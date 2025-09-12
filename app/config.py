@@ -40,6 +40,34 @@ class Settings(BaseSettings):
     # 安全配置
     secret_key: str = "your-secret-key-here"
     
+    # 数据库配置
+    database_url: Optional[str] = None
+    database_echo: bool = False
+    database_pool_size: int = 5
+    database_max_overflow: int = 10
+    database_pool_timeout: int = 30
+    database_pool_recycle: int = 3600
+    
+    # SQLite配置（开发环境）
+    sqlite_file: str = "logs.db"
+    
+    # PostgreSQL配置（生产环境）
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_db: str = "log_staging"
+    postgres_user: str = "postgres"
+    postgres_password: str = "password"
+    
+    def get_database_url(self) -> str:
+        """获取数据库连接URL"""
+        if self.database_url:
+            return self.database_url
+            
+        if self.environment == "production":
+            return f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        else:
+            return f"sqlite+aiosqlite:///{self.sqlite_file}"
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

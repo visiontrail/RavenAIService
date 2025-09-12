@@ -13,6 +13,7 @@ from app.config import settings
 from app.api import health, logs
 from app.middleware import RequestLoggingMiddleware, FileSizeLimitMiddleware
 from app.exceptions import register_exception_handlers
+from app.database import init_database, close_database
 
 
 def setup_logging():
@@ -53,10 +54,23 @@ async def lifespan(app: FastAPI):
     logger.info(f"日志级别: {settings.log_level}")
     logger.info(f"最大文件大小: {settings.max_file_size / 1024 / 1024 / 1024:.1f}GB")
     
+    # 初始化数据库
+    try:
+        await init_database()
+        logger.info("数据库初始化成功")
+    except Exception as e:
+        logger.error(f"数据库初始化失败: {str(e)}")
+        raise
+    
     yield
     
     # 关闭时执行
     logger.info("应用关闭")
+    try:
+        await close_database()
+        logger.info("数据库连接已关闭")
+    except Exception as e:
+        logger.error(f"关闭数据库连接失败: {str(e)}")
 
 
 def create_app() -> FastAPI:

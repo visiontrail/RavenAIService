@@ -1,21 +1,26 @@
 """
 日志相关数据模型
+包含SQLAlchemy数据库模型和Pydantic数据验证模型
 """
 
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, validator
 from enum import Enum
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import String, DateTime, Integer, Text, Enum as SQLEnum, UUID, Float
+import uuid
 
 from .base import BaseResponse, PaginatedResponse
+from .database import Base, TimestampMixin
 
 
 class LogStatus(str, Enum):
-    """日志状态枚举"""
-    UPLOADING = "uploading"
-    STORED = "stored"
+    """日志处理状态枚举"""
+    PENDING = "pending"
     PROCESSING = "processing"
-    DELETED = "deleted"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class LogLevel(str, Enum):
@@ -29,12 +34,112 @@ class LogLevel(str, Enum):
 
 class LogType(str, Enum):
     """日志类型枚举"""
-    APPLICATION = "application"
-    ACCESS = "access"
-    ERROR = "error"
-    SYSTEM = "system"
-    AUDIT = "audit"
+    STACK = "stack"
+    OAM_ANTENNA = "oam_antenna"
 
+
+# ==================== SQLAlchemy 数据库模型 ====================
+
+class LogRecord(Base, TimestampMixin):
+    """日志记录数据库模型"""
+    __tablename__ = "log_records"
+    
+    # 主键字段
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+        comment="日志记录主键UUID"
+    )
+    
+    # 文件相关字段
+    filename: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        comment="文件名"
+    )
+    original_filename: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        comment="原始文件名"
+    )
+    file_size: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="文件大小（字节）"
+    )
+    file_path: Mapped[str] = mapped_column(
+        String(500),
+        nullable=False,
+        comment="文件存储路径"
+    )
+    
+    # 日志类型和状态
+    log_type: Mapped[LogType] = mapped_column(
+        SQLEnum(LogType),
+        nullable=False,
+        default=LogType.STACK,
+        comment="日志类型"
+    )
+    status: Mapped[LogStatus] = mapped_column(
+        SQLEnum(LogStatus),
+        nullable=False,
+        default=LogStatus.PENDING,
+        comment="处理状态"
+    )
+    
+    # 处理进度
+    progress: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=0.0,
+        comment="处理进度（0-100）"
+    )
+    
+    # 时间字段
+    processed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime,
+        nullable=True,
+        comment="处理完成时间"
+    )
+    
+    # 可选字段
+    checksum: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="文件校验和"
+    )
+    mime_type: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="MIME类型"
+    )
+    log_level: Mapped[Optional[LogLevel]] = mapped_column(
+        SQLEnum(LogLevel),
+        nullable=True,
+        default=LogLevel.INFO,
+        comment="日志级别"
+    )
+    
+    # 元数据（JSON格式存储）
+    metadata_json: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="元数据JSON字符串"
+    )
+    
+    # 错误信息
+    error_message: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="错误信息"
+    )
+    
+    def __repr__(self) -> str:
+        return f"<LogRecord(id={self.id}, filename={self.filename}, status={self.status})>"
+
+
+# ==================== Pydantic 数据验证模型 ====================
 
 class LogMetadata(BaseModel):
     """日志元数据"""
@@ -52,17 +157,18 @@ class LogFileInfo(BaseModel):
     filename: str = Field(..., description="文件名")
     original_filename: str = Field(..., description="原始文件名")
     file_size: int = Field(..., description="文件大小（字节）")
-    file_type: str = Field(..., description="文件类型")
-    mime_type: str = Field(..., description="MIME类型")
     file_path: str = Field(..., description="文件存储路径")
-    checksum: str = Field(..., description="文件校验和")
-    status: LogStatus = Field(LogStatus.STORED, description="文件状态")
-    log_type: LogType = Field(LogType.APPLICATION, description="日志类型")
-    log_level: LogLevel = Field(LogLevel.INFO, description="日志级别")
-    metadata: LogMetadata = Field(default_factory=LogMetadata, description="元数据")
-    upload_time: datetime = Field(default_factory=datetime.now, description="上传时间")
-    last_modified: datetime = Field(default_factory=datetime.now, description="最后修改时间")
-    expires_at: Optional[datetime] = Field(None, description="过期时间")
+    log_type: LogType = Field(LogType.STACK, description="日志类型")
+    status: LogStatus = Field(LogStatus.PENDING, description="处理状态")
+    progress: float = Field(0.0, ge=0.0, le=100.0, description="处理进度（0-100）")
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
+    updated_at: datetime = Field(default_factory=datetime.utcnow, description="更新时间")
+    processed_at: Optional[datetime] = Field(None, description="处理完成时间")
+    checksum: Optional[str] = Field(None, description="文件校验和")
+    mime_type: Optional[str] = Field(None, description="MIME类型")
+    log_level: Optional[LogLevel] = Field(LogLevel.INFO, description="日志级别")
+    metadata: Optional[LogMetadata] = Field(default_factory=LogMetadata, description="元数据")
+    error_message: Optional[str] = Field(None, description="错误信息")
     
     class Config:
         from_attributes = True
@@ -70,16 +176,9 @@ class LogFileInfo(BaseModel):
 
 class LogUploadRequest(BaseModel):
     """日志上传请求"""
-    log_type: LogType = Field(LogType.APPLICATION, description="日志类型")
-    log_level: LogLevel = Field(LogLevel.INFO, description="日志级别")
+    log_type: LogType = Field(LogType.STACK, description="日志类型")
+    log_level: Optional[LogLevel] = Field(LogLevel.INFO, description="日志级别")
     metadata: Optional[LogMetadata] = Field(default_factory=LogMetadata, description="元数据")
-    expires_in_days: Optional[int] = Field(None, ge=1, le=365, description="过期天数")
-    
-    @validator('expires_in_days')
-    def validate_expires_in_days(cls, v):
-        if v is not None and (v < 1 or v > 365):
-            raise ValueError('过期天数必须在1-365之间')
-        return v
 
 
 class LogListRequest(BaseModel):
