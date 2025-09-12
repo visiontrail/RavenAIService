@@ -10,7 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config import settings
-from app.api import health
+from app.api import health, logs
+from app.middleware import RequestLoggingMiddleware, FileSizeLimitMiddleware
+from app.exceptions import register_exception_handlers
 
 
 def setup_logging():
@@ -69,6 +71,13 @@ def create_app() -> FastAPI:
         lifespan=lifespan
     )
     
+    # 注册异常处理器
+    register_exception_handlers(app)
+    
+    # 添加自定义中间件
+    app.add_middleware(RequestLoggingMiddleware, exclude_paths=["/health", "/docs", "/redoc", "/openapi.json"])
+    app.add_middleware(FileSizeLimitMiddleware, max_file_size=settings.max_file_size)
+    
     # 添加CORS中间件
     app.add_middleware(
         CORSMiddleware,
@@ -87,6 +96,7 @@ def create_app() -> FastAPI:
     
     # 注册路由
     app.include_router(health.router, tags=["健康检查"])
+    app.include_router(logs.router, prefix="/api/v1/logs", tags=["日志管理"])
     
     return app
 
