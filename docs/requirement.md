@@ -235,8 +235,8 @@ RUN pip install -r requirements.txt
 COPY tool_log_decompress /usr/local/bin/
 RUN chmod +x /usr/local/bin/tool_log_decompress
 
-EXPOSE 8080
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "app:app"]
+EXPOSE 8085
+CMD ["gunicorn", "--bind", "0.0.0.0:8085", "app:app"]
 ```
 
 #### 3.3.2 部署脚本要求
@@ -254,12 +254,12 @@ docker rm log-staging-service 2>/dev/null || true
 # 启动新容器
 docker run -d \
   --name log-staging-service \
-  -p 8080:8080 \
+  -p 8085:8085 \
   -v /data/logs:/app/logs \
   --restart unless-stopped \
   log-staging-service
 
-echo "部署完成，服务运行在 http://localhost:8080"
+echo "部署完成，服务运行在 http://localhost:8085"
 ```
 
 **restart.sh**
