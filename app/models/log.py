@@ -96,6 +96,14 @@ class LogRecord(Base, TimestampMixin):
         comment="处理进度（0-100）"
     )
     
+    # 下载次数
+    download_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="下载次数"
+    )
+    
     # 任务相关字段
     task_id: Mapped[Optional[str]] = mapped_column(
         String(255),
@@ -203,6 +211,13 @@ class LogFileInfo(BaseModel):
     log_level: Optional[LogLevel] = Field(LogLevel.INFO, description="日志级别")
     metadata: Optional[LogMetadata] = Field(default_factory=LogMetadata, description="元数据")
     error_message: Optional[str] = Field(None, description="错误信息")
+    download_count: int = Field(0, description="下载次数")
+    
+    @computed_field
+    @property
+    def download_url(self) -> str:
+        """生成下载URL"""
+        return f"/api/v1/logs/{self.id}/download"
     
     @computed_field
     @property

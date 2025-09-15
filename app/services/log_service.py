@@ -356,7 +356,7 @@ class LogService(BaseCRUDService[LogRecord]):
 
     async def get_download_path(self, db: AsyncSession, log_id: str) -> str:
         """
-        获取日志下载路径
+        获取文件下载路径
         
         Args:
             db: 数据库会话
@@ -365,17 +365,52 @@ class LogService(BaseCRUDService[LogRecord]):
         Returns:
             str: 文件路径
         """
-        log_record = await self.get_by_id(db, log_id)
+        # 获取日志记录
+        record = await self.get_by_id(db, log_id)
+        if not record:
+            raise FileNotFoundError(filename=log_id)
         
-        if not log_record:
-            raise FileNotFoundError(file_id=log_id)
-        
-        file_path = Path(log_record.file_path)
-        
+        # 检查文件是否存在
+        file_path = Path(record.file_path)
         if not file_path.exists():
-            raise FileNotFoundError(file_id=log_id)
+            raise FileNotFoundError(filename=record.original_filename)
         
         return str(file_path)
+
+    async def increment_download_count(self, db: AsyncSession, log_id: str) -> LogFileInfo:
+        """
+        增加下载次数
+        
+        Args:
+            db: 数据库会话
+            log_id: 日志ID
+            
+        Returns:
+            LogFileInfo: 更新后的日志信息
+        """
+        # 获取日志记录
+        record = await self.get_by_id(db, log_id)
+        if not record:
+            raise FileNotFoundError(filename=log_id)
+        
+        # 增加下载次数
+        record.download_count += 1
+        record.updated_at = datetime.utcnow()
+        
+        # 保存到数据库
+        await db.commit()
+        await db.refresh(record)
+        
+        # 解析元数据
+        metadata = None
+        if record.metadata_json:
+            try:
+                metadata_dict = json.loads(record.metadata_json)
+                metadata = LogMetadata(**metadata_dict)
+            except (json.JSONDecodeError, TypeError):
+                metadata = LogMetadata()
+        
+        return await self._db_to_pydantic(record, metadata)
 
     async def batch_delete(
         self, 
@@ -517,7 +552,8 @@ class LogService(BaseCRUDService[LogRecord]):
             mime_type=record.mime_type,
             log_level=record.log_level,
             metadata=metadata or LogMetadata(),
-            error_message=record.error_message
+            error_message=record.error_message,
+            download_count=record.download_count
         )
 
     async def _create_metadata_content(self, log_record: LogRecord) -> str:
