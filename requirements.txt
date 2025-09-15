@@ -9,3 +9,13 @@ sqlalchemy>=2.0.0
 alembic>=1.13.0
 asyncpg>=0.29.0
 aiosqlite>=0.19.0
+
+# Celery and Redis for async task processing
+celery>=5.3.0
+redis>=5.0.0
+kombu>=5.3.0
+
+# Additional utilities for file processing
+tarfile
+shutil
+subprocess

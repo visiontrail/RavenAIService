@@ -106,6 +106,9 @@ class LogService(BaseCRUDService[LogRecord]):
                 metadata_json=metadata_json
             )
             
+            # 检查是否为协议栈日志，如果是则自动触发处理
+            await self._check_and_trigger_protocol_stack_processing(log_record)
+            
             # 转换为Pydantic模型
             return await self._db_to_pydantic(log_record, request.metadata)
             
@@ -544,6 +547,45 @@ class LogService(BaseCRUDService[LogRecord]):
                 pass
         
         return json.dumps(metadata, indent=2, ensure_ascii=False)
+
+    async def _check_and_trigger_protocol_stack_processing(self, log_record: LogRecord):
+        """
+        检查是否为协议栈日志，如果是则自动触发处理
+        
+        Args:
+            log_record: 日志记录
+        """
+        try:
+            # 检查文件名是否包含"stack"关键字
+            if "stack" in log_record.original_filename.lower():
+                # 动态导入避免循环导入
+                from app.tasks.log_processing import process_protocol_stack_log
+                
+                # 启动异步任务
+                task_result = process_protocol_stack_log.delay(log_record.id)
+                
+                # 更新任务ID到数据库（同步方式）
+                from sqlalchemy.orm import sessionmaker
+                from sqlalchemy import create_engine
+                
+                sync_engine = create_engine(settings.get_database_url().replace('aiosqlite', 'sqlite'))
+                SessionLocal = sessionmaker(bind=sync_engine)
+                db_session = SessionLocal()
+                try:
+                    # 重新查询记录以确保获取最新状态
+                    record = db_session.query(LogRecord).filter(LogRecord.id == log_record.id).first()
+                    if record:
+                        record.task_id = task_result.id
+                        record.log_type = LogType.STACK  # 确保设置为协议栈类型
+                        db_session.commit()
+                finally:
+                    db_session.close()
+                    
+        except Exception as e:
+            # 记录错误但不影响文件上传流程
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to trigger protocol stack processing for log {log_record.id}: {str(e)}")
 
 
 # 创建全局服务实例

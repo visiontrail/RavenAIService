@@ -48,6 +48,27 @@ class Settings(BaseSettings):
     database_pool_timeout: int = 30
     database_pool_recycle: int = 3600
     
+    # Celery配置
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/0"
+    celery_task_serializer: str = "json"
+    celery_result_serializer: str = "json"
+    celery_accept_content: List[str] = ["json"]
+    celery_timezone: str = "UTC"
+    celery_enable_utc: bool = True
+    
+    # Redis配置
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_db: int = 0
+    redis_password: Optional[str] = None
+    
+    # 协议栈日志处理配置
+    log_processing_speed_mb_per_sec: int = 100  # 假设处理速度100MB/s
+    max_retry_attempts: int = 3
+    task_timeout: int = 3600  # 1小时超时
+    thread_num_for_decompress: int = 4  # 默认线程数
+    
     # SQLite配置（开发环境）
     sqlite_file: str = "logs.db"
     

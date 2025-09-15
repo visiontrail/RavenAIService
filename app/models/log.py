@@ -96,6 +96,24 @@ class LogRecord(Base, TimestampMixin):
         comment="处理进度（0-100）"
     )
     
+    # 任务相关字段
+    task_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Celery任务ID"
+    )
+    retry_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="重试次数"
+    )
+    processing_started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime,
+        nullable=True,
+        comment="处理开始时间"
+    )
+    
     # 时间字段
     processed_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime,
@@ -174,6 +192,9 @@ class LogFileInfo(BaseModel):
     log_type: LogType = Field(LogType.STACK, description="日志类型")
     status: LogStatus = Field(LogStatus.PENDING, description="处理状态")
     progress: float = Field(0.0, ge=0.0, le=100.0, description="处理进度（0-100）")
+    task_id: Optional[str] = Field(None, description="Celery任务ID")
+    retry_count: int = Field(0, description="重试次数")
+    processing_started_at: Optional[datetime] = Field(None, description="处理开始时间")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="创建时间")
     updated_at: datetime = Field(default_factory=datetime.utcnow, description="更新时间")
     processed_at: Optional[datetime] = Field(None, description="处理完成时间")
