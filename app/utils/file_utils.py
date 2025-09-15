@@ -57,6 +57,39 @@ def cleanup_temp_files(temp_dir: Optional[str] = None) -> int:
     return cleaned_count
 
 
+def format_file_size(size_bytes: int) -> str:
+    """将文件大小转换为人类可读格式
+    
+    Args:
+        size_bytes: 文件大小（字节）
+        
+    Returns:
+        str: 格式化后的文件大小字符串，如 "1.5 MB"
+    """
+    if size_bytes == 0:
+        return "0 B"
+    
+    # 定义单位
+    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+    unit_index = 0
+    size = float(size_bytes)
+    
+    # 计算合适的单位
+    while size >= 1024.0 and unit_index < len(units) - 1:
+        size /= 1024.0
+        unit_index += 1
+    
+    # 格式化数字
+    if unit_index == 0:  # 字节不需要小数
+        return f"{int(size)} {units[unit_index]}"
+    elif size >= 100:
+        return f"{size:.0f} {units[unit_index]}"
+    elif size >= 10:
+        return f"{size:.1f} {units[unit_index]}"
+    else:
+        return f"{size:.2f} {units[unit_index]}"
+
+
 def get_safe_filename(filename: str) -> str:
     """获取安全的文件名，移除或替换危险字符"""
     # 移除路径分隔符和其他危险字符

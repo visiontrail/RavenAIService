@@ -230,9 +230,9 @@ pip install --upgrade pip
 ```
 
 ### 3. 端口占用
-如果8000端口被占用，修改 `.env` 文件中的 `PORT` 值或使用其他端口启动：
+如果8085端口被占用，修改 `.env` 文件中的 `PORT` 值或使用其他端口启动：
 ```bash
-uvicorn app.main:app --port 8001
+uvicorn app.main:app --port 8085
 ```
 
 ## 📋 待开发功能

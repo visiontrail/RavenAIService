@@ -20,7 +20,7 @@ from app.config import settings
 from app.models.log import (
     LogRecord, LogFileInfo, LogUploadRequest, LogListRequest, BatchDeleteRequest,
     BatchDownloadRequest, LogStatus, LogType, LogLevel, LogMetadata,
-    BatchOperationResult
+    BatchOperationResult, SortField, SortOrder, LogListData, PaginationInfo
 )
 from app.models.database import get_db
 from app.services.base import BaseCRUDService
@@ -123,7 +123,7 @@ class LogService(BaseCRUDService[LogRecord]):
         self, 
         db: AsyncSession, 
         request: LogListRequest
-    ) -> Tuple[List[LogFileInfo], int]:
+    ) -> LogListData:
         """
         获取日志列表
         
@@ -132,15 +132,14 @@ class LogService(BaseCRUDService[LogRecord]):
             request: 查询请求参数
             
         Returns:
-            Tuple[List[LogFileInfo], int]: (日志列表, 总数)
+            LogListData: 包含日志列表和分页信息的数据
         """
         try:
             # 构建查询条件
             query = select(LogRecord)
-            count_query = select(LogRecord)
             
-            # 添加过滤条件
-            conditions = []
+            # 添加过滤条件（默认只查询未删除的记录）
+            conditions = [LogRecord.is_deleted == False]
             
             if request.log_type:
                 conditions.append(LogRecord.log_type == request.log_type)
@@ -157,12 +156,13 @@ class LogService(BaseCRUDService[LogRecord]):
             if request.end_time:
                 conditions.append(LogRecord.created_at <= request.end_time)
             
+            # 按文件名搜索
             if request.search:
                 search_pattern = f"%{request.search}%"
                 conditions.append(
                     or_(
                         LogRecord.original_filename.ilike(search_pattern),
-                        LogRecord.metadata_json.ilike(search_pattern)
+                        LogRecord.filename.ilike(search_pattern)
                     )
                 )
             
@@ -170,7 +170,6 @@ class LogService(BaseCRUDService[LogRecord]):
             if conditions:
                 filter_condition = and_(*conditions)
                 query = query.where(filter_condition)
-                count_query = count_query.where(filter_condition)
             
             # 计算总数
             from sqlalchemy import func
@@ -179,12 +178,18 @@ class LogService(BaseCRUDService[LogRecord]):
                 total_query = total_query.where(and_(*conditions))
             
             total_result = await db.execute(total_query)
-            total = total_result.scalar()
+            total = total_result.scalar() or 0
             
-            # 排序和分页
-            query = query.order_by(LogRecord.created_at.desc())
-            offset = (request.page - 1) * request.size
-            query = query.offset(offset).limit(request.size)
+            # 排序
+            sort_column = getattr(LogRecord, request.sort_by.value)
+            if request.sort_order == SortOrder.DESC:
+                query = query.order_by(sort_column.desc())
+            else:
+                query = query.order_by(sort_column.asc())
+            
+            # 分页
+            offset = (request.page - 1) * request.per_page
+            query = query.offset(offset).limit(request.per_page)
             
             # 执行查询
             result = await db.execute(query)
@@ -204,7 +209,19 @@ class LogService(BaseCRUDService[LogRecord]):
                 log_info = await self._db_to_pydantic(record, metadata)
                 log_infos.append(log_info)
             
-            return log_infos, total
+            # 计算分页信息
+            pages = (total + request.per_page - 1) // request.per_page if total > 0 else 0
+            pagination = PaginationInfo(
+                page=request.page,
+                per_page=request.per_page,
+                total=total,
+                pages=pages
+            )
+            
+            return LogListData(
+                logs=log_infos,
+                pagination=pagination
+            )
             
         except Exception as e:
             raise StorageError(f"获取日志列表失败: {str(e)}")
@@ -222,7 +239,7 @@ class LogService(BaseCRUDService[LogRecord]):
         """
         log_record = await self.get_by_id(db, log_id)
         
-        if not log_record:
+        if not log_record or log_record.is_deleted:
             raise FileNotFoundError(file_id=log_id)
         
         # 检查文件是否存在
@@ -242,13 +259,14 @@ class LogService(BaseCRUDService[LogRecord]):
         
         return await self._db_to_pydantic(log_record, metadata)
 
-    async def delete_log(self, db: AsyncSession, log_id: str) -> bool:
+    async def delete_log(self, db: AsyncSession, log_id: str, hard_delete: bool = False) -> bool:
         """
-        删除日志文件
+        删除日志文件（支持软删除和硬删除）
         
         Args:
             db: 数据库会话
             log_id: 日志ID
+            hard_delete: 是否硬删除（物理删除文件和数据库记录）
             
         Returns:
             bool: 是否删除成功
@@ -258,18 +276,30 @@ class LogService(BaseCRUDService[LogRecord]):
         if not log_record:
             raise FileNotFoundError(file_id=log_id)
         
+        # 检查是否已经被软删除
+        if log_record.is_deleted and not hard_delete:
+            return True
+        
         try:
-            # 删除文件
-            file_path = Path(log_record.file_path)
-            if file_path.exists():
-                file_path.unlink()
-            
-            # 从数据库删除记录
-            await self.delete(db, log_id)
+            if hard_delete:
+                # 硬删除：删除文件和数据库记录
+                file_path = Path(log_record.file_path)
+                if file_path.exists():
+                    file_path.unlink()
+                
+                # 从数据库删除记录
+                await self.delete(db, log_id)
+            else:
+                # 软删除：只标记为已删除
+                log_record.is_deleted = True
+                log_record.deleted_at = datetime.utcnow()
+                db.add(log_record)
+                await db.commit()
             
             return True
             
         except Exception as e:
+            await db.rollback()
             raise StorageError(f"删除日志失败: {str(e)}")
 
     async def update_log_status(
@@ -363,7 +393,7 @@ class LogService(BaseCRUDService[LogRecord]):
         
         for log_id in request.log_ids:
             try:
-                await self.delete_log(db, log_id)
+                await self.delete_log(db, log_id, hard_delete=request.force)
                 result.success_count += 1
                 result.success_ids.append(log_id)
                 

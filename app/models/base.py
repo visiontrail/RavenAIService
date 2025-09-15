@@ -12,6 +12,11 @@ class BaseResponse(BaseModel):
     success: bool = True
     message: str = "操作成功"
     timestamp: datetime = Field(default_factory=datetime.now)
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat() if v else None
+        }
 
 
 class ErrorResponse(BaseResponse):

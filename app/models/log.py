@@ -5,10 +5,10 @@
 
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, computed_field
 from enum import Enum
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, DateTime, Integer, Text, Enum as SQLEnum, UUID, Float
+from sqlalchemy import String, DateTime, Integer, Text, Enum as SQLEnum, UUID, Float, Boolean
 import uuid
 
 from .base import BaseResponse, PaginatedResponse
@@ -135,6 +135,19 @@ class LogRecord(Base, TimestampMixin):
         comment="错误信息"
     )
     
+    # 软删除字段
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="是否已删除（软删除）"
+    )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime,
+        nullable=True,
+        comment="删除时间"
+    )
+    
     def __repr__(self) -> str:
         return f"<LogRecord(id={self.id}, filename={self.filename}, status={self.status})>"
 
@@ -170,8 +183,18 @@ class LogFileInfo(BaseModel):
     metadata: Optional[LogMetadata] = Field(default_factory=LogMetadata, description="元数据")
     error_message: Optional[str] = Field(None, description="错误信息")
     
+    @computed_field
+    @property
+    def file_size_human(self) -> str:
+        """人类可读的文件大小格式"""
+        from app.utils.file_utils import format_file_size
+        return format_file_size(self.file_size)
+    
     class Config:
         from_attributes = True
+        json_encoders = {
+            datetime: lambda v: v.isoformat() if v else None
+        }
 
 
 class LogUploadRequest(BaseModel):
@@ -181,16 +204,32 @@ class LogUploadRequest(BaseModel):
     metadata: Optional[LogMetadata] = Field(default_factory=LogMetadata, description="元数据")
 
 
+class SortField(str, Enum):
+    """排序字段枚举"""
+    CREATED_AT = "created_at"
+    UPDATED_AT = "updated_at"
+    FILE_SIZE = "file_size"
+    FILENAME = "filename"
+
+
+class SortOrder(str, Enum):
+    """排序顺序枚举"""
+    ASC = "asc"
+    DESC = "desc"
+
+
 class LogListRequest(BaseModel):
-    """日志列表查询请求"""
+    """日志列表查询请求模型"""
     page: int = Field(1, ge=1, description="页码")
-    size: int = Field(10, ge=1, le=100, description="每页大小")
+    per_page: int = Field(20, ge=1, le=100, description="每页大小")
     log_type: Optional[LogType] = Field(None, description="日志类型过滤")
     log_level: Optional[LogLevel] = Field(None, description="日志级别过滤")
     status: Optional[LogStatus] = Field(None, description="状态过滤")
     start_time: Optional[datetime] = Field(None, description="开始时间")
     end_time: Optional[datetime] = Field(None, description="结束时间")
-    search: Optional[str] = Field(None, max_length=100, description="搜索关键词")
+    search: Optional[str] = Field(None, max_length=100, description="搜索关键词（按文件名搜索）")
+    sort_by: SortField = Field(SortField.CREATED_AT, description="排序字段")
+    sort_order: SortOrder = Field(SortOrder.DESC, description="排序顺序")
     tags: Optional[List[str]] = Field(None, description="标签过滤")
     
     @validator('end_time')
@@ -240,9 +279,23 @@ class LogDetailResponse(BaseResponse):
     data: LogFileInfo
 
 
-class LogListResponse(PaginatedResponse):
-    """日志列表响应"""
-    data: List[LogFileInfo]
+class PaginationInfo(BaseModel):
+    """分页信息模型"""
+    page: int = Field(..., description="当前页码")
+    per_page: int = Field(..., description="每页大小")
+    total: int = Field(..., description="总记录数")
+    pages: int = Field(..., description="总页数")
+
+
+class LogListData(BaseModel):
+    """日志列表数据模型"""
+    logs: List[LogFileInfo] = Field(..., description="日志列表")
+    pagination: PaginationInfo = Field(..., description="分页信息")
+
+
+class LogListResponse(BaseResponse):
+    """日志列表响应模型"""
+    data: LogListData
 
 
 class BatchOperationResult(BaseModel):
@@ -260,11 +313,16 @@ class BatchDeleteResponse(BaseResponse):
 
 
 class DownloadInfo(BaseModel):
-    """下载信息"""
+    """下载信息模型"""
     download_url: str = Field(..., description="下载链接")
     filename: str = Field(..., description="文件名")
     file_size: int = Field(..., description="文件大小")
     expires_at: datetime = Field(..., description="链接过期时间")
+    
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat() if v else None
+        }
 
 
 class BatchDownloadResponse(BaseResponse):

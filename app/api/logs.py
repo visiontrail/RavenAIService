@@ -8,12 +8,15 @@ from typing import List
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Query, Path
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.database import get_db
 
 from app.models.log import (
     LogUploadRequest, LogUploadResponse, LogListRequest, LogListResponse,
     LogDetailResponse, LogDeleteResponse, BatchDeleteRequest, BatchDeleteResponse,
     BatchDownloadRequest, BatchDownloadResponse, LogType, LogLevel, LogStatus,
-    LogMetadata
+    LogMetadata, SortField, SortOrder
 )
 from app.services.log_service import log_service
 from app.utils.validation import request_validator
@@ -35,7 +38,8 @@ async def upload_log(
     environment: str = Form(None, description="环境信息"),
     service_name: str = Form(None, description="服务名称"),
     version: str = Form(None, description="版本号"),
-    expires_in_days: int = Form(None, ge=1, le=365, description="过期天数")
+    expires_in_days: int = Form(None, ge=1, le=365, description="过期天数"),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     上传日志文件
@@ -67,7 +71,7 @@ async def upload_log(
     )
     
     # 执行上传
-    log_info = await log_service.upload_log(file, upload_request)
+    log_info = await log_service.upload_log(db, file, upload_request)
     
     logger.info(f"Log uploaded successfully: {log_info.id}")
     
@@ -333,27 +337,32 @@ async def upload_t04_logs(
 @router.get("", response_model=LogListResponse)
 async def get_logs(
     page: int = Query(1, ge=1, description="页码"),
-    size: int = Query(10, ge=1, le=100, description="每页大小"),
+    per_page: int = Query(20, ge=1, le=100, description="每页大小"),
     log_type: LogType = Query(None, description="日志类型过滤"),
     log_level: LogLevel = Query(None, description="日志级别过滤"),
     status: LogStatus = Query(None, description="状态过滤"),
     start_time: str = Query(None, description="开始时间 (ISO格式)"),
     end_time: str = Query(None, description="结束时间 (ISO格式)"),
-    search: str = Query(None, max_length=100, description="搜索关键词"),
-    tags: List[str] = Query(None, description="标签过滤")
+    search: str = Query(None, max_length=100, description="搜索关键词（按文件名搜索）"),
+    sort_by: SortField = Query(SortField.CREATED_AT, description="排序字段"),
+    sort_order: SortOrder = Query(SortOrder.DESC, description="排序顺序"),
+    tags: List[str] = Query(None, description="标签过滤"),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     获取日志列表
     
     支持多种过滤条件：
     - **page**: 页码 (从1开始)
-    - **size**: 每页大小 (1-100)
+    - **per_page**: 每页大小 (1-100)
     - **log_type**: 按日志类型过滤
     - **log_level**: 按日志级别过滤
     - **status**: 按状态过滤
     - **start_time**: 开始时间过滤 (ISO格式: 2024-01-01T00:00:00Z)
     - **end_time**: 结束时间过滤
-    - **search**: 关键词搜索 (搜索文件名、来源、服务名)
+    - **search**: 关键词搜索 (按文件名搜索)
+    - **sort_by**: 排序字段 (created_at, updated_at, file_size, filename)
+    - **sort_order**: 排序顺序 (asc, desc)
     - **tags**: 标签过滤 (可多选)
     """
     
@@ -363,33 +372,35 @@ async def get_logs(
     
     # 构建查询请求
     from datetime import datetime
+    from app.models.database import get_db
+    
     list_request = LogListRequest(
         page=page,
-        size=size,
+        per_page=per_page,
         log_type=log_type,
         log_level=log_level,
         status=status,
         start_time=datetime.fromisoformat(start_time.replace('Z', '+00:00')) if start_time else None,
         end_time=datetime.fromisoformat(end_time.replace('Z', '+00:00')) if end_time else None,
         search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
         tags=tags
     )
     
     # 获取日志列表
-    logs, total = await log_service.get_log_list(list_request)
+    log_data = await log_service.get_log_list(db, list_request)
     
     return LogListResponse(
         message="获取日志列表成功",
-        data=logs,
-        total=total,
-        page=page,
-        size=size
+        data=log_data
     )
 
 
 @router.get("/{log_id}", response_model=LogDetailResponse)
 async def get_log_detail(
-    log_id: str = Path(..., description="日志文件ID")
+    log_id: str = Path(..., description="日志文件ID"),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     获取日志详情
@@ -401,7 +412,7 @@ async def get_log_detail(
     request_validator.validate_log_id(log_id)
     
     # 获取日志详情
-    log_info = await log_service.get_log_detail(log_id)
+    log_info = await log_service.get_log_detail(db, log_id)
     
     return LogDetailResponse(
         message="获取日志详情成功",
@@ -411,10 +422,11 @@ async def get_log_detail(
 
 @router.delete("/{log_id}", response_model=LogDeleteResponse)
 async def delete_log(
-    log_id: str = Path(..., description="日志文件ID")
+    log_id: str = Path(..., description="日志文件ID"),
+    db: AsyncSession = Depends(get_db)
 ):
     """
-    删除日志文件
+    删除日志文件（软删除）
     
     - **log_id**: 要删除的日志文件ID
     """
@@ -422,8 +434,8 @@ async def delete_log(
     # 验证日志ID
     request_validator.validate_log_id(log_id)
     
-    # 删除日志
-    success = await log_service.delete_log(log_id)
+    # 删除日志（默认软删除）
+    success = await log_service.delete_log(db, log_id)
     
     logger.info(f"Log deleted successfully: {log_id}")
     
@@ -434,7 +446,8 @@ async def delete_log(
 
 @router.get("/{log_id}/download")
 async def download_log(
-    log_id: str = Path(..., description="日志文件ID")
+    log_id: str = Path(..., description="日志文件ID"),
+    db: AsyncSession = Depends(get_db)
 ):
     """
     下载日志文件
@@ -448,10 +461,10 @@ async def download_log(
     request_validator.validate_log_id(log_id)
     
     # 获取文件路径
-    file_path = await log_service.get_download_path(log_id)
+    file_path = await log_service.get_download_path(db, log_id)
     
     # 获取日志信息用于设置文件名
-    log_info = await log_service.get_log_detail(log_id)
+    log_info = await log_service.get_log_detail(db, log_id)
     
     logger.info(f"Log download started: {log_id}")
     
@@ -464,20 +477,21 @@ async def download_log(
 
 @router.post("/batch/delete", response_model=BatchDeleteResponse)
 async def batch_delete_logs(
-    request: BatchDeleteRequest
+    request: BatchDeleteRequest,
+    db: AsyncSession = Depends(get_db)
 ):
     """
     批量删除日志文件
     
     - **log_ids**: 要删除的日志ID列表 (最多100个)
-    - **force**: 是否强制删除 (默认false)
+    - **force**: 是否强制删除 (默认false，true为物理删除)
     """
     
     # 验证日志ID列表
     request_validator.validate_log_ids(request.log_ids)
     
     # 执行批量删除
-    result = await log_service.batch_delete(request)
+    result = await log_service.batch_delete(db, request)
     
     logger.info(
         f"Batch delete completed: {result.success_count} success, {result.failed_count} failed"
@@ -491,7 +505,8 @@ async def batch_delete_logs(
 
 @router.post("/batch/download", response_model=BatchDownloadResponse)
 async def batch_download_logs(
-    request: BatchDownloadRequest
+    request: BatchDownloadRequest,
+    db: AsyncSession = Depends(get_db)
 ):
     """
     批量下载日志文件
@@ -510,22 +525,23 @@ async def batch_download_logs(
     request_validator.validate_log_ids(request.log_ids)
     
     # 执行批量下载
-    zip_path = await log_service.batch_download(request)
+    zip_path = await log_service.batch_download(db, request)
     
     # 生成下载信息
     import os
     from datetime import datetime, timedelta
+    from app.models.log import DownloadInfo
     
     file_size = os.path.getsize(zip_path)
     filename = os.path.basename(zip_path)
     expires_at = datetime.now() + timedelta(hours=1)  # 下载链接1小时后过期
     
-    download_info = {
-        "download_url": f"/api/v1/logs/download-batch/{filename}",
-        "filename": filename,
-        "file_size": file_size,
-        "expires_at": expires_at
-    }
+    download_info = DownloadInfo(
+        download_url=f"/api/v1/logs/download-batch/{filename}",
+        filename=filename,
+        file_size=file_size,
+        expires_at=expires_at
+    )
     
     logger.info(f"Batch download prepared: {len(request.log_ids)} files, {file_size} bytes")
     
