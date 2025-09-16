@@ -336,8 +336,12 @@ class LogListResponse(BaseResponse):
 
 class BatchOperationResult(BaseModel):
     """批量操作结果"""
-    success_count: int = Field(0, description="成功数量")
+    deleted_count: int = Field(0, description="删除成功数量")
     failed_count: int = Field(0, description="失败数量")
+    failed_logs: List[Dict[str, str]] = Field(default_factory=list, description="失败的日志详情")
+    
+    # 保持向后兼容性
+    success_count: int = Field(0, description="成功数量")
     success_ids: List[str] = Field(default_factory=list, description="成功的ID列表")
     failed_ids: List[str] = Field(default_factory=list, description="失败的ID列表")
     errors: Dict[str, str] = Field(default_factory=dict, description="错误详情")

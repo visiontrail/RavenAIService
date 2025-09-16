@@ -5,6 +5,9 @@
 
 import logging
 import re
+import io
+import uuid
+from datetime import datetime
 from typing import List
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Query, Path, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -651,26 +654,53 @@ async def batch_delete_logs(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    批量删除日志文件
+    批量删除日志文件 - 改进版本
     
+    支持事务处理和详细错误报告：
     - **log_ids**: 要删除的日志ID列表 (最多100个)
-    - **force**: 是否强制删除 (默认false，true为物理删除)
+    - **force**: 是否强制删除 (默认false为软删除，true为物理删除)
+    
+    响应格式符合T08要求：
+    ```json
+    {
+        "success": true,
+        "data": {
+            "deleted_count": 2,
+            "failed_count": 1,
+            "failed_logs": [
+                {
+                    "log_id": "uuid3",
+                    "reason": "文件不存在"
+                }
+            ]
+        }
+    }
+    ```
     """
     
-    # 验证日志ID列表
-    request_validator.validate_log_ids(request.log_ids)
-    
-    # 执行批量删除
-    result = await log_service.batch_delete(db, request)
-    
-    logger.info(
-        f"Batch delete completed: {result.success_count} success, {result.failed_count} failed"
-    )
-    
-    return BatchDeleteResponse(
-        message=f"批量删除完成: 成功 {result.success_count} 个，失败 {result.failed_count} 个",
-        data=result
-    )
+    try:
+        # 验证日志ID列表
+        request_validator.validate_log_ids(request.log_ids)
+        
+        # 执行批量删除
+        result = await log_service.batch_delete(db, request)
+        
+        logger.info(
+            f"Batch delete completed: {result.deleted_count} deleted, {result.failed_count} failed"
+        )
+        
+        return BatchDeleteResponse(
+            success=True,
+            message=f"批量删除完成: 成功删除 {result.deleted_count} 个，失败 {result.failed_count} 个",
+            data=result
+        )
+        
+    except ValidationError as e:
+        logger.error(f"Batch delete validation error: {str(e)}")
+        raise e
+    except Exception as e:
+        logger.error(f"Batch delete error: {str(e)}")
+        raise LogServiceException(f"批量删除操作失败: {str(e)}")
 
 
 @router.post("/batch/download", response_model=BatchDownloadResponse)
@@ -679,46 +709,111 @@ async def batch_download_logs(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    批量下载日志文件
+    批量下载日志文件 - 改进版本
     
+    支持流式zip文件生成，避免内存溢出：
     - **log_ids**: 要下载的日志ID列表 (最多50个)
     - **compress**: 是否压缩下载 (默认true)
     - **include_metadata**: 是否包含元数据文件 (默认false)
     
-    返回压缩包下载链接
+    返回压缩包下载链接，支持大量文件打包
     """
     
-    # 验证日志ID列表
-    if len(request.log_ids) > 50:
-        raise ValidationError("批量下载的文件数量不能超过50个")
+    try:
+        # 验证日志ID列表
+        if len(request.log_ids) > 50:
+            raise ValidationError("批量下载的文件数量不能超过50个")
+        
+        request_validator.validate_log_ids(request.log_ids)
+        
+        # 执行批量下载
+        zip_path = await log_service.batch_download(db, request)
+        
+        # 生成下载信息
+        import os
+        from datetime import datetime, timedelta
+        from app.models.log import DownloadInfo
+        
+        file_size = os.path.getsize(zip_path)
+        filename = os.path.basename(zip_path)
+        expires_at = datetime.now() + timedelta(hours=2)  # 下载链接2小时后过期
+        
+        download_info = DownloadInfo(
+            download_url=f"/api/v1/logs/download-batch/{filename}",
+            filename=filename,
+            file_size=file_size,
+            expires_at=expires_at
+        )
+        
+        logger.info(f"Batch download prepared: {len(request.log_ids)} files requested, {file_size} bytes")
+        
+        return BatchDownloadResponse(
+            success=True,
+            message="批量下载准备完成",
+            data=download_info
+        )
+        
+    except ValidationError as e:
+        logger.error(f"Batch download validation error: {str(e)}")
+        raise e
+    except FileNotFoundError as e:
+        logger.error(f"Batch download file not found: {str(e)}")
+        raise e
+    except Exception as e:
+        logger.error(f"Batch download error: {str(e)}")
+        raise LogServiceException(f"批量下载操作失败: {str(e)}")
+
+
+@router.post("/batch/download-stream")
+async def batch_download_logs_stream(
+    request: BatchDownloadRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    流式批量下载日志文件
     
-    request_validator.validate_log_ids(request.log_ids)
+    直接返回zip文件流，适用于小批量文件的即时下载：
+    - **log_ids**: 要下载的日志ID列表 (最多20个)
+    - **compress**: 是否压缩下载 (默认true)
+    - **include_metadata**: 是否包含元数据文件 (默认false)
     
-    # 执行批量下载
-    zip_path = await log_service.batch_download(db, request)
+    直接返回zip文件内容，无需临时文件
+    """
     
-    # 生成下载信息
-    import os
-    from datetime import datetime, timedelta
-    from app.models.log import DownloadInfo
-    
-    file_size = os.path.getsize(zip_path)
-    filename = os.path.basename(zip_path)
-    expires_at = datetime.now() + timedelta(hours=1)  # 下载链接1小时后过期
-    
-    download_info = DownloadInfo(
-        download_url=f"/api/v1/logs/download-batch/{filename}",
-        filename=filename,
-        file_size=file_size,
-        expires_at=expires_at
-    )
-    
-    logger.info(f"Batch download prepared: {len(request.log_ids)} files, {file_size} bytes")
-    
-    return BatchDownloadResponse(
-        message="批量下载准备完成",
-        data=download_info
-    )
+    try:
+        # 验证日志ID列表 - 流式下载限制更严格
+        if len(request.log_ids) > 20:
+            raise ValidationError("流式批量下载的文件数量不能超过20个")
+        
+        request_validator.validate_log_ids(request.log_ids)
+        
+        # 执行流式批量下载
+        zip_content = await log_service.batch_download_stream(db, request)
+        
+        # 生成文件名
+        download_id = str(uuid.uuid4())[:8]
+        filename = f"logs_stream_{download_id}.zip"
+        
+        logger.info(f"Stream batch download: {len(request.log_ids)} files, {len(zip_content)} bytes")
+        
+        return StreamingResponse(
+            io.BytesIO(zip_content),
+            media_type='application/zip',
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Content-Length': str(len(zip_content))
+            }
+        )
+        
+    except ValidationError as e:
+        logger.error(f"Stream batch download validation error: {str(e)}")
+        raise e
+    except FileNotFoundError as e:
+        logger.error(f"Stream batch download file not found: {str(e)}")
+        raise e
+    except Exception as e:
+        logger.error(f"Stream batch download error: {str(e)}")
+        raise LogServiceException(f"流式批量下载操作失败: {str(e)}")
 
 
 @router.get("/download-batch/{filename}")
@@ -726,21 +821,45 @@ async def download_batch_file(
     filename: str = Path(..., description="批量下载文件名")
 ):
     """
-    下载批量打包的文件
+    下载批量打包的文件 - 改进版本
     
+    支持大文件下载和错误处理：
     - **filename**: 批量打包的文件名
+    
+    返回zip文件，支持断点续传
     """
     
-    # 构建文件路径
-    file_path = log_service.downloads_storage_path / filename
-    
-    if not file_path.exists():
-        raise FileNotFoundError(filename=filename)
-    
-    logger.info(f"Batch download started: {filename}")
-    
-    return FileResponse(
-        path=str(file_path),
-        filename=filename,
-        media_type='application/zip'
-    )
+    try:
+        # 构建文件路径
+        file_path = log_service.downloads_storage_path / filename
+        
+        if not file_path.exists():
+            logger.error(f"Batch download file not found: {filename}")
+            raise FileNotFoundError(filename=filename)
+        
+        # 检查文件是否过期（超过2小时）
+        file_stat = file_path.stat()
+        file_age = datetime.now().timestamp() - file_stat.st_mtime
+        if file_age > 7200:  # 2 hours
+            logger.warning(f"Batch download file expired: {filename}")
+            # 可以选择删除过期文件
+            # file_path.unlink()
+            # raise FileNotFoundError(filename=filename)
+        
+        logger.info(f"Batch download started: {filename}, size: {file_stat.st_size}")
+        
+        return FileResponse(
+            path=str(file_path),
+            filename=filename,
+            media_type='application/zip',
+            headers={
+                'Accept-Ranges': 'bytes',  # 支持断点续传
+                'Content-Length': str(file_stat.st_size)
+            }
+        )
+        
+    except FileNotFoundError:
+        raise
+    except Exception as e:
+        logger.error(f"Batch download file error: {str(e)}")
+        raise LogServiceException(f"下载批量文件失败: {str(e)}")

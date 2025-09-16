@@ -418,7 +418,7 @@ class LogService(BaseCRUDService[LogRecord]):
         request: BatchDeleteRequest
     ) -> BatchOperationResult:
         """
-        批量删除日志
+        批量删除日志 - 改进版本，支持事务处理和详细错误报告
         
         Args:
             db: 数据库会话
@@ -429,16 +429,106 @@ class LogService(BaseCRUDService[LogRecord]):
         """
         result = BatchOperationResult()
         
-        for log_id in request.log_ids:
-            try:
-                await self.delete_log(db, log_id, hard_delete=request.force)
-                result.success_count += 1
-                result.success_ids.append(log_id)
-                
-            except Exception as e:
+        # 首先批量查询所有日志记录
+        try:
+            stmt = select(LogRecord).where(
+                LogRecord.id.in_(request.log_ids),
+                LogRecord.is_deleted == False
+            )
+            db_result = await db.execute(stmt)
+            log_records = db_result.scalars().all()
+            
+            # 创建ID到记录的映射
+            records_map = {record.id: record for record in log_records}
+            
+            # 检查哪些ID不存在
+            found_ids = set(records_map.keys())
+            requested_ids = set(request.log_ids)
+            missing_ids = requested_ids - found_ids
+            
+            # 为不存在的ID添加错误信息
+            for missing_id in missing_ids:
+                result.failed_count += 1
+                result.failed_ids.append(missing_id)
+                result.errors[missing_id] = "日志记录不存在"
+                result.failed_logs.append({
+                    "log_id": missing_id,
+                    "reason": "日志记录不存在"
+                })
+            
+        except Exception as e:
+            # 如果查询失败，所有操作都失败
+            for log_id in request.log_ids:
                 result.failed_count += 1
                 result.failed_ids.append(log_id)
-                result.errors[log_id] = str(e)
+                result.errors[log_id] = f"数据库查询失败: {str(e)}"
+                result.failed_logs.append({
+                    "log_id": log_id,
+                    "reason": f"数据库查询失败: {str(e)}"
+                })
+            return result
+        
+        # 使用事务处理批量删除
+        try:
+            # 批量处理文件删除和数据库更新
+            for log_id in found_ids:
+                try:
+                    record = records_map[log_id]
+                    
+                    # 删除物理文件
+                    if request.force:
+                        # 硬删除：删除物理文件和数据库记录
+                        file_path = Path(record.file_path)
+                        if file_path.exists():
+                            file_path.unlink()
+                        
+                        # 删除数据库记录
+                        await db.delete(record)
+                    else:
+                        # 软删除：只标记为已删除
+                        record.is_deleted = True
+                        record.deleted_at = datetime.utcnow()
+                    
+                    result.success_count += 1
+                    result.deleted_count += 1
+                    result.success_ids.append(log_id)
+                    
+                except Exception as e:
+                    result.failed_count += 1
+                    result.failed_ids.append(log_id)
+                    error_msg = f"删除失败: {str(e)}"
+                    result.errors[log_id] = error_msg
+                    result.failed_logs.append({
+                        "log_id": log_id,
+                        "reason": error_msg
+                    })
+                    
+                    # 如果是硬删除模式下的文件删除失败，回滚事务
+                    if request.force:
+                        await db.rollback()
+                        raise BatchOperationError(f"批量删除失败: {error_msg}")
+            
+            # 提交事务
+            await db.commit()
+            
+        except Exception as e:
+            # 事务回滚
+            await db.rollback()
+            
+            # 如果是事务级别的错误，将所有成功的操作标记为失败
+            for log_id in result.success_ids:
+                result.failed_count += 1
+                result.failed_ids.append(log_id)
+                result.errors[log_id] = f"事务回滚: {str(e)}"
+                result.failed_logs.append({
+                    "log_id": log_id,
+                    "reason": f"事务回滚: {str(e)}"
+                })
+            
+            # 重置成功计数
+            result.success_count = 0
+            result.deleted_count = 0
+            result.success_ids = []
         
         return result
 
@@ -448,7 +538,7 @@ class LogService(BaseCRUDService[LogRecord]):
         request: BatchDownloadRequest
     ) -> str:
         """
-        批量下载日志
+        批量下载日志 - 改进版本，支持流式zip文件生成
         
         Args:
             db: 数据库会话
@@ -458,34 +548,164 @@ class LogService(BaseCRUDService[LogRecord]):
             str: 压缩文件路径
         """
         try:
+            # 批量查询所有日志记录
+            stmt = select(LogRecord).where(
+                LogRecord.id.in_(request.log_ids),
+                LogRecord.is_deleted == False
+            )
+            db_result = await db.execute(stmt)
+            log_records = db_result.scalars().all()
+            
+            if not log_records:
+                raise FileNotFoundError("没有找到有效的日志文件")
+            
             # 创建临时压缩文件
             download_id = str(uuid.uuid4())
             zip_filename = f"logs_batch_{download_id}.zip"
             zip_path = self.downloads_storage_path / zip_filename
             
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for log_id in request.log_ids:
-                    log_record = await self.get_by_id(db, log_id)
-                    
-                    if not log_record:
-                        continue
-                    
-                    file_path = Path(log_record.file_path)
-                    
-                    if file_path.exists():
-                        # 添加文件到压缩包
-                        zipf.write(file_path, log_record.original_filename)
+            # 使用流式压缩避免内存溢出
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
+                processed_count = 0
+                
+                for log_record in log_records:
+                    try:
+                        file_path = Path(log_record.file_path)
+                        
+                        if not file_path.exists():
+                            # 如果文件不存在，创建一个错误信息文件
+                            error_filename = f"{log_record.original_filename}.error.txt"
+                            error_content = f"错误: 文件 {log_record.original_filename} 不存在\n"
+                            error_content += f"原始路径: {log_record.file_path}\n"
+                            error_content += f"日志ID: {log_record.id}\n"
+                            zipf.writestr(error_filename, error_content)
+                            continue
+                        
+                        # 生成唯一的文件名避免冲突
+                        base_name = log_record.original_filename
+                        name, ext = os.path.splitext(base_name)
+                        unique_filename = f"{name}_{log_record.id[:8]}{ext}"
+                        
+                        # 流式添加文件到压缩包
+                        with open(file_path, 'rb') as f:
+                            # 分块读取文件，避免大文件占用过多内存
+                            with zipf.open(unique_filename, 'w') as zf:
+                                while True:
+                                    chunk = f.read(8192)  # 8KB chunks
+                                    if not chunk:
+                                        break
+                                    zf.write(chunk)
                         
                         # 如果需要包含元数据
                         if request.include_metadata:
                             metadata_content = await self._create_metadata_content(log_record)
-                            metadata_filename = f"{log_record.original_filename}.metadata.json"
+                            metadata_filename = f"{name}_{log_record.id[:8]}.metadata.json"
                             zipf.writestr(metadata_filename, metadata_content)
+                        
+                        processed_count += 1
+                        
+                        # 更新下载计数
+                        log_record.download_count += 1
+                        
+                    except Exception as e:
+                        # 为单个文件错误创建错误信息文件
+                        error_filename = f"{log_record.original_filename}.error.txt"
+                        error_content = f"处理文件时发生错误: {str(e)}\n"
+                        error_content += f"文件: {log_record.original_filename}\n"
+                        error_content += f"日志ID: {log_record.id}\n"
+                        zipf.writestr(error_filename, error_content)
+                        continue
+                
+                # 添加批量下载信息文件
+                batch_info = {
+                    "download_id": download_id,
+                    "requested_files": len(request.log_ids),
+                    "processed_files": processed_count,
+                    "download_time": datetime.utcnow().isoformat(),
+                    "include_metadata": request.include_metadata,
+                    "compress": request.compress
+                }
+                zipf.writestr("batch_download_info.json", json.dumps(batch_info, indent=2))
+            
+            # 提交数据库更改（下载计数）
+            await db.commit()
             
             return str(zip_path)
             
         except Exception as e:
+            await db.rollback()
             raise FileProcessingError(f"批量下载失败: {str(e)}")
+
+    async def batch_download_stream(
+        self, 
+        db: AsyncSession, 
+        request: BatchDownloadRequest
+    ):
+        """
+        流式批量下载 - 生成器函数，用于API流式响应
+        
+        Args:
+            db: 数据库会话
+            request: 批量下载请求
+            
+        Yields:
+            bytes: zip文件数据块
+        """
+        import io
+        
+        try:
+            # 批量查询所有日志记录
+            stmt = select(LogRecord).where(
+                LogRecord.id.in_(request.log_ids),
+                LogRecord.is_deleted == False
+            )
+            db_result = await db.execute(stmt)
+            log_records = db_result.scalars().all()
+            
+            if not log_records:
+                raise FileNotFoundError("没有找到有效的日志文件")
+            
+            # 创建内存中的zip文件
+            zip_buffer = io.BytesIO()
+            
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
+                for log_record in log_records:
+                    try:
+                        file_path = Path(log_record.file_path)
+                        
+                        if not file_path.exists():
+                            continue
+                        
+                        # 生成唯一的文件名
+                        base_name = log_record.original_filename
+                        name, ext = os.path.splitext(base_name)
+                        unique_filename = f"{name}_{log_record.id[:8]}{ext}"
+                        
+                        # 添加文件到zip
+                        zipf.write(file_path, unique_filename)
+                        
+                        # 如果需要包含元数据
+                        if request.include_metadata:
+                            metadata_content = await self._create_metadata_content(log_record)
+                            metadata_filename = f"{name}_{log_record.id[:8]}.metadata.json"
+                            zipf.writestr(metadata_filename, metadata_content)
+                        
+                        # 更新下载计数
+                        log_record.download_count += 1
+                        
+                    except Exception:
+                        continue
+            
+            # 提交数据库更改
+            await db.commit()
+            
+            # 返回zip文件内容
+            zip_buffer.seek(0)
+            return zip_buffer.getvalue()
+            
+        except Exception as e:
+            await db.rollback()
+            raise FileProcessingError(f"流式批量下载失败: {str(e)}")
 
     async def cleanup_expired_logs(self, db: AsyncSession) -> int:
         """
