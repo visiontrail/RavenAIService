@@ -3,7 +3,7 @@ import type { ApiResponse, LogRecord, PaginatedResponse } from '@/types'
 
 // 创建axios实例
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
+  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8085',
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',

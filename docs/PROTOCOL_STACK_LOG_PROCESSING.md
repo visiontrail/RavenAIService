@@ -134,14 +134,14 @@ alembic upgrade head
 ./start_celery.sh
 
 # 启动FastAPI应用
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8085
 ```
 
 ## 使用示例
 
 ### 1. 上传协议栈日志
 ```bash
-curl -X POST "http://localhost:8000/api/v1/logs/upload" \
+curl -X POST "http://localhost:8085/api/v1/logs/upload" \
   -H "Content-Type: multipart/form-data" \
   -F "file=@protocol_stack_log.tar.gz" \
   -F "log_type=stack"
@@ -150,12 +150,12 @@ curl -X POST "http://localhost:8000/api/v1/logs/upload" \
 ### 2. 查询处理进度
 ```bash
 # 使用返回的log_id查询状态
-curl "http://localhost:8000/api/v1/tasks/log/{log_id}/status"
+curl "http://localhost:8085/api/v1/tasks/log/{log_id}/status"
 ```
 
 ### 3. 监控任务列表
 ```bash
-curl "http://localhost:8000/api/v1/tasks/list?status_filter=processing"
+curl "http://localhost:8085/api/v1/tasks/list?status_filter=processing"
 ```
 
 ## 配置说明

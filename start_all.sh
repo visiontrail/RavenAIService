@@ -72,8 +72,8 @@ sleep 3
 
 # 5. 启动FastAPI应用
 echo "\n=== Starting FastAPI Application ==="
-echo "Application will be available at: http://localhost:8000"
-echo "API Documentation: http://localhost:8000/docs"
+echo "Application will be available at: http://localhost:8085"
+echo "API Documentation: http://localhost:8085/docs"
 echo "\nPress Ctrl+C to stop all services"
 echo "\n=== Service Status ==="
 echo "✓ Redis: Running on port 6379"
@@ -85,4 +85,4 @@ echo "\n==========================================\n"
 trap 'echo "\n\nShutting down services..."; kill $(cat /tmp/celery_worker.pid 2>/dev/null) 2>/dev/null; echo "Services stopped."; exit 0' INT TERM
 
 # 启动FastAPI应用（前台运行）
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8085
