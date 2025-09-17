@@ -218,8 +218,8 @@ import { ElMessage } from 'element-plus'
 import type { UploadFile, UploadFiles, UploadInstance } from 'element-plus'
 import { useLogStore } from '../stores/logs'
 import { useAppStore } from '../stores/app'
-import { formatDateTime, getStatusColor, getStatusText, formatFileSize } from '../utils'
-import type { LogRecord, UploadFile as CustomUploadFile } from '../types'
+import { formatDateTime, getStatusColor, getStatusText } from '../utils'
+import type { UploadFile as CustomUploadFile } from '../types'
 import {
   Upload,
   UploadFilled,
@@ -246,12 +246,12 @@ const recentUploads = computed(() => {
 })
 
 // 文件变化处理
-const handleFileChange = (file: UploadFile, files: UploadFiles) => {
+const handleFileChange = (_file: UploadFile, files: UploadFiles) => {
   fileList.value = files
 }
 
 // 文件移除处理
-const handleFileRemove = (file: UploadFile, files: UploadFiles) => {
+const handleFileRemove = (_file: UploadFile, files: UploadFiles) => {
   fileList.value = files
 }
 
@@ -294,7 +294,7 @@ const handleUpload = async () => {
   }
 
   uploading.value = true
-  uploadProgress.value = fileList.value.map(file => ({
+  uploadProgress.value = fileList.value.map((file: UploadFile) => ({
     file: file.raw!,
     progress: 0,
     status: 'pending',
@@ -306,7 +306,7 @@ const handleUpload = async () => {
       item.status = 'uploading'
 
       try {
-        const result = await logStore.uploadLog(item.file, (progress) => {
+        await logStore.uploadLog(item.file, (progress: number) => {
           item.progress = progress
         })
 

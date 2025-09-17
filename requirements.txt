@@ -16,6 +16,3 @@ redis>=5.0.0
 kombu>=5.3.0
 
 # Additional utilities for file processing
-tarfile
-shutil
-subprocess

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { LogRecord, PaginatedResponse } from '../types'
+import type { LogRecord } from '../types'
 import { logApi } from '../api'
 
 export const useLogStore = defineStore('logs', () => {
@@ -21,7 +21,7 @@ export const useLogStore = defineStore('logs', () => {
 
   // 计算属性
   const filteredLogs = computed(() => {
-    return logs.value.filter(log => {
+    return logs.value.filter((log: LogRecord) => {
       const matchesStatus = !filters.value.status || log.status === filters.value.status
       const matchesSearch = !filters.value.search || 
         log.filename.toLowerCase().includes(filters.value.search.toLowerCase()) ||
@@ -93,7 +93,7 @@ export const useLogStore = defineStore('logs', () => {
     try {
       const response = await logApi.deleteLog(id)
       if (response.success) {
-        logs.value = logs.value.filter(log => log.id !== id)
+        logs.value = logs.value.filter((log: LogRecord) => log.id !== id)
         return true
       }
     } catch (error) {
@@ -106,7 +106,7 @@ export const useLogStore = defineStore('logs', () => {
     try {
       const response = await logApi.batchDeleteLogs(ids)
       if (response.success) {
-        logs.value = logs.value.filter(log => !ids.includes(log.id))
+        logs.value = logs.value.filter((log: LogRecord) => !ids.includes(log.id))
         return true
       }
     } catch (error) {
