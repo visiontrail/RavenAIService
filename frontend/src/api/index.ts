@@ -1,5 +1,6 @@
 import axios from 'axios'
-import type { ApiResponse, LogRecord, PaginatedResponse } from '@/types'
+import type { ApiResponse, LogRecord } from '@/types'
+import type { LogListData, DownloadInfo } from '@/types'
 
 // 创建axios实例
 const api = axios.create({
@@ -37,16 +38,21 @@ export const logApi = {
   // 获取日志列表
   getLogList: (params: {
     page?: number
-    size?: number
+    per_page?: number
+    log_type?: string
     status?: string
+    start_time?: string
+    end_time?: string
     search?: string
-  } = {}): Promise<ApiResponse<PaginatedResponse<LogRecord>>> => {
-    return api.get('/api/logs', { params })
+    sort_by?: 'created_at' | 'file_size' | 'updated_at' | 'filename'
+    sort_order?: 'asc' | 'desc'
+  } = {}): Promise<ApiResponse<LogListData>> => {
+    return api.get('/api/v1/logs', { params })
   },
 
   // 获取日志详情
   getLogDetail: (id: string): Promise<ApiResponse<LogRecord>> => {
-    return api.get(`/api/logs/${id}`)
+    return api.get(`/api/v1/logs/${id}`)
   },
 
   // 上传日志文件
@@ -54,7 +60,7 @@ export const logApi = {
     const formData = new FormData()
     formData.append('file', file)
 
-    return api.post('/api/logs/upload', formData, {
+    return api.post('/api/v1/logs/upload', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
@@ -69,19 +75,24 @@ export const logApi = {
 
   // 下载日志文件
   downloadLog: (id: string): Promise<Blob> => {
-    return api.get(`/api/logs/${id}/download`, {
+    return api.get(`/api/v1/logs/${id}/download`, {
       responseType: 'blob',
     })
   },
 
   // 删除日志
   deleteLog: (id: string): Promise<ApiResponse> => {
-    return api.delete(`/api/logs/${id}`)
+    return api.delete(`/api/v1/logs/${id}`)
   },
 
   // 批量删除日志
   batchDeleteLogs: (ids: string[]): Promise<ApiResponse> => {
-    return api.post('/api/logs/batch-delete', { ids })
+    return api.post('/api/v1/logs/batch/delete', { log_ids: ids, force: false })
+  },
+
+  // 批量下载日志
+  batchDownloadLogs: (ids: string[]): Promise<ApiResponse<DownloadInfo>> => {
+    return api.post('/api/v1/logs/batch/download', { log_ids: ids, compress: true, include_metadata: false })
   },
 }
 
@@ -89,19 +100,19 @@ export const logApi = {
 export const taskApi = {
   // 获取任务列表
   getTaskList: (): Promise<ApiResponse<any[]>> => {
-    return api.get('/api/tasks')
+    return api.get('/api/v1/tasks')
   },
 
   // 获取任务状态
   getTaskStatus: (taskId: string): Promise<ApiResponse<any>> => {
-    return api.get(`/api/tasks/${taskId}/status`)
+    return api.get(`/api/v1/tasks/${taskId}/status`)
   },
 }
 
 // 健康检查API
 export const healthApi = {
   check: (): Promise<ApiResponse> => {
-    return api.get('/api/health')
+    return api.get('/api/v1/health')
   },
 }
 

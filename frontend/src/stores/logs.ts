@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import type { LogRecord } from '../types'
 import { logApi } from '../api'
 
@@ -11,48 +11,43 @@ export const useLogStore = defineStore('logs', () => {
   const pagination = ref({
     total: 0,
     page: 1,
-    size: 10,
+    per_page: 10,
     pages: 0,
   })
   const filters = ref({
     status: '',
+    log_type: '',
     search: '',
-  })
-
-  // 计算属性
-  const filteredLogs = computed(() => {
-    return logs.value.filter((log: LogRecord) => {
-      const matchesStatus = !filters.value.status || log.status === filters.value.status
-      const matchesSearch = !filters.value.search || 
-        log.filename.toLowerCase().includes(filters.value.search.toLowerCase()) ||
-        log.task_name?.toLowerCase().includes(filters.value.search.toLowerCase())
-      return matchesStatus && matchesSearch
-    })
+    start_time: '',
+    end_time: '',
+    sort_by: 'created_at' as 'created_at' | 'file_size' | 'updated_at' | 'filename',
+    sort_order: 'desc' as 'asc' | 'desc',
   })
 
   // 操作
-  const fetchLogs = async (params: {
-    page?: number
-    size?: number
-    status?: string
-    search?: string
-  } = {}) => {
+  const fetchLogs = async (params: Partial<typeof filters.value & typeof pagination.value> = {}) => {
     loading.value = true
     try {
-      const response = await logApi.getLogList({
-        page: params.page || pagination.value.page,
-        size: params.size || pagination.value.size,
-        status: params.status || filters.value.status,
-        search: params.search || filters.value.search,
-      })
-      
+      const query = {
+        page: params.page ?? pagination.value.page,
+        per_page: params.per_page ?? pagination.value.per_page,
+        log_type: (params.log_type ?? filters.value.log_type) || undefined,
+        status: (params.status ?? filters.value.status) || undefined,
+        start_time: (params.start_time ?? filters.value.start_time) || undefined,
+        end_time: (params.end_time ?? filters.value.end_time) || undefined,
+        search: (params.search ?? filters.value.search) || undefined,
+        sort_by: params.sort_by ?? filters.value.sort_by,
+        sort_order: params.sort_order ?? filters.value.sort_order,
+      }
+
+      const response = await logApi.getLogList(query)
       if (response.success && response.data) {
-        logs.value = response.data.items
+        logs.value = response.data.logs
         pagination.value = {
-          total: response.data.total,
-          page: response.data.page,
-          size: response.data.size,
-          pages: response.data.pages,
+          total: response.data.pagination.total,
+          page: response.data.pagination.page,
+          per_page: response.data.pagination.per_page,
+          pages: response.data.pagination.pages,
         }
       }
     } catch (error) {
@@ -94,6 +89,8 @@ export const useLogStore = defineStore('logs', () => {
       const response = await logApi.deleteLog(id)
       if (response.success) {
         logs.value = logs.value.filter((log: LogRecord) => log.id !== id)
+        // 删除后刷新分页数据
+        await fetchLogs()
         return true
       }
     } catch (error) {
@@ -107,6 +104,7 @@ export const useLogStore = defineStore('logs', () => {
       const response = await logApi.batchDeleteLogs(ids)
       if (response.success) {
         logs.value = logs.value.filter((log: LogRecord) => !ids.includes(log.id))
+        await fetchLogs()
         return true
       }
     } catch (error) {
@@ -130,8 +128,6 @@ export const useLogStore = defineStore('logs', () => {
     loading,
     pagination,
     filters,
-    // 计算属性
-    filteredLogs,
     // 操作
     fetchLogs,
     fetchLogDetail,

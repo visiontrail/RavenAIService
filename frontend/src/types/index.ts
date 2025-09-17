@@ -2,13 +2,27 @@
 export interface LogRecord {
   id: string
   filename: string
+  original_filename?: string
   file_size: number
-  upload_time: string
+  file_path?: string
+  log_type?: 'stack' | 'oam_antenna'
   status: 'pending' | 'processing' | 'completed' | 'failed'
+  progress?: number
   task_id?: string
   task_name?: string
   task_description?: string
+  retry_count?: number
+  processing_started_at?: string
+  processed_at?: string
+  checksum?: string
+  mime_type?: string
+  log_level?: 'debug' | 'info' | 'warn' | 'error' | 'fatal'
+  metadata?: Record<string, any>
   download_count: number
+  download_url?: string
+  file_size_human?: string
+  // 兼容旧字段
+  upload_time?: string
   created_at: string
   updated_at: string
 }
@@ -21,13 +35,24 @@ export interface ApiResponse<T = any> {
   error?: string
 }
 
-// 分页响应类型
-export interface PaginatedResponse<T> {
-  items: T[]
-  total: number
+// 分页响应类型（后端统一格式）
+export interface PaginationInfo {
   page: number
-  size: number
+  per_page: number
+  total: number
   pages: number
+}
+
+export interface LogListData {
+  logs: LogRecord[]
+  pagination: PaginationInfo
+}
+
+export interface DownloadInfo {
+  download_url: string
+  filename: string
+  file_size: number
+  expires_at: string
 }
 
 // 上传文件类型
