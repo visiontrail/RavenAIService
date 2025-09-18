@@ -13,16 +13,16 @@
         </div>
 
         <!-- 导航菜单 -->
-        <div class="flex items-center space-x-6">
+        <div class="flex items-center space-x-1">
           <router-link
             to="/"
             class="nav-link"
             :class="{ 'nav-link-active': $route.name === 'LogList' }"
           >
-            <el-icon class="mr-1">
+            <el-icon class="mr-2">
               <List />
             </el-icon>
-            日志列表
+            <span class="font-medium">日志列表</span>
           </router-link>
           
           <router-link
@@ -30,25 +30,15 @@
             class="nav-link"
             :class="{ 'nav-link-active': $route.name === 'Upload' }"
           >
-            <el-icon class="mr-1">
+            <el-icon class="mr-2">
               <Upload />
             </el-icon>
-            上传日志
+            <span class="font-medium">上传日志</span>
           </router-link>
         </div>
 
         <!-- 用户操作区域 -->
         <div class="flex items-center space-x-4">
-          <el-button
-            type="primary"
-            size="small"
-            @click="$router.push('/upload')"
-          >
-            <el-icon class="mr-1">
-              <Plus />
-            </el-icon>
-            上传文件
-          </el-button>
         </div>
       </div>
     </div>
@@ -63,22 +53,55 @@ import { Document, List, Upload, Plus } from '@element-plus/icons-vue'
 .nav-link {
   display: flex;
   align-items: center;
-  padding: 0.5rem 0.75rem;
+  padding: 0.75rem 1rem;
   font-size: 0.875rem;
   font-weight: 500;
   color: #6b7280;
-  border-radius: 0.375rem;
-  transition: all 0.2s;
+  border-radius: 0.5rem;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   text-decoration: none;
+  position: relative;
+  overflow: hidden;
+}
+
+.nav-link::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(120deg, rgba(37, 99, 235, 0.1), rgba(37, 99, 235, 0.05));
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: -1;
 }
 
 .nav-link:hover {
   color: #111827;
   background-color: #f9fafb;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+}
+
+.nav-link:hover::before {
+  opacity: 1;
 }
 
 .nav-link-active {
   color: #2563eb;
   background-color: #eff6ff;
+  font-weight: 600;
+}
+
+.nav-link-active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 25%;
+  width: 50%;
+  height: 3px;
+  background: linear-gradient(90deg, #3b82f6, #2563eb);
+  border-radius: 2px;
 }
 </style>
