@@ -16,7 +16,8 @@
             placeholder="搜索文件名或任务名称..."
             clearable
             @input="handleSearch"
-            class="w-48"
+            class="w-52"
+            style="width: 220px"
           >
             <template #prefix>
               <el-icon><Search /></el-icon>
@@ -27,7 +28,8 @@
             placeholder="日志类型"
             clearable
             @change="handleLogTypeFilter"
-            class="w-32"
+            class="w-40"
+            style="width: 180px"
           >
             <el-option label="协议栈日志" value="stack" />
             <el-option label="OAM与天线日志" value="oam_antenna" />
@@ -37,7 +39,8 @@
             placeholder="状态筛选"
             clearable
             @change="handleStatusFilter"
-            class="w-28"
+            class="w-32"
+            style="width: 140px"
           >
             <el-option label="待处理" value="pending" />
             <el-option label="处理中" value="processing" />
@@ -52,7 +55,8 @@
             end-placeholder="结束时间"
             :shortcuts="dateShortcuts"
             value-format="YYYY-MM-DDTHH:mm:ss[Z]"
-            class="w-72"
+            class="w-80"
+            style="width: 350px"
             @change="handleDateRangeChange"
             clearable
           />
