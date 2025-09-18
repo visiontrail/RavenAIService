@@ -10,14 +10,14 @@
     <!-- 搜索和筛选 -->
     <div class="filter-section">
       <el-card class="mb-6">
-        <div class="flex items-center gap-3">
+        <div class="flex flex-wrap items-center gap-3 w-full" style="gap: 0.75rem;">
           <el-input
             v-model="searchQuery"
             placeholder="搜索文件名或任务名称..."
             clearable
             @input="handleSearch"
-            class="w-52"
-            style="width: 220px"
+            class="w-64"
+            style="width: 280px"
           >
             <template #prefix>
               <el-icon><Search /></el-icon>
@@ -28,8 +28,8 @@
             placeholder="日志类型"
             clearable
             @change="handleLogTypeFilter"
-            class="w-40"
-            style="width: 180px"
+            class="w-36"
+            style="width: 150px"
           >
             <el-option label="协议栈日志" value="stack" />
             <el-option label="OAM与天线日志" value="oam_antenna" />
@@ -40,7 +40,7 @@
             clearable
             @change="handleStatusFilter"
             class="w-32"
-            style="width: 140px"
+            style="width: 130px"
           >
             <el-option label="待处理" value="pending" />
             <el-option label="处理中" value="processing" />
@@ -55,19 +55,20 @@
             end-placeholder="结束时间"
             :shortcuts="dateShortcuts"
             value-format="YYYY-MM-DDTHH:mm:ss[Z]"
-            class="w-80"
-            style="width: 350px"
+            class="w-80 flex-grow"
+            style="width: 360px"
             @change="handleDateRangeChange"
             clearable
           />
-          <el-button type="primary" @click="applyFilters">
-            <el-icon class="mr-1"><Search /></el-icon>
-            搜索
-          </el-button>
-          <el-button @click="resetFilters">
-            重置
-          </el-button>
-          <div class="flex-grow"></div>
+          <div class="flex items-center gap-2">
+            <el-button type="primary" @click="applyFilters">
+              <el-icon class="mr-1"><Search /></el-icon>
+              搜索
+            </el-button>
+            <el-button @click="resetFilters">
+              重置
+            </el-button>
+          </div>
         </div>
       </el-card>
     </div>
