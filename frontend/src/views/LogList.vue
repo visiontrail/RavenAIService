@@ -442,7 +442,7 @@ const handleDownload = async (log: LogRecord) => {
 
 // 复制链接
 const copyLink = async (log: LogRecord) => {
-  const link = `${window.location.origin}/#/log/${log.id}`
+  const link = `${window.location.origin}/log/${log.id}`
   try {
     await copyToClipboard(link)
     ElMessage.success('链接已复制到剪贴板')

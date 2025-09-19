@@ -23,27 +23,6 @@ class HealthResponse(BaseModel):
 router = APIRouter()
 
 
-@router.get("/", summary="服务欢迎页面")
-async def root():
-    """
-    根路径处理
-    返回服务基本信息和可用端点
-    """
-    return {
-        "message": "欢迎使用日志暂存服务",
-        "service": "LogStagingService",
-        "version": "1.0.0",
-        "status": "running",
-        "endpoints": {
-            "health": "/health",
-            "api_docs": "/docs",
-            "logs_api": "/api/v1/logs",
-            "tasks_api": "/api/v1/tasks"
-        },
-        "description": "一个用于临时存储和管理日志文件的服务"
-    }
-
-
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
     """

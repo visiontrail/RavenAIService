@@ -113,6 +113,18 @@ def create_app() -> FastAPI:
     app.include_router(logs.router, prefix="/api/v1/logs", tags=["日志管理"])
     app.include_router(tasks.router, prefix="/api/v1", tags=["任务管理"])
     
+    # 挂载前端静态站点（若已构建）
+    try:
+        static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
+        if os.path.isdir(static_dir):
+            from fastapi.staticfiles import StaticFiles
+            app.mount("/", StaticFiles(directory=static_dir, html=True), name="frontend")
+            logging.getLogger(__name__).info(f"Mounted frontend at {static_dir}")
+        else:
+            logging.getLogger(__name__).warning(f"Frontend build directory not found: {static_dir}")
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Failed to mount frontend: {e}")
+    
     return app
 
 

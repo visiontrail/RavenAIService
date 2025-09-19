@@ -257,22 +257,21 @@
           </div>
         </div>
       </div>
+      <!-- 文件不存在（必须与 v-if/v-else-if 同级且紧随其后） -->
+      <div v-else class="not-found">
+        <el-result
+          icon="warning"
+          title="文件不存在"
+          sub-title="请检查文件ID是否正确，或文件可能已被删除"
+        >
+          <template #extra>
+            <el-button type="primary" @click="$router.push('/')">
+              返回列表
+            </el-button>
+          </template>
+        </el-result>
+      </div>
     </main>
-
-    <!-- 文件不存在 -->
-    <div v-else class="not-found">
-      <el-result
-        icon="warning"
-        title="文件不存在"
-        sub-title="请检查文件ID是否正确，或文件可能已被删除"
-      >
-        <template #extra>
-          <el-button type="primary" @click="$router.push('/')">
-            返回列表
-          </el-button>
-        </template>
-      </el-result>
-    </div>
   </div>
 </template>
 

@@ -2,9 +2,14 @@ import axios from 'axios'
 import type { ApiResponse, LogRecord } from '@/types'
 import type { LogListData, DownloadInfo } from '@/types'
 
+const defaultBase = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8085'
+const computedBaseURL = import.meta.env.PROD
+  ? defaultBase
+  : (import.meta.env.VITE_API_BASE_URL || defaultBase)
+
 // 创建axios实例
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8085',
+  baseURL: computedBaseURL,
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
@@ -112,7 +117,7 @@ export const taskApi = {
 // 健康检查API
 export const healthApi = {
   check: (): Promise<ApiResponse> => {
-    return api.get('/api/v1/health')
+    return api.get('/health')
   },
 }
 

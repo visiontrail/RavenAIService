@@ -197,6 +197,28 @@ install_requirements() {
 }
 
 # ------------------------------
+# 前端构建
+# ------------------------------
+build_frontend() {
+  local fe_dir="$PROJECT_ROOT/frontend"
+  if [[ -d "$fe_dir" ]]; then
+    if command_exists npm; then
+      if [[ ! -d "$fe_dir/node_modules" ]]; then
+        log_info "Installing frontend dependencies (npm install) ..."
+        (cd "$fe_dir" && npm install)
+      fi
+      log_info "Building frontend (npm run build) ..."
+      (cd "$fe_dir" && npm run build)
+      log_info "Frontend build completed."
+    else
+      log_warn "npm not found, skipping frontend build. The root page may not be available."
+    fi
+  else
+    log_warn "Frontend directory not found, skipping frontend build."
+  fi
+}
+
+# ------------------------------
 # 4) 启动依赖服务与后台任务
 # ------------------------------
 start_redis() {
@@ -298,6 +320,7 @@ install_requirements
 start_redis
 run_db_migrations
 start_celery
+build_frontend
 
 log_info "=== Service Status ==="
 log_info "✓ Redis: start script executed (check redis-cli PING if available)"
