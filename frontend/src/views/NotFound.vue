@@ -24,6 +24,8 @@
 </script>
 
 <style scoped>
+@reference "tailwindcss";
+
 .not-found-page {
   @apply flex items-center justify-center min-h-96;
 }

@@ -351,6 +351,8 @@ onMounted(() => {
 </script>
 
 <style scoped>
+@reference "tailwindcss";
+
 .upload-page {
   @apply space-y-6;
 }

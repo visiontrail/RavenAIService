@@ -531,6 +531,8 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+@reference "tailwindcss";
+
 .log-detail {
   @apply min-h-screen bg-gray-50;
 }
