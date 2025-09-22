@@ -20,7 +20,7 @@ from app.exceptions import (
 SUPPORTED_LOG_EXTENSIONS = [
     '.log', '.txt', '.out', '.err', '.trace',
     '.json', '.xml', '.csv', '.tsv',
-    '.gz', '.zip', '.tar', '.bz2'
+    '.gz', '.zip', '.tar', '.bz2', '.tgz'
 ]
 
 SUPPORTED_MIME_TYPES = [
@@ -102,6 +102,14 @@ class FileValidator:
         if '.' not in filename:
             raise UnsupportedFileTypeError("unknown", self.supported_extensions)
         
+        filename_lower = filename.lower()
+        
+        # 检查是否为.tar.gz格式
+        if filename_lower.endswith('.tar.gz'):
+            # .tar.gz格式是支持的
+            return
+        
+        # 检查普通扩展名
         extension = '.' + filename.split('.')[-1].lower()
         
         # 验证扩展名

@@ -34,8 +34,9 @@ TAR_MAGIC_NUMBERS = [
     b'ustar  \x00',  # GNU tar format
 ]
 
-# 安全文件名正则表达式
-SAFE_FILENAME_PATTERN = re.compile(r'^[a-zA-Z0-9._\-\s()\[\]{}]+\.tar\.gz$')
+# 安全文件名正则表达式 - 支持.tar.gz和.tgz格式
+SAFE_FILENAME_PATTERN_TAR_GZ = re.compile(r'^[a-zA-Z0-9._\-\s()\[\]{}]+\.tar\.gz$')
+SAFE_FILENAME_PATTERN_TGZ = re.compile(r'^[a-zA-Z0-9._\-\s()\[\]{}]+\.tgz$')
 
 
 class T04FileUploadValidator:
@@ -105,20 +106,22 @@ class T04FileUploadValidator:
         if '..' in filename or '/' in filename or '\\' in filename:
             raise ValidationError("文件名不能包含路径分隔符")
         
-        # 检查危险字符
-        if not SAFE_FILENAME_PATTERN.match(filename):
-            raise ValidationError("文件名包含不安全的字符或格式不正确")
+        # 检查危险字符和文件格式
+        filename_lower = filename.lower()
+        if not (SAFE_FILENAME_PATTERN_TAR_GZ.match(filename) or SAFE_FILENAME_PATTERN_TGZ.match(filename)):
+            raise ValidationError("文件名包含不安全的字符或格式不正确，只支持.tar.gz和.tgz格式")
         
         # 检查隐藏文件
         if filename.startswith('.'):
             raise ValidationError("不支持隐藏文件")
     
     def _validate_file_format(self, filename: str):
-        """验证文件格式（只允许tar.gz）"""
-        if not filename.lower().endswith('.tar.gz'):
+        """验证文件格式（只允许tar.gz和tgz）"""
+        filename_lower = filename.lower()
+        if not (filename_lower.endswith('.tar.gz') or filename_lower.endswith('.tgz')):
             raise UnsupportedFileTypeError(
                 filename.split('.')[-1] if '.' in filename else 'unknown',
-                ['.tar.gz']
+                ['.tar.gz', '.tgz']
             )
     
     async def _validate_file_size(self, file: UploadFile):

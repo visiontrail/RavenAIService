@@ -41,7 +41,7 @@
                     <span class="text-blue-600">点击上传</span>
                   </p>
                   <p class="text-sm text-gray-500 mt-2">
-                    支持 .log, .txt, .json 等格式，单个文件不超过 {{ maxFileSize }}MB
+                    支持 .log, .txt, .json, .tgz, .tar.gz 等格式，单个文件不超过 {{ maxFileSize }}MB
                   </p>
                 </div>
               </div>
@@ -89,7 +89,7 @@
                 <el-icon class="text-green-500 mt-0.5" size="14">
                   <Check />
                 </el-icon>
-                <span>支持 .log、.txt、.json 等文本格式</span>
+                <span>支持 .log、.txt、.json、.tgz、.tar.gz 等格式</span>
               </li>
               <li class="flex items-start space-x-2">
                 <el-icon class="text-green-500 mt-0.5" size="14">
@@ -238,7 +238,7 @@ const uploading = ref(false)
 const uploadProgress = ref<CustomUploadFile[]>([])
 
 const maxFileSize = computed(() => {
-  return parseInt(import.meta.env.VITE_MAX_FILE_SIZE || '100')
+  return parseInt(import.meta.env.VITE_MAX_FILE_SIZE || '1024')
 })
 
 const recentUploads = computed(() => {
@@ -265,10 +265,15 @@ const beforeUpload = (file: File) => {
   }
 
   // 检查文件类型
-  const allowedTypes = ['.log', '.txt', '.json']
-  const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase()
-  if (!allowedTypes.includes(fileExtension)) {
-    ElMessage.error('只支持 .log、.txt、.json 格式的文件!')
+  const allowedTypes = ['.log', '.txt', '.json', '.tgz']
+  const fileName = file.name.toLowerCase()
+  
+  // 检查是否为支持的格式
+  const isValidType = allowedTypes.some(type => fileName.endsWith(type)) || 
+                     fileName.endsWith('.tar.gz')
+  
+  if (!isValidType) {
+    ElMessage.error('只支持 .log、.txt、.json、.tgz、.tar.gz 格式的文件!')
     return false
   }
 
