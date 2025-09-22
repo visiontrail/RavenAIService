@@ -13,4 +13,5 @@ env/
 *.tmp
 *.bak
 *.swp
-frontend/
+frontend/node_modules/
+frontend/dist/

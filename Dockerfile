@@ -5,11 +5,13 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
-# Install system dependencies
+# Install system dependencies including Node.js
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tar \
     gzip \
     curl \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy tool_log_decompress to system directory (as root)
@@ -28,6 +30,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code and change ownership
 COPY . .
+
+# Build frontend (as root before changing ownership)
+WORKDIR /app/frontend
+RUN if [ -f package.json ]; then \
+    npm install && \
+    npm run build; \
+    fi
+
+# Change ownership and switch back to app directory
+WORKDIR /app
 RUN chown -R appuser:appuser /app
 
 # Switch to non-root user
