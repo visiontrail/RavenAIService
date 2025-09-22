@@ -12,22 +12,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy tool_log_decompress to system directory (as root)
+COPY bin/tool_log_decompress /usr/local/bin/
+RUN chmod +x /usr/local/bin/tool_log_decompress
+
 # Create a non-root user
 RUN useradd -m -u 1000 appuser
-USER appuser
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements and install dependencies
-COPY --chown=appuser:appuser requirements.txt .
+# Copy requirements and install dependencies (as root first)
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY --chown=appuser:appuser . .
+# Copy application code and change ownership
+COPY . .
+RUN chown -R appuser:appuser /app
 
-# Copy tool_log_decompress
-COPY --chown=appuser:appuser bin/tool_log_decompress /usr/local/bin/
+# Switch to non-root user
+USER appuser
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
