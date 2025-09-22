@@ -1,0 +1,16 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+lib
+lib64
+venv/
+env/
+.git/
+.vscode/
+*.log
+*.tmp
+*.bak
+*.swp
+frontend/
