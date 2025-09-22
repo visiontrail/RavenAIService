@@ -6,9 +6,9 @@ services:
     expose:
       - "8085"
     volumes:
-      - ./logs:/app/logs
-      - ./temp:/app/temp
-      - ./data:/app/data
+      - app_logs:/app/logs
+      - app_temp:/app/temp
+      - app_data:/app/data
     depends_on:
       - redis
     env_file:
@@ -37,3 +37,6 @@ services:
 
 volumes:
   redis_data:
+  app_logs:
+  app_temp:
+  app_data:

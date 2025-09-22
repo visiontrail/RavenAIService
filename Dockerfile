@@ -46,6 +46,10 @@ RUN pip install --no-cache-dir \
 # Copy application code and change ownership
 COPY . .
 
+# Create necessary directories and set permissions
+RUN mkdir -p /app/logs /app/temp/logs /app/temp/downloads /app/data
+RUN chown -R appuser:appuser /app
+
 # Build frontend (as root before changing ownership)
 WORKDIR /app/frontend
 RUN if [ -f package.json ]; then \
