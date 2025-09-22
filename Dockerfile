@@ -5,13 +5,17 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
-# Install system dependencies including Node.js
+# Install system dependencies including Node.js and build tools for psutil
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tar \
     gzip \
     curl \
     nodejs \
     npm \
+    gcc \
+    g++ \
+    python3-dev \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy tool_log_decompress to system directory (as root)
@@ -26,7 +30,18 @@ WORKDIR /app
 
 # Copy requirements and install dependencies (as root first)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Upgrade pip and configure for better network handling
+RUN pip install --upgrade pip
+
+# Install dependencies with increased timeout and retries
+RUN pip install --no-cache-dir \
+    --timeout 300 \
+    --retries 5 \
+    --trusted-host pypi.org \
+    --trusted-host pypi.python.org \
+    --trusted-host files.pythonhosted.org \
+    -r requirements.txt
 
 # Copy application code and change ownership
 COPY . .
