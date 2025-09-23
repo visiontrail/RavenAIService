@@ -824,7 +824,15 @@ class LogService(BaseCRUDService[LogRecord]):
                 from sqlalchemy.orm import sessionmaker
                 from sqlalchemy import create_engine
                 
-                sync_engine = create_engine(settings.get_database_url().replace('aiosqlite', 'sqlite'))
+                # 正确构建同步SQLite连接URL
+                database_url = settings.get_database_url()
+                if 'sqlite+aiosqlite' in database_url:
+                    sync_database_url = database_url.replace('sqlite+aiosqlite', 'sqlite')
+                else:
+                    # 如果是其他数据库类型，保持原样但移除异步驱动器
+                    sync_database_url = database_url.replace('+asyncpg', '').replace('+aiosqlite', '')
+                
+                sync_engine = create_engine(sync_database_url)
                 SessionLocal = sessionmaker(bind=sync_engine)
                 db_session = SessionLocal()
                 try:
