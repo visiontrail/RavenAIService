@@ -33,6 +33,34 @@ router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
 
+@router.post("/upload-simple", response_model=LogUploadResponse, status_code=201)
+async def upload_log_simple(
+    file: UploadFile = File(..., description="要上传的日志文件"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    简化的日志文件上传接口 - 用于测试和调试
+    """
+    # 使用默认值
+    metadata = LogMetadata()
+    upload_request = LogUploadRequest(
+        log_type=LogType.STACK,
+        log_level=LogLevel.INFO,
+        metadata=metadata,
+        expires_in_days=None
+    )
+    
+    # 执行上传
+    log_info = await log_service.upload_log(db, file, upload_request)
+    
+    logger.info(f"Log uploaded successfully (simple): {log_info.id}")
+    
+    return LogUploadResponse(
+        message="日志上传成功",
+        data=log_info
+    )
+
+
 @router.post("/upload", response_model=LogUploadResponse, status_code=201)
 async def upload_log(
     file: UploadFile = File(..., description="要上传的日志文件"),

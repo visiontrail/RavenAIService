@@ -10,7 +10,7 @@ const computedBaseURL = import.meta.env.PROD
 // 创建axios实例
 const api = axios.create({
   baseURL: computedBaseURL,
-  timeout: 30000,
+  timeout: 300000, // 增加到5分钟超时，用于大文件上传
   headers: {
     'Content-Type': 'application/json',
   },
@@ -64,11 +64,9 @@ export const logApi = {
   uploadLog: (file: File, onProgress?: (progress: number) => void): Promise<ApiResponse<LogRecord>> => {
     const formData = new FormData()
     formData.append('file', file)
-    // 添加必需的form字段
-    formData.append('log_type', 'stack')
-    formData.append('log_level', 'info')
 
-    return api.post('/api/v1/logs/upload', formData, {
+    // 使用简化的上传端点进行测试
+    return api.post('/api/v1/logs/upload-simple', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },

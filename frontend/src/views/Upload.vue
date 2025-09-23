@@ -3,7 +3,7 @@
     <!-- 页面标题 -->
     <div class="page-header">
       <h1 class="text-2xl font-bold text-gray-900 mb-2">上传日志文件</h1>
-      <p class="text-gray-600">支持上传日志文件进行分析处理</p>
+      <p class="text-gray-600">支持上传未解析的协议栈日志包进行解析处理</p>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
