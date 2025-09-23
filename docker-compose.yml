@@ -26,6 +26,23 @@ services:
     volumes:
       - redis_data:/data
 
+  worker:
+    build: .
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2 --queues=log_processing,default --hostname=worker@%h
+    volumes:
+      - app_logs:/app/logs
+      - app_temp:/app/temp
+      - app_data:/app/data
+    depends_on:
+      - redis
+    env_file:
+      - .env.example
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   nginx:
     image: nginx:alpine
     ports:
