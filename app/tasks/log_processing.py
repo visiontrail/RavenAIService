@@ -266,15 +266,20 @@ def _repackage_processed_files(processed_dir: str, original_filename: str, temp_
     base_name = os.path.splitext(os.path.splitext(original_filename)[0])[0]  # 移除 .tar.gz
     new_filename = f"{base_name}_processed.tar.gz"
     output_file = os.path.join(temp_dir, new_filename)
+    logger.info(f"RepackageTask - 开始重新打包: 输入目录={processed_dir}, 输出文件={output_file}")
     
     try:
         with tarfile.open(output_file, 'w:gz') as tar:
+            file_count = 0
             for root, dirs, files in os.walk(processed_dir):
                 for file in files:
                     file_path = os.path.join(root, file)
                     arcname = os.path.relpath(file_path, processed_dir)
                     tar.add(file_path, arcname=arcname)
+                    file_count += 1
+        logger.info(f"RepackageTask - 重新打包成功: 包含文件数={file_count}, 输出文件={output_file}")
     except Exception as e:
+        logger.error(f"RepackageTask - 重新打包失败: 错误={str(e)}")
         raise RuntimeError(f"Failed to repackage files: {str(e)}")
     
     return output_file
@@ -291,26 +296,33 @@ def _replace_original_file(processed_file_path: str, original_file_path: str) ->
     Returns:
         str: 最终文件路径
     """
+    logger.info(f"ReplaceTask - 开始替换原始文件: {processed_file_path} -> {original_file_path}")
     try:
         # 备份原文件（可选）
         backup_path = f"{original_file_path}.backup"
         if os.path.exists(original_file_path):
             shutil.copy2(original_file_path, backup_path)
+            logger.info(f"ReplaceTask - 原文件备份完成: {backup_path}")
         
         # 替换文件
         shutil.move(processed_file_path, original_file_path)
+        logger.info(f"ReplaceTask - 文件替换成功")
         
         # 删除备份（如果替换成功）
         if os.path.exists(backup_path):
             os.remove(backup_path)
+            logger.info(f"ReplaceTask - 备份文件已删除")
             
     except Exception as e:
         # 如果替换失败，尝试恢复备份
         backup_path = f"{original_file_path}.backup"
         if os.path.exists(backup_path):
             shutil.move(backup_path, original_file_path)
+            logger.info(f"ReplaceTask - 已恢复备份文件")
+        logger.error(f"ReplaceTask - 文件替换失败: 错误={str(e)}")
         raise RuntimeError(f"Failed to replace original file: {str(e)}")
     
+    logger.info(f"ReplaceTask - 文件替换操作完成: {original_file_path}")
     return original_file_path
 
 
@@ -324,9 +336,12 @@ def _update_progress(db_session: Session, log_record: LogRecord, progress: float
         progress: 进度百分比
     """
     try:
+        old_progress = log_record.progress
         log_record.progress = min(progress, 95.0)  # 最大进度限制95%
         log_record.updated_at = datetime.utcnow()
         db_session.commit()
-    except Exception:
+        logger.debug(f"ProgressUpdate - 进度更新: 日志ID={log_record.id}, {old_progress:.1f}% -> {log_record.progress:.1f}%")
+    except Exception as e:
         # 进度更新失败不应该影响主流程
+        logger.warning(f"ProgressUpdate - 进度更新失败: 日志ID={log_record.id}, 错误={str(e)}")
         db_session.rollback()

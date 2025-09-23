@@ -9,6 +9,7 @@ import zipfile
 import tempfile
 import uuid
 import json
+import logging
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
@@ -29,6 +30,8 @@ from app.exceptions import (
     FileProcessingError, BatchOperationError
 )
 from app.utils.validation import file_validator
+
+logger = logging.getLogger(__name__)
 
 
 class LogService(BaseCRUDService[LogRecord]):
@@ -61,11 +64,15 @@ class LogService(BaseCRUDService[LogRecord]):
         Returns:
             LogFileInfo: 上传后的文件信息
         """
+        logger.info(f"LogService - 开始处理日志上传: {file.filename}")
         try:
             # 验证文件
+            logger.info(f"LogService - 开始验证文件: {file.filename}")
             is_valid, error_msg = await file_validator.validate_upload_file(file)
             if not is_valid:
+                logger.error(f"LogService - 文件验证失败: {file.filename}, 错误: {error_msg}")
                 raise FileUploadError(error_msg)
+            logger.info(f"LogService - 文件验证通过: {file.filename}")
             
             # 生成文件ID和存储路径
             file_id = str(uuid.uuid4())
@@ -73,16 +80,22 @@ class LogService(BaseCRUDService[LogRecord]):
             sanitized_filename = file_validator.sanitize_filename(original_filename)
             stored_filename = f"{file_id}_{sanitized_filename}"
             file_path = self.logs_storage_path / stored_filename
+            logger.info(f"LogService - 生成文件路径: {file_path}")
             
             # 计算文件校验和
+            logger.info(f"LogService - 开始计算文件校验和: {file.filename}")
             checksum = await file_validator.calculate_file_checksum(file)
+            logger.info(f"LogService - 文件校验和计算完成: {checksum[:16]}...")
             
             # 保存文件
+            logger.info(f"LogService - 开始保存文件: {file_path}")
             await self._save_file(file, file_path)
+            logger.info(f"LogService - 文件保存完成")
             
             # 获取文件信息
             file_size = file_path.stat().st_size
             mime_type = file.content_type or "application/octet-stream"
+            logger.info(f"LogService - 文件信息: 大小={file_size} bytes, MIME类型={mime_type}")
             
             # 将元数据转换为JSON字符串
             metadata_json = None
@@ -90,6 +103,7 @@ class LogService(BaseCRUDService[LogRecord]):
                 metadata_json = request.metadata.model_dump_json()
             
             # 创建数据库记录
+            logger.info(f"LogService - 开始创建数据库记录: ID={file_id}")
             log_record = await self.create(
                 db=db,
                 id=file_id,
@@ -105,17 +119,23 @@ class LogService(BaseCRUDService[LogRecord]):
                 log_level=request.log_level,
                 metadata_json=metadata_json
             )
+            logger.info(f"LogService - 数据库记录创建成功: ID={file_id}")
             
             # 检查是否为协议栈日志，如果是则自动触发处理
+            logger.info(f"LogService - 检查是否需要触发协议栈处理: {original_filename}")
             await self._check_and_trigger_protocol_stack_processing(log_record)
             
             # 转换为Pydantic模型
-            return await self._db_to_pydantic(log_record, request.metadata)
+            result = await self._db_to_pydantic(log_record, request.metadata)
+            logger.info(f"LogService - 日志上传完成: ID={file_id}, 文件名={original_filename}")
+            return result
             
         except Exception as e:
+            logger.error(f"LogService - 日志上传失败: {file.filename}, 错误: {str(e)}")
             # 清理已创建的文件
             if 'file_path' in locals() and file_path.exists():
                 file_path.unlink()
+                logger.info(f"LogService - 清理失败文件: {file_path}")
             
             if isinstance(e, (FileUploadError, StorageError)):
                 raise e
@@ -326,6 +346,7 @@ class LogService(BaseCRUDService[LogRecord]):
         Returns:
             LogFileInfo: 更新后的日志信息
         """
+        logger.info(f"LogService - 更新日志状态: ID={log_id}, 状态={status.value}, 进度={progress}")
         update_data = {"status": status}
         
         if progress is not None:
@@ -341,7 +362,10 @@ class LogService(BaseCRUDService[LogRecord]):
         log_record = await self.update(db, log_id, **update_data)
         
         if not log_record:
+            logger.error(f"LogService - 日志记录不存在: ID={log_id}")
             raise FileNotFoundError(file_id=log_id)
+        
+        logger.info(f"LogService - 日志状态更新成功: ID={log_id}, 新状态={log_record.status.value}")
         
         # 解析元数据
         metadata = LogMetadata()
@@ -814,11 +838,13 @@ class LogService(BaseCRUDService[LogRecord]):
         try:
             # 检查文件名是否包含"stack"关键字
             if "stack" in log_record.original_filename.lower():
+                logger.info(f"LogService - 检测到协议栈日志，准备启动处理任务: {log_record.original_filename}")
                 # 动态导入避免循环导入
                 from app.tasks.log_processing import process_protocol_stack_log
                 
                 # 启动异步任务
                 task_result = process_protocol_stack_log.delay(log_record.id)
+                logger.info(f"LogService - 协议栈处理任务已启动: 任务ID={task_result.id}, 日志ID={log_record.id}")
                 
                 # 更新任务ID到数据库（同步方式）
                 from sqlalchemy.orm import sessionmaker
@@ -842,14 +868,13 @@ class LogService(BaseCRUDService[LogRecord]):
                         record.task_id = task_result.id
                         record.log_type = LogType.STACK  # 确保设置为协议栈类型
                         db_session.commit()
+                        logger.info(f"LogService - 数据库记录已更新任务ID: 日志ID={log_record.id}, 任务ID={task_result.id}")
                 finally:
                     db_session.close()
                     
         except Exception as e:
             # 记录错误但不影响文件上传流程
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Failed to trigger protocol stack processing for log {log_record.id}: {str(e)}")
+            logger.error(f"LogService - 触发协议栈处理失败: 日志ID={log_record.id}, 错误: {str(e)}")
 
 
 # 创建全局服务实例

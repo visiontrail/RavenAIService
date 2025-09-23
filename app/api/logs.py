@@ -136,6 +136,8 @@ async def upload_t04_logs(
     - 507: 存储空间不足
     - 500: 服务器错误
     """
+    
+    logger.info(f"T04上传请求开始 - 文件数量: {len(files)}, 文件名列表: {[f.filename for f in files]}")
     from fastapi import HTTPException, status
     from sqlalchemy.ext.asyncio import AsyncSession
     from app.models.database import get_db
@@ -147,14 +149,16 @@ async def upload_t04_logs(
     try:
         cleaned_count = temp_file_cleaner.cleanup_expired_files()
         if cleaned_count > 0:
-            logger.info(f"清理了 {cleaned_count} 个过期临时文件")
+            logger.info(f"T04上传 - 清理了 {cleaned_count} 个过期临时文件")
     except Exception as e:
-        logger.warning(f"清理临时文件失败: {e}")
+        logger.warning(f"T04上传 - 清理临时文件失败: {e}")
     
     # 验证文件列表
+    logger.info("T04上传 - 开始文件验证")
     try:
         is_valid, error_msg = await t04_file_validator.validate_upload_files(files)
         if not is_valid:
+            logger.error(f"T04上传 - 文件验证失败: {error_msg}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
@@ -163,7 +167,9 @@ async def upload_t04_logs(
                     "error": error_msg
                 }
             )
+        logger.info("T04上传 - 文件验证通过")
     except FileSizeExceededError as e:
+        logger.error(f"T04上传 - 文件大小超限: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail={
@@ -173,6 +179,7 @@ async def upload_t04_logs(
             }
         )
     except UnsupportedFileTypeError as e:
+        logger.error(f"T04上传 - 文件格式错误: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -183,6 +190,7 @@ async def upload_t04_logs(
         )
     except ValidationError as e:
         if "损坏" in str(e):
+            logger.error(f"T04上传 - 文件损坏: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
@@ -192,6 +200,7 @@ async def upload_t04_logs(
                 }
             )
         else:
+            logger.error(f"T04上传 - 文件验证失败: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
@@ -202,6 +211,7 @@ async def upload_t04_logs(
             )
     
     # 检查存储空间
+    logger.info("T04上传 - 开始存储空间检查")
     try:
         storage_path = Path("logs")
         storage_path.mkdir(exist_ok=True)
@@ -215,7 +225,10 @@ async def upload_t04_logs(
         for file in files:
             await file.seek(0)
         
+        logger.info(f"T04上传 - 存储空间检查: 可用空间={free_space // (1024*1024)}MB, 需要空间={total_file_size // (1024*1024)}MB")
+        
         if free_space < total_file_size * 2:  # 预留一倍空间
+            logger.error(f"T04上传 - 存储空间不足: 可用空间={free_space // (1024*1024)}MB, 需要空间={total_file_size // (1024*1024)}MB")
             raise HTTPException(
                 status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
                 detail={
@@ -224,13 +237,16 @@ async def upload_t04_logs(
                     "error": f"可用空间: {free_space // (1024*1024)}MB, 需要空间: {total_file_size // (1024*1024)}MB"
                 }
             )
+        
+        logger.info("T04上传 - 存储空间检查通过")
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"存储空间检查失败: {e}")
+        logger.error(f"T04上传 - 存储空间检查失败: {e}")
         # 存储空间检查失败不阻止上传，继续处理
     
     # 处理文件上传
+    logger.info("T04上传 - 开始文件上传处理")
     upload_results = []
     failed_files = []
     
@@ -239,30 +255,39 @@ async def upload_t04_logs(
         try:
             for file in files:
                 try:
+                    logger.info(f"T04上传 - 开始处理文件: {file.filename}")
+                    
                     # 生成文件ID
                     file_id = str(uuid.uuid4())
+                    logger.info(f"T04上传 - 生成文件ID: {file_id}")
                     
                     # 判断日志类型
                     log_type = t04_file_validator.determine_log_type_from_filename(file.filename)
+                    logger.info(f"T04上传 - 检测到日志类型: {log_type}")
                     
                     # 生成安全的文件名
                     safe_filename = t04_file_validator.generate_unique_filename(file.filename, file_id)
+                    logger.info(f"T04上传 - 生成安全文件名: {safe_filename}")
                     
                     # 保存文件
                     file_path = storage_path / safe_filename
                     
                     # 保存文件内容
+                    logger.info(f"T04上传 - 开始保存文件到: {file_path}")
                     await file.seek(0)
                     content = await file.read()
                     with open(file_path, "wb") as f:
                         f.write(content)
+                    logger.info(f"T04上传 - 文件保存完成")
                     
                     # 计算文件校验和
                     await file.seek(0)
                     checksum = await t04_file_validator.calculate_file_checksum(file)
+                    logger.info(f"T04上传 - 文件校验和计算完成: {checksum[:16]}...")
                     
                     # 获取文件大小
                     file_size = len(content)
+                    logger.info(f"T04上传 - 文件大小: {file_size} bytes")
                     
                     # 创建数据库记录
                     from app.models.log import LogRecord
@@ -282,9 +307,11 @@ async def upload_t04_logs(
                         "log_level": LogLevel.INFO
                     }
                     
+                    logger.info(f"T04上传 - 开始创建数据库记录")
                     stmt = insert(LogRecord).values(**log_record_data)
                     await db.execute(stmt)
                     await db.commit()
+                    logger.info(f"T04上传 - 数据库记录创建成功")
                     
                     # 添加到成功结果
                     upload_results.append({
@@ -296,10 +323,10 @@ async def upload_t04_logs(
                         "status": "pending"
                     })
                     
-                    logger.info(f"T04文件上传成功: {file.filename} -> {safe_filename}")
+                    logger.info(f"T04上传 - 文件处理完成: {file.filename} -> {safe_filename}, ID: {file_id}")
                     
                 except Exception as e:
-                     logger.error(f"处理文件 {file.filename} 失败: {e}")
+                     logger.error(f"T04上传 - 处理文件 {file.filename} 失败: {e}")
                      failed_files.append({
                          "filename": file.filename,
                          "error": str(e)
@@ -309,6 +336,7 @@ async def upload_t04_logs(
                      if 'file_path' in locals() and file_path.exists():
                          try:
                              file_path.unlink()
+                             logger.info(f"T04上传 - 清理失败文件: {file_path}")
                          except Exception:
                              pass
                      
@@ -316,13 +344,14 @@ async def upload_t04_logs(
                      if 'file_id' in locals():
                          try:
                              temp_file_cleaner.cleanup_on_upload_failure(file_id)
+                             logger.info(f"T04上传 - 清理临时文件: {file_id}")
                          except Exception as cleanup_error:
-                             logger.warning(f"清理临时文件失败: {cleanup_error}")
+                             logger.warning(f"T04上传 - 清理临时文件失败: {cleanup_error}")
             
             break  # 成功处理完所有文件，退出数据库会话循环
             
         except Exception as e:
-            logger.error(f"数据库操作失败: {e}")
+            logger.error(f"T04上传 - 数据库操作失败: {e}")
             await db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -334,6 +363,7 @@ async def upload_t04_logs(
             )
     
     # 构建响应
+    logger.info(f"T04上传 - 上传完成: 成功={len(upload_results)}, 失败={len(failed_files)}")
     if upload_results:
         response_data = {
             "success": True,
@@ -348,12 +378,15 @@ async def upload_t04_logs(
         
         if failed_files:
             # 部分成功
+            logger.warning(f"T04上传 - 部分成功: {len(upload_results)}/{len(files)} 个文件上传成功")
             return response_data
         else:
             # 全部成功
+            logger.info(f"T04上传 - 全部成功: {len(upload_results)} 个文件上传成功")
             return response_data
     else:
         # 全部失败
+        logger.error(f"T04上传 - 全部失败: {len(failed_files)} 个文件上传失败")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
