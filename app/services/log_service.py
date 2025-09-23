@@ -121,12 +121,18 @@ class LogService(BaseCRUDService[LogRecord]):
             )
             logger.info(f"LogService - 数据库记录创建成功: ID={file_id}")
             
+            # 转换为Pydantic模型
+            result = await self._db_to_pydantic(log_record, request.metadata)
+            
+            # 立即提交事务，确保数据在触发Celery任务前已完全写入数据库
+            # 这样可以避免Celery worker无法找到记录的竞态条件
+            await db.commit()
+            logger.info(f"LogService - 数据库记录已提交: ID={file_id}")
+            
             # 检查是否为协议栈日志，如果是则自动触发处理
             logger.info(f"LogService - 检查是否需要触发协议栈处理: {original_filename}")
             await self._check_and_trigger_protocol_stack_processing(log_record)
             
-            # 转换为Pydantic模型
-            result = await self._db_to_pydantic(log_record, request.metadata)
             logger.info(f"LogService - 日志上传完成: ID={file_id}, 文件名={original_filename}")
             return result
             
@@ -842,35 +848,12 @@ class LogService(BaseCRUDService[LogRecord]):
                 # 动态导入避免循环导入
                 from app.tasks.log_processing import process_protocol_stack_log
                 
-                # 启动异步任务
-                task_result = process_protocol_stack_log.delay(log_record.id)
-                logger.info(f"LogService - 协议栈处理任务已启动: 任务ID={task_result.id}, 日志ID={log_record.id}")
-                
-                # 更新任务ID到数据库（同步方式）
-                from sqlalchemy.orm import sessionmaker
-                from sqlalchemy import create_engine
-                
-                # 正确构建同步SQLite连接URL
-                database_url = settings.get_database_url()
-                if 'sqlite+aiosqlite' in database_url:
-                    sync_database_url = database_url.replace('sqlite+aiosqlite', 'sqlite')
-                else:
-                    # 如果是其他数据库类型，保持原样但移除异步驱动器
-                    sync_database_url = database_url.replace('+asyncpg', '').replace('+aiosqlite', '')
-                
-                sync_engine = create_engine(sync_database_url)
-                SessionLocal = sessionmaker(bind=sync_engine)
-                db_session = SessionLocal()
-                try:
-                    # 重新查询记录以确保获取最新状态
-                    record = db_session.query(LogRecord).filter(LogRecord.id == log_record.id).first()
-                    if record:
-                        record.task_id = task_result.id
-                        record.log_type = LogType.STACK  # 确保设置为协议栈类型
-                        db_session.commit()
-                        logger.info(f"LogService - 数据库记录已更新任务ID: 日志ID={log_record.id}, 任务ID={task_result.id}")
-                finally:
-                    db_session.close()
+                # 启动异步任务，由于数据库事务已经立即提交，只需要很短的延迟
+                task_result = process_protocol_stack_log.apply_async(
+                    args=[log_record.id],
+                    countdown=1  # 延迟1秒执行，给数据库一点时间确保在所有连接中可见
+                )
+                logger.info(f"LogService - 协议栈处理任务已启动: 任务ID={task_result.id}, 日志ID={log_record.id}, 延迟执行=1秒")
                     
         except Exception as e:
             # 记录错误但不影响文件上传流程

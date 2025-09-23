@@ -9,6 +9,7 @@ services:
       - app_logs:/app/logs
       - app_temp:/app/temp
       - app_data:/app/data
+      - app_db:/app
     depends_on:
       - redis
     env_file:
@@ -33,6 +34,7 @@ services:
       - app_logs:/app/logs
       - app_temp:/app/temp
       - app_data:/app/data
+      - app_db:/app
     depends_on:
       - redis
     env_file:
@@ -57,3 +59,4 @@ volumes:
   app_logs:
   app_temp:
   app_data:
+  app_db:

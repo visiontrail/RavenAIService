@@ -79,32 +79,62 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
     database_url = settings.get_database_url()
     if 'sqlite+aiosqlite' in database_url:
         sync_database_url = database_url.replace('sqlite+aiosqlite', 'sqlite')
+    elif 'postgresql+asyncpg' in database_url:
+        sync_database_url = database_url.replace('postgresql+asyncpg', 'postgresql+psycopg2')
     else:
         # 如果是其他数据库类型，保持原样但移除异步驱动器
         sync_database_url = database_url.replace('+asyncpg', '').replace('+aiosqlite', '')
     
     logger.debug(f"LogProcessingTask - 创建数据库连接: 数据库URL={sync_database_url}")
-    sync_engine = create_engine(sync_database_url)
+    # 为Celery任务创建独立的数据库引擎，避免连接池冲突
+    sync_engine = create_engine(
+        sync_database_url,
+        pool_size=1,  # 减少连接池大小
+        max_overflow=0,  # 不允许溢出连接
+        pool_timeout=30,
+        pool_recycle=3600,
+        echo=False  # 减少日志输出
+    )
     SessionLocal = sessionmaker(bind=sync_engine)
     db_session = SessionLocal()
     
     try:
-        # 获取日志记录
+        # 获取日志记录 - 优化重试机制
         logger.debug(f"LogProcessingTask - 查询日志记录: 日志ID={log_id}")
-        log_record = db_session.query(LogRecord).filter(LogRecord.id == log_id).first()
-        if not log_record:
-            logger.error(f"LogProcessingTask - 日志记录不存在: 日志ID={log_id}")
-            raise ValueError(f"Log record with id {log_id} not found")
+        log_record = None
+        max_retries = 3  # 减少重试次数，因为数据库事务已经立即提交
+        retry_delay = 0.5  # 减少初始延迟时间
+        
+        for attempt in range(max_retries):
+            # 刷新数据库会话以确保获取最新数据
+            db_session.expire_all()
+            log_record = db_session.query(LogRecord).filter(LogRecord.id == log_id).first()
+            if log_record:
+                logger.info(f"LogProcessingTask - 成功找到日志记录: 日志ID={log_id}, 尝试次数={attempt + 1}")
+                break
+            
+            if attempt < max_retries - 1:
+                logger.warning(f"LogProcessingTask - 日志记录暂时不存在，等待重试: 日志ID={log_id}, 尝试次数={attempt + 1}/{max_retries}, 等待时间={retry_delay}秒")
+                time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2.0, 2.0)  # 指数退避，最大2秒
+            else:
+                logger.error(f"LogProcessingTask - 经过{max_retries}次重试后仍未找到日志记录: 日志ID={log_id}")
+                raise ValueError(f"Log record with id {log_id} not found after {max_retries} retries")
         
         logger.info(f"LogProcessingTask - 找到日志记录: 文件名={log_record.original_filename}, 文件大小={log_record.file_size}字节, 当前状态={log_record.status}")
         
-        # 更新任务状态
+        # 更新任务状态和相关信息
         log_record.task_id = task_id
         log_record.status = LogStatus.PROCESSING
         log_record.processing_started_at = datetime.utcnow()
         log_record.progress = 0.0
+        
+        # 确保设置为协议栈类型
+        from app.models.log import LogType
+        log_record.log_type = LogType.STACK
+        
         db_session.commit()
-        logger.info(f"LogProcessingTask - 任务状态已更新为处理中: 任务ID={task_id}")
+        logger.info(f"LogProcessingTask - 任务状态已更新为处理中: 任务ID={task_id}, 日志类型={log_record.log_type}")
         
         # 检查文件是否存在
         if not os.path.exists(log_record.file_path):
@@ -191,13 +221,22 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
         
         logger.error(f"LogProcessingTask - 处理过程中发生异常: 日志ID={log_id}, 任务ID={task_id}, 错误信息={error_message}, 处理时间={processing_time:.2f}秒, 异常类型={type(exc).__name__}", exc_info=True)
         
-        # 更新数据库记录
-        if 'log_record' in locals():
-            log_record.status = LogStatus.FAILED
-            log_record.error_message = error_message
-            log_record.retry_count += 1
-            db_session.commit()
-            logger.info(f"LogProcessingTask - 数据库记录已更新为失败状态: 重试次数={log_record.retry_count}")
+        # 更新数据库记录 - 安全检查log_record是否存在且不为None
+        if 'log_record' in locals() and log_record is not None:
+            try:
+                log_record.status = LogStatus.FAILED
+                log_record.error_message = error_message
+                log_record.retry_count += 1
+                db_session.commit()
+                logger.info(f"LogProcessingTask - 数据库记录已更新为失败状态: 重试次数={log_record.retry_count}")
+            except Exception as db_error:
+                logger.error(f"LogProcessingTask - 更新数据库记录失败: {str(db_error)}")
+                try:
+                    db_session.rollback()
+                except Exception as rollback_error:
+                    logger.error(f"LogProcessingTask - 数据库回滚失败: {str(rollback_error)}")
+        else:
+            logger.warning(f"LogProcessingTask - 无法更新数据库记录，log_record不存在或为None: 日志ID={log_id}")
         
         # 重试逻辑
         if self.request.retries < self.max_retries:
