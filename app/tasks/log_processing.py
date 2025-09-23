@@ -6,6 +6,7 @@ import tarfile
 import shutil
 import subprocess
 import hashlib
+import logging
 from datetime import datetime
 from typing import Optional
 from pathlib import Path
@@ -19,6 +20,37 @@ from app.models.database import db_manager
 from app.models.log import LogRecord, LogStatus
 from app.utils.file_utils import get_file_size
 from app.utils.validation import file_validator
+
+# 设置日志记录器
+logger = logging.getLogger(__name__)
+
+
+def _log_performance_stats(operation: str, start_time: float, file_size: int = None, additional_info: dict = None):
+    """
+    记录性能统计信息
+    
+    Args:
+        operation: 操作名称
+        start_time: 开始时间
+        file_size: 文件大小（字节）
+        additional_info: 额外信息字典
+    """
+    elapsed_time = time.time() - start_time
+    throughput = None
+    
+    if file_size and file_size > 0:
+        throughput = file_size / elapsed_time / (1024 * 1024)  # MB/s
+    
+    log_msg = f"PerformanceStats - {operation}: 耗时={elapsed_time:.2f}秒"
+    
+    if throughput:
+        log_msg += f", 吞吐量={throughput:.2f}MB/s"
+    
+    if additional_info:
+        for key, value in additional_info.items():
+            log_msg += f", {key}={value}"
+    
+    logger.info(log_msg)
 
 
 @celery_app.task(bind=True, max_retries=settings.max_retry_attempts)
@@ -35,6 +67,8 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
     task_id = self.request.id
     start_time = time.time()
     
+    logger.info(f"LogProcessingTask - 开始处理协议栈日志: 任务ID={task_id}, 日志ID={log_id}, 重试次数={self.request.retries}")
+    
     # 获取数据库会话（同步方式）
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy import create_engine
@@ -49,15 +83,20 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
         # 如果是其他数据库类型，保持原样但移除异步驱动器
         sync_database_url = database_url.replace('+asyncpg', '').replace('+aiosqlite', '')
     
+    logger.debug(f"LogProcessingTask - 创建数据库连接: 数据库URL={sync_database_url}")
     sync_engine = create_engine(sync_database_url)
     SessionLocal = sessionmaker(bind=sync_engine)
     db_session = SessionLocal()
     
     try:
         # 获取日志记录
+        logger.debug(f"LogProcessingTask - 查询日志记录: 日志ID={log_id}")
         log_record = db_session.query(LogRecord).filter(LogRecord.id == log_id).first()
         if not log_record:
+            logger.error(f"LogProcessingTask - 日志记录不存在: 日志ID={log_id}")
             raise ValueError(f"Log record with id {log_id} not found")
+        
+        logger.info(f"LogProcessingTask - 找到日志记录: 文件名={log_record.original_filename}, 文件大小={log_record.file_size}字节, 当前状态={log_record.status}")
         
         # 更新任务状态
         log_record.task_id = task_id
@@ -65,21 +104,29 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
         log_record.processing_started_at = datetime.utcnow()
         log_record.progress = 0.0
         db_session.commit()
+        logger.info(f"LogProcessingTask - 任务状态已更新为处理中: 任务ID={task_id}")
         
         # 检查文件是否存在
         if not os.path.exists(log_record.file_path):
+            logger.error(f"LogProcessingTask - 日志文件不存在: 文件路径={log_record.file_path}")
             raise FileNotFoundError(f"Log file not found: {log_record.file_path}")
+        
+        logger.info(f"LogProcessingTask - 日志文件验证通过: 文件路径={log_record.file_path}")
         
         # 创建临时工作目录
         temp_work_dir = os.path.join(settings.temp_dir, f"processing_{task_id}")
         os.makedirs(temp_work_dir, exist_ok=True)
+        logger.info(f"LogProcessingTask - 创建临时工作目录: {temp_work_dir}")
         
         try:
             # 步骤1: 解压文件 (进度 0-20%)
+            logger.info(f"LogProcessingTask - 开始步骤1: 解压日志文件")
             extracted_dir = _extract_log_file(log_record.file_path, temp_work_dir)
             _update_progress(db_session, log_record, 20.0)
+            logger.info(f"LogProcessingTask - 步骤1完成: 解压文件到目录={extracted_dir}")
             
             # 步骤2: 调用外部工具处理 (进度 20-80%)
+            logger.info(f"LogProcessingTask - 开始步骤2: 调用外部工具处理日志")
             processed_dir = _process_with_external_tool(
                 extracted_dir, 
                 temp_work_dir, 
@@ -87,20 +134,28 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
                 db_session,
                 log_record
             )
+            logger.info(f"LogProcessingTask - 步骤2完成: 外部工具处理完成，输出目录={processed_dir}")
             
             # 步骤3: 重新打包 (进度 80-95%)
+            logger.info(f"LogProcessingTask - 开始步骤3: 重新打包处理后的文件")
             processed_file_path = _repackage_processed_files(
                 processed_dir, 
                 log_record.original_filename,
                 temp_work_dir
             )
             _update_progress(db_session, log_record, 95.0)
+            logger.info(f"LogProcessingTask - 步骤3完成: 重新打包完成，文件路径={processed_file_path}")
             
             # 步骤4: 替换原文件并更新记录 (进度 95-100%)
+            logger.info(f"LogProcessingTask - 开始步骤4: 替换原始文件")
             final_file_path = _replace_original_file(processed_file_path, log_record.file_path)
+            logger.info(f"LogProcessingTask - 步骤4完成: 文件替换成功")
             
             # 更新数据库记录
+            logger.info(f"LogProcessingTask - 开始更新数据库记录")
+            original_file_size = log_record.file_size
             log_record.file_size = get_file_size(final_file_path)
+            
             # 计算文件校验和
             with open(final_file_path, 'rb') as f:
                 log_record.checksum = hashlib.sha256(f.read()).hexdigest()
@@ -111,6 +166,7 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
             db_session.commit()
             
             processing_time = time.time() - start_time
+            logger.info(f"LogProcessingTask - 处理完成: 日志ID={log_id}, 处理时间={processing_time:.2f}秒, 原文件大小={original_file_size}字节, 处理后大小={log_record.file_size}字节, 校验和={log_record.checksum}")
             
             return {
                 "status": "completed",
@@ -124,11 +180,16 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
         finally:
             # 清理临时文件
             if os.path.exists(temp_work_dir):
+                logger.info(f"LogProcessingTask - 清理临时工作目录: {temp_work_dir}")
                 shutil.rmtree(temp_work_dir, ignore_errors=True)
+                logger.debug(f"LogProcessingTask - 临时工作目录清理完成")
                 
     except Exception as exc:
         # 错误处理
         error_message = str(exc)
+        processing_time = time.time() - start_time
+        
+        logger.error(f"LogProcessingTask - 处理过程中发生异常: 日志ID={log_id}, 任务ID={task_id}, 错误信息={error_message}, 处理时间={processing_time:.2f}秒, 异常类型={type(exc).__name__}", exc_info=True)
         
         # 更新数据库记录
         if 'log_record' in locals():
@@ -136,14 +197,17 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
             log_record.error_message = error_message
             log_record.retry_count += 1
             db_session.commit()
+            logger.info(f"LogProcessingTask - 数据库记录已更新为失败状态: 重试次数={log_record.retry_count}")
         
         # 重试逻辑
         if self.request.retries < self.max_retries:
             # 指数退避重试
             countdown = 2 ** self.request.retries * 60  # 1分钟, 2分钟, 4分钟
+            logger.warning(f"LogProcessingTask - 准备重试任务: 当前重试次数={self.request.retries}, 最大重试次数={self.max_retries}, 等待时间={countdown}秒")
             raise self.retry(exc=exc, countdown=countdown)
         
         # 最终失败
+        logger.error(f"LogProcessingTask - 任务最终失败: 日志ID={log_id}, 任务ID={task_id}, 总重试次数={self.request.retries}, 错误信息={error_message}")
         return {
             "status": "failed",
             "log_id": log_id,
@@ -153,6 +217,7 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
         }
         
     finally:
+        logger.debug(f"LogProcessingTask - 关闭数据库连接: 任务ID={task_id}")
         db_session.close()
 
 
@@ -170,10 +235,30 @@ def _extract_log_file(file_path: str, temp_dir: str) -> str:
     extracted_dir = os.path.join(temp_dir, "extracted")
     os.makedirs(extracted_dir, exist_ok=True)
     
+    logger.info(f"ExtractTask - 开始解压文件: 源文件={file_path}, 目标目录={extracted_dir}")
+    
     try:
+        start_time = time.time()
+        file_size = os.path.getsize(file_path)
+        
         with tarfile.open(file_path, 'r:gz') as tar:
+            # 获取压缩包中的文件列表
+            file_list = tar.getnames()
+            logger.debug(f"ExtractTask - 压缩包包含文件数: {len(file_list)}")
+            
+            # 解压文件
             tar.extractall(path=extracted_dir)
+            
+        # 记录性能统计
+        _log_performance_stats(
+            "文件解压", 
+            start_time, 
+            file_size, 
+            {"文件数": len(file_list), "源文件": os.path.basename(file_path)}
+        )
+        
     except Exception as e:
+        logger.error(f"ExtractTask - 文件解压失败: 源文件={file_path}, 错误信息={str(e)}", exc_info=True)
         raise RuntimeError(f"Failed to extract file {file_path}: {str(e)}")
     
     return extracted_dir
@@ -209,6 +294,8 @@ def _process_with_external_tool(
         str(settings.thread_num_for_decompress)
     ]
     
+    logger.info(f"ExternalToolTask - 开始调用外部工具: 命令={cmd}, 输入目录={input_dir}, 输出目录={processed_dir}, 文件大小={total_file_size}字节, 线程数={settings.thread_num_for_decompress}")
+    
     try:
         # 启动外部进程
         process = subprocess.Popen(
@@ -219,8 +306,11 @@ def _process_with_external_tool(
             text=True
         )
         
+        logger.info(f"ExternalToolTask - 外部进程已启动: PID={process.pid}")
+        
         # 监控进度
         start_time = time.time()
+        progress_update_count = 0
         while process.poll() is None:
             elapsed_time = time.time() - start_time
             
@@ -231,20 +321,38 @@ def _process_with_external_tool(
             )
             
             _update_progress(db_session, log_record, estimated_progress)
+            progress_update_count += 1
+            
+            # 每10次进度更新记录一次日志
+            if progress_update_count % 10 == 0:
+                logger.debug(f"ExternalToolTask - 进度监控: 已运行时间={elapsed_time:.1f}秒, 估算进度={estimated_progress:.1f}%, 进程状态=运行中")
+            
             time.sleep(5)  # 每5秒更新一次进度
         
         # 检查进程结果
         stdout, stderr = process.communicate()
+        total_time = time.time() - start_time
+        
+        logger.info(f"ExternalToolTask - 外部进程执行完成: 返回码={process.returncode}, 执行时间={total_time:.2f}秒")
+        
+        if stdout:
+            logger.debug(f"ExternalToolTask - 标准输出: {stdout[:500]}...")  # 只记录前500个字符
+        if stderr:
+            logger.warning(f"ExternalToolTask - 标准错误: {stderr[:500]}...")  # 只记录前500个字符
         
         if process.returncode != 0:
+            logger.error(f"ExternalToolTask - 外部工具执行失败: 返回码={process.returncode}, 错误信息={stderr}")
             raise RuntimeError(f"External tool failed with return code {process.returncode}: {stderr}")
         
         # 最终进度设为80%
         _update_progress(db_session, log_record, 80.0)
+        logger.info(f"ExternalToolTask - 外部工具处理成功完成")
         
     except FileNotFoundError:
+        logger.error(f"ExternalToolTask - 外部工具未找到: tool_log_decompress")
         raise RuntimeError("External tool 'tool_log_decompress' not found. Please ensure it's installed and in PATH.")
     except Exception as e:
+        logger.error(f"ExternalToolTask - 外部工具处理失败: 错误信息={str(e)}", exc_info=True)
         raise RuntimeError(f"Failed to process with external tool: {str(e)}")
     
     return processed_dir
@@ -269,15 +377,27 @@ def _repackage_processed_files(processed_dir: str, original_filename: str, temp_
     logger.info(f"RepackageTask - 开始重新打包: 输入目录={processed_dir}, 输出文件={output_file}")
     
     try:
+        start_time = time.time()
+        
         with tarfile.open(output_file, 'w:gz') as tar:
             file_count = 0
+            total_size = 0
             for root, dirs, files in os.walk(processed_dir):
                 for file in files:
                     file_path = os.path.join(root, file)
                     arcname = os.path.relpath(file_path, processed_dir)
                     tar.add(file_path, arcname=arcname)
                     file_count += 1
-        logger.info(f"RepackageTask - 重新打包成功: 包含文件数={file_count}, 输出文件={output_file}")
+                    total_size += os.path.getsize(file_path)
+        
+        # 记录性能统计
+        _log_performance_stats(
+            "文件重新打包", 
+            start_time, 
+            total_size, 
+            {"文件数": file_count, "输出文件": os.path.basename(output_file)}
+        )
+        
     except Exception as e:
         logger.error(f"RepackageTask - 重新打包失败: 错误={str(e)}")
         raise RuntimeError(f"Failed to repackage files: {str(e)}")
@@ -298,6 +418,9 @@ def _replace_original_file(processed_file_path: str, original_file_path: str) ->
     """
     logger.info(f"ReplaceTask - 开始替换原始文件: {processed_file_path} -> {original_file_path}")
     try:
+        start_time = time.time()
+        file_size = os.path.getsize(processed_file_path)
+        
         # 备份原文件（可选）
         backup_path = f"{original_file_path}.backup"
         if os.path.exists(original_file_path):
@@ -312,6 +435,14 @@ def _replace_original_file(processed_file_path: str, original_file_path: str) ->
         if os.path.exists(backup_path):
             os.remove(backup_path)
             logger.info(f"ReplaceTask - 备份文件已删除")
+        
+        # 记录性能统计
+        _log_performance_stats(
+            "文件替换", 
+            start_time, 
+            file_size, 
+            {"目标文件": os.path.basename(original_file_path)}
+        )
             
     except Exception as e:
         # 如果替换失败，尝试恢复备份
@@ -337,11 +468,22 @@ def _update_progress(db_session: Session, log_record: LogRecord, progress: float
     """
     try:
         old_progress = log_record.progress
-        log_record.progress = min(progress, 95.0)  # 最大进度限制95%
+        new_progress = min(progress, 95.0)  # 最大进度限制95%
+        
+        # 只有当进度有显著变化时才记录日志（避免过多日志）
+        if abs(new_progress - old_progress) >= 5.0 or new_progress >= 95.0:
+            logger.info(f"ProgressUpdate - 进度更新: 日志ID={log_record.id}, 任务ID={log_record.task_id}, {old_progress:.1f}% -> {new_progress:.1f}%")
+        else:
+            logger.debug(f"ProgressUpdate - 进度更新: 日志ID={log_record.id}, {old_progress:.1f}% -> {new_progress:.1f}%")
+        
+        log_record.progress = new_progress
         log_record.updated_at = datetime.utcnow()
         db_session.commit()
-        logger.debug(f"ProgressUpdate - 进度更新: 日志ID={log_record.id}, {old_progress:.1f}% -> {log_record.progress:.1f}%")
+        
     except Exception as e:
         # 进度更新失败不应该影响主流程
-        logger.warning(f"ProgressUpdate - 进度更新失败: 日志ID={log_record.id}, 错误={str(e)}")
-        db_session.rollback()
+        logger.warning(f"ProgressUpdate - 进度更新失败: 日志ID={log_record.id}, 任务ID={getattr(log_record, 'task_id', 'N/A')}, 错误={str(e)}", exc_info=True)
+        try:
+            db_session.rollback()
+        except Exception as rollback_error:
+            logger.error(f"ProgressUpdate - 数据库回滚失败: 错误={str(rollback_error)}")
