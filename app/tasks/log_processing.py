@@ -196,8 +196,8 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
         
         logger.info(f"LogProcessingTask - 日志文件验证通过: 文件路径={log_record.file_path}")
         
-        # 创建临时工作目录
-        temp_work_dir = os.path.join(settings.temp_dir, f"processing_{task_id}")
+        # 创建临时工作目录 - 使用绝对路径确保路径解析正确
+        temp_work_dir = os.path.abspath(os.path.join(settings.temp_dir, f"processing_{task_id}"))
         logger.info(f"LogProcessingTask - 准备创建临时工作目录: {temp_work_dir}")
         
         try:
@@ -491,14 +491,16 @@ def _process_with_external_tool(
     if not _check_and_log_directory_status(processed_dir, "ExternalToolTask - 处理输出目录", required=True):
         raise RuntimeError(f"Failed to create or access processed directory: {processed_dir}")
     
-    # 构建外部工具命令
+    # 构建外部工具命令 - 使用绝对路径确保外部工具能正确找到输入目录
+    abs_input_dir = os.path.abspath(input_dir)
     cmd = [
         "tool_log_decompress",
-        input_dir,
+        abs_input_dir,
         str(settings.thread_num_for_decompress)
     ]
     
     logger.info(f"ExternalToolTask - 外部工具命令配置: 命令={cmd}, 线程数={settings.thread_num_for_decompress}")
+    logger.info(f"ExternalToolTask - 路径信息: 输入目录(相对)={input_dir}, 输入目录(绝对)={abs_input_dir}, 工作目录={processed_dir}")
     
     # 检查输入目录中的文件详情
     try:
@@ -528,7 +530,8 @@ def _process_with_external_tool(
     
     try:
         # 启动外部进程
-        logger.info(f"ExternalToolTask - 启动外部进程: 工作目录={processed_dir}")
+        abs_processed_dir = os.path.abspath(processed_dir)
+        logger.info(f"ExternalToolTask - 启动外部进程: 工作目录(相对)={processed_dir}, 工作目录(绝对)={abs_processed_dir}")
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
