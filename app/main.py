@@ -118,7 +118,38 @@ def create_app() -> FastAPI:
         static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
         if os.path.isdir(static_dir):
             from fastapi.staticfiles import StaticFiles
-            app.mount("/", StaticFiles(directory=static_dir, html=True), name="frontend")
+            from fastapi.responses import FileResponse
+            from fastapi import Request, HTTPException
+            
+            # 挂载静态资源文件
+            assets_dir = os.path.join(static_dir, "assets")
+            if os.path.isdir(assets_dir):
+                app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+            
+            # 添加SPA路由处理 - 使用更低优先级的路由
+            @app.get("/{full_path:path}", include_in_schema=False)
+            async def serve_spa(request: Request, full_path: str):
+                # 检查是否是API路径，如果是则跳过（让FastAPI的404处理）
+                if (full_path.startswith("api/") or 
+                    full_path.startswith("docs") or 
+                    full_path.startswith("redoc") or 
+                    full_path.startswith("openapi.json") or
+                    full_path == "health"):
+                    raise HTTPException(status_code=404, detail="Not found")
+                
+                # 尝试返回静态文件
+                file_path = os.path.join(static_dir, full_path)
+                if os.path.isfile(file_path):
+                    return FileResponse(file_path)
+                
+                # 对于前端路由，返回index.html
+                index_path = os.path.join(static_dir, "index.html")
+                if os.path.isfile(index_path):
+                    return FileResponse(index_path, media_type="text/html")
+                
+                # 如果index.html不存在，返回404
+                raise HTTPException(status_code=404, detail="Frontend not found")
+            
             logging.getLogger(__name__).info(f"Mounted frontend at {static_dir}")
         else:
             logging.getLogger(__name__).warning(f"Frontend build directory not found: {static_dir}")
