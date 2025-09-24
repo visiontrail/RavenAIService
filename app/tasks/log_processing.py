@@ -153,7 +153,7 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
             logger.info(f"LogProcessingTask - 开始步骤1: 解压日志文件")
             extracted_dir = _extract_log_file(log_record.file_path, temp_work_dir)
             _update_progress(db_session, log_record, 20.0)
-            logger.info(f"LogProcessingTask - 步骤1完成: 解压文件到目录={extracted_dir}")
+            logger.info(f"LogProcessingTask - 步骤1完成: 解压文件到目录={os.path.abspath(extracted_dir)}")
             
             # 步骤2: 调用外部工具处理 (进度 20-80%)
             logger.info(f"LogProcessingTask - 开始步骤2: 调用外部工具处理日志")
@@ -164,7 +164,7 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
                 db_session,
                 log_record
             )
-            logger.info(f"LogProcessingTask - 步骤2完成: 外部工具处理完成，输出目录={processed_dir}")
+            logger.info(f"LogProcessingTask - 步骤2完成: 外部工具处理完成，输出目录={os.path.abspath(processed_dir)}")
             
             # 步骤3: 重新打包 (进度 80-95%)
             logger.info(f"LogProcessingTask - 开始步骤3: 重新打包处理后的文件")
@@ -174,7 +174,7 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
                 temp_work_dir
             )
             _update_progress(db_session, log_record, 95.0)
-            logger.info(f"LogProcessingTask - 步骤3完成: 重新打包完成，文件路径={processed_file_path}")
+            logger.info(f"LogProcessingTask - 步骤3完成: 重新打包完成，文件路径={os.path.abspath(processed_file_path)}")
             
             # 步骤4: 替换原文件并更新记录 (进度 95-100%)
             logger.info(f"LogProcessingTask - 开始步骤4: 替换原始文件")
