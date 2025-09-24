@@ -301,9 +301,9 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
         finally:
             # 清理临时文件
             if os.path.exists(temp_work_dir):
-                logger.info(f"LogProcessingTask - （暂时取消）清理临时工作目录: {temp_work_dir}")
-                # shutil.rmtree(temp_work_dir, ignore_errors=True)
-                logger.debug(f"LogProcessingTask - 临时工作目录清理完成（暂时取消）")
+                logger.info(f"LogProcessingTask - 清理临时工作目录: {temp_work_dir}")
+                shutil.rmtree(temp_work_dir, ignore_errors=True)
+                logger.debug(f"LogProcessingTask - 临时工作目录清理完成")
                 
     except Exception as exc:
         # 错误处理
