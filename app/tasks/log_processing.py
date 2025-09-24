@@ -53,6 +53,59 @@ def _log_performance_stats(operation: str, start_time: float, file_size: int = N
     logger.info(log_msg)
 
 
+def _check_and_log_directory_status(directory_path: str, operation_name: str, required: bool = True) -> bool:
+    """
+    检查并记录目录状态
+    
+    Args:
+        directory_path: 目录路径
+        operation_name: 操作名称（用于日志）
+        required: 是否要求目录必须存在
+        
+    Returns:
+        bool: 目录是否存在
+        
+    Raises:
+        FileNotFoundError: 当required=True且目录不存在时
+    """
+    abs_path = os.path.abspath(directory_path)
+    exists = os.path.exists(abs_path)
+    is_dir = os.path.isdir(abs_path) if exists else False
+    
+    if exists and is_dir:
+        # 获取目录内容信息
+        try:
+            files = os.listdir(abs_path)
+            file_count = len(files)
+            total_size = 0
+            
+            for file_name in files:
+                file_path = os.path.join(abs_path, file_name)
+                if os.path.isfile(file_path):
+                    total_size += os.path.getsize(file_path)
+            
+            logger.info(f"DirectoryStatus - {operation_name}: 目录存在且可访问, 路径={abs_path}, 文件数量={file_count}, 总大小={total_size}字节")
+            if file_count > 0:
+                # 显示前几个文件名作为示例
+                sample_files = files[:5]
+                logger.debug(f"DirectoryStatus - {operation_name}: 目录内容示例={sample_files}")
+        except PermissionError as e:
+            logger.warning(f"DirectoryStatus - {operation_name}: 目录存在但无法访问内容, 路径={abs_path}, 错误={str(e)}")
+        except Exception as e:
+            logger.warning(f"DirectoryStatus - {operation_name}: 目录存在但检查内容时出错, 路径={abs_path}, 错误={str(e)}")
+            
+    elif exists and not is_dir:
+        logger.error(f"DirectoryStatus - {operation_name}: 路径存在但不是目录, 路径={abs_path}")
+        if required:
+            raise FileNotFoundError(f"Path exists but is not a directory: {abs_path}")
+    else:
+        logger.warning(f"DirectoryStatus - {operation_name}: 目录不存在, 路径={abs_path}")
+        if required:
+            raise FileNotFoundError(f"Required directory does not exist: {abs_path}")
+    
+    return exists and is_dir
+
+
 @celery_app.task(bind=True, max_retries=settings.max_retry_attempts)
 def process_protocol_stack_log(self, log_id: str) -> dict:
     """
@@ -145,18 +198,37 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
         
         # 创建临时工作目录
         temp_work_dir = os.path.join(settings.temp_dir, f"processing_{task_id}")
-        os.makedirs(temp_work_dir, exist_ok=True)
-        logger.info(f"LogProcessingTask - 创建临时工作目录: {temp_work_dir}")
+        logger.info(f"LogProcessingTask - 准备创建临时工作目录: {temp_work_dir}")
+        
+        try:
+            os.makedirs(temp_work_dir, exist_ok=True)
+            logger.info(f"LogProcessingTask - 临时工作目录创建成功: {temp_work_dir}")
+        except Exception as e:
+            logger.error(f"LogProcessingTask - 创建临时工作目录失败: {str(e)}")
+            raise RuntimeError(f"Failed to create temporary work directory: {str(e)}")
+        
+        # 验证临时工作目录创建成功
+        _check_and_log_directory_status(temp_work_dir, "临时工作目录创建后验证", required=True)
         
         try:
             # 步骤1: 解压文件 (进度 0-20%)
             logger.info(f"LogProcessingTask - 开始步骤1: 解压日志文件")
+            # 步骤1开始前的目录状态检查
+            _check_and_log_directory_status(temp_work_dir, "步骤1开始前-临时工作目录状态", required=True)
+            
             extracted_dir = _extract_log_file(log_record.file_path, temp_work_dir)
             _update_progress(db_session, log_record, 20.0)
             logger.info(f"LogProcessingTask - 步骤1完成: 解压文件到目录={os.path.abspath(extracted_dir)}")
             
+            # 步骤1完成后验证解压目录
+            _check_and_log_directory_status(extracted_dir, "步骤1完成后-解压目录验证", required=True)
+            
             # 步骤2: 调用外部工具处理 (进度 20-80%)
             logger.info(f"LogProcessingTask - 开始步骤2: 调用外部工具处理日志")
+            # 步骤2开始前的目录状态检查
+            _check_and_log_directory_status(extracted_dir, "步骤2开始前-解压目录状态", required=True)
+            _check_and_log_directory_status(temp_work_dir, "步骤2开始前-临时工作目录状态", required=True)
+            
             processed_dir = _process_with_external_tool(
                 extracted_dir, 
                 temp_work_dir, 
@@ -166,8 +238,15 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
             )
             logger.info(f"LogProcessingTask - 步骤2完成: 外部工具处理完成，输出目录={os.path.abspath(processed_dir)}")
             
+            # 步骤2完成后验证处理目录
+            _check_and_log_directory_status(processed_dir, "步骤2完成后-处理目录验证", required=True)
+            
             # 步骤3: 重新打包 (进度 80-95%)
             logger.info(f"LogProcessingTask - 开始步骤3: 重新打包处理后的文件")
+            # 步骤3开始前的目录状态检查
+            _check_and_log_directory_status(processed_dir, "步骤3开始前-处理目录状态", required=True)
+            _check_and_log_directory_status(temp_work_dir, "步骤3开始前-临时工作目录状态", required=True)
+            
             processed_file_path = _repackage_processed_files(
                 processed_dir, 
                 log_record.original_filename,
@@ -176,8 +255,20 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
             _update_progress(db_session, log_record, 95.0)
             logger.info(f"LogProcessingTask - 步骤3完成: 重新打包完成，文件路径={os.path.abspath(processed_file_path)}")
             
+            # 步骤3完成后验证打包文件
+            if not os.path.exists(processed_file_path):
+                raise FileNotFoundError(f"Repackaged file not found: {processed_file_path}")
+            logger.info(f"LogProcessingTask - 步骤3验证: 打包文件存在，大小={os.path.getsize(processed_file_path)}字节")
+            
             # 步骤4: 替换原文件并更新记录 (进度 95-100%)
             logger.info(f"LogProcessingTask - 开始步骤4: 替换原始文件")
+            # 步骤4开始前验证打包文件和原始文件
+            if not os.path.exists(processed_file_path):
+                raise FileNotFoundError(f"Processed file not found before replacement: {processed_file_path}")
+            if not os.path.exists(log_record.file_path):
+                raise FileNotFoundError(f"Original file not found before replacement: {log_record.file_path}")
+            logger.info(f"LogProcessingTask - 步骤4验证: 文件替换前检查通过")
+            
             final_file_path = _replace_original_file(processed_file_path, log_record.file_path)
             logger.info(f"LogProcessingTask - 步骤4完成: 文件替换成功")
             
@@ -210,9 +301,9 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
         finally:
             # 清理临时文件
             if os.path.exists(temp_work_dir):
-                logger.info(f"LogProcessingTask - 清理临时工作目录: {temp_work_dir}")
-                shutil.rmtree(temp_work_dir, ignore_errors=True)
-                logger.debug(f"LogProcessingTask - 临时工作目录清理完成")
+                logger.info(f"LogProcessingTask - （暂时取消）清理临时工作目录: {temp_work_dir}")
+                # shutil.rmtree(temp_work_dir, ignore_errors=True)
+                logger.debug(f"LogProcessingTask - 临时工作目录清理完成（暂时取消）")
                 
     except Exception as exc:
         # 错误处理
@@ -271,8 +362,34 @@ def _extract_log_file(file_path: str, temp_dir: str) -> str:
     Returns:
         str: 解压后的目录路径
     """
+    # 检查临时工作目录状态
+    _check_and_log_directory_status(temp_dir, "解压前-临时工作目录检查", required=True)
+    
     extracted_dir = os.path.join(temp_dir, "extracted")
-    os.makedirs(extracted_dir, exist_ok=True)
+    
+    # 记录目标解压目录信息
+    logger.info(f"ExtractTask - 准备创建解压目录: 目标路径={os.path.abspath(extracted_dir)}")
+    
+    # 检查解压目录是否已存在
+    if os.path.exists(extracted_dir):
+        logger.warning(f"ExtractTask - 解压目录已存在，将清理后重新创建: {os.path.abspath(extracted_dir)}")
+        try:
+            shutil.rmtree(extracted_dir)
+            logger.info(f"ExtractTask - 已清理现有解压目录")
+        except Exception as e:
+            logger.error(f"ExtractTask - 清理现有解压目录失败: {str(e)}")
+            raise RuntimeError(f"Failed to clean existing extraction directory: {str(e)}")
+    
+    # 创建解压目录
+    try:
+        os.makedirs(extracted_dir, exist_ok=True)
+        logger.info(f"ExtractTask - 解压目录创建成功: {os.path.abspath(extracted_dir)}")
+    except Exception as e:
+        logger.error(f"ExtractTask - 创建解压目录失败: {str(e)}")
+        raise RuntimeError(f"Failed to create extraction directory: {str(e)}")
+    
+    # 验证解压目录创建成功
+    _check_and_log_directory_status(extracted_dir, "解压目录创建后验证", required=True)
     
     logger.info(f"ExtractTask - 开始解压文件: 源文件={file_path}, 目标目录={extracted_dir}")
     
@@ -280,14 +397,26 @@ def _extract_log_file(file_path: str, temp_dir: str) -> str:
         start_time = time.time()
         file_size = os.path.getsize(file_path)
         
+        # 验证源文件存在性
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Source file does not exist: {file_path}")
+        
+        logger.info(f"ExtractTask - 源文件验证通过: 文件大小={file_size}字节")
+        
         with tarfile.open(file_path, 'r:gz') as tar:
             # 获取压缩包中的文件列表
             file_list = tar.getnames()
-            logger.debug(f"ExtractTask - 压缩包包含文件数: {len(file_list)}")
+            logger.info(f"ExtractTask - 压缩包分析完成: 包含文件数={len(file_list)}")
+            logger.debug(f"ExtractTask - 压缩包文件列表前10项: {file_list[:10]}")
             
             # 解压文件
+            logger.info(f"ExtractTask - 开始解压文件到目录: {os.path.abspath(extracted_dir)}")
             tar.extractall(path=extracted_dir)
+            logger.info(f"ExtractTask - 文件解压完成")
             
+        # 验证解压结果
+        _check_and_log_directory_status(extracted_dir, "解压完成后验证", required=True)
+        
         # 记录性能统计
         _log_performance_stats(
             "文件解压", 
@@ -296,8 +425,17 @@ def _extract_log_file(file_path: str, temp_dir: str) -> str:
             {"文件数": len(file_list), "源文件": os.path.basename(file_path)}
         )
         
+        logger.info(f"ExtractTask - 解压任务完成: 解压目录={os.path.abspath(extracted_dir)}")
+        
     except Exception as e:
         logger.error(f"ExtractTask - 文件解压失败: 源文件={file_path}, 错误信息={str(e)}", exc_info=True)
+        # 清理失败的解压目录
+        if os.path.exists(extracted_dir):
+            try:
+                shutil.rmtree(extracted_dir, ignore_errors=True)
+                logger.info(f"ExtractTask - 已清理失败的解压目录")
+            except Exception as cleanup_error:
+                logger.warning(f"ExtractTask - 清理失败的解压目录时出错: {str(cleanup_error)}")
         raise RuntimeError(f"Failed to extract file {file_path}: {str(e)}")
     
     return extracted_dir
@@ -323,8 +461,35 @@ def _process_with_external_tool(
     Returns:
         str: 处理后的目录路径
     """
+    logger.info(f"ExternalToolTask - 开始外部工具处理: 输入目录={input_dir}, 临时目录={temp_dir}, 文件大小={total_file_size}字节")
+    
+    # 验证临时工作目录状态
+    if not _check_and_log_directory_status(temp_dir, "ExternalToolTask - 临时工作目录", required=True):
+        raise RuntimeError(f"Temporary directory is not accessible: {temp_dir}")
+    
+    # 验证输入目录状态（必须存在且可访问）
+    if not _check_and_log_directory_status(input_dir, "ExternalToolTask - 输入目录", required=True):
+        raise RuntimeError(f"Input directory is not accessible: {input_dir}")
+    
+    # 检查输入目录是否为目录
+    if not os.path.isdir(input_dir):
+        error_msg = f"输入路径不是目录: {input_dir}"
+        logger.error(f"ExternalToolTask - {error_msg}")
+        raise RuntimeError(f"Input path is not a directory: {input_dir}")
+    
+    # 创建处理输出目录
     processed_dir = os.path.join(temp_dir, "processed")
-    os.makedirs(processed_dir, exist_ok=True)
+    logger.info(f"ExternalToolTask - 创建处理输出目录: {processed_dir}")
+    try:
+        os.makedirs(processed_dir, exist_ok=True)
+        logger.info(f"ExternalToolTask - 处理输出目录创建成功")
+    except Exception as e:
+        logger.error(f"ExternalToolTask - 创建处理输出目录失败: {str(e)}")
+        raise RuntimeError(f"Failed to create processed directory: {str(e)}")
+    
+    # 验证处理输出目录创建成功
+    if not _check_and_log_directory_status(processed_dir, "ExternalToolTask - 处理输出目录", required=True):
+        raise RuntimeError(f"Failed to create or access processed directory: {processed_dir}")
     
     # 构建外部工具命令
     cmd = [
@@ -333,23 +498,16 @@ def _process_with_external_tool(
         str(settings.thread_num_for_decompress)
     ]
     
-    logger.info(f"ExternalToolTask - 开始调用外部工具: 命令={cmd}, 输入目录={input_dir}, 输出目录={processed_dir}, 文件大小={total_file_size}字节, 线程数={settings.thread_num_for_decompress}")
+    logger.info(f"ExternalToolTask - 外部工具命令配置: 命令={cmd}, 线程数={settings.thread_num_for_decompress}")
     
-    # 检查输入目录是否存在和可访问
-    if not os.path.exists(input_dir):
-        error_msg = f"输入目录不存在: {input_dir}"
-        logger.error(f"ExternalToolTask - {error_msg}")
-        raise RuntimeError(f"Input directory does not exist: {input_dir}")
-    
-    if not os.path.isdir(input_dir):
-        error_msg = f"输入路径不是目录: {input_dir}"
-        logger.error(f"ExternalToolTask - {error_msg}")
-        raise RuntimeError(f"Input path is not a directory: {input_dir}")
-    
-    # 检查输入目录中的文件
+    # 检查输入目录中的文件详情
     try:
         input_files = os.listdir(input_dir)
-        logger.info(f"ExternalToolTask - 输入目录内容: 文件数量={len(input_files)}, 文件列表={input_files[:10]}{'...' if len(input_files) > 10 else ''}")
+        logger.info(f"ExternalToolTask - 输入目录内容分析: 文件数量={len(input_files)}, 文件列表={input_files[:10]}{'...' if len(input_files) > 10 else ''}")
+        
+        if len(input_files) == 0:
+            logger.warning(f"ExternalToolTask - 警告: 输入目录为空")
+        
     except Exception as e:
         error_msg = f"无法读取输入目录内容: {str(e)}"
         logger.error(f"ExternalToolTask - {error_msg}")
@@ -428,12 +586,24 @@ def _process_with_external_tool(
         else:
             logger.info(f"ExternalToolTask - 标准错误: 无错误输出")
         
-        # 检查输出目录
+        # 验证输出目录状态
+        logger.info(f"ExternalToolTask - 开始验证输出目录状态")
+        if not _check_and_log_directory_status(processed_dir, "ExternalToolTask - 输出目录", required=True):
+            logger.error(f"ExternalToolTask - 输出目录验证失败")
+            # 即使目录验证失败，也继续检查进程返回码，以提供完整的错误信息
+        
+        # 检查输出目录内容详情
         try:
             output_files = os.listdir(processed_dir)
-            logger.info(f"ExternalToolTask - 输出目录内容: 文件数量={len(output_files)}, 文件列表={output_files[:10]}{'...' if len(output_files) > 10 else ''}")
+            logger.info(f"ExternalToolTask - 输出目录内容分析: 文件数量={len(output_files)}, 文件列表={output_files[:10]}{'...' if len(output_files) > 10 else ''}")
+            
+            if len(output_files) == 0:
+                logger.warning(f"ExternalToolTask - 警告: 输出目录为空，外部工具可能未生成任何文件")
+            else:
+                logger.info(f"ExternalToolTask - 输出目录验证成功，包含 {len(output_files)} 个文件")
+                
         except Exception as e:
-            logger.warning(f"ExternalToolTask - 无法读取输出目录内容: {str(e)}")
+            logger.error(f"ExternalToolTask - 无法读取输出目录内容: {str(e)}")
         
         if process.returncode != 0:
             # 提供更详细的错误信息
