@@ -335,14 +335,49 @@ def _process_with_external_tool(
     
     logger.info(f"ExternalToolTask - 开始调用外部工具: 命令={cmd}, 输入目录={input_dir}, 输出目录={processed_dir}, 文件大小={total_file_size}字节, 线程数={settings.thread_num_for_decompress}")
     
+    # 检查输入目录是否存在和可访问
+    if not os.path.exists(input_dir):
+        error_msg = f"输入目录不存在: {input_dir}"
+        logger.error(f"ExternalToolTask - {error_msg}")
+        raise RuntimeError(f"Input directory does not exist: {input_dir}")
+    
+    if not os.path.isdir(input_dir):
+        error_msg = f"输入路径不是目录: {input_dir}"
+        logger.error(f"ExternalToolTask - {error_msg}")
+        raise RuntimeError(f"Input path is not a directory: {input_dir}")
+    
+    # 检查输入目录中的文件
+    try:
+        input_files = os.listdir(input_dir)
+        logger.info(f"ExternalToolTask - 输入目录内容: 文件数量={len(input_files)}, 文件列表={input_files[:10]}{'...' if len(input_files) > 10 else ''}")
+    except Exception as e:
+        error_msg = f"无法读取输入目录内容: {str(e)}"
+        logger.error(f"ExternalToolTask - {error_msg}")
+        raise RuntimeError(f"Cannot read input directory contents: {str(e)}")
+    
+    # 检查外部工具是否存在
+    import shutil as sh_util
+    tool_path = sh_util.which("tool_log_decompress")
+    if tool_path:
+        logger.info(f"ExternalToolTask - 找到外部工具: 路径={tool_path}")
+        # 检查工具是否可执行
+        if not os.access(tool_path, os.X_OK):
+            error_msg = f"外部工具不可执行: {tool_path}"
+            logger.error(f"ExternalToolTask - {error_msg}")
+            raise RuntimeError(f"External tool is not executable: {tool_path}")
+    else:
+        logger.warning(f"ExternalToolTask - 外部工具不在PATH中，尝试使用相对路径")
+    
     try:
         # 启动外部进程
+        logger.info(f"ExternalToolTask - 启动外部进程: 工作目录={processed_dir}")
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=processed_dir,
-            text=True
+            text=True,
+            env=os.environ.copy()  # 传递环境变量
         )
         
         logger.info(f"ExternalToolTask - 外部进程已启动: PID={process.pid}")
@@ -350,6 +385,8 @@ def _process_with_external_tool(
         # 监控进度
         start_time = time.time()
         progress_update_count = 0
+        last_log_time = start_time
+        
         while process.poll() is None:
             elapsed_time = time.time() - start_time
             
@@ -362,8 +399,12 @@ def _process_with_external_tool(
             _update_progress(db_session, log_record, estimated_progress)
             progress_update_count += 1
             
-            # 每10次进度更新记录一次日志
-            if progress_update_count % 10 == 0:
+            # 每30秒记录一次详细日志，每10次进度更新记录一次简要日志
+            current_time = time.time()
+            if current_time - last_log_time >= 30:
+                logger.info(f"ExternalToolTask - 详细进度监控: 已运行时间={elapsed_time:.1f}秒, 估算进度={estimated_progress:.1f}%, 进程状态=运行中, PID={process.pid}")
+                last_log_time = current_time
+            elif progress_update_count % 10 == 0:
                 logger.debug(f"ExternalToolTask - 进度监控: 已运行时间={elapsed_time:.1f}秒, 估算进度={estimated_progress:.1f}%, 进程状态=运行中")
             
             time.sleep(5)  # 每5秒更新一次进度
@@ -374,25 +415,83 @@ def _process_with_external_tool(
         
         logger.info(f"ExternalToolTask - 外部进程执行完成: 返回码={process.returncode}, 执行时间={total_time:.2f}秒")
         
+        # 记录完整的输出信息
         if stdout:
-            logger.debug(f"ExternalToolTask - 标准输出: {stdout[:500]}...")  # 只记录前500个字符
+            stdout_preview = stdout[:1000] + "..." if len(stdout) > 1000 else stdout
+            logger.info(f"ExternalToolTask - 标准输出 (长度={len(stdout)}): {stdout_preview}")
+        else:
+            logger.info(f"ExternalToolTask - 标准输出: 无输出")
+        
         if stderr:
-            logger.warning(f"ExternalToolTask - 标准错误: {stderr[:500]}...")  # 只记录前500个字符
+            stderr_preview = stderr[:1000] + "..." if len(stderr) > 1000 else stderr
+            logger.warning(f"ExternalToolTask - 标准错误 (长度={len(stderr)}): {stderr_preview}")
+        else:
+            logger.info(f"ExternalToolTask - 标准错误: 无错误输出")
+        
+        # 检查输出目录
+        try:
+            output_files = os.listdir(processed_dir)
+            logger.info(f"ExternalToolTask - 输出目录内容: 文件数量={len(output_files)}, 文件列表={output_files[:10]}{'...' if len(output_files) > 10 else ''}")
+        except Exception as e:
+            logger.warning(f"ExternalToolTask - 无法读取输出目录内容: {str(e)}")
         
         if process.returncode != 0:
-            logger.error(f"ExternalToolTask - 外部工具执行失败: 返回码={process.returncode}, 错误信息={stderr}")
-            raise RuntimeError(f"External tool failed with return code {process.returncode}: {stderr}")
+            # 提供更详细的错误信息
+            error_details = []
+            error_details.append(f"返回码: {process.returncode}")
+            
+            if stderr:
+                error_details.append(f"错误输出: {stderr}")
+            else:
+                error_details.append("错误输出: 无")
+            
+            if stdout:
+                error_details.append(f"标准输出: {stdout}")
+            else:
+                error_details.append("标准输出: 无")
+            
+            error_details.append(f"执行时间: {total_time:.2f}秒")
+            error_details.append(f"工作目录: {processed_dir}")
+            error_details.append(f"命令: {' '.join(cmd)}")
+            
+            # 常见错误码的解释
+            error_code_meanings = {
+                1: "一般错误",
+                2: "误用shell命令",
+                126: "命令不可执行",
+                127: "命令未找到",
+                128: "无效的退出参数",
+                130: "脚本被Ctrl+C终止",
+                255: "退出状态超出范围或其他严重错误"
+            }
+            
+            if process.returncode in error_code_meanings:
+                error_details.append(f"错误码含义: {error_code_meanings[process.returncode]}")
+            
+            full_error_msg = "; ".join(error_details)
+            logger.error(f"ExternalToolTask - 外部工具执行失败: {full_error_msg}")
+            raise RuntimeError(f"External tool failed with return code {process.returncode}: {full_error_msg}")
         
         # 最终进度设为80%
         _update_progress(db_session, log_record, 80.0)
         logger.info(f"ExternalToolTask - 外部工具处理成功完成")
         
-    except FileNotFoundError:
-        logger.error(f"ExternalToolTask - 外部工具未找到: tool_log_decompress")
-        raise RuntimeError("External tool 'tool_log_decompress' not found. Please ensure it's installed and in PATH.")
+    except FileNotFoundError as e:
+        error_msg = f"外部工具未找到: tool_log_decompress, 详细错误: {str(e)}"
+        logger.error(f"ExternalToolTask - {error_msg}")
+        raise RuntimeError(f"External tool 'tool_log_decompress' not found. Please ensure it's installed and in PATH. Details: {str(e)}")
+    except subprocess.TimeoutExpired as e:
+        error_msg = f"外部工具执行超时: {str(e)}"
+        logger.error(f"ExternalToolTask - {error_msg}")
+        raise RuntimeError(f"External tool execution timed out: {str(e)}")
+    except PermissionError as e:
+        error_msg = f"权限错误: {str(e)}"
+        logger.error(f"ExternalToolTask - {error_msg}")
+        raise RuntimeError(f"Permission error when executing external tool: {str(e)}")
     except Exception as e:
-        logger.error(f"ExternalToolTask - 外部工具处理失败: 错误信息={str(e)}", exc_info=True)
-        raise RuntimeError(f"Failed to process with external tool: {str(e)}")
+        error_msg = f"外部工具处理失败: 错误类型={type(e).__name__}, 错误信息={str(e)}"
+        logger.error(f"ExternalToolTask - {error_msg}", exc_info=True)
+        raise RuntimeError(f"Failed to process with external tool: {type(e).__name__}: {str(e)}")
     
     return processed_dir
 
