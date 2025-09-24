@@ -177,3 +177,4 @@ logs.db
 
 # 生产环境文件
 .env.production
+bin/tool_log_decompress
