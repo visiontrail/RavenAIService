@@ -16,6 +16,44 @@ from app.exceptions import register_exception_handlers
 from app.database import init_database, close_database
 
 
+class HealthCheckFilter(logging.Filter):
+    """健康检查日志过滤器 - 仅在失败时记录"""
+    
+    def filter(self, record):
+        # 如果是健康检查请求
+        if hasattr(record, 'getMessage'):
+            message = record.getMessage()
+            if '/health' in message:
+                # 只记录非200状态码的健康检查请求
+                if '200' not in message:
+                    return True
+                return False
+        return True
+
+
+class AccessLogFilter(logging.Filter):
+    """访问日志过滤器 - 减少详细访问记录"""
+    
+    def filter(self, record):
+        if hasattr(record, 'getMessage'):
+            message = record.getMessage()
+            
+            # 过滤健康检查成功请求
+            if '/health' in message and '200' in message:
+                return False
+                
+            # 过滤静态资源请求（如果状态码是200或304）
+            static_extensions = ['.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.woff', '.woff2', '.ttf']
+            if any(ext in message for ext in static_extensions) and ('200' in message or '304' in message):
+                return False
+                
+            # 过滤vite.svg等开发资源
+            if 'vite.svg' in message and ('200' in message or '304' in message):
+                return False
+                
+        return True
+
+
 def setup_logging():
     """设置日志配置"""
     # 确保日志目录存在
@@ -36,7 +74,16 @@ def setup_logging():
     
     # 设置uvicorn日志级别
     logging.getLogger("uvicorn").setLevel(getattr(logging, settings.log_level))
-    logging.getLogger("uvicorn.access").setLevel(getattr(logging, settings.log_level))
+    
+    # 为uvicorn.access添加过滤器
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.setLevel(getattr(logging, settings.log_level))
+    access_logger.addFilter(AccessLogFilter())
+    
+    # 为健康检查添加专门的过滤器
+    health_filter = HealthCheckFilter()
+    for handler in logging.getLogger().handlers:
+        handler.addFilter(health_filter)
 
 
 @asynccontextmanager

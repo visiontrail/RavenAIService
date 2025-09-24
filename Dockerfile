@@ -48,6 +48,10 @@ COPY . .
 
 # Create necessary directories and set permissions
 RUN mkdir -p /app/logs /app/temp/logs /app/temp/downloads /app/data
+
+# Make cleanup script executable
+RUN chmod +x /app/cleanup_runtime_data.py
+
 RUN chown -R appuser:appuser /app
 
 # Build frontend (as root before changing ownership)
