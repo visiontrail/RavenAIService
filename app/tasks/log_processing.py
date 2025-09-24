@@ -452,14 +452,14 @@ def _process_with_external_tool(
     使用外部工具处理日志
     
     Args:
-        input_dir: 输入目录
+        input_dir: 输入目录 (extracted目录)
         temp_dir: 临时目录
         total_file_size: 总文件大小
         db_session: 数据库会话
         log_record: 日志记录
         
     Returns:
-        str: 处理后的目录路径
+        str: 处理后的目录路径 (tool_log_decompress会直接在input_dir中生成结果)
     """
     logger.info(f"ExternalToolTask - 开始外部工具处理: 输入目录={input_dir}, 临时目录={temp_dir}, 文件大小={total_file_size}字节")
     
@@ -477,20 +477,6 @@ def _process_with_external_tool(
         logger.error(f"ExternalToolTask - {error_msg}")
         raise RuntimeError(f"Input path is not a directory: {input_dir}")
     
-    # 创建处理输出目录
-    processed_dir = os.path.join(temp_dir, "processed")
-    logger.info(f"ExternalToolTask - 创建处理输出目录: {processed_dir}")
-    try:
-        os.makedirs(processed_dir, exist_ok=True)
-        logger.info(f"ExternalToolTask - 处理输出目录创建成功")
-    except Exception as e:
-        logger.error(f"ExternalToolTask - 创建处理输出目录失败: {str(e)}")
-        raise RuntimeError(f"Failed to create processed directory: {str(e)}")
-    
-    # 验证处理输出目录创建成功
-    if not _check_and_log_directory_status(processed_dir, "ExternalToolTask - 处理输出目录", required=True):
-        raise RuntimeError(f"Failed to create or access processed directory: {processed_dir}")
-    
     # 构建外部工具命令 - 使用绝对路径确保外部工具能正确找到输入目录
     abs_input_dir = os.path.abspath(input_dir)
     cmd = [
@@ -500,7 +486,8 @@ def _process_with_external_tool(
     ]
     
     logger.info(f"ExternalToolTask - 外部工具命令配置: 命令={cmd}, 线程数={settings.thread_num_for_decompress}")
-    logger.info(f"ExternalToolTask - 路径信息: 输入目录(相对)={input_dir}, 输入目录(绝对)={abs_input_dir}, 工作目录={processed_dir}")
+    logger.info(f"ExternalToolTask - 路径信息: 输入目录(相对)={input_dir}, 输入目录(绝对)={abs_input_dir}")
+    logger.info(f"ExternalToolTask - 注意: tool_log_decompress工具会直接在输入目录中生成处理结果")
     
     # 检查输入目录中的文件详情
     try:
@@ -529,14 +516,13 @@ def _process_with_external_tool(
         logger.warning(f"ExternalToolTask - 外部工具不在PATH中，尝试使用相对路径")
     
     try:
-        # 启动外部进程
-        abs_processed_dir = os.path.abspath(processed_dir)
-        logger.info(f"ExternalToolTask - 启动外部进程: 工作目录(相对)={processed_dir}, 工作目录(绝对)={abs_processed_dir}")
+        # 启动外部进程 - 使用临时目录作为工作目录
+        logger.info(f"ExternalToolTask - 启动外部进程: 工作目录={temp_dir}")
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            cwd=processed_dir,
+            cwd=temp_dir,
             text=True,
             env=os.environ.copy()  # 传递环境变量
         )
@@ -589,15 +575,15 @@ def _process_with_external_tool(
         else:
             logger.info(f"ExternalToolTask - 标准错误: 无错误输出")
         
-        # 验证输出目录状态
+        # 验证输出目录状态 - 检查输入目录，因为tool_log_decompress会在输入目录中生成结果
         logger.info(f"ExternalToolTask - 开始验证输出目录状态")
-        if not _check_and_log_directory_status(processed_dir, "ExternalToolTask - 输出目录", required=True):
+        if not _check_and_log_directory_status(input_dir, "ExternalToolTask - 输出目录", required=True):
             logger.error(f"ExternalToolTask - 输出目录验证失败")
             # 即使目录验证失败，也继续检查进程返回码，以提供完整的错误信息
         
-        # 检查输出目录内容详情
+        # 检查输出目录内容详情 - 检查输入目录中的处理结果
         try:
-            output_files = os.listdir(processed_dir)
+            output_files = os.listdir(input_dir)
             logger.info(f"ExternalToolTask - 输出目录内容分析: 文件数量={len(output_files)}, 文件列表={output_files[:10]}{'...' if len(output_files) > 10 else ''}")
             
             if len(output_files) == 0:
@@ -624,7 +610,7 @@ def _process_with_external_tool(
                 error_details.append("标准输出: 无")
             
             error_details.append(f"执行时间: {total_time:.2f}秒")
-            error_details.append(f"工作目录: {processed_dir}")
+            error_details.append(f"工作目录: {temp_dir}")
             error_details.append(f"命令: {' '.join(cmd)}")
             
             # 常见错误码的解释
@@ -666,7 +652,8 @@ def _process_with_external_tool(
         logger.error(f"ExternalToolTask - {error_msg}", exc_info=True)
         raise RuntimeError(f"Failed to process with external tool: {type(e).__name__}: {str(e)}")
     
-    return processed_dir
+    # 返回输入目录，因为tool_log_decompress会直接在输入目录中生成处理结果
+    return input_dir
 
 
 def _repackage_processed_files(processed_dir: str, original_filename: str, temp_dir: str) -> str:
