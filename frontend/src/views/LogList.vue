@@ -150,10 +150,12 @@
         class="w-full"
         :default-sort="{ prop: 'created_at', order: sortOrder === 'desc' ? 'descending' : 'ascending' }"
         @sort-change="onTableSortChange"
+        border
+        resizable
       >
-        <el-table-column type="selection" width="55" />
+        <el-table-column type="selection" width="55" resizable />
 
-        <el-table-column prop="filename" label="文件名" min-width="300" :show-overflow-tooltip="true">
+        <el-table-column prop="filename" label="文件名" min-width="300" :show-overflow-tooltip="true" resizable>
           <template #default="{ row }">
             <div class="flex items-center space-x-2 filename-cell">
               <el-icon class="text-blue-600 flex-shrink-0">
@@ -173,19 +175,19 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="log_type" label="日志类型" width="140">
+        <el-table-column prop="log_type" label="日志类型" width="140" resizable>
           <template #default="{ row }">
             <el-tag :type="row.log_type === 'stack' ? 'success' : 'warning'">{{ logTypeText(row.log_type) }}</el-tag>
           </template>
         </el-table-column>
 
-        <el-table-column prop="file_size" label="文件大小" width="120" sortable="custom">
+        <el-table-column prop="file_size" label="文件大小" width="120" sortable="custom" resizable>
           <template #default="{ row }">
             {{ formatFileSize(row.file_size) }}
           </template>
         </el-table-column>
 
-        <el-table-column prop="status" label="状态" width="110">
+        <el-table-column prop="status" label="状态" width="110" resizable>
           <template #default="{ row }">
             <el-tag :type="getStatusColor(row.status)">
               {{ getStatusText(row.status) }}
@@ -193,22 +195,23 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="progress" label="进度" width="120">
+        <el-table-column prop="progress" label="进度" width="120" resizable>
           <template #default="{ row }">
             <el-progress v-if="row.status === 'processing'" :percentage="Math.round(row.progress || 0)" />
             <span v-else class="text-gray-400">-</span>
           </template>
         </el-table-column>
 
-        <el-table-column prop="download_count" label="下载次数" width="100" />
+        <el-table-column prop="download_count" label="下载次数" width="100" resizable>
+        </el-table-column>
 
-        <el-table-column prop="created_at" label="创建时间" width="180" sortable="custom">
+        <el-table-column prop="created_at" label="创建时间" width="180" sortable="custom" resizable>
           <template #default="{ row }">
             {{ formatDateTime(row.created_at) }}
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="260" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right" resizable>
           <template #default="{ row }">
             <div class="flex space-x-2">
               <el-button
