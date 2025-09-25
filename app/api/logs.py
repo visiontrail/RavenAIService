@@ -39,7 +39,7 @@ async def upload_log_simple(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    简化的日志文件上传接口 - 用于测试和调试
+    简化的日志文件上传接口
     """
     # 使用默认值
     metadata = LogMetadata()

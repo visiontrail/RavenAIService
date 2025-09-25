@@ -153,19 +153,20 @@
       >
         <el-table-column type="selection" width="55" />
 
-        <el-table-column prop="filename" label="文件名" min-width="220">
+        <el-table-column prop="filename" label="文件名" min-width="200" width="auto" :show-overflow-tooltip="true">
           <template #default="{ row }">
-            <div class="flex items-center space-x-2">
-              <el-icon class="text-blue-600">
+            <div class="flex items-center space-x-2 filename-cell">
+              <el-icon class="text-blue-600 flex-shrink-0">
                 <Document />
               </el-icon>
               <router-link
                 :to="`/log/${row.id}`"
-                class="text-blue-600 hover:text-blue-800 font-medium"
+                class="text-blue-600 hover:text-blue-800 font-medium filename-link"
+                :title="getDisplayFilename(row)"
               >
-                {{ row.filename }}
+                {{ getDisplayFilename(row) }}
               </router-link>
-              <el-button link type="primary" size="small" @click="copyLink(row)">复制链接</el-button>
+              <el-button link type="primary" size="small" class="flex-shrink-0" @click="copyLink(row)">复制链接</el-button>
             </div>
           </template>
         </el-table-column>
@@ -570,6 +571,30 @@ onBeforeUnmount(() => {
 
 // 文本映射
 const logTypeText = (t?: string) => (t === 'oam_antenna' ? 'OAM与天线日志' : '协议栈日志')
+
+// 获取显示用的文件名（去除日志ID前缀）
+const getDisplayFilename = (row: LogRecord) => {
+  // 如果有original_filename字段，优先使用
+  if (row.original_filename) {
+    return row.original_filename
+  }
+  
+  // 否则从filename中提取，去除UUID前缀
+  // 文件名格式通常是: {uuid}_{original_filename}
+  const filename = row.filename
+  const underscoreIndex = filename.indexOf('_')
+  
+  if (underscoreIndex > 0) {
+    // 检查下划线前的部分是否像UUID（包含连字符的36字符字符串）
+    const prefix = filename.substring(0, underscoreIndex)
+    if (prefix.length === 36 && prefix.includes('-')) {
+      return filename.substring(underscoreIndex + 1)
+    }
+  }
+  
+  // 如果不符合预期格式，返回原文件名
+  return filename
+}
 </script>
 
 <style scoped>
@@ -740,6 +765,40 @@ const logTypeText = (t?: string) => (t === 'oam_antenna' ? 'OAM与天线日志' 
   
   :deep(.el-table .el-table__cell) {
     padding: 8px 4px;
+  }
+}
+
+/* 文件名列样式优化 */
+.filename-cell {
+  max-width: 100%;
+  min-width: 0; /* 允许flex子项收缩 */
+}
+
+.filename-link {
+  flex: 1;
+  min-width: 0; /* 允许文本截断 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+
+/* 响应式文件名显示 */
+@media (max-width: 1024px) {
+  .filename-link {
+    max-width: 150px;
+  }
+}
+
+@media (max-width: 768px) {
+  .filename-link {
+    max-width: 120px;
+  }
+}
+
+@media (max-width: 640px) {
+  .filename-link {
+    max-width: 100px;
   }
 }
 </style>
