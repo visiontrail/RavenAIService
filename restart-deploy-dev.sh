@@ -5,6 +5,21 @@ echo "🔄 部署环境快速重启（支持代码热重载）..."
 # 使用部署开发配置
 COMPOSE_FILE="docker-compose.deploy-dev.yml"
 
+echo "🏗️ 编译前端代码..."
+cd frontend
+if [ ! -d "node_modules" ]; then
+    echo "📦 安装前端依赖..."
+    npm install
+fi
+echo "🔨 构建前端..."
+npm run build
+if [ $? -ne 0 ]; then
+    echo "❌ 前端构建失败！"
+    exit 1
+fi
+echo "✅ 前端构建完成"
+cd ..
+
 echo "📋 停止服务..."
 docker-compose -f $COMPOSE_FILE down
 
@@ -18,4 +33,4 @@ echo "📊 检查服务状态..."
 docker-compose -f $COMPOSE_FILE ps
 
 echo "🎉 重启完成！代码更改已生效。"
-echo "💡 提示：现在修改 Python 代码后，只需重启容器服务即可，无需重新构建镜像。"
+echo "💡 提示：此脚本会自动编译前端代码并重启服务，支持前端和后端代码热重载。"
