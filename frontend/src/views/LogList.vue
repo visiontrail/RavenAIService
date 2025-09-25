@@ -309,6 +309,10 @@ const eligibleDownloadIds = computed(() => selectedLogs.value.filter(l => l.stat
 
 // 搜索防抖
 const handleSearch = debounce(() => {
+  console.log('🔍 [handleSearch] 搜索触发:', {
+    searchQuery: searchQuery.value,
+    timestamp: new Date().toLocaleTimeString()
+  })
   logStore.setFilters({ search: searchQuery.value })
   logStore.setPagination({ page: 1 })
   logStore.fetchLogs()
@@ -339,7 +343,7 @@ const handleDateRangeChange = () => {
 }
 
 const applyFilters = () => {
-  logStore.setFilters({
+  const filters = {
     search: searchQuery.value,
     status: statusFilter.value,
     log_type: logTypeFilter.value,
@@ -347,7 +351,15 @@ const applyFilters = () => {
     end_time: dateRange.value?.[1] || '',
     sort_by: sortBy.value,
     sort_order: sortOrder.value,
+  }
+  
+  console.log('🎯 [applyFilters] 应用筛选条件:', {
+    filters,
+    dateRange: dateRange.value,
+    timestamp: new Date().toLocaleTimeString()
   })
+  
+  logStore.setFilters(filters)
   logStore.setPagination({ page: 1 })
   logStore.fetchLogs()
 }
@@ -400,6 +412,14 @@ const onTableSortChange = (sort: { prop: string; order: 'ascending' | 'descendin
 
 // 刷新数据
 const refreshData = () => {
+  console.log('🔄 [refreshData] 手动刷新数据开始')
+  console.log('📊 当前状态:', {
+    currentPage: logStore.pagination.page,
+    pageSize: logStore.pagination.per_page,
+    total: logStore.pagination.total,
+    filters: logStore.filters,
+    loading: logStore.loading
+  })
   logStore.fetchLogs()
 }
 
@@ -546,23 +566,51 @@ const handleBatchDelete = async () => {
 // 自动刷新处理中的状态
 let timer: number | null = null
 const startAutoRefresh = () => {
+  console.log('⏰ [startAutoRefresh] 启动自动刷新定时器')
   stopAutoRefresh()
   timer = window.setInterval(() => {
-    const hasProcessing = logStore.logs.some(l => l.status === 'processing')
+    const hasProcessing = logStore.logs.some((l: any) => l.status === 'processing')
+    const processingCount = logStore.logs.filter((l: any) => l.status === 'processing').length
+    
+    console.log('🔍 [autoRefresh] 检查处理中的任务:', {
+      hasProcessing,
+      processingCount,
+      totalLogs: logStore.logs.length,
+      timestamp: new Date().toLocaleTimeString()
+    })
+    
     if (hasProcessing) {
+      console.log('🔄 [autoRefresh] 发现处理中的任务，触发自动刷新')
       logStore.fetchLogs()
+    } else {
+      console.log('✅ [autoRefresh] 无处理中的任务，跳过刷新')
     }
   }, 5000)
 }
 const stopAutoRefresh = () => {
   if (timer) {
+    console.log('⏹️ [stopAutoRefresh] 停止自动刷新定时器')
     clearInterval(timer)
     timer = null
   }
 }
 
 onMounted(() => {
-  logStore.fetchLogs().then(() => startAutoRefresh())
+  console.log('🚀 [onMounted] LogList组件已挂载，开始初始化')
+  console.log('📋 初始化参数:', {
+    searchQuery: searchQuery.value,
+    statusFilter: statusFilter.value,
+    logTypeFilter: logTypeFilter.value,
+    sortBy: sortBy.value,
+    sortOrder: sortOrder.value
+  })
+  
+  logStore.fetchLogs().then(() => {
+    console.log('✅ [onMounted] 初始数据加载完成，启动自动刷新')
+    startAutoRefresh()
+  }).catch((error) => {
+    console.error('❌ [onMounted] 初始数据加载失败:', error)
+  })
 })
 
 onBeforeUnmount(() => {
@@ -574,8 +622,18 @@ const logTypeText = (t?: string) => (t === 'oam_antenna' ? 'OAM与天线日志' 
 
 // 获取显示用的文件名（去除日志ID前缀）
 const getDisplayFilename = (row: LogRecord) => {
+  console.group(`🔍 [getDisplayFilename] 处理文件名 - ID: ${row.id}`)
+  console.log('📄 原始数据:', {
+    id: row.id,
+    filename: row.filename,
+    original_filename: row.original_filename,
+    log_type: row.log_type
+  })
+  
   // 如果有original_filename字段，优先使用
   if (row.original_filename) {
+    console.log('✅ 使用 original_filename:', row.original_filename)
+    console.groupEnd()
     return row.original_filename
   }
   
@@ -584,15 +642,35 @@ const getDisplayFilename = (row: LogRecord) => {
   const filename = row.filename
   const underscoreIndex = filename.indexOf('_')
   
+  console.log('🔍 分析filename:', {
+    filename,
+    underscoreIndex,
+    hasUnderscore: underscoreIndex > 0
+  })
+  
   if (underscoreIndex > 0) {
     // 检查下划线前的部分是否像UUID（包含连字符的36字符字符串）
     const prefix = filename.substring(0, underscoreIndex)
+    const extractedName = filename.substring(underscoreIndex + 1)
+    
+    console.log('🧩 UUID检查:', {
+      prefix,
+      prefixLength: prefix.length,
+      hasHyphen: prefix.includes('-'),
+      isUUIDLike: prefix.length === 36 && prefix.includes('-'),
+      extractedName
+    })
+    
     if (prefix.length === 36 && prefix.includes('-')) {
-      return filename.substring(underscoreIndex + 1)
+      console.log('✅ 检测到UUID前缀，返回提取的文件名:', extractedName)
+      console.groupEnd()
+      return extractedName
     }
   }
   
   // 如果不符合预期格式，返回原文件名
+  console.log('⚠️ 不符合预期格式，返回原文件名:', filename)
+  console.groupEnd()
   return filename
 }
 </script>
