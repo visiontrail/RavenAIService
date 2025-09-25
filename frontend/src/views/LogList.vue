@@ -153,7 +153,7 @@
       >
         <el-table-column type="selection" width="55" />
 
-        <el-table-column prop="filename" label="文件名" min-width="200" width="auto" :show-overflow-tooltip="true">
+        <el-table-column prop="filename" label="文件名" min-width="300" :show-overflow-tooltip="true">
           <template #default="{ row }">
             <div class="flex items-center space-x-2 filename-cell">
               <el-icon class="text-blue-600 flex-shrink-0">
@@ -161,12 +161,14 @@
               </el-icon>
               <router-link
                 :to="`/log/${row.id}`"
-                class="text-blue-600 hover:text-blue-800 font-medium filename-link"
+                class="text-blue-600 hover:text-blue-800 font-medium filename-link truncate"
                 :title="getDisplayFilename(row)"
               >
                 {{ getDisplayFilename(row) }}
               </router-link>
-              <el-button link type="primary" size="small" class="flex-shrink-0" @click="copyLink(row)">复制链接</el-button>
+              <el-button link type="primary" size="small" class="flex-shrink-0 copy-link-btn" @click="copyLink(row)">
+                <el-icon><CopyDocument /></el-icon>
+              </el-button>
             </div>
           </template>
         </el-table-column>
@@ -191,7 +193,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="progress" label="进度" width="180">
+        <el-table-column prop="progress" label="进度" width="120">
           <template #default="{ row }">
             <el-progress v-if="row.status === 'processing'" :percentage="Math.round(row.progress || 0)" />
             <span v-else class="text-gray-400">-</span>
@@ -266,6 +268,7 @@ import {
   Refresh,
   Document,
   Sort,
+  CopyDocument,
 } from '@element-plus/icons-vue'
 
 const logStore = useLogStore()
