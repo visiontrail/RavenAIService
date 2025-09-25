@@ -259,7 +259,7 @@ import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useLogStore } from '../stores/logs'
 import { useAppStore } from '../stores/app'
-import { formatFileSize, formatDateTime, getStatusColor, getStatusText, downloadFile, debounce, copyToClipboard } from '../utils'
+import { formatFileSize, formatDateTime, getStatusColor, getStatusText, downloadFile, debounce } from '../utils'
 import { logApi } from '../api'
 import type { LogRecord } from '../types'
 import {
@@ -468,10 +468,21 @@ const handleDownload = async (log: LogRecord) => {
 const copyLink = async (log: LogRecord) => {
   const link = `${window.location.origin}/log/${log.id}`
   try {
-    await copyToClipboard(link)
+    await navigator.clipboard.writeText(link)
     ElMessage.success('链接已复制到剪贴板')
-  } catch (e) {
-    ElMessage.error('复制失败')
+  } catch (error) {
+    // 降级方案
+    const textArea = document.createElement('textarea')
+    textArea.value = link
+    document.body.appendChild(textArea)
+    textArea.select()
+    try {
+      document.execCommand('copy')
+      ElMessage.success('链接已复制到剪贴板')
+    } catch (err) {
+      ElMessage.error('复制失败，请手动复制链接')
+    }
+    document.body.removeChild(textArea)
   }
 }
 
