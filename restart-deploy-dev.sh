@@ -6,19 +6,45 @@ echo "🔄 部署环境快速重启（支持代码热重载）..."
 COMPOSE_FILE="docker-compose.deploy-dev.yml"
 
 echo "🏗️ 编译前端代码..."
-cd frontend
-if [ ! -d "node_modules" ]; then
-    echo "📦 安装前端依赖..."
-    npm install
+
+# 检查本地是否有 npm 命令
+if command -v npm &> /dev/null; then
+    echo "📍 使用本地 npm 构建前端..."
+    cd frontend
+    if [ ! -d "node_modules" ]; then
+        echo "📦 安装前端依赖..."
+        npm install
+    fi
+    echo "🔨 构建前端..."
+    npm run build
+    if [ $? -ne 0 ]; then
+        echo "❌ 前端构建失败！"
+        exit 1
+    fi
+    echo "✅ 前端构建完成"
+    cd ..
+else
+    echo "📍 本地未找到 npm，使用 Docker 容器构建前端..."
+    
+    # 创建临时构建容器
+    echo "🐳 创建临时构建容器..."
+    docker run --rm \
+        -v "$(pwd)/frontend:/app/frontend" \
+        -w /app/frontend \
+        node:18-alpine \
+        sh -c "
+            echo '📦 安装前端依赖...' && \
+            npm install && \
+            echo '🔨 构建前端...' && \
+            npm run build
+        "
+    
+    if [ $? -ne 0 ]; then
+        echo "❌ 容器内前端构建失败！"
+        exit 1
+    fi
+    echo "✅ 容器内前端构建完成"
 fi
-echo "🔨 构建前端..."
-npm run build
-if [ $? -ne 0 ]; then
-    echo "❌ 前端构建失败！"
-    exit 1
-fi
-echo "✅ 前端构建完成"
-cd ..
 
 echo "📋 停止服务..."
 docker-compose -f $COMPOSE_FILE down
