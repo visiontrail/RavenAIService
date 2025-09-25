@@ -27,14 +27,14 @@ else
     echo "📍 本地未找到 npm，使用 Docker 容器构建前端..."
     
     # 创建临时构建容器
-    echo "🐳 创建临时构建容器..."
+    echo "🐳 创建临时构建容器（使用 Node.js 20）..."
     docker run --rm \
         -v "$(pwd)/frontend:/app/frontend" \
         -w /app/frontend \
-        node:18-alpine \
+        node:20-alpine \
         sh -c "
             echo '📦 安装前端依赖...' && \
-            npm install && \
+            npm install --no-fund --no-audit && \
             echo '🔨 构建前端...' && \
             npm run build
         "
