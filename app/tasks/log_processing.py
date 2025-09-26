@@ -477,22 +477,10 @@ def _process_with_external_tool(
         logger.error(f"ExternalToolTask - {error_msg}")
         raise RuntimeError(f"Input path is not a directory: {input_dir}")
     
-    # 构建外部工具命令 - 使用绝对路径确保外部工具能正确找到输入目录
-    abs_input_dir = os.path.abspath(input_dir)
-    cmd = [
-        "tool_log_decompress",
-        abs_input_dir,
-        str(settings.thread_num_for_decompress)
-    ]
-    
-    logger.info(f"ExternalToolTask - 外部工具命令配置: 命令={cmd}, 线程数={settings.thread_num_for_decompress}")
-    logger.info(f"ExternalToolTask - 路径信息: 输入目录(相对)={input_dir}, 输入目录(绝对)={abs_input_dir}")
-    logger.info(f"ExternalToolTask - 注意: tool_log_decompress工具会直接在输入目录中生成处理结果")
-    
     # 检查输入目录中的文件详情
     try:
         input_files = os.listdir(input_dir)
-        logger.info(f"ExternalToolTask - 输入目录内容分析: 文件数量={len(input_files)}, 文件列表={input_files[:10]}{'...' if len(input_files) > 10 else ''}")
+        logger.info(f"ExternalToolTask - 输入目录内容分析: 文件数量={len(input_files)}, 文件列表={input_files}")
         
         if len(input_files) == 0:
             logger.warning(f"ExternalToolTask - 警告: 输入目录为空")
@@ -501,6 +489,15 @@ def _process_with_external_tool(
         error_msg = f"无法读取输入目录内容: {str(e)}"
         logger.error(f"ExternalToolTask - {error_msg}")
         raise RuntimeError(f"Cannot read input directory contents: {str(e)}")
+    
+    # 检测STACK_*子文件夹
+    stack_folders = []
+    for item in input_files:
+        item_path = os.path.join(input_dir, item)
+        if os.path.isdir(item_path) and item.startswith('STACK_'):
+            stack_folders.append(item)
+    
+    logger.info(f"ExternalToolTask - 检测到STACK_*子文件夹: {stack_folders}")
     
     # 检查外部工具是否存在
     import shutil as sh_util
@@ -514,6 +511,223 @@ def _process_with_external_tool(
             raise RuntimeError(f"External tool is not executable: {tool_path}")
     else:
         logger.warning(f"ExternalToolTask - 外部工具不在PATH中，尝试使用相对路径")
+    
+    # 如果没有检测到STACK_*子文件夹，使用原有逻辑处理整个目录
+    if not stack_folders:
+        logger.info(f"ExternalToolTask - 未检测到STACK_*子文件夹，使用原有逻辑处理整个目录")
+        return _process_single_directory_with_tool(input_dir, temp_dir, total_file_size, db_session, log_record)
+    
+    # 对每个STACK_*子文件夹分别调用tool_log_decompress
+    successful_processes = 0
+    total_processes = len(stack_folders)
+    
+    for i, stack_folder in enumerate(stack_folders):
+        stack_folder_path = os.path.join(input_dir, stack_folder)
+        logger.info(f"ExternalToolTask - 开始处理STACK_*子文件夹 ({i+1}/{total_processes}): {stack_folder}")
+        
+        try:
+            # 验证子文件夹状态
+            if not _check_and_log_directory_status(stack_folder_path, f"ExternalToolTask - STACK_*子文件夹 {stack_folder}", required=True):
+                logger.error(f"ExternalToolTask - STACK_*子文件夹不可访问: {stack_folder_path}")
+                continue
+            
+            # 构建外部工具命令 - 使用绝对路径确保外部工具能正确找到子文件夹
+            abs_stack_folder_path = os.path.abspath(stack_folder_path)
+            cmd = [
+                "tool_log_decompress",
+                abs_stack_folder_path,
+                str(settings.thread_num_for_decompress)
+            ]
+            
+            logger.info(f"ExternalToolTask - 外部工具命令配置 ({stack_folder}): 命令={cmd}, 线程数={settings.thread_num_for_decompress}")
+            logger.info(f"ExternalToolTask - 路径信息 ({stack_folder}): 子文件夹(相对)={stack_folder_path}, 子文件夹(绝对)={abs_stack_folder_path}")
+            
+            # 启动外部进程 - 使用子文件夹作为工作目录
+            logger.info(f"ExternalToolTask - 启动外部进程 ({stack_folder}): 工作目录={stack_folder_path}")
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=stack_folder_path,
+                text=True,
+                env=os.environ.copy()  # 传递环境变量
+            )
+            
+            logger.info(f"ExternalToolTask - 外部进程已启动 ({stack_folder}): PID={process.pid}")
+            
+            # 监控进度
+            start_time = time.time()
+            progress_update_count = 0
+            last_log_time = start_time
+            
+            while process.poll() is None:
+                elapsed_time = time.time() - start_time
+                
+                # 基于时间和文件大小估算进度，考虑多个子文件夹的处理
+                base_progress = 20.0 + (i * 60.0 / total_processes)
+                current_folder_progress = min(
+                    (elapsed_time * settings.log_processing_speed_mb_per_sec * 1024 * 1024) / (total_file_size / total_processes) * (60.0 / total_processes),
+                    60.0 / total_processes
+                )
+                estimated_progress = min(base_progress + current_folder_progress, 80.0)
+                
+                _update_progress(db_session, log_record, estimated_progress)
+                progress_update_count += 1
+                
+                # 每30秒记录一次详细日志，每10次进度更新记录一次简要日志
+                current_time = time.time()
+                if current_time - last_log_time >= 30:
+                    logger.info(f"ExternalToolTask - 详细进度监控 ({stack_folder}): 已运行时间={elapsed_time:.1f}秒, 估算进度={estimated_progress:.1f}%, 进程状态=运行中, PID={process.pid}")
+                    last_log_time = current_time
+                elif progress_update_count % 10 == 0:
+                    logger.debug(f"ExternalToolTask - 进度监控 ({stack_folder}): 已运行时间={elapsed_time:.1f}秒, 估算进度={estimated_progress:.1f}%, 进程状态=运行中")
+                
+                time.sleep(5)  # 每5秒更新一次进度
+            
+            # 检查进程结果
+            stdout, stderr = process.communicate()
+            total_time = time.time() - start_time
+            
+            logger.info(f"ExternalToolTask - 外部进程执行完成 ({stack_folder}): 返回码={process.returncode}, 执行时间={total_time:.2f}秒")
+            
+            # 记录完整的输出信息
+            if stdout:
+                stdout_preview = stdout[:1000] + "..." if len(stdout) > 1000 else stdout
+                logger.info(f"ExternalToolTask - 标准输出 ({stack_folder}) (长度={len(stdout)}): {stdout_preview}")
+            else:
+                logger.info(f"ExternalToolTask - 标准输出 ({stack_folder}): 无输出")
+            
+            if stderr:
+                stderr_preview = stderr[:1000] + "..." if len(stderr) > 1000 else stderr
+                logger.warning(f"ExternalToolTask - 标准错误 ({stack_folder}) (长度={len(stderr)}): {stderr_preview}")
+            else:
+                logger.info(f"ExternalToolTask - 标准错误 ({stack_folder}): 无错误输出")
+            
+            # 验证输出目录状态
+            logger.info(f"ExternalToolTask - 开始验证输出目录状态 ({stack_folder})")
+            if not _check_and_log_directory_status(stack_folder_path, f"ExternalToolTask - 输出目录 {stack_folder}", required=True):
+                logger.error(f"ExternalToolTask - 输出目录验证失败 ({stack_folder})")
+            
+            # 检查输出目录内容详情
+            try:
+                output_files = os.listdir(stack_folder_path)
+                logger.info(f"ExternalToolTask - 输出目录内容分析 ({stack_folder}): 文件数量={len(output_files)}, 文件列表={output_files[:10]}{'...' if len(output_files) > 10 else ''}")
+                
+                if len(output_files) == 0:
+                    logger.warning(f"ExternalToolTask - 警告: 输出目录为空 ({stack_folder})，外部工具可能未生成任何文件")
+                else:
+                    logger.info(f"ExternalToolTask - 输出目录验证成功 ({stack_folder})，包含 {len(output_files)} 个文件")
+                    
+            except Exception as e:
+                logger.error(f"ExternalToolTask - 无法读取输出目录内容 ({stack_folder}): {str(e)}")
+            
+            if process.returncode != 0:
+                # 提供更详细的错误信息
+                error_details = []
+                error_details.append(f"返回码: {process.returncode}")
+                
+                if stderr:
+                    error_details.append(f"错误输出: {stderr}")
+                else:
+                    error_details.append("错误输出: 无")
+                
+                if stdout:
+                    error_details.append(f"标准输出: {stdout}")
+                else:
+                    error_details.append("标准输出: 无")
+                
+                error_details.append(f"执行时间: {total_time:.2f}秒")
+                error_details.append(f"工作目录: {stack_folder_path}")
+                error_details.append(f"命令: {' '.join(cmd)}")
+                
+                # 常见错误码的解释
+                error_code_meanings = {
+                    1: "一般错误",
+                    2: "误用shell命令",
+                    126: "命令不可执行",
+                    127: "命令未找到",
+                    128: "无效的退出参数",
+                    130: "脚本被Ctrl+C终止",
+                    255: "退出状态超出范围或其他严重错误"
+                }
+                
+                if process.returncode in error_code_meanings:
+                    error_details.append(f"错误码含义: {error_code_meanings[process.returncode]}")
+                
+                full_error_msg = "; ".join(error_details)
+                logger.error(f"ExternalToolTask - 外部工具执行失败 ({stack_folder}): {full_error_msg}")
+                # 对于单个子文件夹的失败，记录错误但继续处理其他子文件夹
+                continue
+            
+            successful_processes += 1
+            logger.info(f"ExternalToolTask - 外部工具处理成功完成 ({stack_folder})")
+            
+        except FileNotFoundError as e:
+            error_msg = f"外部工具未找到: tool_log_decompress, 详细错误: {str(e)}"
+            logger.error(f"ExternalToolTask - {error_msg} ({stack_folder})")
+            continue
+        except subprocess.TimeoutExpired as e:
+            error_msg = f"外部工具执行超时: {str(e)}"
+            logger.error(f"ExternalToolTask - {error_msg} ({stack_folder})")
+            continue
+        except PermissionError as e:
+            error_msg = f"权限错误: {str(e)}"
+            logger.error(f"ExternalToolTask - {error_msg} ({stack_folder})")
+            continue
+        except Exception as e:
+            error_msg = f"外部工具处理失败: 错误类型={type(e).__name__}, 错误信息={str(e)}"
+            logger.error(f"ExternalToolTask - {error_msg} ({stack_folder})", exc_info=True)
+            continue
+    
+    # 检查处理结果
+    if successful_processes == 0:
+        raise RuntimeError(f"所有STACK_*子文件夹处理失败: 总数={total_processes}, 成功数={successful_processes}")
+    elif successful_processes < total_processes:
+        logger.warning(f"ExternalToolTask - 部分STACK_*子文件夹处理失败: 总数={total_processes}, 成功数={successful_processes}")
+    else:
+        logger.info(f"ExternalToolTask - 所有STACK_*子文件夹处理成功: 总数={total_processes}, 成功数={successful_processes}")
+    
+    # 最终进度设为80%
+    _update_progress(db_session, log_record, 80.0)
+    logger.info(f"ExternalToolTask - 外部工具处理完成: 成功处理{successful_processes}/{total_processes}个STACK_*子文件夹")
+    
+    # 返回输入目录，因为tool_log_decompress会直接在各个子文件夹中生成处理结果
+    return input_dir
+
+
+def _process_single_directory_with_tool(
+    input_dir: str, 
+    temp_dir: str, 
+    total_file_size: int,
+    db_session: Session,
+    log_record: LogRecord
+) -> str:
+    """
+    使用外部工具处理单个目录（原有逻辑）
+    
+    Args:
+        input_dir: 输入目录
+        temp_dir: 临时目录
+        total_file_size: 总文件大小
+        db_session: 数据库会话
+        log_record: 日志记录
+        
+    Returns:
+        str: 处理后的目录路径
+    """
+    logger.info(f"ExternalToolTask - 使用原有逻辑处理单个目录: {input_dir}")
+    
+    # 构建外部工具命令 - 使用绝对路径确保外部工具能正确找到输入目录
+    abs_input_dir = os.path.abspath(input_dir)
+    cmd = [
+        "tool_log_decompress",
+        abs_input_dir,
+        str(settings.thread_num_for_decompress)
+    ]
+    
+    logger.info(f"ExternalToolTask - 外部工具命令配置: 命令={cmd}, 线程数={settings.thread_num_for_decompress}")
+    logger.info(f"ExternalToolTask - 路径信息: 输入目录(相对)={input_dir}, 输入目录(绝对)={abs_input_dir}")
+    logger.info(f"ExternalToolTask - 注意: tool_log_decompress工具会直接在输入目录中生成处理结果")
     
     try:
         # 启动外部进程 - 使用临时目录作为工作目录
