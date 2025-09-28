@@ -114,12 +114,12 @@
             </div>
 
             <!-- 更新时间 -->
-            <div class="space-y-2">
+            <!-- <div class="space-y-2">
               <label class="text-sm font-medium text-gray-500">更新时间</label>
               <div class="text-sm text-gray-900">
                 {{ formatDateTime(logStore.currentLog.updated_at) }}
               </div>
-            </div>
+            </div> -->
 
             <!-- 处理状态 -->
             <div class="space-y-2">
@@ -159,33 +159,11 @@
                 {{ logStore.currentLog.download_count }}
               </div>
             </div>
-
-            <!-- 日志级别 -->
-            <div class="space-y-2" v-if="logStore.currentLog.log_level">
-              <label class="text-sm font-medium text-gray-500">日志级别</label>
-              <div>
-                <el-tag 
-                  :type="getLogLevelTagType(logStore.currentLog.log_level)"
-                  size="default"
-                >
-                  {{ getLogLevelLabel(logStore.currentLog.log_level) }}
-                </el-tag>
-              </div>
-            </div>
-
             <!-- 文件校验和 -->
             <div class="space-y-2" v-if="logStore.currentLog.checksum">
               <label class="text-sm font-medium text-gray-500">文件校验和</label>
               <div class="text-sm text-gray-900 font-mono bg-gray-50 p-2 rounded border">
                 {{ logStore.currentLog.checksum }}
-              </div>
-            </div>
-
-            <!-- MIME类型 -->
-            <div class="space-y-2" v-if="logStore.currentLog.mime_type">
-              <label class="text-sm font-medium text-gray-500">MIME类型</label>
-              <div class="text-sm text-gray-900 bg-gray-50 p-2 rounded border">
-                {{ logStore.currentLog.mime_type }}
               </div>
             </div>
 
@@ -206,20 +184,20 @@
             </div>
 
             <!-- 处理开始时间 -->
-            <div class="space-y-2" v-if="logStore.currentLog.processing_started_at">
+            <!-- <div class="space-y-2" v-if="logStore.currentLog.processing_started_at">
               <label class="text-sm font-medium text-gray-500">处理开始时间</label>
               <div class="text-sm text-gray-900">
                 {{ formatDateTime(logStore.currentLog.processing_started_at) }}
               </div>
-            </div>
+            </div> -->
 
             <!-- 处理完成时间 -->
-            <div class="space-y-2" v-if="logStore.currentLog.processed_at">
+            <!-- <div class="space-y-2" v-if="logStore.currentLog.processed_at">
               <label class="text-sm font-medium text-gray-500">处理完成时间</label>
               <div class="text-sm text-gray-900">
                 {{ formatDateTime(logStore.currentLog.processed_at) }}
               </div>
-            </div>
+            </div> -->
 
             <!-- 问题描述 -->
             <div class="space-y-2 md:col-span-2 lg:col-span-3" v-if="logStore.currentLog.issue_description">
