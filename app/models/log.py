@@ -36,6 +36,7 @@ class LogType(str, Enum):
     """日志类型枚举"""
     STACK = "stack"
     OAM_ANTENNA = "oam_antenna"
+    FULL = "full"  # 全量日志（包含协议栈和OAM/天线日志）
 
 
 # ==================== SQLAlchemy 数据库模型 ====================

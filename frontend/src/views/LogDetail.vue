@@ -138,7 +138,7 @@
             </div>
 
             <!-- 协议栈日志处理进度 -->
-            <div class="space-y-2 md:col-span-2 lg:col-span-3" v-if="logStore.currentLog.log_type === 'stack' && logStore.currentLog.status === 'processing'">
+            <div class="space-y-2 md:col-span-2 lg:col-span-3" v-if="(logStore.currentLog.log_type === 'stack' || logStore.currentLog.log_type === 'full') && logStore.currentLog.status === 'processing'">
               <label class="text-sm font-medium text-gray-500">处理进度</label>
               <div class="space-y-2">
                 <el-progress 
@@ -332,6 +332,8 @@ const getLogTypeTagType = (logType?: string) => {
       return 'primary'
     case 'oam_antenna':
       return 'success'
+    case 'full':
+      return 'warning'
     default:
       return 'info'
   }
@@ -344,6 +346,8 @@ const getLogTypeLabel = (logType?: string) => {
       return '协议栈日志'
     case 'oam_antenna':
       return 'OAM天线日志'
+    case 'full':
+      return '全量日志'
     default:
       return '未知类型'
   }

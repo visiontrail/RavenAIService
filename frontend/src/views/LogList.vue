@@ -33,6 +33,7 @@
           >
             <el-option label="协议栈日志" value="stack" />
             <el-option label="OAM与天线日志" value="oam_antenna" />
+            <el-option label="全量日志" value="full" />
           </el-select>
           <el-select
             v-model="statusFilter"
@@ -642,7 +643,16 @@ onBeforeUnmount(() => {
 })
 
 // 文本映射
-const logTypeText = (t?: string) => (t === 'oam_antenna' ? 'OAM与天线日志' : '协议栈日志')
+const logTypeText = (t?: string) => {
+  switch (t) {
+    case 'oam_antenna':
+      return 'OAM与天线日志'
+    case 'full':
+      return '全量日志'
+    default:
+      return '协议栈日志'
+  }
+}
 
 // 获取显示用的文件名（去除日志ID前缀）
 const getDisplayFilename = (row: LogRecord) => {

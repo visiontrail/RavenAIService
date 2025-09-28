@@ -844,8 +844,8 @@ class LogService(BaseCRUDService[LogRecord]):
             log_record: 日志记录
         """
         try:
-            # 检查文件名是否包含"stack"关键字
-            if "stack" in log_record.original_filename.lower():
+            # 检查文件名是否包含"stack"关键字，或者日志类型为FULL（全量日志）
+            if "stack" in log_record.original_filename.lower() or log_record.log_type == LogType.FULL:
                 logger.info(f"LogService - 检测到协议栈日志，准备启动处理任务: {log_record.original_filename}")
                 # 动态导入避免循环导入
                 from app.tasks.log_processing import process_protocol_stack_log

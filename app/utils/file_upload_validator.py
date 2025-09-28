@@ -195,12 +195,17 @@ class T04FileUploadValidator:
             filename: 文件名
             
         Returns:
-            str: 日志类型 ('stack' 或 'oam_antenna')
+            str: 日志类型 ('stack', 'oam_antenna', 或 'full')
         """
         filename_lower = filename.lower()
         
-        # 根据T04要求：包含"stack"为协议栈日志
-        if 'stack' in filename_lower:
+        # 检查是否为全量日志：同时包含stack和(oam或om)
+        has_stack = 'stack' in filename_lower
+        has_oam = 'oam' in filename_lower or 'om' in filename_lower
+        
+        if has_stack and has_oam:
+            return 'full'
+        elif has_stack:
             return 'stack'
         else:
             return 'oam_antenna'

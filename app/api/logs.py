@@ -78,7 +78,7 @@ async def upload_log(
     上传日志文件
     
     - **file**: 要上传的日志文件
-    - **log_type**: 日志类型 (application, access, error, system, audit)
+    - **log_type**: 日志类型 (stack, oam_antenna, full)
     - **log_level**: 日志级别 (debug, info, warn, error, fatal)
     - **source**: 日志来源系统
     - **environment**: 运行环境 (dev, test, prod等)
@@ -302,7 +302,7 @@ async def upload_t04_logs(
                         "original_filename": file.filename,
                         "file_size": file_size,
                         "file_path": str(file_path),
-                        "log_type": LogType.STACK if log_type == "stack" else LogType.OAM_ANTENNA,
+                        "log_type": LogType.STACK if log_type == "stack" else (LogType.FULL if log_type == "full" else LogType.OAM_ANTENNA),
                         "status": LogStatus.PENDING,
                         "progress": 0.0,
                         "checksum": checksum,
