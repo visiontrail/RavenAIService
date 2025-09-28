@@ -1,3 +1,13 @@
+// 日志元数据类型
+export interface LogMetadata {
+  source?: string
+  environment?: string
+  service_name?: string
+  version?: string
+  tags?: string[]
+  extra_fields?: Record<string, any>
+}
+
 // 日志记录类型
 export interface LogRecord {
   id: string
@@ -5,7 +15,7 @@ export interface LogRecord {
   original_filename?: string
   file_size: number
   file_path?: string
-  log_type?: 'stack' | 'oam_antenna'
+  log_type?: 'stack' | 'oam_antenna' | 'full'
   status: 'pending' | 'processing' | 'completed' | 'failed'
   progress?: number
   task_id?: string
@@ -17,7 +27,9 @@ export interface LogRecord {
   checksum?: string
   mime_type?: string
   log_level?: 'debug' | 'info' | 'warn' | 'error' | 'fatal'
-  metadata?: Record<string, any>
+  metadata?: LogMetadata
+  error_message?: string
+  issue_description?: string
   download_count: number
   download_url?: string
   file_size_human?: string

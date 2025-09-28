@@ -159,6 +159,138 @@
                 {{ logStore.currentLog.download_count }}
               </div>
             </div>
+
+            <!-- 日志级别 -->
+            <div class="space-y-2" v-if="logStore.currentLog.log_level">
+              <label class="text-sm font-medium text-gray-500">日志级别</label>
+              <div>
+                <el-tag 
+                  :type="getLogLevelTagType(logStore.currentLog.log_level)"
+                  size="default"
+                >
+                  {{ getLogLevelLabel(logStore.currentLog.log_level) }}
+                </el-tag>
+              </div>
+            </div>
+
+            <!-- 文件校验和 -->
+            <div class="space-y-2" v-if="logStore.currentLog.checksum">
+              <label class="text-sm font-medium text-gray-500">文件校验和</label>
+              <div class="text-sm text-gray-900 font-mono bg-gray-50 p-2 rounded border">
+                {{ logStore.currentLog.checksum }}
+              </div>
+            </div>
+
+            <!-- MIME类型 -->
+            <div class="space-y-2" v-if="logStore.currentLog.mime_type">
+              <label class="text-sm font-medium text-gray-500">MIME类型</label>
+              <div class="text-sm text-gray-900 bg-gray-50 p-2 rounded border">
+                {{ logStore.currentLog.mime_type }}
+              </div>
+            </div>
+
+            <!-- 任务ID -->
+            <div class="space-y-2" v-if="logStore.currentLog.task_id">
+              <label class="text-sm font-medium text-gray-500">任务ID</label>
+              <div class="text-sm text-gray-900 font-mono bg-gray-50 p-2 rounded border">
+                {{ logStore.currentLog.task_id }}
+              </div>
+            </div>
+
+            <!-- 重试次数 -->
+            <div class="space-y-2" v-if="logStore.currentLog.retry_count !== undefined && logStore.currentLog.retry_count > 0">
+              <label class="text-sm font-medium text-gray-500">重试次数</label>
+              <div class="text-sm text-gray-900 font-semibold">
+                {{ logStore.currentLog.retry_count }}
+              </div>
+            </div>
+
+            <!-- 处理开始时间 -->
+            <div class="space-y-2" v-if="logStore.currentLog.processing_started_at">
+              <label class="text-sm font-medium text-gray-500">处理开始时间</label>
+              <div class="text-sm text-gray-900">
+                {{ formatDateTime(logStore.currentLog.processing_started_at) }}
+              </div>
+            </div>
+
+            <!-- 处理完成时间 -->
+            <div class="space-y-2" v-if="logStore.currentLog.processed_at">
+              <label class="text-sm font-medium text-gray-500">处理完成时间</label>
+              <div class="text-sm text-gray-900">
+                {{ formatDateTime(logStore.currentLog.processed_at) }}
+              </div>
+            </div>
+
+            <!-- 问题描述 -->
+            <div class="space-y-2 md:col-span-2 lg:col-span-3" v-if="logStore.currentLog.issue_description">
+              <label class="text-sm font-medium text-gray-500">问题描述</label>
+              <div class="text-sm text-gray-900 bg-blue-50 p-3 rounded border border-blue-200">
+                {{ logStore.currentLog.issue_description }}
+              </div>
+            </div>
+
+            <!-- 错误信息 -->
+            <div class="space-y-2 md:col-span-2 lg:col-span-3" v-if="logStore.currentLog.error_message">
+              <label class="text-sm font-medium text-gray-500">错误信息</label>
+              <div class="text-sm text-red-700 bg-red-50 p-3 rounded border border-red-200">
+                {{ logStore.currentLog.error_message }}
+              </div>
+            </div>
+
+            <!-- 元数据信息 -->
+            <div class="space-y-2 md:col-span-2 lg:col-span-3" v-if="logStore.currentLog.metadata && hasMetadata(logStore.currentLog.metadata)">
+              <label class="text-sm font-medium text-gray-500">元数据信息</label>
+              <div class="bg-gray-50 p-3 rounded border">
+                <!-- 日志来源 -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div v-if="logStore.currentLog.metadata.source" class="space-y-1">
+                    <label class="text-xs font-medium text-gray-400">日志来源</label>
+                    <div class="text-sm text-gray-900">{{ logStore.currentLog.metadata.source }}</div>
+                  </div>
+                  
+                  <!-- 环境信息 -->
+                  <div v-if="logStore.currentLog.metadata.environment" class="space-y-1">
+                    <label class="text-xs font-medium text-gray-400">环境信息</label>
+                    <div class="text-sm text-gray-900">{{ logStore.currentLog.metadata.environment }}</div>
+                  </div>
+                  
+                  <!-- 服务名称 -->
+                  <div v-if="logStore.currentLog.metadata.service_name" class="space-y-1">
+                    <label class="text-xs font-medium text-gray-400">服务名称</label>
+                    <div class="text-sm text-gray-900">{{ logStore.currentLog.metadata.service_name }}</div>
+                  </div>
+                  
+                  <!-- 版本号 -->
+                  <div v-if="logStore.currentLog.metadata.version" class="space-y-1">
+                    <label class="text-xs font-medium text-gray-400">版本号</label>
+                    <div class="text-sm text-gray-900">{{ logStore.currentLog.metadata.version }}</div>
+                  </div>
+                </div>
+                
+                <!-- 标签列表 -->
+                <div v-if="logStore.currentLog.metadata.tags && logStore.currentLog.metadata.tags.length > 0" class="mt-3 space-y-1">
+                  <label class="text-xs font-medium text-gray-400">标签</label>
+                  <div class="flex flex-wrap gap-1">
+                    <el-tag 
+                      v-for="tag in logStore.currentLog.metadata.tags" 
+                      :key="tag" 
+                      size="small" 
+                      type="info"
+                    >
+                      {{ tag }}
+                    </el-tag>
+                  </div>
+                </div>
+                
+                <!-- 额外字段 -->
+                <div v-if="logStore.currentLog.metadata.extra_fields && Object.keys(logStore.currentLog.metadata.extra_fields).length > 0" class="mt-3 space-y-1">
+                  <label class="text-xs font-medium text-gray-400">额外字段</label>
+                  <div class="text-xs text-gray-700 font-mono bg-white p-2 rounded border">
+                    {{ JSON.stringify(logStore.currentLog.metadata.extra_fields, null, 2) }}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -383,6 +515,55 @@ const getStatusLabel = (status: string) => {
     default:
       return '未知状态'
   }
+}
+
+// 获取日志级别标签类型
+const getLogLevelTagType = (logLevel?: string) => {
+  switch (logLevel) {
+    case 'fatal':
+    case 'error':
+      return 'danger'
+    case 'warn':
+      return 'warning'
+    case 'info':
+      return 'primary'
+    case 'debug':
+      return 'info'
+    default:
+      return 'info'
+  }
+}
+
+// 获取日志级别标签文本
+const getLogLevelLabel = (logLevel?: string) => {
+  switch (logLevel) {
+    case 'fatal':
+      return '致命错误'
+    case 'error':
+      return '错误'
+    case 'warn':
+      return '警告'
+    case 'info':
+      return '信息'
+    case 'debug':
+      return '调试'
+    default:
+      return '未知级别'
+  }
+}
+
+// 检查是否有元数据内容
+const hasMetadata = (metadata: any) => {
+  if (!metadata || typeof metadata !== 'object') return false
+  
+  return !!(
+    metadata.source ||
+    metadata.environment ||
+    metadata.service_name ||
+    metadata.version ||
+    (metadata.tags && metadata.tags.length > 0) ||
+    (metadata.extra_fields && Object.keys(metadata.extra_fields).length > 0)
+  )
 }
 
 // 下载文件 - 使用直接URL下载，立即触发
