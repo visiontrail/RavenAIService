@@ -49,6 +49,15 @@ fi
 echo "📋 停止服务..."
 docker-compose -f $COMPOSE_FILE down
 
+echo "🗄️ 运行数据库迁移..."
+# 运行数据库迁移，确保数据库结构是最新的
+docker-compose -f $COMPOSE_FILE run --rm app python -m alembic upgrade head
+if [ $? -ne 0 ]; then
+    echo "❌ 数据库迁移失败！"
+    exit 1
+fi
+echo "✅ 数据库迁移完成"
+
 echo "🔧 重启服务（无需重新构建）..."
 docker-compose -f $COMPOSE_FILE up -d
 
@@ -59,4 +68,4 @@ echo "📊 检查服务状态..."
 docker-compose -f $COMPOSE_FILE ps
 
 echo "🎉 重启完成！代码更改已生效。"
-echo "💡 提示：此脚本会自动编译前端代码并重启服务，支持前端和后端代码热重载。"
+echo "💡 提示：此脚本会自动编译前端代码、运行数据库迁移并重启服务，支持前端和后端代码热重载。"
