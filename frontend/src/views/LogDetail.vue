@@ -381,19 +381,28 @@ const getStatusLabel = (status: string) => {
   }
 }
 
-// 下载文件
+// 下载文件 - 使用直接URL下载，立即触发
 const handleDownload = async () => {
   if (!logStore.currentLog) return
 
   try {
     downloadLoading.value = true
-    const blob = await logApi.downloadLog(logStore.currentLog.id)
-    downloadFile(blob, logStore.currentLog.filename)
+    
+    // 直接使用URL下载，立即触发浏览器下载
+    const downloadUrl = logApi.getDownloadUrl(logStore.currentLog.id)
+    downloadFile(downloadUrl, logStore.currentLog.filename)
     ElMessage.success(`文件 ${logStore.currentLog.filename} 已开始下载`)
     
-    // 更新下载次数
-    if (logStore.currentLog) {
-      logStore.currentLog.download_count += 1
+    // 异步更新下载次数，不影响下载体验
+    try {
+      const response = await logApi.incrementDownloadCount(logStore.currentLog.id)
+      // 更新本地下载次数
+      if (logStore.currentLog && response.data?.data?.download_count) {
+        logStore.currentLog.download_count = response.data.data.download_count
+      }
+    } catch (error) {
+      // 忽略计数更新失败，不影响用户体验
+      console.warn('下载计数更新失败:', error)
     }
   } catch (error) {
     ElMessage.error('文件下载失败，请稍后重试')

@@ -709,6 +709,53 @@ async def download_log(
         )
 
 
+@router.post("/{log_id}/download-count")
+async def increment_download_count(
+    log_id: str = Path(..., description="日志文件ID"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    增加下载次数
+    
+    专门用于前端异步更新下载计数，不影响实际下载体验
+    
+    - **log_id**: 要更新下载次数的日志文件ID
+    
+    返回更新后的下载次数
+    """
+    try:
+        # 验证日志ID格式
+        request_validator.validate_log_id(log_id)
+        
+        # 增加下载次数
+        log_info = await log_service.increment_download_count(db, log_id)
+        
+        logger.info(f"Download count incremented: {log_id}, new count: {log_info.download_count}")
+        
+        return {
+            "success": True,
+            "message": "下载次数已更新",
+            "data": {
+                "log_id": log_id,
+                "download_count": log_info.download_count
+            }
+        }
+        
+    except ValidationError as e:
+        logger.warning(f"Invalid log ID format for download count: {log_id}")
+        raise e
+    except FileNotFoundError as e:
+        logger.warning(f"File not found for download count update: {log_id}")
+        raise e
+    except Exception as e:
+        logger.error(f"Error updating download count {log_id}: {str(e)}")
+        raise LogServiceException(
+            message="下载次数更新失败",
+            error_code="DOWNLOAD_COUNT_ERROR",
+            detail=str(e)
+        )
+
+
 @router.post("/batch/delete", response_model=BatchDeleteResponse)
 async def batch_delete_logs(
     request: BatchDeleteRequest,

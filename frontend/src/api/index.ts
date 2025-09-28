@@ -79,12 +79,21 @@ export const logApi = {
     })
   },
 
-  // 下载日志文件
+  // 下载日志文件 - 返回Blob（旧方式，保留兼容性）
   downloadLog: (id: string): Promise<Blob> => {
     return api.get(`/api/v1/logs/${id}/download`, {
       responseType: 'blob',
     })
   },
+
+  // 获取下载URL - 直接下载，不等待响应（推荐方式）
+  getDownloadUrl: (id: string): string => {
+    return `${computedBaseURL}/api/v1/logs/${id}/download`
+  },
+
+  // 异步更新下载次数 - 用于在直接URL下载后更新计数
+  incrementDownloadCount: (id: string) => 
+    api.post(`/api/v1/logs/${id}/download-count`),
 
   // 删除日志
   deleteLog: (id: string): Promise<ApiResponse> => {

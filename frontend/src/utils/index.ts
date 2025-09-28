@@ -66,16 +66,37 @@ export const getStatusText = (status: string): string => {
   return texts[status] || status
 }
 
-// 下载文件
-export const downloadFile = (blob: Blob, filename: string): void => {
-  const url = window.URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  window.URL.revokeObjectURL(url)
+// 下载文件 - 支持两种方式：直接URL下载和Blob下载
+export const downloadFile = (blobOrUrl: Blob | string, filename?: string): void => {
+  if (typeof blobOrUrl === 'string') {
+    // 直接URL下载 - 立即触发浏览器下载，不等待完整响应
+    const link = document.createElement('a')
+    link.href = blobOrUrl
+    if (filename) {
+      link.download = filename
+    }
+    link.target = '_blank' // 在新标签页打开，避免页面跳转
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  } else {
+    // Blob下载 - 用于已获取的blob数据
+    const url = window.URL.createObjectURL(blobOrUrl)
+    const link = document.createElement('a')
+    link.href = url
+    if (filename) {
+      link.download = filename
+    }
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+  }
+}
+
+// 直接URL下载 - 立即触发下载，不显示加载状态
+export const downloadFileByUrl = (url: string, filename?: string): void => {
+  downloadFile(url, filename)
 }
 
 // 复制到剪贴板

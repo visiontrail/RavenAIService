@@ -445,25 +445,32 @@ const handleCurrentChange = (page: number) => {
   logStore.fetchLogs()
 }
 
-// 下载文件
+// 下载文件 - 使用直接URL下载，立即触发
 const handleDownload = async (log: LogRecord) => {
   try {
-    appStore.setLoading(true)
-    const blob = await logApi.downloadLog(log.id)
-    downloadFile(blob, log.filename)
+    // 直接使用URL下载，不需要等待响应，立即触发浏览器下载
+    const downloadUrl = logApi.getDownloadUrl(log.id)
+    downloadFile(downloadUrl, log.filename)
+    
     appStore.showNotification({
-      title: '下载成功',
+      title: '下载开始',
       message: `文件 ${log.filename} 已开始下载`,
       type: 'success',
     })
+    
+    // 异步更新下载次数，不影响下载体验
+    try {
+      await logApi.incrementDownloadCount(log.id)
+    } catch (error) {
+      // 忽略计数更新失败，不影响用户体验
+      console.warn('下载计数更新失败:', error)
+    }
   } catch (error) {
     appStore.showNotification({
       title: '下载失败',
       message: '文件下载失败，请稍后重试',
       type: 'error',
     })
-  } finally {
-    appStore.setLoading(false)
   }
 }
 
