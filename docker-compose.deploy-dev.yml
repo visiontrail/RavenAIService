@@ -32,6 +32,11 @@ services:
       timeout: 10s
       retries: 3
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   redis:
     image: "redis:7-alpine"
@@ -40,6 +45,11 @@ services:
     volumes:
       - redis_data:/data
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   worker:
     build: .
@@ -68,6 +78,11 @@ services:
       timeout: 10s
       retries: 3
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   nginx:
     image: nginx:alpine
@@ -78,6 +93,11 @@ services:
     depends_on:
       - app
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   redis_data:
