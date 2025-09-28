@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 默认配置
-RUN_MIGRATION=true
+RUN_MIGRATION=false
 COMPOSE_FILE="docker-compose.deploy-dev.yml"
 
 # 显示帮助信息
@@ -11,18 +11,18 @@ show_help() {
     echo "用法: $0 [选项]"
     echo ""
     echo "选项:"
-    echo "  --migrate      强制执行数据库迁移（默认行为）"
-    echo "  --no-migrate   跳过数据库迁移"
+    echo "  --migrate      强制执行数据库迁移"
+    echo "  --no-migrate   跳过数据库迁移（默认行为）"
     echo "  -h, --help     显示此帮助信息"
     echo ""
     echo "说明:"
     echo "  此脚本会自动编译前端代码并重启服务，支持前端和后端代码热重载。"
-    echo "  默认情况下会执行数据库迁移以确保数据库结构与代码模型保持同步。"
+    echo "  默认情况下会跳过数据库迁移以加快重启速度。"
     echo ""
     echo "示例:"
-    echo "  $0                # 默认执行，包含数据库迁移"
+    echo "  $0                # 默认执行，跳过数据库迁移"
     echo "  $0 --migrate      # 明确指定执行数据库迁移"
-    echo "  $0 --no-migrate   # 跳过数据库迁移"
+    echo "  $0 --no-migrate   # 跳过数据库迁移（默认行为）"
     exit 0
 }
 
@@ -106,7 +106,7 @@ if [ "$RUN_MIGRATION" = true ]; then
     fi
     echo "✅ 数据库迁移完成"
 else
-    echo "⏭️ 跳过数据库迁移（根据 --no-migrate 参数）"
+    echo "⏭️ 跳过数据库迁移（默认行为）"
 fi
 
 echo "🔧 重启服务（无需重新构建）..."
