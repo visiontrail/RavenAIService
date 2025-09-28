@@ -117,7 +117,8 @@ class LogService(BaseCRUDService[LogRecord]):
                 checksum=checksum,
                 mime_type=mime_type,
                 log_level=request.log_level,
-                metadata_json=metadata_json
+                metadata_json=metadata_json,
+                issue_description=request.issue_description
             )
             logger.info(f"LogService - 数据库记录创建成功: ID={file_id}")
             
@@ -803,7 +804,8 @@ class LogService(BaseCRUDService[LogRecord]):
             log_level=record.log_level,
             metadata=metadata or LogMetadata(),
             error_message=record.error_message,
-            download_count=record.download_count
+            download_count=record.download_count,
+            issue_description=record.issue_description
         )
 
     async def _create_metadata_content(self, log_record: LogRecord) -> str:

@@ -8,7 +8,7 @@ import re
 import io
 import uuid
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Query, Path, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPBearer
@@ -66,11 +66,12 @@ async def upload_log(
     file: UploadFile = File(..., description="要上传的日志文件"),
     log_type: LogType = Form(LogType.STACK, description="日志类型"),
     log_level: LogLevel = Form(LogLevel.INFO, description="日志级别"),
-    source: str = Form(None, description="日志来源"),
-    environment: str = Form(None, description="环境信息"),
-    service_name: str = Form(None, description="服务名称"),
-    version: str = Form(None, description="版本号"),
-    expires_in_days: int = Form(None, ge=1, le=365, description="过期天数"),
+    source: Optional[str] = Form(None, description="日志来源"),
+    environment: Optional[str] = Form(None, description="环境信息"),
+    service_name: Optional[str] = Form(None, description="服务名称"),
+    version: Optional[str] = Form(None, description="版本号"),
+    expires_in_days: Optional[int] = Form(None, ge=1, le=365, description="过期天数"),
+    issue_description: Optional[str] = Form(None, description="问题描述"),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -84,6 +85,7 @@ async def upload_log(
     - **service_name**: 服务名称
     - **version**: 版本号
     - **expires_in_days**: 文件过期天数 (1-365天)
+    - **issue_description**: 问题描述，用于描述日志所对应的问题
     """
     
     # 构建元数据
@@ -99,7 +101,8 @@ async def upload_log(
         log_type=log_type,
         log_level=log_level,
         metadata=metadata,
-        expires_in_days=expires_in_days
+        expires_in_days=expires_in_days,
+        issue_description=issue_description
     )
     
     # 执行上传

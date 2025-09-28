@@ -161,6 +161,13 @@ class LogRecord(Base, TimestampMixin):
         comment="错误信息"
     )
     
+    # 问题描述
+    issue_description: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="问题描述"
+    )
+    
     # 软删除字段
     is_deleted: Mapped[bool] = mapped_column(
         Boolean,
@@ -211,6 +218,7 @@ class LogFileInfo(BaseModel):
     log_level: Optional[LogLevel] = Field(LogLevel.INFO, description="日志级别")
     metadata: Optional[LogMetadata] = Field(default_factory=LogMetadata, description="元数据")
     error_message: Optional[str] = Field(None, description="错误信息")
+    issue_description: Optional[str] = Field(None, description="问题描述")
     download_count: int = Field(0, description="下载次数")
     
     @computed_field
@@ -238,6 +246,8 @@ class LogUploadRequest(BaseModel):
     log_type: LogType = Field(LogType.STACK, description="日志类型")
     log_level: Optional[LogLevel] = Field(LogLevel.INFO, description="日志级别")
     metadata: Optional[LogMetadata] = Field(default_factory=LogMetadata, description="元数据")
+    expires_in_days: Optional[int] = Field(None, ge=1, le=365, description="过期天数")
+    issue_description: Optional[str] = Field(None, description="问题描述")
 
 
 class SortField(str, Enum):
