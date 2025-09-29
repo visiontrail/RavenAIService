@@ -37,6 +37,56 @@ router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
 
+def _infer_log_type_from_filename(filename: str) -> LogType:
+    """
+    根据文件名初步判断日志类型：
+    - 同时包含 stack 与 (oam 或 om) -> FULL
+    - 仅包含 stack -> STACK
+    - 其他情况（包含 oam/om 或都不包含）-> OAM_ANTENNA
+    """
+    name = (filename or "").lower()
+    has_stack = "stack" in name
+    has_oam = ("oam" in name) or ("om" in name)
+    if has_stack and has_oam:
+        return LogType.FULL
+    if has_stack:
+        return LogType.STACK
+    return LogType.OAM_ANTENNA
+
+
+def _infer_log_type_from_components(components) -> Optional[LogType]:
+    """
+    根据 metadata.json 中的 log_components 的 component_name 进一步细化日志类型：
+    - 若包含任一 STACK 相关组件（如："STACK_", "CUCP", "STACK_CUUP", "STACK_DU"），认为包含协议栈
+    - 若包含任一 OAM 相关组件（名称包含 "OAM"，如："CUUP_OAM", "DU_OAM", "DVB_OAM", "MAIN_OAM"），认为包含 OAM
+    - 两者皆有 -> FULL；仅栈 -> STACK；仅 OAM -> OAM_ANTENNA；都无 -> None（不改变）
+    """
+    try:
+        if not isinstance(components, list):
+            return None
+        has_stack_component = False
+        has_oam_component = False
+        for item in components:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("component_name", "")).upper()
+            if not name:
+                continue
+            if "STACK" in name or name == "CUCP" or name.startswith("STACK_"):
+                has_stack_component = True
+            if "OAM" in name:
+                has_oam_component = True
+        if has_stack_component and has_oam_component:
+            return LogType.FULL
+        if has_stack_component:
+            return LogType.STACK
+        if has_oam_component:
+            return LogType.OAM_ANTENNA
+        return None
+    except Exception:
+        return None
+
+
 async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
     """
     检查上传的日志包中是否包含 metadata.json，若存在则解析并回填到数据库现有字段：
@@ -132,6 +182,16 @@ async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
         except Exception:
             pass
 
+        # 先尝试基于 log_components 细化日志类型
+        refined_log_type: Optional[LogType] = None
+        try:
+            components = None
+            if isinstance(metadata_dict, dict):
+                components = metadata_dict.get("log_components")
+            refined_log_type = _infer_log_type_from_components(components)
+        except Exception:
+            refined_log_type = None
+
         # 组装需要更新的数据
         update_data = {
             "metadata_json": json.dumps(log_metadata_dict, ensure_ascii=False)
@@ -140,6 +200,10 @@ async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
         # 仅当 issue_description 为空时从文件回填
         if issue_desc and is_empty(getattr(record, "issue_description", None)):
             update_data["issue_description"] = issue_desc
+
+        # 如能根据组件细化日志类型，则一并更新
+        if refined_log_type is not None and getattr(record, "log_type", None) != refined_log_type:
+            update_data["log_type"] = refined_log_type
 
         # 执行更新并提交
         await log_service.update(db, log_info.id, **update_data)
@@ -156,10 +220,11 @@ async def upload_log_simple(
     """
     简化的日志文件上传接口
     """
-    # 使用默认值
+    # 使用文件名推断初始日志类型
+    inferred_type = _infer_log_type_from_filename(file.filename)
     metadata = LogMetadata()
     upload_request = LogUploadRequest(
-        log_type=LogType.STACK,
+        log_type=inferred_type,
         log_level=LogLevel.INFO,
         metadata=metadata,
         expires_in_days=None
@@ -219,9 +284,12 @@ async def upload_log(
         version=version
     )
     
-    # 构建上传请求
+    # 基于文件名推断，优先于表单入参
+    inferred_type = _infer_log_type_from_filename(file.filename)
+
+    # 构建上传请求（覆盖为推断结果）
     upload_request = LogUploadRequest(
-        log_type=log_type,
+        log_type=inferred_type,
         log_level=log_level,
         metadata=metadata,
         expires_in_days=expires_in_days,
