@@ -4,6 +4,26 @@
 RUN_MIGRATION=false
 COMPOSE_FILE="docker-compose.deploy-dev.yml"
 
+# 同步 .env 到 .env.example（Compose 使用 .env.example 作为容器环境来源）
+sync_env_file() {
+    echo "🧩 同步环境变量文件 (.env → .env.example)..."
+    if [ -f ".env" ]; then
+        if [ -f ".env.example" ]; then
+            if cmp -s ".env" ".env.example"; then
+                echo "ℹ️ 检测到 .env 无变化，跳过同步"
+                return 0
+            fi
+            local backup_name=".env.example.bak_$(date +%Y%m%d%H%M%S)"
+            cp ".env.example" "$backup_name"
+            echo "📦 已备份 .env.example 为 $backup_name"
+        fi
+        cp ".env" ".env.example"
+        echo "✅ 已更新 .env.example（容器将使用最新环境变量）"
+    else
+        echo "ℹ️ 未找到 .env 文件，跳过环境变量同步"
+    fi
+}
+
 # 显示帮助信息
 show_help() {
     echo "🔄 部署环境快速重启脚本"
@@ -91,6 +111,9 @@ else
     fi
     echo "✅ 容器内前端构建完成"
 fi
+
+# 在停止/启动容器前，同步环境变量文件，确保 .env 变更生效
+sync_env_file
 
 echo "📋 停止服务..."
 docker-compose -f $COMPOSE_FILE down
