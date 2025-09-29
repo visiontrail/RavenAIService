@@ -8,8 +8,8 @@ from typing import List, Optional
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
-# 加载环境变量
-load_dotenv()
+# 加载环境变量（优先使用容器内挂载的 .env）
+load_dotenv(dotenv_path=".env", override=True)
 
 
 class Settings(BaseSettings):

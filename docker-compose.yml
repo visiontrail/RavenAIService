@@ -10,6 +10,7 @@ services:
       - app_temp:/app/temp
       - app_data:/app/data
       - app_db:/app
+      - ./.env:/app/.env:ro
     depends_on:
       - redis
     env_file:
@@ -45,6 +46,7 @@ services:
       - app_temp:/app/temp
       - app_data:/app/data
       - app_db:/app
+      - ./.env:/app/.env:ro
     depends_on:
       - redis
     env_file:
