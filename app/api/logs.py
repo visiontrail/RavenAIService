@@ -7,6 +7,10 @@ import logging
 import re
 import io
 import uuid
+import json
+import tarfile
+import zipfile
+from pathlib import Path
 from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Query, Path, Request
@@ -33,6 +37,117 @@ router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
 
+async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
+    """
+    检查上传的日志包中是否包含 metadata.json，若存在则解析并回填到数据库现有字段：
+    - issue_description: 优先在数据库为空时从 issue_info.issue_description 回填
+    - metadata_json: 合并到 LogMetadata（填充 environment、service_name，原有值优先），
+      并将完整的 metadata.json 放入 extra_fields.metadata_json 以便后续使用
+    """
+    try:
+        file_path = Path(getattr(log_info, "file_path", ""))
+        if not file_path or not file_path.exists() or not file_path.is_file():
+            return
+
+        metadata_dict = None
+
+        # 支持 .zip 与 tar 家族（.tar, .tgz, .tar.gz, 等）
+        suffix_lower = file_path.suffix.lower()
+        name_lower = file_path.name.lower()
+
+        # 优先尝试 zip
+        if suffix_lower == ".zip":
+            try:
+                with zipfile.ZipFile(file_path, 'r') as zf:
+                    # 查找任意路径下的 metadata.json
+                    meta_name = next((n for n in zf.namelist() if n.endswith("metadata.json") and not n.endswith("/")), None)
+                    if meta_name:
+                        with zf.open(meta_name) as f:
+                            content = f.read().decode('utf-8', errors='ignore')
+                            metadata_dict = json.loads(content)
+            except Exception:
+                metadata_dict = None
+
+        # 若不是 zip 或 zip 失败，尝试 tar 系列
+        if metadata_dict is None:
+            try:
+                # tarfile 会自动识别 tar、tar.gz、tgz 等压缩格式（mode='r:*'）
+                with tarfile.open(file_path, mode='r:*') as tf:
+                    member = next((m for m in tf.getmembers() if m.isfile() and m.name.endswith('metadata.json')), None)
+                    if member is not None:
+                        extracted = tf.extractfile(member)
+                        if extracted is not None:
+                            content = extracted.read().decode('utf-8', errors='ignore')
+                            metadata_dict = json.loads(content)
+            except tarfile.ReadError:
+                # 非 tar 格式，忽略
+                pass
+            except Exception:
+                metadata_dict = None
+
+        if not metadata_dict:
+            return
+
+        # 从 DB 获取最新记录
+        record = await log_service.get_by_id(db, log_info.id)
+        if not record or getattr(record, 'is_deleted', False):
+            return
+
+        # 准备合并 LogMetadata
+        existing_meta = {}
+        if record.metadata_json:
+            try:
+                existing_meta = json.loads(record.metadata_json)
+            except Exception:
+                existing_meta = {}
+
+        # 标准化为 LogMetadata 结构的字典
+        log_metadata_dict = {
+            "source": existing_meta.get("source"),
+            "environment": existing_meta.get("environment"),
+            "service_name": existing_meta.get("service_name"),
+            "version": existing_meta.get("version"),
+            "tags": existing_meta.get("tags") or [],
+            "extra_fields": existing_meta.get("extra_fields") or {}
+        }
+
+        # 从 metadata.json 中提取可回填字段
+        issue_info = metadata_dict.get("issue_info", {}) if isinstance(metadata_dict, dict) else {}
+        issue_desc = issue_info.get("issue_description")
+        environment_info = issue_info.get("environment_info")
+        service_name = issue_info.get("service_name")
+
+        def is_empty(value):
+            return value is None or (isinstance(value, str) and value.strip() == "")
+
+        # 回填 environment / service_name（仅当原值为空时）
+        if environment_info and is_empty(log_metadata_dict.get("environment")):
+            log_metadata_dict["environment"] = environment_info
+        if service_name and is_empty(log_metadata_dict.get("service_name")):
+            log_metadata_dict["service_name"] = service_name
+
+        # 将完整 metadata.json 放入 extra_fields 以保留全部信息
+        try:
+            log_metadata_dict["extra_fields"]["metadata_json"] = metadata_dict
+        except Exception:
+            pass
+
+        # 组装需要更新的数据
+        update_data = {
+            "metadata_json": json.dumps(log_metadata_dict, ensure_ascii=False)
+        }
+
+        # 仅当 issue_description 为空时从文件回填
+        if issue_desc and is_empty(getattr(record, "issue_description", None)):
+            update_data["issue_description"] = issue_desc
+
+        # 执行更新并提交
+        await log_service.update(db, log_info.id, **update_data)
+        await db.commit()
+    except Exception as e:
+        # 解析失败不影响主流程
+        logger.warning(f"metadata.json 解析或回填失败: {e}")
+
 @router.post("/upload-simple", response_model=LogUploadResponse, status_code=201)
 async def upload_log_simple(
     file: UploadFile = File(..., description="要上传的日志文件"),
@@ -54,6 +169,14 @@ async def upload_log_simple(
     log_info = await log_service.upload_log(db, file, upload_request)
     
     logger.info(f"Log uploaded successfully (simple): {log_info.id}")
+    
+    # 二次检查并回填 metadata.json
+    try:
+        await _try_extract_and_update_metadata(db, log_info)
+        # 回填后刷新返回数据
+        log_info = await log_service.get_log_detail(db, log_info.id)
+    except Exception as e:
+        logger.warning(f"Post-upload metadata backfill failed: {e}")
     
     return LogUploadResponse(
         message="日志上传成功",
@@ -109,6 +232,14 @@ async def upload_log(
     log_info = await log_service.upload_log(db, file, upload_request)
     
     logger.info(f"Log uploaded successfully: {log_info.id}")
+    
+    # 二次检查并回填 metadata.json
+    try:
+        await _try_extract_and_update_metadata(db, log_info)
+        # 回填后刷新返回数据
+        log_info = await log_service.get_log_detail(db, log_info.id)
+    except Exception as e:
+        logger.warning(f"Post-upload metadata backfill failed: {e}")
     
     return LogUploadResponse(
         message="日志上传成功",
