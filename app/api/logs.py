@@ -10,7 +10,7 @@ import uuid
 import json
 import tarfile
 import zipfile
-from pathlib import Path
+from pathlib import Path as FilePath
 from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, Form, Depends, Query, Path, Request
@@ -45,7 +45,7 @@ async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
       并将完整的 metadata.json 放入 extra_fields.metadata_json 以便后续使用
     """
     try:
-        file_path = Path(getattr(log_info, "file_path", ""))
+        file_path = FilePath(getattr(log_info, "file_path", ""))
         if not file_path or not file_path.exists() or not file_path.is_file():
             return
 
@@ -347,7 +347,7 @@ async def upload_t04_logs(
     # 检查存储空间
     logger.info("T04上传 - 开始存储空间检查")
     try:
-        storage_path = Path("logs")
+        storage_path = FilePath("logs")
         storage_path.mkdir(exist_ok=True)
         
         # 简单的存储空间检查
@@ -742,7 +742,7 @@ async def download_log(
         import os
         from pathlib import Path
         
-        file_path_obj = Path(file_path)
+        file_path_obj = FilePath(file_path)
         if not file_path_obj.exists():
             logger.error(f"File not found on disk: {file_path}")
             raise FileNotFoundError(filename=log_info.original_filename)
