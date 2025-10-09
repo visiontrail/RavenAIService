@@ -102,24 +102,37 @@ class LogService(BaseCRUDService[LogRecord]):
             if request.metadata:
                 metadata_json = request.metadata.model_dump_json()
             
+            # 根据日志类型确定初始状态和进度
+            # OAM天线日志上传后直接标记为已完成，其他类型保持待处理状态
+            initial_status = LogStatus.COMPLETED if request.log_type == LogType.OAM_ANTENNA else LogStatus.PENDING
+            initial_progress = 100.0 if request.log_type == LogType.OAM_ANTENNA else 0.0
+            processed_at = datetime.utcnow() if request.log_type == LogType.OAM_ANTENNA else None
+            
+            logger.info(f"LogService - 日志类型: {request.log_type.value}, 初始状态: {initial_status.value}, 初始进度: {initial_progress}")
+            
             # 创建数据库记录
             logger.info(f"LogService - 开始创建数据库记录: ID={file_id}")
-            log_record = await self.create(
-                db=db,
-                id=file_id,
-                filename=stored_filename,
-                original_filename=original_filename,
-                file_size=file_size,
-                file_path=str(file_path),
-                log_type=request.log_type,
-                status=LogStatus.PENDING,
-                progress=0.0,
-                checksum=checksum,
-                mime_type=mime_type,
-                log_level=request.log_level,
-                metadata_json=metadata_json,
-                issue_description=request.issue_description
-            )
+            create_data = {
+                "id": file_id,
+                "filename": stored_filename,
+                "original_filename": original_filename,
+                "file_size": file_size,
+                "file_path": str(file_path),
+                "log_type": request.log_type,
+                "status": initial_status,
+                "progress": initial_progress,
+                "checksum": checksum,
+                "mime_type": mime_type,
+                "log_level": request.log_level,
+                "metadata_json": metadata_json,
+                "issue_description": request.issue_description
+            }
+            
+            # 如果是OAM天线日志，设置处理完成时间
+            if processed_at:
+                create_data["processed_at"] = processed_at
+            
+            log_record = await self.create(db=db, **create_data)
             logger.info(f"LogService - 数据库记录创建成功: ID={file_id}")
             
             # 转换为Pydantic模型
@@ -131,8 +144,12 @@ class LogService(BaseCRUDService[LogRecord]):
             logger.info(f"LogService - 数据库记录已提交: ID={file_id}")
             
             # 检查是否为协议栈日志，如果是则自动触发处理
-            logger.info(f"LogService - 检查是否需要触发协议栈处理: {original_filename}")
-            await self._check_and_trigger_protocol_stack_processing(log_record)
+            # OAM天线日志已经标记为完成，无需额外处理
+            if request.log_type != LogType.OAM_ANTENNA:
+                logger.info(f"LogService - 检查是否需要触发协议栈处理: {original_filename}")
+                await self._check_and_trigger_protocol_stack_processing(log_record)
+            else:
+                logger.info(f"LogService - OAM天线日志无需额外处理，已标记为完成: {original_filename}")
             
             logger.info(f"LogService - 日志上传完成: ID={file_id}, 文件名={original_filename}")
             return result
