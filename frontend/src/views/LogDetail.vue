@@ -234,7 +234,7 @@
                   
                   <!-- 服务名称 -->
                   <div v-if="logStore.currentLog.metadata.service_name" class="space-y-1">
-                    <label class="text-xs font-medium text-gray-400">服务名称</label>
+                    <label class="text-xs font-medium text-gray-400">研发分析</label>
                     <div class="text-sm text-gray-900">{{ logStore.currentLog.metadata.service_name }}</div>
                   </div>
                   
@@ -261,12 +261,12 @@
                 </div>
                 
                 <!-- 额外字段 -->
-                <div v-if="logStore.currentLog.metadata.extra_fields && Object.keys(logStore.currentLog.metadata.extra_fields).length > 0" class="mt-3 space-y-1">
+                <!-- <div v-if="logStore.currentLog.metadata.extra_fields && Object.keys(logStore.currentLog.metadata.extra_fields).length > 0" class="mt-3 space-y-1">
                   <label class="text-xs font-medium text-gray-400">额外字段</label>
                   <div class="text-xs text-gray-700 font-mono bg-white p-2 rounded border">
                     {{ JSON.stringify(logStore.currentLog.metadata.extra_fields, null, 2) }}
                   </div>
-                </div>
+                </div> -->
               </div>
             </div>
           </div>
