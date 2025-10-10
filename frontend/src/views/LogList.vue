@@ -610,7 +610,7 @@ const startAutoRefresh = () => {
     } else {
       console.log('✅ [autoRefresh] 无处理中的任务，跳过刷新')
     }
-  }, 5000)
+  }, 30000)
 }
 const stopAutoRefresh = () => {
   if (timer) {
