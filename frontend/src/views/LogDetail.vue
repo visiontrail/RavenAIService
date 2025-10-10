@@ -160,9 +160,9 @@
               </div>
             </div>
             <!-- 文件校验和 -->
-            <div class="space-y-2" v-if="logStore.currentLog.checksum">
-              <label class="text-sm font-medium text-gray-500">文件校验和</label>
-              <div class="text-sm text-gray-900 font-mono bg-gray-50 p-2 rounded border">
+            <div class="space-y-2 md:col-span-2" v-if="logStore.currentLog.checksum">
+              <label class="text-sm font-medium text-gray-500">文件校验和 (SHA256)</label>
+              <div class="text-xs text-gray-900 font-mono bg-gray-50 p-3 rounded border break-all leading-relaxed">
                 {{ logStore.currentLog.checksum }}
               </div>
             </div>
