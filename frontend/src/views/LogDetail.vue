@@ -238,10 +238,133 @@
                     <div class="text-sm text-gray-900">{{ logStore.currentLog.metadata.service_name }}</div>
                   </div>
                   
-                  <!-- 版本号 -->
-                  <div v-if="logStore.currentLog.metadata.version" class="space-y-1">
-                    <label class="text-xs font-medium text-gray-400">版本号</label>
-                    <div class="text-sm text-gray-900">{{ logStore.currentLog.metadata.version }}</div>
+                  <!-- 版本信息 -->
+                  <div v-if="logStore.currentLog.metadata.version_info || logStore.currentLog.metadata.version" class="space-y-1 md:col-span-2">
+                    <label class="text-xs font-medium text-gray-400">版本信息</label>
+                    
+                    <!-- 如果有详细的版本信息 -->
+                    <div v-if="logStore.currentLog.metadata.version_info && logStore.currentLog.metadata.version_info.raw_content" class="version-info-container">
+                      <el-collapse v-model="activeVersionCollapse" class="version-collapse">
+                        <el-collapse-item title="GNB系统组件版本详情" name="version-details">
+                          <template #title>
+                            <div class="flex items-center space-x-2">
+                              <el-icon class="text-blue-600">
+                                <InfoFilled />
+                              </el-icon>
+                              <span class="font-medium">GNB系统组件版本详情</span>
+                              <el-tag size="small" type="info">{{ getVersionBoardCount(logStore.currentLog.metadata.version_info.raw_content) }}个板卡</el-tag>
+                            </div>
+                          </template>
+                          
+                          <div class="version-content">
+                            <div v-for="(board, index) in parseVersionInfo(logStore.currentLog.metadata.version_info.raw_content)" :key="index" class="board-info mb-6 last:mb-0">
+                              <!-- 板卡标题 -->
+                              <div class="board-header flex items-center justify-between p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200 mb-3">
+                                <div class="flex items-center space-x-3">
+                                  <el-icon class="text-blue-600" size="20">
+                                    <Cpu />
+                                  </el-icon>
+                                  <div>
+                                    <h4 class="font-semibold text-gray-900">{{ board.title }}</h4>
+                                    <p class="text-sm text-gray-600">Slot ID: {{ board.slotId }} | CPU ID: {{ board.cpuId }}</p>
+                                  </div>
+                                </div>
+                                <el-tag :type="board.type === 'main' ? 'success' : 'info'" size="small">
+                                  {{ board.type === 'main' ? '主控板' : '子板' }}
+                                </el-tag>
+                              </div>
+                              
+                              <!-- 版本详情 -->
+                              <div class="board-details grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <!-- OAM版本 -->
+                                <div v-if="board.oamVersion" class="version-section bg-white p-4 rounded-lg border border-gray-200">
+                                  <div class="flex items-center space-x-2 mb-3">
+                                    <el-icon class="text-green-600" size="16">
+                                      <Setting />
+                                    </el-icon>
+                                    <h5 class="font-medium text-gray-900">OAM版本</h5>
+                                  </div>
+                                  <div class="space-y-2 text-sm">
+                                    <div class="flex justify-between">
+                                      <span class="text-gray-600">版本号:</span>
+                                      <span class="font-mono text-gray-900">{{ board.oamVersion.version }}</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                      <span class="text-gray-600">Git版本:</span>
+                                      <span class="font-mono text-gray-900">{{ board.oamVersion.gitVersion }}</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                      <span class="text-gray-600">分支:</span>
+                                      <span class="font-mono text-gray-900">{{ board.oamVersion.branch }}</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                      <span class="text-gray-600">构建时间:</span>
+                                      <span class="font-mono text-gray-900">{{ board.oamVersion.buildTime }}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                                
+                                <!-- 协议栈版本 -->
+                                <div v-if="board.protocolVersion" class="version-section bg-white p-4 rounded-lg border border-gray-200">
+                                  <div class="flex items-center space-x-2 mb-3">
+                                    <el-icon class="text-purple-600" size="16">
+                                      <Connection />
+                                    </el-icon>
+                                    <h5 class="font-medium text-gray-900">协议栈版本</h5>
+                                  </div>
+                                  <div class="space-y-2 text-sm">
+                                    <div v-if="board.protocolVersion.cucp" class="flex justify-between">
+                                      <span class="text-gray-600">CUCP版本:</span>
+                                      <span class="font-mono text-gray-900">{{ board.protocolVersion.cucp }}</span>
+                                    </div>
+                                    <div v-if="board.protocolVersion.status" class="flex justify-between">
+                                      <span class="text-gray-600">状态:</span>
+                                      <el-tag size="small" :type="board.protocolVersion.status === 'Not applicable for this SOM type' ? 'info' : 'success'">
+                                        {{ board.protocolVersion.status }}
+                                      </el-tag>
+                                    </div>
+                                  </div>
+                                </div>
+                                
+                                <!-- FPGA版本 -->
+                                <div v-if="board.fpgaVersion" class="version-section bg-white p-4 rounded-lg border border-gray-200">
+                                  <div class="flex items-center space-x-2 mb-3">
+                                    <el-icon class="text-orange-600" size="16">
+                                      <Cpu />
+                                    </el-icon>
+                                    <h5 class="font-medium text-gray-900">FPGA版本</h5>
+                                  </div>
+                                  <div class="text-sm">
+                                    <el-tag size="small" type="warning">{{ board.fpgaVersion }}</el-tag>
+                                  </div>
+                                </div>
+                                
+                                <!-- 组件数量 -->
+                                <div v-if="board.componentCount" class="version-section bg-white p-4 rounded-lg border border-gray-200">
+                                  <div class="flex items-center space-x-2 mb-3">
+                                    <el-icon class="text-blue-600" size="16">
+                                      <Grid />
+                                    </el-icon>
+                                    <h5 class="font-medium text-gray-900">组件信息</h5>
+                                  </div>
+                                  <div class="text-sm">
+                                    <div class="flex justify-between">
+                                      <span class="text-gray-600">组件数量:</span>
+                                      <span class="font-semibold text-blue-600">{{ board.componentCount }}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </el-collapse-item>
+                      </el-collapse>
+                    </div>
+                    
+                    <!-- 如果只有简单版本号 -->
+                    <div v-else-if="logStore.currentLog.metadata.version" class="text-sm text-gray-900 font-mono bg-gray-50 p-2 rounded border">
+                      {{ logStore.currentLog.metadata.version }}
+                    </div>
                   </div>
                 </div>
                 
@@ -411,6 +534,10 @@ import {
   Share,
   CopyDocument,
   Loading,
+  Cpu,
+  Setting,
+  Connection,
+  Grid,
 } from '@element-plus/icons-vue'
 
 interface Props {
@@ -426,6 +553,7 @@ const appStore = useAppStore()
 // 响应式变量
 const downloadLoading = ref(false)
 const deleteLoading = ref(false)
+const activeVersionCollapse = ref(['version-details'])
 
 // 计算属性
 const pageTitle = computed(() => {
@@ -542,6 +670,97 @@ const hasMetadata = (metadata: any) => {
     (metadata.tags && metadata.tags.length > 0) ||
     (metadata.extra_fields && Object.keys(metadata.extra_fields).length > 0)
   )
+}
+
+// 解析版本信息
+const parseVersionInfo = (rawContent: string) => {
+  const boards = []
+  const sections = rawContent.split('-----------------------------------------------------------------')
+  
+  for (const section of sections) {
+    if (!section.trim()) continue
+    
+    const lines = section.split('\n').map(line => line.trim()).filter(line => line)
+    
+    let board: any = {
+      title: '',
+      slotId: '',
+      cpuId: '',
+      type: 'sub',
+      oamVersion: null,
+      protocolVersion: null,
+      fpgaVersion: null,
+      componentCount: null
+    }
+    
+    // 解析板卡信息
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      
+      if (line.includes('[Main Control Board Information]')) {
+        board.title = 'Main Control Board Information'
+        board.type = 'main'
+      } else if (line.includes('[Sub Board Information]')) {
+        board.title = 'Sub Board Information'
+        board.type = 'sub'
+      } else if (line.startsWith('Slot ID:')) {
+        board.slotId = line.split(':')[1]?.trim()
+      } else if (line.startsWith('CPU ID:')) {
+        board.cpuId = line.split(':')[1]?.trim()
+      } else if (line.startsWith('Component Count:')) {
+        board.componentCount = line.split(':')[1]?.trim()
+      } else if (line.includes('[OAM Version]')) {
+        // 解析OAM版本信息
+        board.oamVersion = {}
+        for (let j = i + 1; j < lines.length && !lines[j].startsWith('['); j++) {
+          const versionLine = lines[j]
+          if (versionLine.startsWith('version:')) {
+            board.oamVersion.version = versionLine.split(':')[1]?.trim()
+          } else if (versionLine.startsWith('git version:')) {
+            board.oamVersion.gitVersion = versionLine.split(':')[1]?.trim()
+          } else if (versionLine.startsWith('branch:')) {
+            board.oamVersion.branch = versionLine.split(':')[1]?.trim()
+          } else if (versionLine.startsWith('build time:')) {
+            board.oamVersion.buildTime = versionLine.split(':')[1]?.trim()
+          }
+        }
+      } else if (line.includes('[CUCP Protocol Stack Version]') || line.includes('[Protocol Stack Version]')) {
+        // 解析协议栈版本信息
+        board.protocolVersion = {}
+        for (let j = i + 1; j < lines.length && !lines[j].startsWith('['); j++) {
+          const protocolLine = lines[j]
+          if (protocolLine.startsWith('cucp_version=')) {
+            board.protocolVersion.cucp = protocolLine.split('=')[1]?.trim()
+          } else if (protocolLine.includes('Not applicable for this SOM type')) {
+            board.protocolVersion.status = 'Not applicable for this SOM type'
+          }
+        }
+      } else if (line.includes('[MOM FPGA Version]')) {
+        // 解析FPGA版本信息
+        for (let j = i + 1; j < lines.length && !lines[j].startsWith('['); j++) {
+          const fpgaLine = lines[j]
+          if (fpgaLine.trim() && !fpgaLine.includes('Unavailable')) {
+            board.fpgaVersion = fpgaLine.trim()
+          } else if (fpgaLine.includes('Unavailable')) {
+            board.fpgaVersion = 'Unavailable'
+          }
+        }
+      }
+    }
+    
+    // 只添加有效的板卡信息
+    if (board.slotId && board.cpuId) {
+      boards.push(board)
+    }
+  }
+  
+  return boards
+}
+
+// 获取版本信息中的板卡数量
+const getVersionBoardCount = (rawContent: string) => {
+  const boards = parseVersionInfo(rawContent)
+  return boards.length
 }
 
 // 下载文件 - 使用直接URL下载，立即触发
@@ -817,6 +1036,58 @@ onMounted(async () => {
   
   .action-buttons .el-button {
     @apply w-full;
+  }
+}
+
+/* 版本信息样式 */
+.version-info-container {
+  @apply mt-2;
+}
+
+.version-collapse {
+  @apply border border-gray-200 rounded-lg overflow-hidden;
+}
+
+.version-collapse :deep(.el-collapse-item__header) {
+  @apply bg-gray-50 px-4 py-3 border-b border-gray-200;
+}
+
+.version-collapse :deep(.el-collapse-item__content) {
+  @apply p-4 bg-white;
+}
+
+.board-info {
+  @apply border border-gray-100 rounded-lg p-4 bg-gray-50;
+}
+
+.board-header {
+  @apply shadow-sm;
+}
+
+.version-section {
+  @apply shadow-sm hover:shadow-md transition-shadow duration-200;
+}
+
+.version-section h5 {
+  @apply text-sm;
+}
+
+/* 响应式版本信息 */
+@media (max-width: 768px) {
+  .board-details {
+    @apply grid-cols-1;
+  }
+  
+  .version-section {
+    @apply p-3;
+  }
+  
+  .board-header {
+    @apply flex-col items-start space-y-2;
+  }
+  
+  .board-header > div:first-child {
+    @apply space-x-2;
   }
 }
 </style>
