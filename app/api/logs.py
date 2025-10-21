@@ -158,6 +158,7 @@ async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
             "service_name": existing_meta.get("service_name"),
             "version": existing_meta.get("version"),
             "tags": existing_meta.get("tags") or [],
+            "version_info": existing_meta.get("version_info"),
             "extra_fields": existing_meta.get("extra_fields") or {}
         }
 
@@ -166,6 +167,7 @@ async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
         issue_desc = issue_info.get("issue_description")
         environment_info = issue_info.get("environment_info")
         service_name = issue_info.get("service_name")
+        version_info = metadata_dict.get("version_info") if isinstance(metadata_dict, dict) else None
 
         def is_empty(value):
             return value is None or (isinstance(value, str) and value.strip() == "")
@@ -175,6 +177,10 @@ async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
             log_metadata_dict["environment"] = environment_info
         if service_name and is_empty(log_metadata_dict.get("service_name")):
             log_metadata_dict["service_name"] = service_name
+        
+        # 回填 version_info（仅当原值为空时）
+        if version_info and is_empty(log_metadata_dict.get("version_info")):
+            log_metadata_dict["version_info"] = version_info
 
         # 将完整 metadata.json 放入 extra_fields 以保留全部信息
         try:

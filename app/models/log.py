@@ -189,12 +189,13 @@ class LogRecord(Base, TimestampMixin):
 # ==================== Pydantic 数据验证模型 ====================
 
 class LogMetadata(BaseModel):
-    """日志元数据"""
+    """日志元数据模型"""
     source: Optional[str] = Field(None, description="日志来源")
     environment: Optional[str] = Field(None, description="环境信息")
     service_name: Optional[str] = Field(None, description="服务名称")
     version: Optional[str] = Field(None, description="版本号")
     tags: List[str] = Field(default_factory=list, description="标签列表")
+    version_info: Optional[Dict[str, Any]] = Field(None, description="版本信息")
     extra_fields: Dict[str, Any] = Field(default_factory=dict, description="额外字段")
 
 
