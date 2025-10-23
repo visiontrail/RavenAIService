@@ -1,0 +1,12 @@
+{
+  "plan_prompt": {
+    "description": "用于生成执行计划的系统提示，要求以 <plan><step>...</step></plan> 的XML结构输出，并指导可选步骤（元数据提取、grep检索、全文检索、读取片段）。",
+    "variables": ["memory_context", "user_query"],
+    "template": "你是一个日志分析Agent，需要制定执行计划。输出使用<plan><step>...</step></plan>的XML结构。根据用户需求选择：提取元数据、grep检索、全文检索、读取片段。\n\n{memory_context}<用户需求>{user_query}</用户需求>"
+  },
+  "summary_prompt": {
+    "description": "对多个日志片段进行简要总结，突出 ERROR/WARN 及关键事件，便于快速理解上下文。",
+    "variables": ["compact_snippet"],
+    "template": "请对以下日志片段进行简要总结，突出ERROR/WARN及关键事件。\n\n<片段>{compact_snippet}</片段>"
+  }
+}

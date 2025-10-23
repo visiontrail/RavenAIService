@@ -31,6 +31,29 @@ class Settings(BaseSettings):
     temp_dir: str = "temp"
     logs_dir: str = "logs"
     
+    # Agent配置（日志分析智能体）
+    agent_enabled: bool = True
+    agent_root_dir: str = "uploads"  # 允许Agent访问的日志根目录
+    agent_max_snippet_bytes: int = 512 * 1024  # 每次提取的最大字节数
+    agent_max_matches: int = 50  # grep最大匹配数
+    agent_search_backend: str = "regex"  # 可选：regex | elasticsearch
+    elasticsearch_url: Optional[str] = None
+    
+    # LLM配置
+    llm_provider: str = "deepseek"
+    deepseek_api_key: Optional[str] = "sk-rebTXHBiV7Nr1PRzaODQOZKztKqpv7bPoQE10dNItF9yIyBh"
+    deepseek_base_url: str = "http://oneapi.yhroot.com"
+    llm_model_name: str = "deepseek-v3.1-chat"
+    llm_reasoning_model: str = "deepseek-v3.1"  # 推理模型
+    llm_temperature: float = 0.0
+    
+    # 上下文压缩/记忆配置
+    agent_compression_strategy: str = "map_reduce_summarize"  # 可选：map_reduce_summarize | extractive | hybrid
+    agent_short_term_window: int = 5  # 短时记忆窗口消息条数
+    
+    # Prompt配置（外部化模板路径，可通过环境变量覆盖）
+    prompts_config_path: str = "app/prompts/prompts_config.yaml"
+    
     # CORS配置
     cors_origins: List[str] = ["*"]
     cors_credentials: bool = True

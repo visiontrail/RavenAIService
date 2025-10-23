@@ -16,3 +16,10 @@ redis>=5.0.0
 kombu>=5.3.0
 
 # Additional utilities for file processing
+
+# Agent framework and LLM clients
+langchain>=0.2.15
+langchain-community>=0.2.15
+langgraph>=0.1.18
+openai>=1.40.0
+tiktoken>=0.7.0

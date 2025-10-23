@@ -178,3 +178,8 @@ logs.db
 # 生产环境文件
 .env.production
 bin/tool_log_decompress
+test_data/ai_test_logs.tar.gz
+test_data/ai_test_logs.zip
+test_data/ai_test_logs/metadata.json
+test_data/performance_ai_test_logs/metadata.json
+test_results/test_results_20251023_183347.json
