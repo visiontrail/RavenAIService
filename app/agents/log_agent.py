@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 import os
 import re
 import json
+import logging
 
 # Optional LangChain imports (gracefully degrade if unavailable)
 try:
@@ -34,6 +35,8 @@ try:
     import yaml  # type: ignore
 except Exception:
     yaml = None
+
+logger = logging.getLogger(__name__)
 
 from app.config import settings
 from app.agents.xml_utils import wrap_plan, wrap_document
@@ -67,8 +70,10 @@ def get_llm() -> Any:
     - Provider 'deepseek' uses deepseek config, falls back to qwen if network/API failure at call time.
     - Provider 'qwen' uses qwen config directly.
     """
+    logger.debug(f"get_llm: provider={getattr(settings, 'llm_provider', 'auto')}")
     # If ChatOpenAI class unavailable, use DummyLLM
     if not ChatOpenAI:
+        logger.info("get_llm: ChatOpenAI unavailable, using DummyLLM")
         return DummyLLM(temperature=settings.llm_temperature)
 
     def make_chat_openai(api_key: str, base_url: str, model: str):
@@ -76,8 +81,10 @@ def get_llm() -> Any:
         os.environ["OPENAI_BASE_URL"] = base_url
         os.environ["OPENAI_API_BASE"] = base_url
         try:
+            logger.debug(f"Initializing ChatOpenAI client: base_url={base_url}, model={model}")
             return ChatOpenAI(model=model, temperature=settings.llm_temperature)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"ChatOpenAI init failed: base_url={base_url}, model={model}, error={e}")
             return None
 
     # 封装一个具有运行时回退能力的LLM包装器：调用失败时自动切换到Qwen
@@ -93,12 +100,15 @@ def get_llm() -> Any:
             # 尝试主模型（DeepSeek）
             if self._primary:
                 try:
+                    logger.debug("FallbackLLM.invoke: using primary model")
                     return self._primary.invoke(prompt)
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Primary model invocation failed, switching to fallback: {e}")
                     # 出现HTTP错误（如404/502/超时等）时切换到备选（Qwen）
                     pass
             # 构建并尝试备选模型（Qwen）
             if self._fallback_conf and not self._fallback:
+                logger.debug("FallbackLLM.invoke: building fallback model")
                 self._fallback = make_chat_openai(
                     self._fallback_conf.get("api_key", ""),
                     self._fallback_conf.get("base_url", ""),
@@ -106,10 +116,12 @@ def get_llm() -> Any:
                 )
             if self._fallback:
                 try:
+                    logger.debug("FallbackLLM.invoke: using fallback model")
                     return self._fallback.invoke(prompt)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Fallback model invocation failed: {e}")
             # 最终回退到DummyLLM，返回可用的字符串结果
+            logger.info("FallbackLLM.invoke: using DummyLLM")
             return DummyLLM(temperature=self.temperature).predict(prompt)
 
     # Helper: try deepseek, then qwen (初始化阶段)
@@ -299,22 +311,27 @@ class LogAnalysisAgent:
     """Main Agent orchestrating planning and tool execution via LangGraph."""
     def __init__(self):
         self.llm = get_llm()
+        logger.info("LogAnalysisAgent.__init__: llm=%s", type(self.llm).__name__)
         self.memory = ShortTermMemory(window=settings.agent_short_term_window)
         self.search_backend = (
             ElasticSearchBackend(url=settings.elasticsearch_url)
             if settings.agent_search_backend == "elasticsearch"
             else RegexSearchBackend(root=settings.agent_root_dir)
         )
+        logger.info("LogAnalysisAgent.__init__: backend=%s", type(self.search_backend).__name__)
         try:
             paths: List[str] = []
+            logger.debug("Search indexing start: root=%s", settings.agent_root_dir)
             for d, _, files in os.walk(settings.agent_root_dir):
                 for f in files:
                     paths.append(os.path.join(d, f))
                 if len(paths) > 5000:
+                    logger.warning("Indexing truncated at 5000 files to limit scope")
                     break
             self.search_backend.index(paths)
-        except Exception:
-            pass
+            logger.info("Search indexing done: files=%d", len(paths))
+        except Exception as e:
+            logger.warning("Search indexing failed: %s", e)
 
         # Build LangGraph (compact ReAct-style loop)
         if StateGraph:
@@ -328,63 +345,88 @@ class LogAnalysisAgent:
         else:
             self._app = None  # Fallback: run() will degrade to sequential execution
 
+    def _plan_node(self, state: AgentState) -> AgentState:
+        """Graph node that generates plan XML and step list."""
+        query = state.get("query", "")
+        plan_xml = self.plan(query)
+        steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
+        return {"plan_xml": plan_xml, "steps": steps}
+
+    def _first_text_file(self) -> Optional[str]:
+        for d, _, files in os.walk(settings.agent_root_dir):
+            for f in files:
+                if f.lower().endswith(('.log', '.txt')):
+                    p = os.path.join(d, f)
+                    logger.debug('First text file found: %s', p)
+                    return p
+        logger.debug('First text file not found under root=%s', settings.agent_root_dir)
+        return None
+
+    def _first_text_file_under(self, root: str) -> Optional[str]:
+        for d, _, files in os.walk(root):
+            for f in files:
+                if f.lower().endswith(('.log', '.txt')):
+                    p = os.path.join(d, f)
+                    logger.debug('First text file found under %s: %s', root, p)
+                    return p
+        logger.debug('First text file not found under root=%s', root)
+        return None
+
     # Backward-compatible plan() API
     def plan(self, query: str) -> str:
+        logger.info("Plan: start query='%s'", query[:200])
         prompt = render_prompt(
             "plan_prompt",
             memory_context=self.memory.context(),
             user_query=query,
         )
+        logger.debug("Plan: prompt chars=%d", len(prompt))
         plan_xml: str = ""
-        # 调用LLM生成计划，若失败则回退到内置计划
         try:
+            logger.debug("Plan: llm=%s", type(self.llm).__name__)
             if hasattr(self.llm, "predict"):
                 plan_xml = self.llm.predict(prompt)
             else:
                 plan_xml = str(self.llm.invoke(prompt))
         except Exception as e:
-            # 记录失败并提供内置回退计划，避免测试因网络/模型不可用而中断
+            logger.warning("Plan LLM failed, using fallback: %s", e)
             plan_xml = wrap_plan(["读取日志片段", "在相关文件中执行grep搜索"])
         # Normalize: ensure XML structure
         steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
         if not steps:
+            logger.debug("Plan: no <step> found, using fallback plan")
             plan_xml = wrap_plan(["读取日志片段", "在相关文件中执行grep搜索"])
         self.memory.add_message("user", query)
         self.memory.add_message("system", plan_xml)
+        logger.info("Plan: steps=%d", len(re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)))
         return plan_xml
-
-    # Graph node: plan
-    def _plan_node(self, state: AgentState) -> AgentState:
-        plan_xml = self.plan(state["query"])
-        steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
-        return {
-            "plan_xml": plan_xml,
-            "steps": steps,
-            "idx": 0,
-            "done": False,
-            "outputs": state.get("outputs", []),
-        }
 
     # Tool routing (XML-producing)
     def _execute_step(self, step: str, query: str, hints: Optional[Dict[str, Any]] = None) -> str:
+        logger.info("Execute step: %s", step)
         step_l = step.lower()
         if "元数据" in step_l or "metadata" in step_l:
             path = (hints or {}).get("archive_path") or os.path.join(settings.agent_root_dir, "logs.tar.gz")
+            logger.debug("Tool=metadata path=%s", path)
             try:
                 return get_log_package_metadata_xml(path)
             except Exception as e:
+                logger.warning("Metadata tool failed: %s", e)
                 return wrap_document(f"元数据提取失败: {e}", {"step": step})
         if "grep" in step_l or "查找" in step_l or "搜索" in step_l:
             pattern = (hints or {}).get("pattern") or query
             path = (hints or {}).get("path") or self._first_text_file()
+            logger.debug("Tool=grep path=%s pattern=%s", path, pattern)
             if not path:
                 return wrap_document("未找到可搜索的文本文件", {"step": step})
             try:
                 return grep_file_xml(path, pattern, context=2)
             except Exception as e:
+                logger.warning("grep tool failed: %s", e)
                 return wrap_document(f"grep失败: {e}", {"step": step})
         if "读取" in step_l or "片段" in step_l or "head" in step_l or "tail" in step_l:
             path = (hints or {}).get("path") or self._first_text_file()
+            logger.debug("Tool=reads path=%s", path)
             if not path:
                 return wrap_document("未找到可读取的文本文件", {"step": step})
             try:
@@ -392,11 +434,13 @@ class LogAnalysisAgent:
                 tail = read_tail_xml(path, n_lines=50)
                 return f"<reads>{head}{tail}</reads>"
             except Exception as e:
+                logger.warning("read tool failed: %s", e)
                 return wrap_document(f"读取失败: {e}", {"step": step})
         # 新增：树结构与嵌套解压支持
         if "解压" in step_l or "extract" in step_l or "decompress" in step_l:
             nested_path = (hints or {}).get("nested_path")
             root = (hints or {}).get("extracted_root") or settings.agent_root_dir
+            logger.debug("Tool=extract nested_path=%s root=%s", nested_path, root)
             try:
                 if nested_path:
                     _, xml = extract_nested_archive_xml(nested_path, parent_root=root)
@@ -404,26 +448,34 @@ class LogAnalysisAgent:
                 else:
                     return nested_archives_xml(root)
             except Exception as e:
+                logger.warning("extract tool failed: %s", e)
                 return wrap_document(f"解压/扫描嵌套归档失败: {e}", {"step": step})
         if "树" in step_l or "tree" in step_l or "结构" in step_l or "list" in step_l:
             root = (hints or {}).get("extracted_root") or settings.agent_root_dir
+            logger.debug("Tool=tree root=%s", root)
             try:
                 return list_tree_xml(root, max_depth=2)
             except Exception as e:
+                logger.warning("tree tool failed: %s", e)
                 return wrap_document(f"树结构生成失败: {e}", {"step": step})
         try:
+            logger.debug("Tool=search query=%s", query)
             return search_to_xml(self.search_backend, query=query, k=10)
         except Exception as e:
+            logger.warning("search backend failed: %s", e)
             return wrap_document(f"搜索失败: {e}", {"step": step})
 
     # Graph node: act
     def _act_node(self, state: AgentState) -> AgentState:
         steps = state["steps"]
         idx = state.get("idx", 0)
+        logger.info("Act: idx=%d/%d", idx, len(steps))
         if idx >= len(steps):
+            logger.debug("Act: completed all steps")
             return {"done": True}
         step = steps[idx]
         out = self._execute_step(step, state["query"], hints=state.get("hints"))
+        logger.debug("Act: output chars=%d", len(out))
         self.memory.add_summary(out)
         outputs = state.get("outputs", []) + [out]
         return {"outputs": outputs, "idx": idx + 1}
@@ -432,33 +484,25 @@ class LogAnalysisAgent:
     def _should_continue(self, state: AgentState):
         idx = state.get("idx", 0)
         steps = state.get("steps", [])
+        decision = "act" if idx < len(steps) else "end"
+        logger.debug("Continue? idx=%d steps=%d decision=%s", idx, len(steps), decision)
         if idx < len(steps):
             return "act"
         return END
 
-    def _first_text_file(self) -> Optional[str]:
-        for d, _, files in os.walk(settings.agent_root_dir):
-            for f in files:
-                if f.lower().endswith((".log", ".txt")):
-                    return os.path.join(d, f)
-        return None
-
-    def _first_text_file_under(self, root_dir: str) -> Optional[str]:
-        for d, _, files in os.walk(root_dir):
-            for f in files:
-                if f.lower().endswith((".log", ".txt")):
-                    return os.path.join(d, f)
-        return None
-
     def run(self, query: str, hints: Optional[Dict[str, Any]] = None) -> str:
         """Run the agent end-to-end using LangGraph when available; fallback sequential otherwise."""
+        logger.info("Run: start query='%s'", query)
         hints_local: Dict[str, Any] = dict(hints or {})
+        logger.debug("Run: hints=%s", hints_local)
         pre_outputs: List[str] = []
         # 自动解压流程：如果提供了归档路径，则先解压并输出树结构
         archive_path = hints_local.get("archive_path")
         if archive_path:
+            logger.info("Run: auto-extract archive=%s", archive_path)
             try:
                 extracted_dir, ex_xml = auto_extract_archive_xml(archive_path)
+                logger.info("Run: auto-extract ok extracted_dir=%s", extracted_dir)
                 pre_outputs.append(ex_xml)
                 self.memory.add_summary(ex_xml)
                 hints_local["extracted_root"] = extracted_dir
@@ -467,8 +511,10 @@ class LogAnalysisAgent:
                     if p:
                         hints_local["path"] = p
             except Exception as e:
+                logger.warning("Run: auto-extract failed: %s", e)
                 pre_outputs.append(wrap_document(f"自动解压失败: {e}", {"type": "extraction_error"}))
         if self._app:
+            logger.debug("Run: using LangGraph pipeline")
             final_state: AgentState = self._app.invoke({
                 "query": query,
                 "hints": hints_local,
@@ -479,23 +525,32 @@ class LogAnalysisAgent:
                 "done": False,
             })
             outputs = final_state.get("outputs", [])
+            logger.info("Run: outputs via graph=%d", len(outputs))
         else:
-            # Fallback: sequential plan then for each step execute
+            logger.debug("Run: sequential fallback")
             plan_xml = self.plan(query)
             steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
+            logger.info("Run: executing %d steps sequentially", len(steps))
             outputs: List[str] = pre_outputs[:]
             for step in steps:
+                logger.debug("Run: executing step '%s'", step)
                 out = self._execute_step(step, query, hints=hints_local)
                 outputs.append(out)
                 self.memory.add_summary(out)
         summary = compress_outputs(outputs)
+        logger.debug("Run: summary chars=%d", len(summary))
         final_doc = wrap_document("".join(outputs) + summary, {"source": "log_agent"})
+        logger.info("Run: final doc chars=%d", len(final_doc))
         return final_doc
 
 
 def demo_agent_run(query: str, hints: Optional[Dict[str, Any]] = None) -> str:
+    logger.info("demo_agent_run: query='%s'", query)
+    logger.debug("demo_agent_run: hints=%s", hints)
     agent = LogAnalysisAgent()
-    return agent.run(query, hints=hints)
+    result = agent.run(query, hints=hints)
+    logger.info("demo_agent_run: result chars=%d", len(result))
+    return result
 
 # Prompt缓存（全局），用于存储配置与模板实例
 _PROMPTS_CACHE: Dict[str, Dict[str, Any]] = {}
