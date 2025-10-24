@@ -219,11 +219,13 @@ class ShortTermMemory:
 
 
 def _resolve_prompts_config_path() -> str:
-    base_dir = os.path.dirname(os.path.dirname(__file__))  # app/
-    default_path = os.path.join(base_dir, "prompts", "prompts_config.yaml")
+    app_dir = os.path.dirname(os.path.dirname(__file__))  # app/
+    project_root = os.path.dirname(app_dir)
+    default_path = os.path.join(app_dir, "prompts", "prompts_config.yaml")
     path = getattr(settings, "prompts_config_path", default_path)
     if not os.path.isabs(path):
-        path = os.path.join(base_dir, os.path.normpath(path))
+        # 统一以项目根目录为基准解析相对路径，避免出现 app/app 重复
+        path = os.path.join(project_root, os.path.normpath(path))
     return path
 
 def _load_prompts_config() -> Dict[str, Dict[str, Any]]:
@@ -240,7 +242,9 @@ def _load_prompts_config() -> Dict[str, Dict[str, Any]]:
                     raise RuntimeError("YAML库未安装，无法解析prompts_config.yaml")
             else:
                 _PROMPTS_CACHE = json.load(f)
-    except Exception:
+    except Exception as e:
+        # 在异常时记录日志，便于定位问题
+        logger.warning("加载提示词配置失败，使用内置回退。路径=%s，错误=%s", cfg_path, e)
         # 内置回退模板，确保功能不受影响
         _PROMPTS_CACHE = {
             "plan_prompt": {
@@ -287,11 +291,15 @@ def compress_outputs(outputs: List[str]) -> str:
     llm = get_llm()
     try:
         prompt = render_prompt("summary_prompt", compact_snippet=compact)
+        prompt_to_log = prompt[:600] + ("..." if len(prompt) > 600 else "")
+        logger.info("\n--- START LLM PROMPT [summary] ---\n%s\n--- END LLM PROMPT [summary] ---", prompt_to_log)
         if hasattr(llm, "predict"):
             summary_xml = llm.predict(prompt)
+            logger.info("\n--- START LLM OUTPUT [summary] ---\n%s\n--- END LLM OUTPUT [summary] ---", summary_xml)
             return f"<context_summary>{summary_xml}</context_summary>"
         else:
             res = llm.invoke(prompt)
+            logger.info("\n--- START LLM OUTPUT [summary] ---\n%s\n--- END LLM OUTPUT [summary] ---", str(res))
             return wrap_document(str(res), {"type": "summary"})
     except Exception:
         return wrap_document("摘要不可用（降级为提取片段）", {"type": "summary"})
@@ -381,6 +389,7 @@ class LogAnalysisAgent:
             user_query=query,
         )
         logger.debug("Plan: prompt chars=%d", len(prompt))
+        logger.info("\n--- START LLM PROMPT [plan] ---\n%s\n--- END LLM PROMPT [plan] ---", prompt)
         plan_xml: str = ""
         try:
             logger.debug("Plan: llm=%s", type(self.llm).__name__)
@@ -391,6 +400,7 @@ class LogAnalysisAgent:
         except Exception as e:
             logger.warning("Plan LLM failed, using fallback: %s", e)
             plan_xml = wrap_plan(["读取日志片段", "在相关文件中执行grep搜索"])
+        logger.info("\n--- START LLM OUTPUT [plan] ---\n%s\n--- END LLM OUTPUT [plan] ---", plan_xml)
         # Normalize: ensure XML structure
         steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
         if not steps:
@@ -406,7 +416,9 @@ class LogAnalysisAgent:
         logger.info("Execute step: %s", step)
         step_l = step.lower()
         if "元数据" in step_l or "metadata" in step_l:
-            path = (hints or {}).get("archive_path") or os.path.join(settings.agent_root_dir, "logs.tar.gz")
+            hint_arch = (hints or {}).get("archive_path")
+            hint_path = (hints or {}).get("path")
+            path = hint_arch or (hint_path if isinstance(hint_path, str) and hint_path.lower().endswith((".tar.gz", ".tgz", ".zip")) else None) or os.path.join(settings.agent_root_dir, "logs.tar.gz")
             logger.debug("Tool=metadata path=%s", path)
             try:
                 return get_log_package_metadata_xml(path)
@@ -477,6 +489,12 @@ class LogAnalysisAgent:
         out = self._execute_step(step, state["query"], hints=state.get("hints"))
         logger.debug("Act: output chars=%d", len(out))
         self.memory.add_summary(out)
+        # Generate and print per-act LLM thought
+        try:
+            step_thought = compress_outputs([out])
+            logger.info("LLM Thought [after_act]:\n%s", step_thought)
+        except Exception as e:
+            logger.warning("Act: step thought generation failed: %s", e)
         outputs = state.get("outputs", []) + [out]
         return {"outputs": outputs, "idx": idx + 1}
 
@@ -497,7 +515,7 @@ class LogAnalysisAgent:
         logger.debug("Run: hints=%s", hints_local)
         pre_outputs: List[str] = []
         # 自动解压流程：如果提供了归档路径，则先解压并输出树结构
-        archive_path = hints_local.get("archive_path")
+        archive_path = hints_local.get("archive_path") or (hints_local.get("path") if isinstance(hints_local.get("path"), str) and hints_local.get("path").lower().endswith((".tar.gz", ".tgz", ".zip")) else None)
         if archive_path:
             logger.info("Run: auto-extract archive=%s", archive_path)
             try:
@@ -506,6 +524,9 @@ class LogAnalysisAgent:
                 pre_outputs.append(ex_xml)
                 self.memory.add_summary(ex_xml)
                 hints_local["extracted_root"] = extracted_dir
+                # 如果原始hints.path是归档文件，替换为解压目录下的首个文本文件
+                if hints_local.get("path") and isinstance(hints_local["path"], str) and hints_local["path"].lower().endswith((".tar.gz", ".tgz", ".zip")):
+                    hints_local.pop("path", None)
                 if not hints_local.get("path"):
                     p = self._first_text_file_under(extracted_dir)
                     if p:

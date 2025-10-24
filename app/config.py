@@ -47,14 +47,15 @@ class Settings(BaseSettings):
     # llm_reasoning_model: str = "deepseek-v3.1"  # 推理模型
     # llm_temperature: float = 0.0
     
+    
     llm_provider: str = "auto"  # deepseek 优先，不可用时回退到 qwen
     
     # DeepSeek 配置
     deepseek_api_key: Optional[str] = "sk-rebTXHBiV7Nr1PRzaODQOZKztKqpv7bPoQE10dNItF9yIyBh"
     # 使用 OpenAI 兼容客户端的基础URL（不包含 /chat/completions 以避免重复）
     deepseek_base_url: str = "http://oneapi.yhroot.com/v1"
-    llm_model_name: str = "deepseek-v3.1-chat"
-    llm_reasoning_model: str = "deepseek-v3.1"  # 推理模型
+    llm_model_name: str = "deepseek-v3.1"
+    llm_reasoning_model: str = "deepseek-v3.1"
     
     # Qwen 配置（OpenAI 兼容模式）
     qwen_api_key: Optional[str] = "sk-700b5dceea294f099b30f097718b854d"

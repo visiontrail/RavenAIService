@@ -173,6 +173,7 @@ temp/*
 test_data/*
 test_results/*
 temp/*
+uploads/*
 
 # 数据库文件
 *.db
@@ -182,4 +183,4 @@ logs.db
 .env.production
 bin/tool_log_decompress
 
-uploads/main_oam_20251011135430.tgz
+

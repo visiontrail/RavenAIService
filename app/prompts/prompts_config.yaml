@@ -15,6 +15,7 @@ summary_prompt:
   variables:
     - compact_snippet
   template: |
-    请对以下日志片段进行简要总结，突出ERROR/WARN及关键事件。
+    接下来提供的<片段>内容有可能是日志片段，也有可能描述日志基础信息的metadata。
+    如果是日志片段，请分析日志内容，若没有你需要的信息，可以继续请求grep或查询工具。
 
     <片段>{compact_snippet}</片段>

@@ -49,10 +49,12 @@ def main():
 
     query = args.query or f"读取日志片段; grep {args.pattern}"
 
-    hints: Dict[str, str] = {
-        "path": args.file,
-        "pattern": args.pattern,
-    }
+    is_archive = args.file.lower().endswith((".tar.gz", ".tgz", ".zip"))
+    hints: Dict[str, str] = {"pattern": args.pattern}
+    if is_archive:
+        hints["archive_path"] = args.file
+    else:
+        hints["path"] = args.file
 
     print("[INFO] Running LogAnalysisAgent...")
     print(f"[INFO] Query: {query}")
