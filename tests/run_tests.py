@@ -20,7 +20,7 @@ class TestRunner:
     """测试运行器"""
     
     def __init__(self, project_root: str = None):
-        self.project_root = Path(project_root) if project_root else Path.cwd()
+        self.project_root = Path(project_root) if project_root else Path(__file__).resolve().parent.parent
         self.test_data_dir = self.project_root / "test_data"
         self.test_results_dir = self.project_root / "test_results"
         self.test_results_dir.mkdir(exist_ok=True)
@@ -84,11 +84,11 @@ class TestRunner:
         
         # 检查核心代码文件
         core_files = [
-            "log_agent.py",
-            "tools/grep_tool.py",
-            "tools/metadata_tool.py", 
-            "tools/fs_tools.py",
-            "config.py"
+            "app/agents/log_agent.py",
+            "app/tools/grep_tool.py",
+            "app/tools/metadata_tool.py", 
+            "app/tools/fs_tools.py",
+            "app/config.py"
         ]
         
         for core_file in core_files:
@@ -96,7 +96,7 @@ class TestRunner:
                 print(f"⚠️  核心文件不存在: {core_file}")
         
         # 检查配置
-        config_file = self.project_root / "config.py"
+        config_file = self.project_root / "app" / "config.py"
         if config_file.exists():
             try:
                 with open(config_file, 'r', encoding='utf-8') as f:
@@ -179,12 +179,10 @@ class TestRunner:
         # 构建测试命令
         cmd = [
             sys.executable, "tests/test_ai_log_analysis.py",
-            "--test-type", test_type,
-            "--test-data-dir", str(self.test_data_dir)
+            "--test-type", test_type
         ]
         
-        if verbose:
-            cmd.append("--verbose")
+        # 测试脚本内部处理详细输出，不传递 --verbose
         
         # 运行测试
         try:
@@ -200,6 +198,16 @@ class TestRunner:
             end_time = time.time()
             duration = end_time - start_time
             
+            # 处理输出为更易读的结构
+            stdout_lines = result.stdout.splitlines() if result.stdout else []
+            stderr_lines = result.stderr.splitlines() if result.stderr else []
+            stdout_preview = "\n".join(stdout_lines[:20]) if stdout_lines else ""
+            stderr_preview = "\n".join(stderr_lines[:20]) if stderr_lines else ""
+            
+            # 保存原始文本输出为独立文件，避免JSON中的\n转义
+            stdout_path = self._save_text_output(result.stdout, "stdout", timestamp)
+            stderr_path = self._save_text_output(result.stderr, "stderr", timestamp)
+            
             # 解析测试结果
             test_results = {
                 "test_type": test_type,
@@ -207,14 +215,19 @@ class TestRunner:
                 "duration": duration,
                 "return_code": result.returncode,
                 "success": result.returncode == 0,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
+                # 新增可读性字段
+                "stdout_lines": stdout_lines,
+                "stderr_lines": stderr_lines,
+                "stdout_preview": stdout_preview,
+                "stderr_preview": stderr_preview,
+                "stdout_path": stdout_path,
+                "stderr_path": stderr_path,
                 "config": config
             }
             
-            # 尝试解析JSON输出
+            # 尝试解析JSON输出（从stdout末尾提取）
             try:
-                if result.stdout.strip():
+                if result.stdout and result.stdout.strip():
                     lines = result.stdout.strip().split('\n')
                     for line in reversed(lines):
                         if line.startswith('{') and line.endswith('}'):
@@ -269,6 +282,19 @@ class TestRunner:
             
             print(f"❌ 测试执行异常: {e}")
             return test_results
+
+    def _save_text_output(self, content: Optional[str], kind: str, timestamp: str) -> Optional[str]:
+        """将原始文本输出保存为独立文件，并返回路径"""
+        if not content:
+            return None
+        try:
+            file_path = self.test_results_dir / f"test_results_{timestamp}.{kind}.txt"
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return str(file_path)
+        except Exception as e:
+            print(f"⚠️  保存{kind}输出失败: {e}")
+            return None
     
     def save_test_results(self, results: Dict[str, Any], timestamp: str):
         """保存测试结果"""
@@ -303,9 +329,16 @@ class TestRunner:
         if not results['success']:
             if 'error' in results:
                 print(f"错误信息: {results['error']}")
-            elif results.get('stderr'):
-                print("错误输出:")
-                print(results['stderr'][:500] + "..." if len(results['stderr']) > 500 else results['stderr'])
+            elif results.get('stderr_preview') or results.get('stderr_lines'):
+                print("错误输出预览:")
+                preview = results.get('stderr_preview') or "\n".join(results.get('stderr_lines', [])[:20])
+                print(preview)
+            if results.get('stderr_path'):
+                print(f"完整错误输出: {results['stderr_path']}")
+        
+        # 提示查看完整stdout
+        if results.get('stdout_path'):
+            print(f"完整标准输出: {results['stdout_path']}")
         
         print("="*60)
     

@@ -40,11 +40,27 @@ class Settings(BaseSettings):
     elasticsearch_url: Optional[str] = None
     
     # LLM配置
-    llm_provider: str = "deepseek"
+    # llm_provider: str = "deepseek"
+    # deepseek_api_key: Optional[str] = "sk-rebTXHBiV7Nr1PRzaODQOZKztKqpv7bPoQE10dNItF9yIyBh"
+    # deepseek_base_url: str = "http://oneapi.yhroot.com/v1/chat/completions"
+    # llm_model_name: str = "deepseek-v3.1-chat"
+    # llm_reasoning_model: str = "deepseek-v3.1"  # 推理模型
+    # llm_temperature: float = 0.0
+    
+    llm_provider: str = "auto"  # deepseek 优先，不可用时回退到 qwen
+    
+    # DeepSeek 配置
     deepseek_api_key: Optional[str] = "sk-rebTXHBiV7Nr1PRzaODQOZKztKqpv7bPoQE10dNItF9yIyBh"
-    deepseek_base_url: str = "http://oneapi.yhroot.com"
+    # 使用 OpenAI 兼容客户端的基础URL（不包含 /chat/completions 以避免重复）
+    deepseek_base_url: str = "http://oneapi.yhroot.com/v1"
     llm_model_name: str = "deepseek-v3.1-chat"
     llm_reasoning_model: str = "deepseek-v3.1"  # 推理模型
+    
+    # Qwen 配置（OpenAI 兼容模式）
+    qwen_api_key: Optional[str] = "sk-700b5dceea294f099b30f097718b854d"
+    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_model_name: str = "qwen-plus-2025-09-11"
+    
     llm_temperature: float = 0.0
     
     # 上下文压缩/记忆配置

@@ -404,19 +404,39 @@ class TestDeepSeekIntegration(unittest.TestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
     
     def test_deepseek_configuration(self):
-        """测试DeepSeek配置"""
+        """测试DeepSeek配置（兼容自动回退到Qwen）"""
         print("\n=== 测试DeepSeek配置 ===")
-        
-        # 检查配置是否正确设置
-        self.assertEqual(settings.llm_provider, "deepseek")
-        self.assertIsNotNone(getattr(settings, 'deepseek_api_key', None))
-        self.assertIsNotNone(getattr(settings, 'deepseek_base_url', None))
-        self.assertEqual(settings.llm_model_name, "deepseek-v3.1-chat")
-        
-        print(f"LLM提供商: {settings.llm_provider}")
-        print(f"模型名称: {settings.llm_model_name}")
-        print(f"API基础URL: {getattr(settings, 'deepseek_base_url', 'N/A')}")
-        print("DeepSeek配置检查通过")
+        provider = getattr(settings, 'llm_provider', 'auto')
+
+        # 允许 deepseek / qwen / auto 三种设置
+        self.assertIn(provider, ["deepseek", "qwen", "auto"]) 
+
+        if provider in ("deepseek", "auto"):
+            # DeepSeek 配置存在则检查其有效性
+            api_key = getattr(settings, 'deepseek_api_key', None)
+            base_url = getattr(settings, 'deepseek_base_url', None)
+            if api_key and base_url:
+                self.assertIsNotNone(api_key)
+                self.assertIsNotNone(base_url)
+                # 在自动模式下可能模型名称为 deepseek 或 qwen，均视为兼容
+                self.assertIn(settings.llm_model_name, ["deepseek-v3.1-chat", getattr(settings, 'qwen_model_name', 'qwen-plus-2025-09-11')])
+                print(f"LLM提供商: {provider}")
+                print(f"模型名称: {settings.llm_model_name}")
+                print(f"DeepSeek API基础URL: {base_url}")
+                print("DeepSeek配置检查通过（启用回退: DeepSeek→Qwen→DummyLLM）")
+                return
+
+        # 若未使用/不可用 DeepSeek，则检查 Qwen 配置
+        qwen_key = getattr(settings, 'qwen_api_key', None)
+        qwen_url = getattr(settings, 'qwen_base_url', None)
+        qwen_model = getattr(settings, 'qwen_model_name', None)
+        self.assertIsNotNone(qwen_key)
+        self.assertIsNotNone(qwen_url)
+        self.assertTrue(qwen_model and qwen_model.startswith("qwen-"))
+        print(f"LLM提供商: {provider}")
+        print(f"Qwen 模型名称: {qwen_model}")
+        print(f"Qwen API基础URL: {qwen_url}")
+        print("Qwen配置检查通过（作为回退或主提供商）")
     
     def test_llm_initialization(self):
         """测试LLM初始化"""
@@ -425,12 +445,17 @@ class TestDeepSeekIntegration(unittest.TestCase):
         llm = get_llm()
         self.assertIsNotNone(llm)
         print(f"LLM类型: {type(llm).__name__}")
-        
-        # 如果是DummyLLM，说明DeepSeek配置可能有问题，但这是正常的fallback
-        if hasattr(llm, 'predict'):
-            print("使用DummyLLM (fallback模式)")
+    
+        # 根据回退机制输出更准确的说明
+        llm_type = type(llm).__name__
+        if llm_type == "_FallbackLLM":
+            print("使用回退LLM封装（自动DeepSeek→Qwen→DummyLLM）")
+        elif hasattr(llm, 'invoke'):
+            print("使用真实LLM客户端")
+        elif hasattr(llm, 'predict'):
+            print("使用DummyLLM（最终回退）")
         else:
-            print("使用真实LLM")
+            print("使用未知LLM接口")
     
     @unittest.skipIf(not hasattr(settings, 'deepseek_api_key') or not settings.deepseek_api_key, 
                      "需要有效的DeepSeek API密钥")
@@ -598,6 +623,7 @@ def run_tests(test_type: str = "all"):
     print(f"  模型名称: {settings.llm_model_name}")
     print(f"  Agent根目录: {settings.agent_root_dir}")
     print(f"  Agent启用: {settings.agent_enabled}")
+    print("  回退链路: DeepSeek→Qwen→DummyLLM")
     
     if hasattr(settings, 'deepseek_api_key'):
         api_key = settings.deepseek_api_key

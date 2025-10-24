@@ -189,13 +189,13 @@ flowchart TD
 - 图解（Mermaid）：
 ```mermaid
 flowchart TB
-  U[用户Query] --> R[render_prompt(plan_prompt)]
-  M[短时记忆] --> R
-  R --> LLM{ChatOpenAI / DummyLLM}
-  LLM --> P[<plan/>]
-  O[工具输出] --> S[compress_outputs]
+  U["用户Query"] --> R["render_prompt(plan_prompt)"]
+  M["短时记忆"] --> R
+  R --> LLM["ChatOpenAI / DummyLLM"]
+  LLM --> P["plan"]
+  O["工具输出"] --> S["compress_outputs"]
   S --> LLM
-  LLM --> C[<context_summary/>]
+  LLM --> C["context_summary"]
 ```
 - 性能与最佳实践：控制提示词与上下文总tokens（建议 ≤2K），将 `llm_temperature` 设置为 0–0.3 保持确定性；在不可用或限流时回退到 `DummyLLM` 并只做提取式压缩。
 - 配置与调优：`llm_provider`、`openai_api_key`、`llm_model_name`、`llm_temperature`、可选 `base_url`（兼容 DeepSeek）；提示词来自 `prompts_config.yaml/json`。

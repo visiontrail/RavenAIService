@@ -157,7 +157,7 @@ class TestBasicFunctionality(unittest.TestCase):
     """基础功能测试"""
     
     def setUp(self):
-        self.test_data_dir = Path("test_data")
+        self.test_data_dir = Path(__file__).resolve().parent.parent / "test_data"
         self.validator = SimpleTestDataValidator(self.test_data_dir)
     
     def test_test_data_exists(self):
@@ -246,7 +246,7 @@ class TestSimpleGrep(unittest.TestCase):
     """简单的grep功能测试"""
     
     def setUp(self):
-        self.test_data_dir = Path("test_data")
+        self.test_data_dir = Path(__file__).resolve().parent.parent / "test_data"
         self.log_dir = self.test_data_dir / "ai_test_logs"
     
     def simple_grep(self, file_path: Path, pattern: str, max_lines: int = 100) -> List[str]:
@@ -297,7 +297,7 @@ class TestPerformanceBasic(unittest.TestCase):
     """基础性能测试"""
     
     def setUp(self):
-        self.test_data_dir = Path("test_data")
+        self.test_data_dir = Path(__file__).resolve().parent.parent / "test_data"
         self.log_dir = self.test_data_dir / "ai_test_logs"
     
     def test_file_reading_performance(self):
@@ -434,11 +434,11 @@ def main():
     args = parser.parse_args()
     
     # 检查测试数据目录
-    test_data_dir = Path(args.test_data_dir)
+    test_data_dir = Path(__file__).resolve().parent.parent / args.test_data_dir
     if not test_data_dir.exists():
         print(f"❌ 测试数据目录不存在: {test_data_dir}")
         print("请先运行以下命令生成测试数据:")
-        print("  python3 test_data_generator.py")
+        print("  python3 tests/test_data_generator.py")
         sys.exit(1)
     
     # 运行测试
