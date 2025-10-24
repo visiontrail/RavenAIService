@@ -470,7 +470,12 @@ class LogAnalysisAgent:
             if hasattr(self.llm, "predict"):
                 plan_xml = self.llm.predict(prompt)
             else:
-                plan_xml = str(self.llm.invoke(prompt))
+                response = self.llm.invoke(prompt)
+                # 正确提取LangChain消息对象的content字段
+                if hasattr(response, "content"):
+                    plan_xml = response.content
+                else:
+                    plan_xml = str(response)
         except Exception as e:
             logger.warning("Plan LLM failed, using fallback: %s", e)
             plan_xml = wrap_plan(["读取日志片段", "在相关文件中执行grep搜索"])
@@ -602,7 +607,12 @@ class LogAnalysisAgent:
             if hasattr(self.llm, "predict"):
                 raw = self.llm.predict(prompt)
             else:
-                raw = str(self.llm.invoke(prompt))
+                response = self.llm.invoke(prompt)
+                # 正确提取LangChain消息对象的content字段
+                if hasattr(response, "content"):
+                    raw = response.content
+                else:
+                    raw = str(response)
             # 记录手动选择返回内容
             logger.info("\n\n--- START LLM OUTPUT [tool_select] ---\n%s\n--- END LLM OUTPUT [tool_select] ---\n", raw)
             cand = _extract_json_candidate(raw)
@@ -951,7 +961,12 @@ class LogAnalysisAgentDuplicate:
             if hasattr(self.llm, "predict"):
                 plan_xml = self.llm.predict(prompt)
             else:
-                plan_xml = str(self.llm.invoke(prompt))
+                response = self.llm.invoke(prompt)
+                # 正确提取LangChain消息对象的content字段
+                if hasattr(response, "content"):
+                    plan_xml = response.content
+                else:
+                    plan_xml = str(response)
         except Exception as e:
             logger.warning("Plan LLM failed, using fallback: %s", e)
             plan_xml = wrap_plan(["读取日志片段", "在相关文件中执行grep搜索"])
@@ -1069,7 +1084,12 @@ class LogAnalysisAgentDuplicate:
             if hasattr(self.llm, "predict"):
                 raw = self.llm.predict(prompt)
             else:
-                raw = str(self.llm.invoke(prompt))
+                response = self.llm.invoke(prompt)
+                # 正确提取LangChain消息对象的content字段
+                if hasattr(response, "content"):
+                    raw = response.content
+                else:
+                    raw = str(response)
             cand = _extract_json_candidate(raw)
             if not cand:
                 raise ValueError("LLM未返回可解析的JSON")
