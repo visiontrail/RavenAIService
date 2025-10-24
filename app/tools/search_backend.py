@@ -4,11 +4,14 @@ Includes a local regex-based search and an optional Elasticsearch/OpenSearch stu
 """
 import os
 import re
+import logging
 from typing import Dict, List, Optional, Tuple
 
 from app.config import settings
 from app.tools.grep_tool import grep_file
 from app.agents.xml_utils import wrap_search_results
+
+logger = logging.getLogger(__name__)
 
 
 class SearchBackend:
@@ -36,8 +39,10 @@ class RegexSearchBackend(SearchBackend):
             if os.path.isfile(ap):
                 safe_paths.append(ap)
         self.paths = safe_paths
+        logger.info("SearchBackend index: paths_indexed=%d root=%s", len(safe_paths), self.root)
 
     def search(self, query: str, k: int = 10) -> List[Dict[str, str]]:
+        logger.info("ToolCall regex_search: query=%s k=%d indexed_paths=%d", query, k, len(self.paths))
         results: List[Dict[str, str]] = []
         for path in self.paths:
             try:
@@ -54,6 +59,7 @@ class RegexSearchBackend(SearchBackend):
                         break
             except Exception:
                 continue
+        logger.info("ToolResult regex_search: hits=%d query=%s", len(results), query)
         return results
 
 
@@ -84,6 +90,7 @@ class ElasticSearchBackend(SearchBackend):
     def search(self, query: str, k: int = 10) -> List[Dict[str, str]]:
         if not self.client:
             return []
+        logger.info("ToolCall elastic_search: query=%s k=%d url=%s index=%s", query, k, self.url, self.index_name)
         try:
             resp = self.client.search(index=self.index_name, body={
                 "size": k,
@@ -97,6 +104,7 @@ class ElasticSearchBackend(SearchBackend):
                     "path": src.get("path", "unknown"),
                     "score": h.get("_score", 0.0),
                 })
+            logger.info("ToolResult elastic_search: hits=%d query=%s", len(results), query)
             return results
         except Exception:
             return []
@@ -104,4 +112,5 @@ class ElasticSearchBackend(SearchBackend):
 
 def search_to_xml(backend: SearchBackend, query: str, k: int = 10) -> str:
     results = backend.search(query=query, k=k)
+    logger.info("ToolResult search_to_xml: results_count=%d query=%s", len(results), query)
     return wrap_search_results(query, results)

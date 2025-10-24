@@ -7,6 +7,7 @@ plan_prompt:
     你是一个日志分析Agent，需要制定执行计划。
     输出使用<plan><step>...</step></plan>的XML结构。
     根据用户需求选择：提取元数据、grep检索、全文检索、读取片段。
+    如果这个日志是一个OAM日志，那么请重点关注Irun_oam.log日志，这是一个重点存储软件运行流程的日志内容
 
     {memory_context}<用户需求>{user_query}</用户需求>
 

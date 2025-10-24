@@ -3,11 +3,14 @@ Streaming grep tool for large logs with context and safety limits.
 """
 import os
 import re
+import logging
 from collections import deque
 from typing import Deque, Dict, List, Optional
 
 from app.config import settings
 from app.agents.xml_utils import wrap_search_results, wrap_excerpt
+
+logger = logging.getLogger(__name__)
 
 
 def _is_in_allowed_root(path: str) -> bool:
@@ -47,6 +50,15 @@ def grep_file(
     limit_matches = max_matches or settings.agent_max_matches
     limit_bytes = max_bytes or settings.agent_max_snippet_bytes
 
+    logger.info(
+        "ToolCall grep_file: path=%s query=%s context=%d max_matches=%s max_bytes=%s",
+        path,
+        query,
+        context,
+        limit_matches,
+        limit_bytes,
+    )
+
     pattern = _compile_query(query)
     pre: Deque[str] = deque(maxlen=context)
     results: List[Dict[str, str]] = []
@@ -85,6 +97,13 @@ def grep_file(
             if consumed > limit_bytes * 10:  # soft stop for extremely large files
                 break
 
+    logger.info(
+        "ToolResult grep_file: matches=%d path=%s query=%s",
+        len(results),
+        path,
+        query,
+    )
+
     return {"query": query, "results": results}
 
 
@@ -111,4 +130,5 @@ def grep_file_xml(
         wrap_excerpt(r["path"], int(r["start_line"]), int(r["end_line"]), r["text"], match=res["query"]) 
         for r in res["results"]
     ])
+    logger.info("ToolResult grep_file_xml: query=%s results=%d", res["query"], len(res["results"]))
     return f"<grep>{results_xml}{excerpts_xml}</grep>"

@@ -13,6 +13,7 @@ import os
 import re
 import json
 import logging
+import shutil
 
 # Optional LangChain imports (gracefully degrade if unavailable)
 try:
@@ -327,6 +328,7 @@ class LogAnalysisAgent:
             else RegexSearchBackend(root=settings.agent_root_dir)
         )
         logger.info("LogAnalysisAgent.__init__: backend=%s", type(self.search_backend).__name__)
+        self._extracted_dirs: List[str] = []
         try:
             paths: List[str] = []
             logger.debug("Search indexing start: root=%s", settings.agent_root_dir)
@@ -419,7 +421,7 @@ class LogAnalysisAgent:
             hint_arch = (hints or {}).get("archive_path")
             hint_path = (hints or {}).get("path")
             path = hint_arch or (hint_path if isinstance(hint_path, str) and hint_path.lower().endswith((".tar.gz", ".tgz", ".zip")) else None) or os.path.join(settings.agent_root_dir, "logs.tar.gz")
-            logger.debug("Tool=metadata path=%s", path)
+            logger.info("ToolCall metadata: path=%s", path)
             try:
                 return get_log_package_metadata_xml(path)
             except Exception as e:
@@ -428,7 +430,14 @@ class LogAnalysisAgent:
         if "grep" in step_l or "查找" in step_l or "搜索" in step_l:
             pattern = (hints or {}).get("pattern") or query
             path = (hints or {}).get("path") or self._first_text_file()
-            logger.debug("Tool=grep path=%s pattern=%s", path, pattern)
+            logger.info(
+                "ToolCall grep: path=%s pattern=%s context=%d max_matches=%s max_bytes=%s",
+                path,
+                pattern,
+                2,
+                getattr(settings, "agent_max_matches", None),
+                getattr(settings, "agent_max_snippet_bytes", None),
+            )
             if not path:
                 return wrap_document("未找到可搜索的文本文件", {"step": step})
             try:
@@ -438,7 +447,7 @@ class LogAnalysisAgent:
                 return wrap_document(f"grep失败: {e}", {"step": step})
         if "读取" in step_l or "片段" in step_l or "head" in step_l or "tail" in step_l:
             path = (hints or {}).get("path") or self._first_text_file()
-            logger.debug("Tool=reads path=%s", path)
+            logger.info("ToolCall reads: path=%s head_lines=%d tail_lines=%d", path, 50, 50)
             if not path:
                 return wrap_document("未找到可读取的文本文件", {"step": step})
             try:
@@ -452,10 +461,15 @@ class LogAnalysisAgent:
         if "解压" in step_l or "extract" in step_l or "decompress" in step_l:
             nested_path = (hints or {}).get("nested_path")
             root = (hints or {}).get("extracted_root") or settings.agent_root_dir
-            logger.debug("Tool=extract nested_path=%s root=%s", nested_path, root)
+            logger.info("ToolCall extract: nested_path=%s root=%s", nested_path, root)
             try:
                 if nested_path:
-                    _, xml = extract_nested_archive_xml(nested_path, parent_root=root)
+                    dest, xml = extract_nested_archive_xml(nested_path, parent_root=root)
+                    try:
+                        self._extracted_dirs.append(dest)
+                    except Exception:
+                        pass
+                    logger.info("ToolCall extract: extracted_dir=%s", dest)
                     return xml
                 else:
                     return nested_archives_xml(root)
@@ -464,14 +478,14 @@ class LogAnalysisAgent:
                 return wrap_document(f"解压/扫描嵌套归档失败: {e}", {"step": step})
         if "树" in step_l or "tree" in step_l or "结构" in step_l or "list" in step_l:
             root = (hints or {}).get("extracted_root") or settings.agent_root_dir
-            logger.debug("Tool=tree root=%s", root)
+            logger.info("ToolCall tree: root=%s max_depth=%d", root, 2)
             try:
                 return list_tree_xml(root, max_depth=2)
             except Exception as e:
                 logger.warning("tree tool failed: %s", e)
                 return wrap_document(f"树结构生成失败: {e}", {"step": step})
         try:
-            logger.debug("Tool=search query=%s", query)
+            logger.info("ToolCall search: backend=%s query=%s k=%d", type(self.search_backend).__name__, query, 10)
             return search_to_xml(self.search_backend, query=query, k=10)
         except Exception as e:
             logger.warning("search backend failed: %s", e)
@@ -514,55 +528,85 @@ class LogAnalysisAgent:
         hints_local: Dict[str, Any] = dict(hints or {})
         logger.debug("Run: hints=%s", hints_local)
         pre_outputs: List[str] = []
-        # 自动解压流程：如果提供了归档路径，则先解压并输出树结构
-        archive_path = hints_local.get("archive_path") or (hints_local.get("path") if isinstance(hints_local.get("path"), str) and hints_local.get("path").lower().endswith((".tar.gz", ".tgz", ".zip")) else None)
-        if archive_path:
-            logger.info("Run: auto-extract archive=%s", archive_path)
+        final_doc: str = ""
+        try:
+            # 自动解压流程：如果提供了归档路径，则先解压并输出树结构
+            archive_path = hints_local.get("archive_path") or (hints_local.get("path") if isinstance(hints_local.get("path"), str) and hints_local.get("path").lower().endswith((".tar.gz", ".tgz", ".zip")) else None)
+            if archive_path:
+                logger.info("Run: auto-extract archive=%s", archive_path)
+                try:
+                    extracted_dir, ex_xml = auto_extract_archive_xml(archive_path)
+                    logger.info("Run: auto-extract ok extracted_dir=%s", extracted_dir)
+                    pre_outputs.append(ex_xml)
+                    self.memory.add_summary(ex_xml)
+                    hints_local["extracted_root"] = extracted_dir
+                    # 记录解压目录以便完成后清理
+                    try:
+                        self._extracted_dirs.append(extracted_dir)
+                    except Exception:
+                        pass
+                    # 如果原始hints.path是归档文件，替换为解压目录下的首个文本文件
+                    if hints_local.get("path") and isinstance(hints_local["path"], str) and hints_local["path"].lower().endswith((".tar.gz", ".tgz", ".zip")):
+                        hints_local.pop("path", None)
+                    if not hints_local.get("path"):
+                        p = self._first_text_file_under(extracted_dir)
+                        if p:
+                            hints_local["path"] = p
+                except Exception as e:
+                    logger.warning("Run: auto-extract failed: %s", e)
+                    pre_outputs.append(wrap_document(f"自动解压失败: {e}", {"type": "extraction_error"}))
+            if self._app:
+                logger.debug("Run: using LangGraph pipeline")
+                final_state: AgentState = self._app.invoke({
+                    "query": query,
+                    "hints": hints_local,
+                    "plan_xml": "",
+                    "steps": [],
+                    "idx": 0,
+                    "outputs": pre_outputs,
+                    "done": False,
+                })
+                outputs = final_state.get("outputs", [])
+                logger.info("Run: outputs via graph=%d", len(outputs))
+            else:
+                logger.debug("Run: sequential fallback")
+                plan_xml = self.plan(query)
+                steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
+                logger.info("Run: executing %d steps sequentially", len(steps))
+                outputs: List[str] = pre_outputs[:]
+                for step in steps:
+                    logger.debug("Run: executing step '%s'", step)
+                    out = self._execute_step(step, query, hints=hints_local)
+                    outputs.append(out)
+                    self.memory.add_summary(out)
+            summary = compress_outputs(outputs)
+            logger.debug("Run: summary chars=%d", len(summary))
+            final_doc = wrap_document("".join(outputs) + summary, {"source": "log_agent"})
+            logger.info("Run: final doc chars=%d", len(final_doc))
+        finally:
             try:
-                extracted_dir, ex_xml = auto_extract_archive_xml(archive_path)
-                logger.info("Run: auto-extract ok extracted_dir=%s", extracted_dir)
-                pre_outputs.append(ex_xml)
-                self.memory.add_summary(ex_xml)
-                hints_local["extracted_root"] = extracted_dir
-                # 如果原始hints.path是归档文件，替换为解压目录下的首个文本文件
-                if hints_local.get("path") and isinstance(hints_local["path"], str) and hints_local["path"].lower().endswith((".tar.gz", ".tgz", ".zip")):
-                    hints_local.pop("path", None)
-                if not hints_local.get("path"):
-                    p = self._first_text_file_under(extracted_dir)
-                    if p:
-                        hints_local["path"] = p
+                self._cleanup_extracted_dirs()
             except Exception as e:
-                logger.warning("Run: auto-extract failed: %s", e)
-                pre_outputs.append(wrap_document(f"自动解压失败: {e}", {"type": "extraction_error"}))
-        if self._app:
-            logger.debug("Run: using LangGraph pipeline")
-            final_state: AgentState = self._app.invoke({
-                "query": query,
-                "hints": hints_local,
-                "plan_xml": "",
-                "steps": [],
-                "idx": 0,
-                "outputs": pre_outputs,
-                "done": False,
-            })
-            outputs = final_state.get("outputs", [])
-            logger.info("Run: outputs via graph=%d", len(outputs))
-        else:
-            logger.debug("Run: sequential fallback")
-            plan_xml = self.plan(query)
-            steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
-            logger.info("Run: executing %d steps sequentially", len(steps))
-            outputs: List[str] = pre_outputs[:]
-            for step in steps:
-                logger.debug("Run: executing step '%s'", step)
-                out = self._execute_step(step, query, hints=hints_local)
-                outputs.append(out)
-                self.memory.add_summary(out)
-        summary = compress_outputs(outputs)
-        logger.debug("Run: summary chars=%d", len(summary))
-        final_doc = wrap_document("".join(outputs) + summary, {"source": "log_agent"})
-        logger.info("Run: final doc chars=%d", len(final_doc))
+                logger.warning("Run: cleanup extracted dirs failed: %s", e)
         return final_doc
+
+    def _cleanup_extracted_dirs(self) -> None:
+        base = os.path.abspath(os.path.join(settings.agent_root_dir, "_extracted"))
+        for d in getattr(self, "_extracted_dirs", []):
+            try:
+                absd = os.path.abspath(d)
+                if os.path.commonpath([absd, base]) != base:
+                    logger.warning("Cleanup skipped for non-extracted path: %s", absd)
+                    continue
+                if os.path.isdir(absd):
+                    logger.info("Cleanup: removing extracted dir: %s", absd)
+                    shutil.rmtree(absd, ignore_errors=True)
+            except Exception as e:
+                logger.warning("Cleanup error for %s: %s", d, e)
+        self._extracted_dirs = []
+
+
+
 
 
 def demo_agent_run(query: str, hints: Optional[Dict[str, Any]] = None) -> str:
