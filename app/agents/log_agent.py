@@ -413,83 +413,170 @@ class LogAnalysisAgent:
         logger.info("Plan: steps=%d", len(re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)))
         return plan_xml
 
-    # Tool routing (XML-producing)
+    # Tool routing (XML-producing, refactored)
     def _execute_step(self, step: str, query: str, hints: Optional[Dict[str, Any]] = None) -> str:
-        logger.info("Execute step: %s", step)
-        step_l = step.lower()
-        if "元数据" in step_l or "metadata" in step_l:
-            hint_arch = (hints or {}).get("archive_path")
-            hint_path = (hints or {}).get("path")
-            path = hint_arch or (hint_path if isinstance(hint_path, str) and hint_path.lower().endswith((".tar.gz", ".tgz", ".zip")) else None) or os.path.join(settings.agent_root_dir, "logs.tar.gz")
-            logger.info("ToolCall metadata: path=%s", path)
+        logger.info("Execute step (refactored): %s", step)
+        hints = hints or {}
+
+        tool_specs: Dict[str, Dict[str, Any]] = {
+            "metadata_extract": {
+                "desc": "提取日志包元数据（tar.gz/zip）",
+                "schema": {"archive_path": "str"},
+            },
+            "grep_search": {
+                "desc": "在文本文件中执行模式搜索 (grep)",
+                "schema": {"path": "str?", "pattern": "str", "context": "int?"},
+            },
+            "read_snippet": {
+                "desc": "读取文件片段 (head/tail)",
+                "schema": {"path": "str?", "head_lines": "int?", "tail_lines": "int?"},
+            },
+            "nested_extract": {
+                "desc": "解压或扫描嵌套归档",
+                "schema": {"nested_path": "str?", "extracted_root": "str?"},
+            },
+            "list_tree": {
+                "desc": "列出目录树结构",
+                "schema": {"root": "str?", "max_depth": "int?"},
+            },
+            "global_search": {
+                "desc": "使用搜索后转为XML",
+                "schema": {"query": "str", "k": "int?"},
+            },
+        }
+
+        def _extract_json_candidate(s: str) -> Optional[Dict[str, Any]]:
             try:
-                return get_log_package_metadata_xml(path)
-            except Exception as e:
-                logger.warning("Metadata tool failed: %s", e)
-                return wrap_document(f"元数据提取失败: {e}", {"step": step})
-        if "grep" in step_l or "查找" in step_l or "搜索" in step_l:
-            pattern = (hints or {}).get("pattern") or query
-            path = (hints or {}).get("path") or self._first_text_file()
-            logger.info(
-                "ToolCall grep: path=%s pattern=%s context=%d max_matches=%s max_bytes=%s",
-                path,
-                pattern,
-                2,
-                getattr(settings, "agent_max_matches", None),
-                getattr(settings, "agent_max_snippet_bytes", None),
+                s = s.strip()
+                if s.startswith("{") and s.endswith("}"):
+                    return json.loads(s)
+                start = s.find("{")
+                end = s.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    return json.loads(s[start : end + 1])
+            except Exception:
+                return None
+            return None
+
+        def _fallback_select(step_text: str) -> Dict[str, Any]:
+            st = step_text.lower()
+            if ("元数据" in st) or ("metadata" in st):
+                return {"tool": "metadata_extract", "args": {}}
+            if ("grep" in st) or ("查找" in st) or ("搜索" in st):
+                return {"tool": "grep_search", "args": {}}
+            if ("读取" in st) or ("片段" in st) or ("head" in st) or ("tail" in st):
+                return {"tool": "read_snippet", "args": {}}
+            if ("解压" in st) or ("extract" in st) or ("decompress" in st):
+                return {"tool": "nested_extract", "args": {}}
+            if ("树" in st) or ("tree" in st) or ("结构" in st) or ("list" in st):
+                return {"tool": "list_tree", "args": {}}
+            return {"tool": "global_search", "args": {}}
+
+        selection: Dict[str, Any] = {}
+        try:
+            tools_text = "\n".join([f"- {name}: {spec['desc']} schema={spec['schema']}" for name, spec in tool_specs.items()])
+            prompt = (
+                "你是一个日志分析Agent的工具路由器。\n"
+                "基于提供的step、query、hints，从下列工具中选择最合适的一个，并给出JSON参数：\n"
+                f"{tools_text}\n\n"
+                "返回严格的JSON对象，不要包含解释或多余文字。格式：{\"tool\": \"<name>\", \"args\": { ... }}\n"
+                f"<step>{step}</step>\n<query>{query}</query>\n<hints>{json.dumps(hints, ensure_ascii=False)}</hints>\n"
             )
-            if not path:
-                return wrap_document("未找到可搜索的文本文件", {"step": step})
-            try:
-                return grep_file_xml(path, pattern, context=2)
-            except Exception as e:
-                logger.warning("grep tool failed: %s", e)
-                return wrap_document(f"grep失败: {e}", {"step": step})
-        if "读取" in step_l or "片段" in step_l or "head" in step_l or "tail" in step_l:
-            path = (hints or {}).get("path") or self._first_text_file()
-            logger.info("ToolCall reads: path=%s head_lines=%d tail_lines=%d", path, 50, 50)
-            if not path:
-                return wrap_document("未找到可读取的文本文件", {"step": step})
-            try:
-                head = read_head_xml(path, n_lines=50)
-                tail = read_tail_xml(path, n_lines=50)
+            if hasattr(self.llm, "predict"):
+                raw = self.llm.predict(prompt)
+            else:
+                raw = str(self.llm.invoke(prompt))
+            cand = _extract_json_candidate(raw)
+            if not cand:
+                raise ValueError("LLM未返回可解析的JSON")
+            selection = cand
+        except Exception as e:
+            logger.warning("Tool selection via LLM failed, using fallback: %s", e)
+            selection = _fallback_select(step)
+
+        name = str(selection.get("tool", "")).strip()
+        args: Dict[str, Any] = selection.get("args", {}) if isinstance(selection.get("args", {}), dict) else {}
+        if name not in tool_specs:
+            logger.warning("Unknown tool '%s', fallback to global_search", name)
+            name = "global_search"
+
+        try:
+            if name == "metadata_extract":
+                hint_arch = hints.get("archive_path")
+                hint_path = hints.get("path")
+                ap = args.get("archive_path")
+                path = ap or hint_arch or (
+                    hint_path if isinstance(hint_path, str) and hint_path.lower().endswith((".tar.gz", ".tgz", ".zip")) else None
+                ) or os.path.join(settings.agent_root_dir, "logs.tar.gz")
+                logger.info("ToolCall metadata_extract: path=%s", path)
+                return get_log_package_metadata_xml(path)
+
+            if name == "grep_search":
+                pattern = args.get("pattern") or hints.get("pattern") or query
+                path = args.get("path") or hints.get("path") or self._first_text_file()
+                context = int(args.get("context") or 2)
+                logger.info(
+                    "ToolCall grep_search: path=%s pattern=%s context=%d max_matches=%s max_bytes=%s",
+                    path,
+                    pattern,
+                    context,
+                    getattr(settings, "agent_max_matches", None),
+                    getattr(settings, "agent_max_snippet_bytes", None),
+                )
+                if not path:
+                    return wrap_document("未找到可搜索的文本文件", {"step": step})
+                return grep_file_xml(path, pattern, context=context)
+
+            if name == "read_snippet":
+                path = args.get("path") or hints.get("path") or self._first_text_file()
+                head_n = int(args.get("head_lines") or 50)
+                tail_n = int(args.get("tail_lines") or 50)
+                logger.info("ToolCall read_snippet: path=%s head_lines=%d tail_lines=%d", path, head_n, tail_n)
+                if not path:
+                    return wrap_document("未找到可读取的文本文件", {"step": step})
+                head = read_head_xml(path, n_lines=head_n)
+                tail = read_tail_xml(path, n_lines=tail_n)
                 return f"<reads>{head}{tail}</reads>"
-            except Exception as e:
-                logger.warning("read tool failed: %s", e)
-                return wrap_document(f"读取失败: {e}", {"step": step})
-        # 新增：树结构与嵌套解压支持
-        if "解压" in step_l or "extract" in step_l or "decompress" in step_l:
-            nested_path = (hints or {}).get("nested_path")
-            root = (hints or {}).get("extracted_root") or settings.agent_root_dir
-            logger.info("ToolCall extract: nested_path=%s root=%s", nested_path, root)
-            try:
+
+            if name == "nested_extract":
+                nested_path = args.get("nested_path") or hints.get("nested_path")
+                root = args.get("extracted_root") or hints.get("extracted_root") or settings.agent_root_dir
+                logger.info("ToolCall nested_extract: nested_path=%s root=%s", nested_path, root)
                 if nested_path:
                     dest, xml = extract_nested_archive_xml(nested_path, parent_root=root)
                     try:
                         self._extracted_dirs.append(dest)
                     except Exception:
                         pass
-                    logger.info("ToolCall extract: extracted_dir=%s", dest)
+                    logger.info("ToolCall nested_extract: extracted_dir=%s", dest)
                     return xml
                 else:
                     return nested_archives_xml(root)
-            except Exception as e:
-                logger.warning("extract tool failed: %s", e)
-                return wrap_document(f"解压/扫描嵌套归档失败: {e}", {"step": step})
-        if "树" in step_l or "tree" in step_l or "结构" in step_l or "list" in step_l:
-            root = (hints or {}).get("extracted_root") or settings.agent_root_dir
-            logger.info("ToolCall tree: root=%s max_depth=%d", root, 2)
-            try:
-                return list_tree_xml(root, max_depth=2)
-            except Exception as e:
-                logger.warning("tree tool failed: %s", e)
-                return wrap_document(f"树结构生成失败: {e}", {"step": step})
-        try:
-            logger.info("ToolCall search: backend=%s query=%s k=%d", type(self.search_backend).__name__, query, 10)
+
+            if name == "list_tree":
+                root = args.get("root") or hints.get("extracted_root") or settings.agent_root_dir
+                max_depth = int(args.get("max_depth") or 2)
+                logger.info("ToolCall list_tree: root=%s max_depth=%d", root, max_depth)
+                return list_tree_xml(root, max_depth=max_depth)
+
+            if name == "global_search":
+                k = int(args.get("k") or 10)
+                logger.info("ToolCall global_search: backend=%s query=%s k=%d", type(self.search_backend).__name__, query, k)
+                return search_to_xml(self.search_backend, query=query, k=k)
+
+            logger.warning("Unhandled tool '%s', fallback to global_search", name)
             return search_to_xml(self.search_backend, query=query, k=10)
         except Exception as e:
-            logger.warning("search backend failed: %s", e)
-            return wrap_document(f"搜索失败: {e}", {"step": step})
+            logger.warning("Tool '%s' execution failed: %s", name, e)
+            label = {
+                "metadata_extract": "元数据提取失败",
+                "grep_search": "grep失败",
+                "read_snippet": "读取失败",
+                "nested_extract": "解压/扫描嵌套归档失败",
+                "list_tree": "树结构生成失败",
+                "global_search": "搜索失败",
+            }.get(name, "工具执行失败")
+            return wrap_document(f"{label}: {e}", {"step": step})
 
     # Graph node: act
     def _act_node(self, state: AgentState) -> AgentState:
