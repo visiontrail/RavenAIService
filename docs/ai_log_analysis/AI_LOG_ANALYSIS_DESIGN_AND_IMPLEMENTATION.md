@@ -115,6 +115,74 @@ stateDiagram-v2
   - act 输入：`query`、`hints`、`steps[idx]`；输出：工具XML片段（如 `<grep/>`、`<reads/>`、`<log_package_info/>`），追加到 `outputs`。
   - END 输入：`outputs` 列表；输出：`<document><content>...</content><meta>...</meta></document>`。
 
+##### hints
+- 设计要点
+  - 上下文传递 ：在多轮对话中传递关键信息，避免重复计算
+  - 路径指导 ：提供已解压的文件路径和归档路径
+  - 参数默认值 ：为工具调用提供默认参数（如pattern、path等）
+  - 状态保持 ：记录解压目录、搜索模式等状态信息
+
+##### hints内容选择机制详解
+- 核心功能：`_select_relevant_files` 方法负责从解压目录中智能选择最相关的日志文件，生成 `hints` 中的 `relevant_files` 和 `primary_file`。
+
+- 文件发现策略：
+  - **直接扫描**：使用 `os.walk` 遍历解压目录，识别所有 `.log` 和 `.txt` 文件
+  - **嵌套压缩包处理**：调用 `find_nested_archives` 检测嵌套的 `.tar.gz`、`.tgz`、`.zip` 文件
+  - **自动解压**：使用 `safe_extract_archive` 安全解压嵌套压缩包到临时目录
+  - **递归扫描**：扫描嵌套解压目录中的日志文件，扩展候选文件列表
+
+- 智能评分算法：
+  ```python
+  # 基于查询关键词的文件名匹配评分
+  if any(keyword in query_lower for keyword in ['error', '错误', '失败', 'fail', 'exception']):
+      if any(pattern in filename for pattern in ['err', 'error', 'exception', 'fail']):
+          score += 10
+  
+  if any(keyword in query_lower for keyword in ['antenna', '天线', 'ant']):
+      if any(pattern in filename for pattern in ['antenna', 'ant']):
+          score += 10
+  
+  if any(keyword in query_lower for keyword in ['operation', '操作', 'oper']):
+      if any(pattern in filename for pattern in ['oper', 'operation', 'op']):
+          score += 5
+  
+  # 特殊文件优先级
+  if 'irun_oam.log' in filename:
+      score += 15  # OAM日志分析中的重要文件
+  ```
+
+- 优先级策略：
+  - **错误日志**：包含 `err`、`error`、`exception`、`fail` 的文件获得最高优先级（+10分）
+  - **天线相关**：包含 `antenna`、`ant` 的文件在天线查询中优先（+10分）
+  - **操作日志**：包含 `oper`、`operation`、`op` 的文件获得中等优先级（+5分）
+  - **告警日志**：包含 `alarm`、`alert`、`warn` 的文件获得较高优先级（+8分）
+  - **系统日志**：包含 `system`、`sys` 的文件获得基础优先级（+3分）
+  - **特殊文件**：`Irun_oam.log` 等关键文件获得最高优先级（+15分）
+  - **嵌套文件**：来自嵌套压缩包的文件稍微降低优先级（-1分）
+
+- 选择限制：
+  - **数量控制**：默认最多选择3个最相关的文件（`max_files=3`）
+  - **路径安全**：所有文件路径必须通过 `_is_in_allowed_root` 安全检查
+  - **异常处理**：嵌套压缩包解压失败时记录警告但继续处理其他文件
+
+- 输出格式：
+  - **relevant_files**：按评分排序的相关文件列表
+  - **primary_file**：评分最高的主要文件
+  - **详细日志**：记录文件发现、评分和选择过程，便于调试和监控
+
+- 典型应用场景：
+  - **OAM日志分析**：自动发现并优先选择 `Irun_oam.log`、`Ierr.log`、`Ioper.log` 等关键文件
+  - **错误排查**：根据查询内容智能识别错误日志文件
+  - **嵌套归档处理**：自动解压并扫描多层嵌套的压缩包结构
+  - **多文件关联分析**：提供相关文件列表支持交叉验证和完整分析
+
+- 性能优化：
+  - **增量处理**：仅在发现嵌套压缩包时才进行额外解压
+  - **内存控制**：流式处理大型压缩包，避免内存溢出
+  - **缓存机制**：解压后的临时目录可复用，减少重复解压开销
+  - **并发安全**：使用UUID确保多并发请求的解压目录隔离
+  
+
 - 处理流程与算法
 ```mermaid
 flowchart TD
@@ -176,8 +244,17 @@ flowchart TD
   - `hints`：支持覆盖 `archive_path`、`path`、`pattern` 等，提高工具召回与精度。
 - 记忆与压缩：
   - 每步输出经 `memory.add_summary(xml)` 记录；最终由 `compress_outputs(outputs)` 进行提取式压缩 + 可选LLM摘要，产出 `<context_summary>`。
+- hints生成与增强：
+  - `_generate_enhanced_hints(extracted_dir, query)`：核心hints生成方法，负责分析解压目录并生成智能化的文件选择建议
+  - **关键词提取**：从用户查询中提取搜索关键词，支持中英文混合识别
+  - **文件结构分析**：调用 `_build_file_structure_summary` 生成目录树概览
+  - **相关文件选择**：调用 `_select_relevant_files` 智能选择最相关的日志文件
+  - **搜索模式建议**：基于查询内容生成推荐的grep搜索模式
+  - **路径标准化**：确保所有路径符合安全规范并可被后续工具访问
+  - **动态更新**：通过 `_update_hints_after_tool_execution` 根据工具执行结果动态调整hints内容
+
 - 运行与降级：
-  - `run(query, hints)`：有 LangGraph 时通过 `self._app.invoke(state)` 执行完整循环；无 LangGraph 时降级为“顺序：plan→逐步执行”。所有结果最终统一 `wrap_document(..., {source: "log_agent"})`。
+  - `run(query, hints)`：有 LangGraph 时通过 `self._app.invoke(state)` 执行完整循环；无 LangGraph 时降级为"顺序：plan→逐步执行"。所有结果最终统一 `wrap_document(..., {source: "log_agent"})`。
 - LLM与Prompt：
   - `get_llm()`：优先 `ChatOpenAI`（支持自定义 `base_url` 与 DeepSeek 兼容），缺省回退到 `DummyLLM.predict` 保持可用性与可测性。
   - Prompt管理：支持 `prompts_config.yaml/json`；若 `langchain.PromptTemplate` 不可用则安全降级为 `str.format`。
@@ -256,8 +333,31 @@ flowchart TB
 - 嵌套策略：默认仅扫描并列出嵌套归档为 `<nested_archives>`；若模型在后续步骤传入 `nested_path`，则调用 `extract_nested_archive_xml(...)` 解压该子包并返回其树结构。
 - 安全约束：严格根目录校验 `_is_in_allowed_root`、安全路径拼接防路径穿越、忽略设备文件/符号链接。
 
+## 常见问答（hints选择机制）
+- **Q: 为什么某些重要日志文件没有出现在hints中？**
+  - A: 可能原因包括：1）文件位于嵌套压缩包中，需要启用嵌套解压功能；2）文件名不匹配当前的评分规则；3）文件不是 `.log` 或 `.txt` 格式；4）路径不在允许的根目录内。解决方案：检查 `_select_relevant_files` 的日志输出，确认文件发现和评分过程。
+
+- **Q: 如何调整文件选择的优先级策略？**
+  - A: 修改 `_select_relevant_files` 方法中的评分算法，可以：1）调整现有关键词的权重分数；2）添加新的关键词匹配规则；3）为特定文件名设置固定高分；4）修改 `max_files` 参数增加选择数量。
+
+- **Q: 嵌套压缩包处理失败怎么办？**
+  - A: 系统具备容错机制：1）单个嵌套包解压失败不影响其他文件处理；2）会记录详细的警告日志便于排查；3）自动回退到已成功解压的文件；4）可通过配置禁用嵌套解压功能。
+
+- **Q: hints生成过程中的性能瓶颈在哪里？**
+  - A: 主要瓶颈：1）大型嵌套压缩包的解压操作；2）深度目录遍历的I/O开销；3）大量文件的评分计算。优化建议：1）限制解压的嵌套包数量；2）设置目录遍历深度限制；3）使用文件大小和修改时间预筛选。
+
+- **Q: 如何扩展支持新的文件类型？**
+  - A: 在 `_select_relevant_files` 方法中：1）修改文件扩展名过滤条件，添加新的文件类型；2）为新文件类型设计相应的评分规则；3）确保新文件类型能被后续工具正确处理；4）更新相关的安全检查逻辑。
+
+- **Q: hints动态更新机制是如何工作的？**
+  - A: `_update_hints_after_tool_execution` 方法会：1）分析工具执行结果，识别是否找到了相关内容；2）如果搜索无结果，建议替代的文件或搜索模式；3）根据实际找到的内容调整后续步骤的参数；4）保持hints内容与实际执行状态的一致性。
+
+- **Q: 如何调试hints选择过程？**
+  - A: 启用详细日志记录：1）设置日志级别为DEBUG查看文件发现过程；2）检查 `_select_relevant_files` 的评分详情；3）查看嵌套压缩包的解压日志；4）使用CLI工具 `bin/run_log_agent.py` 进行单独测试。
+
 ## 未来扩展
 - 工具调用：使用函数调用式路由（OpenAI工具调用/JSON模式）提升召回与准确性。
 - 双检索：加入向量检索（FAISS/Chroma） + 关键词检索的混合策略。
 - 归档内grep：在压缩包成员级别进行流式匹配（tar/zip内文件）。
 - 观察链路：将每步输出与模型思考过程持久化便于复盘与优化。
+- hints智能化：基于历史查询和文件访问模式，使用机器学习优化文件选择策略。
