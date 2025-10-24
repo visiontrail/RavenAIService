@@ -48,34 +48,19 @@ from app.tools.search_backend import RegexSearchBackend, ElasticSearchBackend, s
 from app.tools.archive_tool import auto_extract_archive_xml, list_tree_xml, nested_archives_xml, extract_nested_archive_xml
 
 
-class DummyLLM:
-    """Fallback LLM that produces deterministic, safe outputs for demo/testing."""
-    def __init__(self, temperature: float = 0.0):
-        self.temperature = temperature
-
-    def predict(self, prompt: str) -> str:
-        steps: List[str] = []
-        p = prompt.lower()
-        if "metadata" in p or "元数据" in p:
-            steps.append("提取日志包元数据")
-        if "grep" in p or "查找" in p or "搜索" in p:
-            steps.append("在相关文件中执行grep搜索")
-        if not steps:
-            steps.append("列出可用日志并读取关键片段")
-        return wrap_plan(steps)
 
 
 def get_llm() -> Any:
-    """Return an LLM client with fallback: deepseek → qwen → dummy.
+    """Return an LLM client with runtime fallback: deepseek → qwen.
     - Provider 'auto' tries deepseek first, then qwen.
     - Provider 'deepseek' uses deepseek config, falls back to qwen if network/API failure at call time.
     - Provider 'qwen' uses qwen config directly.
     """
     logger.debug(f"get_llm: provider={getattr(settings, 'llm_provider', 'auto')}")
-    # If ChatOpenAI class unavailable, use DummyLLM
+    # If ChatOpenAI class unavailable, error out and return None
     if not ChatOpenAI:
-        logger.info("get_llm: ChatOpenAI unavailable, using DummyLLM")
-        return DummyLLM(temperature=settings.llm_temperature)
+        logger.error("get_llm: ChatOpenAI unavailable")
+        return None
 
     def make_chat_openai(api_key: str, base_url: str, model: str):
         os.environ["OPENAI_API_KEY"] = api_key
@@ -121,9 +106,9 @@ def get_llm() -> Any:
                     return self._fallback.invoke(prompt)
                 except Exception as e:
                     logger.warning(f"Fallback model invocation failed: {e}")
-            # 最终回退到DummyLLM，返回可用的字符串结果
-            logger.info("FallbackLLM.invoke: using DummyLLM")
-            return DummyLLM(temperature=self.temperature).predict(prompt)
+            # 无可用后端，抛出运行时异常以避免使用模拟LLM
+            logger.error("FallbackLLM.invoke: no available backend after retry")
+            raise RuntimeError("No available LLM backend; invocation failed")
 
     # Helper: try deepseek, then qwen (初始化阶段)
     def try_deepseek_first_then_qwen():
@@ -160,8 +145,8 @@ def get_llm() -> Any:
         # 若DeepSeek未配置，尝试直接Qwen
         if getattr(settings, "qwen_api_key", None) and getattr(settings, "qwen_base_url", None):
             llm = make_chat_openai(settings.qwen_api_key, settings.qwen_base_url, getattr(settings, "qwen_model_name", "qwen-plus-2025-09-11"))
-            return llm or DummyLLM(temperature=settings.llm_temperature)
-        return DummyLLM(temperature=settings.llm_temperature)
+            return llm
+        return None
 
     if provider == "deepseek":
         # 始终使用运行时回退包装器：DeepSeek失败时自动切换到Qwen
@@ -185,7 +170,7 @@ def get_llm() -> Any:
             if llm:
                 return llm
         # fallback if qwen missing
-        return DummyLLM(temperature=settings.llm_temperature)
+        return None
 
     # OpenAI direct (kept for compatibility)
     if provider == "openai" and getattr(settings, "openai_api_key", None):
@@ -193,10 +178,10 @@ def get_llm() -> Any:
         try:
             return ChatOpenAI(model=settings.llm_model_name, temperature=settings.llm_temperature)
         except Exception:
-            return DummyLLM(temperature=settings.llm_temperature)
+            return None
 
     # Final fallback
-    return DummyLLM(temperature=settings.llm_temperature)
+    return None
 
 
 class ShortTermMemory:
