@@ -54,7 +54,7 @@
         <!-- 主要发现 -->
         <div class="findings-section">
           <h2 class="findings-title">🔍 主要发现</h2>
-          <div class="findings-content" v-html="formatMarkdown(result.final_result.content)"></div>
+          <div class="findings-content prose prose-gray max-w-none" v-html="formatMarkdown(result.final_result.content)"></div>
         </div>
 
         <!-- 建议措施 -->
@@ -158,7 +158,7 @@
                     </div>
                     <Transition name="slide-fade">
                       <div v-show="expandedActSubsections[act.step_id]?.execution" class="subsection-content">
-                        <div class="execution-result" v-html="formatMarkdown(act.execution.processed_output)"></div>
+                      <div class="execution-result prose prose-sm max-w-none" v-html="formatMarkdown(act.execution.processed_output)"></div>
                         
                         <div v-if="showRawOutput[act.step_id]" class="raw-output">
                           <h6 class="raw-output-title">原始输出:</h6>
@@ -809,7 +809,7 @@ const toggleAct = toggleActOptimized
 }
 
 .findings-content {
-  @apply prose prose-gray max-w-none;
+  @apply max-w-none;
 }
 
 .recommendations-list {
@@ -1029,7 +1029,7 @@ const toggleAct = toggleActOptimized
 }
 
 .execution-result {
-  @apply prose prose-sm max-w-none;
+  @apply max-w-none;
 }
 
 .raw-output {
