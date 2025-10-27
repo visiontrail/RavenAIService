@@ -1689,7 +1689,7 @@ const toggleAct = toggleActOptimized
   .section-content,
   .act-content,
   .subsection-content {
-    @apply block !important;
+    @apply !block;
   }
 }
 </style>
