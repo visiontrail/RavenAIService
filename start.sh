@@ -31,12 +31,26 @@ source venv/bin/activate
 
 # 检查并安装依赖
 echo -e "${BLUE}📦 检查依赖包...${NC}"
-if ! pip show fastapi > /dev/null 2>&1; then
-    echo -e "${YELLOW}⚠️  正在安装依赖包...${NC}"
-    pip install fastapi uvicorn python-dotenv psutil pydantic pydantic-settings starlette python-multipart click h11 --upgrade --prefer-binary
-    echo -e "${GREEN}✅ 依赖包安装完成${NC}"
+if [ -f "requirements.txt" ]; then
+    if ! pip show fastapi > /dev/null 2>&1; then
+        echo -e "${YELLOW}⚠️  正在安装依赖包（包含AI分析功能）...${NC}"
+        pip install --upgrade pip
+        pip install -r requirements.txt --upgrade --prefer-binary
+        echo -e "${GREEN}✅ 依赖包安装完成${NC}"
+    else
+        echo -e "${GREEN}✅ 基础依赖包已安装${NC}"
+        echo -e "${BLUE}🔍 检查AI分析相关依赖...${NC}"
+        # 检查关键的AI依赖是否存在
+        if ! pip show langchain > /dev/null 2>&1 || ! pip show langgraph > /dev/null 2>&1; then
+            echo -e "${YELLOW}⚠️  检测到AI分析依赖缺失，正在安装...${NC}"
+            pip install -r requirements.txt --upgrade --prefer-binary
+            echo -e "${GREEN}✅ AI分析依赖安装完成${NC}"
+        else
+            echo -e "${GREEN}✅ AI分析依赖已安装${NC}"
+        fi
+    fi
 else
-    echo -e "${GREEN}✅ 依赖包已安装${NC}"
+    echo -e "${YELLOW}⚠️  requirements.txt 文件不存在，跳过依赖安装${NC}"
 fi
 
 # 检查必要目录
