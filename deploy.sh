@@ -95,8 +95,30 @@ cleanup_container_data() {
 deploy_services() {
     log_info "开始部署 LogStagingService..."
     
-    # 构建并启动服务
-    if docker-compose up -d --build; then
+    # 确保旧容器已停止
+    log_info "确保旧容器已停止..."
+    docker-compose down 2>/dev/null || true
+    
+    # 删除旧镜像以确保使用最新代码
+    log_info "删除旧镜像以确保重新构建..."
+    docker-compose down --rmi local 2>/dev/null || true
+    
+    # 清理构建缓存（可选，但能确保完全重新构建）
+    log_info "清理 Docker 构建缓存..."
+    docker builder prune -f 2>/dev/null || true
+    
+    # 强制重新构建并启动服务（使用 --no-cache 确保不使用缓存）
+    log_info "重新构建镜像（不使用缓存）..."
+    if docker-compose build --no-cache; then
+        log_success "镜像构建成功"
+    else
+        log_error "镜像构建失败"
+        exit 1
+    fi
+    
+    # 启动服务
+    log_info "启动服务..."
+    if docker-compose up -d; then
         log_success "服务部署成功"
         
         # 等待服务启动
