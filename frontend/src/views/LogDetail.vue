@@ -411,6 +411,26 @@
           
           <!-- AI分析输入区域 -->
           <div v-if="!aiAnalysisLoading && !aiAnalysisResult" class="space-y-4">
+            <!-- 问题描述提示（如果存在） -->
+            <div v-if="logStore.currentLog.issue_description" class="bg-blue-50 rounded-lg p-4 border border-blue-200">
+              <div class="flex items-start space-x-2">
+                <el-icon class="text-blue-600 mt-0.5">
+                  <InfoFilled />
+                </el-icon>
+                <div class="flex-1">
+                  <p class="text-sm font-medium text-gray-700 mb-1">已有问题描述</p>
+                  <p class="text-sm text-gray-900 mb-2">{{ logStore.currentLog.issue_description }}</p>
+                  <el-button 
+                    size="small" 
+                    type="primary"
+                    @click="aiAnalysisQuery = logStore.currentLog.issue_description"
+                  >
+                    使用此问题描述进行分析
+                  </el-button>
+                </div>
+              </div>
+            </div>
+            
             <div class="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg p-6 border border-purple-200">
               <div class="flex items-start space-x-3 mb-4">
                 <el-icon class="text-purple-600 mt-1" size="24">
@@ -418,7 +438,11 @@
                 </el-icon>
                 <div>
                   <h3 class="text-base font-semibold text-gray-900 mb-2">智能日志分析</h3>
-                  <p class="text-sm text-gray-600">请输入您想要分析的问题，AI将为您提供详细的分析结果</p>
+                  <p class="text-sm text-gray-600">
+                    {{ logStore.currentLog.issue_description 
+                      ? '您可以使用上面的问题描述，或输入新的分析查询' 
+                      : '请输入您想要分析的问题，AI将为您提供详细的分析结果' }}
+                  </p>
                 </div>
               </div>
               
@@ -426,7 +450,9 @@
                 v-model="aiAnalysisQuery"
                 type="textarea"
                 :rows="3"
-                placeholder="例如：分析所有错误日志、查找天线异常、统计告警信息等..."
+                :placeholder="logStore.currentLog.issue_description 
+                  ? '留空将使用上面的问题描述，或输入新的查询...' 
+                  : '例如：分析所有错误日志、查找天线异常、统计告警信息等...'"
                 class="mb-4"
               />
               
@@ -434,7 +460,6 @@
                 <el-button 
                   type="primary" 
                   @click="handleAIAnalysisSubmit"
-                  :disabled="!aiAnalysisQuery.trim()"
                   size="large"
                 >
                   <el-icon class="mr-2">
@@ -1058,7 +1083,15 @@ const handleCopyLink = async () => {
 
 // AI分析提交
 const handleAIAnalysisSubmit = async () => {
-  if (!logStore.currentLog || !aiAnalysisQuery.value.trim()) return
+  if (!logStore.currentLog) return
+
+  // 使用用户输入的查询，如果为空则使用问题描述
+  const query = aiAnalysisQuery.value.trim() || logStore.currentLog.issue_description || ''
+  
+  if (!query) {
+    ElMessage.warning('请输入分析查询内容或在上传时提供问题描述')
+    return
+  }
 
   try {
     aiAnalysisLoading.value = true
@@ -1072,7 +1105,7 @@ const handleAIAnalysisSubmit = async () => {
     }, 1000)
     
     // 调用AI分析API
-    const response = await logApi.analyzeLog(logStore.currentLog.id, aiAnalysisQuery.value)
+    const response = await logApi.analyzeLog(logStore.currentLog.id, query)
     
     clearInterval(progressInterval)
     aiAnalysisProgress.value = 100
