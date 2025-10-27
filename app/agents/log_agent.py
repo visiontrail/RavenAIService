@@ -1139,6 +1139,352 @@ class LogAnalysisAgent:
                 logger.warning("Cleanup error for %s: %s", d, e)
         self._extracted_dirs = []
 
+    def run_structured(self, query: str, hints: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Run the agent and return structured analysis results for frontend display."""
+        import time
+        import uuid
+        from datetime import datetime
+        
+        start_time = time.time()
+        analysis_id = str(uuid.uuid4())
+        
+        logger.info("RunStructured: start query='%s' id=%s", query, analysis_id)
+        hints_local: Dict[str, Any] = dict(hints or {})
+        
+        # 初始化结果结构
+        result = {
+            "id": analysis_id,
+            "query": query,
+            "status": "processing",
+            "timestamp": datetime.now().isoformat(),
+            "plan": {
+                "content": "",
+                "steps": [],
+                "total_steps": 0,
+                "completed_steps": 0
+            },
+            "acts": [],
+            "final_result": {
+                "summary": "",
+                "content": "",
+                "confidence": 0.0,
+                "recommendations": []
+            },
+            "metadata": {
+                "execution_time": 0.0,
+                "model_used": "unknown",
+                "tokens_used": 0
+            }
+        }
+        
+        try:
+            # 执行分析流程
+            pre_outputs: List[str] = []
+            
+            # 自动解压流程
+            archive_path = hints_local.get("archive_path") or (hints_local.get("path") if isinstance(hints_local.get("path"), str) and hints_local.get("path").lower().endswith((".tar.gz", ".tgz", ".zip")) else None)
+            if archive_path:
+                logger.info("RunStructured: auto-extract archive=%s", archive_path)
+                try:
+                    extracted_dir, ex_xml = auto_extract_archive_xml(archive_path)
+                    logger.info("RunStructured: auto-extract ok extracted_dir=%s", extracted_dir)
+                    pre_outputs.append(ex_xml)
+                    self.memory.add_summary(ex_xml)
+                    
+                    enhanced_hints = self._generate_enhanced_hints(extracted_dir, query, archive_path)
+                    hints_local.update(enhanced_hints)
+                    
+                    try:
+                        self._extracted_dirs.append(extracted_dir)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logger.warning("RunStructured: auto-extract failed: %s", e)
+                    pre_outputs.append(wrap_document(f"自动解压失败: {e}", {"type": "extraction_error"}))
+            
+            # 生成计划
+            plan_xml = self.plan(query)
+            result["plan"]["content"] = self._format_plan_markdown(plan_xml)
+            
+            # 解析步骤
+            steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
+            result["plan"]["total_steps"] = len(steps)
+            result["plan"]["steps"] = [
+                {
+                    "id": f"step_{i+1}",
+                    "title": f"步骤 {i+1}",
+                    "description": step.strip(),
+                    "status": "pending",
+                    "order": i+1
+                }
+                for i, step in enumerate(steps)
+            ]
+            
+            # 执行步骤
+            outputs: List[str] = pre_outputs[:]
+            for i, step in enumerate(steps):
+                step_id = f"step_{i+1}"
+                logger.debug("RunStructured: executing step %s: '%s'", step_id, step)
+                
+                # 更新步骤状态
+                result["plan"]["steps"][i]["status"] = "in_progress"
+                
+                try:
+                    # 执行步骤
+                    out = self._execute_step(step, query, hints=hints_local)
+                    outputs.append(out)
+                    self.memory.add_summary(out)
+                    
+                    # 生成思考过程
+                    thought = self._generate_thought_for_step(step, out)
+                    
+                    # 创建act结果
+                    act_result = {
+                        "step_id": step_id,
+                        "title": f"步骤 {i+1}: {step.strip()[:50]}...",
+                        "status": "completed",
+                        "thought": {
+                            "reasoning": thought.get("reasoning", ""),
+                            "approach": thought.get("approach", ""),
+                            "expected_outcome": thought.get("expected_outcome", "")
+                        },
+                        "execution": {
+                            "tool_used": thought.get("tool_used", "unknown"),
+                            "raw_output": out,
+                            "processed_output": self._format_output_markdown(out),
+                            "success": True,
+                            "error_message": None
+                        },
+                        "summary": thought.get("summary", ""),
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    
+                    result["acts"].append(act_result)
+                    result["plan"]["steps"][i]["status"] = "completed"
+                    result["plan"]["completed_steps"] += 1
+                    
+                except Exception as e:
+                    logger.error("RunStructured: step %s failed: %s", step_id, e)
+                    
+                    # 创建失败的act结果
+                    act_result = {
+                        "step_id": step_id,
+                        "title": f"步骤 {i+1}: {step.strip()[:50]}...",
+                        "status": "failed",
+                        "thought": {
+                            "reasoning": f"执行步骤时遇到错误: {str(e)}",
+                            "approach": "尝试执行指定操作",
+                            "expected_outcome": "获取相关信息"
+                        },
+                        "execution": {
+                            "tool_used": "unknown",
+                            "raw_output": "",
+                            "processed_output": f"**执行失败**: {str(e)}",
+                            "success": False,
+                            "error_message": str(e)
+                        },
+                        "summary": f"步骤执行失败: {str(e)}",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    
+                    result["acts"].append(act_result)
+                    result["plan"]["steps"][i]["status"] = "failed"
+            
+            # 生成最终结果
+            summary = compress_outputs(outputs)
+            final_content = "".join(outputs) + summary
+            
+            result["final_result"] = self._generate_final_result(query, final_content, outputs)
+            result["status"] = "completed"
+            
+        except Exception as e:
+            logger.error("RunStructured: execution failed: %s", e)
+            result["status"] = "failed"
+            result["final_result"]["content"] = f"# 分析失败\n\n执行过程中遇到错误: {str(e)}"
+            
+        finally:
+            # 清理和元数据
+            try:
+                self._cleanup_extracted_dirs()
+            except Exception as e:
+                logger.warning("RunStructured: cleanup failed: %s", e)
+            
+            # 更新元数据
+            execution_time = time.time() - start_time
+            result["metadata"]["execution_time"] = execution_time
+            result["metadata"]["model_used"] = getattr(self.llm, 'model_name', 'unknown')
+            
+            logger.info("RunStructured: completed id=%s time=%.2fs", analysis_id, execution_time)
+        
+        return result
+
+    def _format_plan_markdown(self, plan_xml: str) -> str:
+        """将计划XML转换为markdown格式"""
+        try:
+            steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
+            if not steps:
+                return "# 分析计划\n\n未能解析到具体步骤。"
+            
+            markdown = "# 分析计划\n\n## 步骤概览\n\n"
+            for i, step in enumerate(steps, 1):
+                markdown += f"{i}. **步骤{i}** - {step.strip()}\n"
+            
+            markdown += "\n## 预期目标\n\n通过以上步骤，系统将对日志进行全面分析，识别问题并提供解决建议。"
+            return markdown
+        except Exception as e:
+            logger.error("Format plan markdown failed: %s", e)
+            return "# 分析计划\n\n计划格式化失败。"
+
+    def _format_output_markdown(self, output: str) -> str:
+        """将输出转换为markdown格式"""
+        try:
+            # 简单的格式化处理
+            if not output.strip():
+                return "*无输出内容*"
+            
+            # 如果已经是markdown格式，直接返回
+            if output.strip().startswith('#') or '```' in output:
+                return output
+            
+            # 否则包装为代码块
+            return f"```\n{output}\n```"
+        except Exception as e:
+            logger.error("Format output markdown failed: %s", e)
+            return f"```\n{output}\n```"
+
+    def _generate_thought_for_step(self, step: str, output: str) -> Dict[str, str]:
+        """为步骤生成思考过程"""
+        try:
+            # 简化的思考过程生成
+            return {
+                "reasoning": f"需要执行: {step.strip()}",
+                "approach": "使用相应的工具和方法进行分析",
+                "expected_outcome": "获取相关的分析信息",
+                "tool_used": "log_analysis_tool",
+                "summary": f"完成了步骤: {step.strip()[:100]}..."
+            }
+        except Exception as e:
+            logger.error("Generate thought failed: %s", e)
+            return {
+                "reasoning": "执行分析步骤",
+                "approach": "标准分析流程",
+                "expected_outcome": "获取分析结果",
+                "tool_used": "unknown",
+                "summary": "步骤执行完成"
+            }
+
+    def _generate_final_result(self, query: str, content: str, outputs: List[str]) -> Dict[str, Any]:
+        """生成最终的分析结果"""
+        try:
+            # 提取关键信息
+            summary = self._extract_summary(content)
+            recommendations = self._extract_recommendations(content)
+            confidence = self._calculate_confidence(outputs)
+            
+            # 格式化最终内容
+            formatted_content = self._format_final_content(query, content, summary, recommendations)
+            
+            return {
+                "summary": summary,
+                "content": formatted_content,
+                "confidence": confidence,
+                "recommendations": recommendations
+            }
+        except Exception as e:
+            logger.error("Generate final result failed: %s", e)
+            return {
+                "summary": "分析完成，但结果格式化失败",
+                "content": f"# 日志分析结果\n\n{content}",
+                "confidence": 0.5,
+                "recommendations": ["请检查分析结果的详细内容"]
+            }
+
+    def _extract_summary(self, content: str) -> str:
+        """从内容中提取摘要"""
+        try:
+            # 简单的摘要提取逻辑
+            lines = content.split('\n')
+            summary_lines = []
+            
+            for line in lines[:10]:  # 取前10行作为摘要基础
+                if line.strip() and not line.startswith('<'):
+                    summary_lines.append(line.strip())
+                if len(summary_lines) >= 3:
+                    break
+            
+            if summary_lines:
+                return ' '.join(summary_lines)[:200] + "..."
+            else:
+                return "已完成日志分析，请查看详细结果。"
+        except Exception:
+            return "分析完成"
+
+    def _extract_recommendations(self, content: str) -> List[str]:
+        """从内容中提取建议"""
+        try:
+            recommendations = []
+            lines = content.split('\n')
+            
+            for line in lines:
+                line = line.strip()
+                if any(keyword in line.lower() for keyword in ['建议', '推荐', 'recommend', 'suggest']):
+                    if line and len(line) < 200:
+                        recommendations.append(line)
+                if len(recommendations) >= 5:
+                    break
+            
+            if not recommendations:
+                recommendations = ["请根据分析结果采取相应措施", "建议定期检查日志状态"]
+            
+            return recommendations
+        except Exception:
+            return ["请查看详细分析结果"]
+
+    def _calculate_confidence(self, outputs: List[str]) -> float:
+        """计算分析置信度"""
+        try:
+            if not outputs:
+                return 0.0
+            
+            # 简单的置信度计算
+            total_length = sum(len(output) for output in outputs)
+            error_count = sum(1 for output in outputs if 'error' in output.lower() or 'failed' in output.lower())
+            
+            base_confidence = min(0.9, total_length / 1000)  # 基于输出长度
+            error_penalty = error_count * 0.1  # 错误惩罚
+            
+            return max(0.1, base_confidence - error_penalty)
+        except Exception:
+            return 0.5
+
+    def _format_final_content(self, query: str, content: str, summary: str, recommendations: List[str]) -> str:
+        """格式化最终内容为标准markdown"""
+        try:
+            markdown = f"""# 日志分析结果
+
+## 📊 执行摘要
+{summary}
+
+## 🔍 详细分析
+{content}
+
+## 💡 建议措施
+"""
+            for i, rec in enumerate(recommendations, 1):
+                markdown += f"{i}. {rec}\n"
+            
+            from datetime import datetime
+            markdown += f"""
+## 📈 分析信息
+- **查询**: {query}
+- **分析时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+- **状态**: 已完成
+"""
+            return markdown
+        except Exception as e:
+            logger.error("Format final content failed: %s", e)
+            return f"# 日志分析结果\n\n{content}"
+
 
 
 
