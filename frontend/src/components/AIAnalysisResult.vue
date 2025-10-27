@@ -673,7 +673,7 @@ const toggleAct = toggleActOptimized
 </script>
 
 <style scoped>
-@reference;
+@reference "tailwindcss";
 
 /* 主容器样式 */
 .ai-analysis-result {
