@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     
     # Agent配置（日志分析智能体）
     agent_enabled: bool = True
-    agent_root_dir: str = "uploads"  # 允许Agent访问的日志根目录
+    agent_root_dir: str = "."  # 允许Agent访问的日志根目录
     agent_max_snippet_bytes: int = 512 * 1024  # 每次提取的最大字节数
     agent_max_matches: int = 50  # grep最大匹配数
     agent_search_backend: str = "regex"  # 可选：regex | elasticsearch
