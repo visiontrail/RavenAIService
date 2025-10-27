@@ -109,6 +109,17 @@ export const logApi = {
   batchDownloadLogs: (ids: string[]): Promise<ApiResponse<DownloadInfo>> => {
     return api.post('/api/v1/logs/batch/download', { log_ids: ids, compress: true, include_metadata: false })
   },
+
+  // AI分析日志
+  analyzeLog: (id: string, query: string): Promise<ApiResponse<any>> => {
+    const formData = new FormData()
+    formData.append('query', query)
+    return api.post(`/api/v1/logs/${id}/analyze`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
+  },
 }
 
 // 任务相关API

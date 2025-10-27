@@ -395,22 +395,243 @@
           </div>
         </div>
 
-        <!-- AI分析结果区域（预留） -->
+        <!-- AI分析结果区域 -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <div class="flex items-center space-x-2 mb-6">
-            <el-icon class="text-purple-600" size="20">
-              <MagicStick />
-            </el-icon>
-            <h2 class="text-lg font-semibold text-gray-900">AI分析结果</h2>
-            <el-tag type="info" size="small">预留功能</el-tag>
+          <div class="flex items-center justify-between mb-6">
+            <div class="flex items-center space-x-2">
+              <el-icon class="text-purple-600" size="20">
+                <MagicStick />
+              </el-icon>
+              <h2 class="text-lg font-semibold text-gray-900">AI分析</h2>
+              <el-tag v-if="aiAnalysisResult" :type="aiAnalysisResult.status === 'completed' ? 'success' : 'warning'" size="small">
+                {{ aiAnalysisResult.status === 'completed' ? '已完成' : '部分完成' }}
+              </el-tag>
+            </div>
           </div>
           
-          <div class="text-center py-12">
-            <el-icon class="text-gray-300 mb-4" size="48">
-              <MagicStick />
-            </el-icon>
-            <p class="text-gray-500 mb-4">AI分析功能即将上线</p>
-            <p class="text-sm text-gray-400">将为您提供智能日志分析、异常检测和优化建议</p>
+          <!-- AI分析输入区域 -->
+          <div v-if="!aiAnalysisLoading && !aiAnalysisResult" class="space-y-4">
+            <div class="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg p-6 border border-purple-200">
+              <div class="flex items-start space-x-3 mb-4">
+                <el-icon class="text-purple-600 mt-1" size="24">
+                  <MagicStick />
+                </el-icon>
+                <div>
+                  <h3 class="text-base font-semibold text-gray-900 mb-2">智能日志分析</h3>
+                  <p class="text-sm text-gray-600">请输入您想要分析的问题，AI将为您提供详细的分析结果</p>
+                </div>
+              </div>
+              
+              <el-input
+                v-model="aiAnalysisQuery"
+                type="textarea"
+                :rows="3"
+                placeholder="例如：分析所有错误日志、查找天线异常、统计告警信息等..."
+                class="mb-4"
+              />
+              
+              <div class="flex items-center space-x-3">
+                <el-button 
+                  type="primary" 
+                  @click="handleAIAnalysisSubmit"
+                  :disabled="!aiAnalysisQuery.trim()"
+                  size="large"
+                >
+                  <el-icon class="mr-2">
+                    <MagicStick />
+                  </el-icon>
+                  开始分析
+                </el-button>
+                
+                <el-button @click="aiAnalysisQuery = ''" size="large">
+                  清空
+                </el-button>
+              </div>
+            </div>
+            
+            <!-- 示例查询 -->
+            <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
+              <p class="text-sm font-medium text-gray-700 mb-2">示例查询：</p>
+              <div class="flex flex-wrap gap-2">
+                <el-tag 
+                  v-for="example in exampleQueries" 
+                  :key="example" 
+                  class="cursor-pointer hover:bg-purple-100 transition-colors"
+                  @click="aiAnalysisQuery = example"
+                  size="small"
+                >
+                  {{ example }}
+                </el-tag>
+              </div>
+            </div>
+          </div>
+          
+          <!-- AI分析加载中 -->
+          <div v-if="aiAnalysisLoading" class="space-y-4">
+            <div class="flex items-center justify-center py-8">
+              <el-icon class="is-loading text-purple-600 mr-3" size="32">
+                <Loading />
+              </el-icon>
+              <span class="text-lg text-gray-700">AI正在分析日志，请稍候...</span>
+            </div>
+            <el-progress :percentage="aiAnalysisProgress" :stroke-width="8" />
+          </div>
+          
+          <!-- AI分析结果 -->
+          <div v-if="aiAnalysisResult" class="space-y-6">
+            <!-- 查询信息 -->
+            <div class="bg-blue-50 rounded-lg p-4 border border-blue-200">
+              <div class="flex items-center space-x-2 mb-2">
+                <el-icon class="text-blue-600">
+                  <Document />
+                </el-icon>
+                <span class="text-sm font-medium text-gray-700">分析查询</span>
+              </div>
+              <p class="text-sm text-gray-900">{{ aiAnalysisResult.query }}</p>
+            </div>
+            
+            <!-- 规划流程（CheckList） -->
+            <div class="bg-white rounded-lg border border-gray-200 p-4">
+              <div class="flex items-center space-x-2 mb-4">
+                <el-icon class="text-green-600" size="18">
+                  <List />
+                </el-icon>
+                <h3 class="text-base font-semibold text-gray-900">执行计划</h3>
+                <el-tag size="small" type="info">
+                  {{ aiAnalysisResult.plan.completed_count }}/{{ aiAnalysisResult.plan.total_steps }}
+                </el-tag>
+              </div>
+              
+              <div class="space-y-2">
+                <div 
+                  v-for="(step, index) in aiAnalysisResult.plan.steps" 
+                  :key="index"
+                  class="flex items-start space-x-3 p-3 rounded-lg transition-colors"
+                  :class="aiAnalysisResult.plan.completed_steps.includes(step) ? 'bg-green-50' : 'bg-gray-50'"
+                >
+                  <el-icon 
+                    :class="aiAnalysisResult.plan.completed_steps.includes(step) ? 'text-green-600' : 'text-gray-400'"
+                    size="20"
+                  >
+                    <component :is="aiAnalysisResult.plan.completed_steps.includes(step) ? 'CircleCheck' : 'Clock'" />
+                  </el-icon>
+                  <div class="flex-1">
+                    <span 
+                      class="text-sm"
+                      :class="aiAnalysisResult.plan.completed_steps.includes(step) ? 'text-gray-900 font-medium' : 'text-gray-600'"
+                    >
+                      {{ step }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- 思考过程（可折叠） -->
+            <div class="bg-white rounded-lg border border-gray-200 p-4">
+              <div 
+                class="flex items-center justify-between cursor-pointer"
+                @click="showReasoningProcess = !showReasoningProcess"
+              >
+                <div class="flex items-center space-x-2">
+                  <el-icon class="text-orange-600" size="18">
+                    <Document />
+                  </el-icon>
+                  <h3 class="text-base font-semibold text-gray-900">思考过程</h3>
+                  <el-tag size="small" type="warning">详细信息</el-tag>
+                </div>
+                <el-icon :class="{ 'rotate-180': showReasoningProcess }" class="transition-transform text-gray-500">
+                  <ArrowDown />
+                </el-icon>
+              </div>
+              
+              <el-collapse-transition>
+                <div v-show="showReasoningProcess" class="mt-4 space-y-4">
+                  <div 
+                    v-for="(reasoning, index) in aiAnalysisResult.reasoning" 
+                    :key="index"
+                    class="border border-gray-200 rounded-lg p-4 bg-gray-50"
+                  >
+                    <div class="flex items-center space-x-2 mb-3">
+                      <el-tag size="small" type="info">步骤 {{ reasoning.step_number }}</el-tag>
+                      <span class="text-xs font-medium text-gray-700">{{ reasoning.step_description }}</span>
+                    </div>
+                    
+                    <!-- 思考内容（小字号） -->
+                    <div class="bg-yellow-50 border border-yellow-200 rounded p-3 mb-3">
+                      <p class="text-xs font-medium text-gray-600 mb-1">💭 思考：</p>
+                      <div class="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">
+                        {{ extractThoughtText(reasoning.thought) }}
+                      </div>
+                    </div>
+                    
+                    <!-- 输出内容（小字号，可选显示） -->
+                    <div v-if="reasoning.output && showDetailedOutput" class="bg-gray-100 border border-gray-300 rounded p-3">
+                      <p class="text-xs font-medium text-gray-600 mb-1">📄 原始输出：</p>
+                      <pre class="text-xs text-gray-700 whitespace-pre-wrap break-words">{{ reasoning.output.substring(0, 500) }}{{ reasoning.output.length > 500 ? '...' : '' }}</pre>
+                    </div>
+                    
+                    <!-- 错误信息 -->
+                    <div v-if="reasoning.error" class="bg-red-50 border border-red-200 rounded p-3 mt-2">
+                      <p class="text-xs font-medium text-red-600 mb-1">❌ 错误：</p>
+                      <p class="text-xs text-red-700">{{ reasoning.error }}</p>
+                    </div>
+                  </div>
+                  
+                  <!-- 切换详细输出 -->
+                  <div class="flex justify-center">
+                    <el-button 
+                      size="small" 
+                      text 
+                      @click="showDetailedOutput = !showDetailedOutput"
+                    >
+                      {{ showDetailedOutput ? '隐藏' : '显示' }}原始输出
+                    </el-button>
+                  </div>
+                </div>
+              </el-collapse-transition>
+            </div>
+            
+            <!-- 最终结果 -->
+            <div class="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg border border-purple-200 p-6">
+              <div class="flex items-center space-x-2 mb-4">
+                <el-icon class="text-purple-600" size="20">
+                  <Document />
+                </el-icon>
+                <h3 class="text-lg font-semibold text-gray-900">分析结果</h3>
+              </div>
+              
+              <!-- 摘要 -->
+              <div class="bg-white rounded-lg p-4 mb-4 border border-purple-200">
+                <p class="text-sm font-medium text-gray-700 mb-2">📊 摘要</p>
+                <p class="text-base text-gray-900">{{ aiAnalysisResult.summary }}</p>
+              </div>
+              
+              <!-- 详细结果 -->
+              <div class="bg-white rounded-lg p-4 border border-purple-200">
+                <p class="text-sm font-medium text-gray-700 mb-3">📝 详细分析</p>
+                <div class="prose prose-sm max-w-none">
+                  <div v-html="formatAnalysisResult(aiAnalysisResult.result)" class="text-sm text-gray-800 leading-relaxed"></div>
+                </div>
+              </div>
+            </div>
+            
+            <!-- 操作按钮 -->
+            <div class="flex justify-center space-x-3">
+              <el-button type="primary" @click="resetAIAnalysis">
+                <el-icon class="mr-2">
+                  <Refresh />
+                </el-icon>
+                重新分析
+              </el-button>
+              
+              <el-button @click="copyAnalysisResult">
+                <el-icon class="mr-2">
+                  <CopyDocument />
+                </el-icon>
+                复制结果
+              </el-button>
+            </div>
           </div>
         </div>
 
@@ -423,7 +644,7 @@
             <h2 class="text-lg font-semibold text-gray-900">操作</h2>
           </div>
           
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <!-- 下载按钮 -->
             <el-button 
               type="primary" 
@@ -473,20 +694,6 @@
               </el-icon>
               复制链接
             </el-button>
-
-            <!-- AI分析按钮 -->
-            <el-button 
-              type="warning" 
-              @click="handleAIAnalysis"
-              disabled
-              class="w-full"
-            >
-              <el-icon class="mr-2">
-                <MagicStick />
-              </el-icon>
-              AI分析
-              <el-tag type="info" size="small" class="ml-2">敬请期待</el-tag>
-            </el-button>
           </div>
         </div>
       </div>
@@ -513,11 +720,9 @@ import { onMounted, ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useLogStore } from '../stores/logs'
-import { useAppStore } from '../stores/app'
 import { 
   formatFileSize, 
-  formatDateTime, 
-  formatRelativeTime,
+  formatDateTime,
   downloadFile 
 } from '../utils'
 import { logApi } from '../api'
@@ -527,7 +732,6 @@ import {
   Download,
   Delete,
   Operation,
-  Clock,
   List,
   InfoFilled,
   MagicStick,
@@ -538,6 +742,8 @@ import {
   Setting,
   Connection,
   Grid,
+  ArrowDown,
+  Refresh,
 } from '@element-plus/icons-vue'
 
 interface Props {
@@ -548,12 +754,28 @@ const props = defineProps<Props>()
 const route = useRoute()
 const router = useRouter()
 const logStore = useLogStore()
-const appStore = useAppStore()
 
 // 响应式变量
 const downloadLoading = ref(false)
 const deleteLoading = ref(false)
 const activeVersionCollapse = ref(['version-details'])
+
+// AI分析相关状态
+const aiAnalysisQuery = ref('')
+const aiAnalysisLoading = ref(false)
+const aiAnalysisProgress = ref(0)
+const aiAnalysisResult = ref<any>(null)
+const showReasoningProcess = ref(false)
+const showDetailedOutput = ref(false)
+
+// 示例查询
+const exampleQueries = [
+  '分析所有错误日志',
+  '查找天线异常',
+  '统计告警信息',
+  '分析系统性能问题',
+  '查找连接失败原因'
+]
 
 // 计算属性
 const pageTitle = computed(() => {
@@ -623,40 +845,6 @@ const getStatusLabel = (status: string) => {
   }
 }
 
-// 获取日志级别标签类型
-const getLogLevelTagType = (logLevel?: string) => {
-  switch (logLevel) {
-    case 'fatal':
-    case 'error':
-      return 'danger'
-    case 'warn':
-      return 'warning'
-    case 'info':
-      return 'primary'
-    case 'debug':
-      return 'info'
-    default:
-      return 'info'
-  }
-}
-
-// 获取日志级别标签文本
-const getLogLevelLabel = (logLevel?: string) => {
-  switch (logLevel) {
-    case 'fatal':
-      return '致命错误'
-    case 'error':
-      return '错误'
-    case 'warn':
-      return '警告'
-    case 'info':
-      return '信息'
-    case 'debug':
-      return '调试'
-    default:
-      return '未知级别'
-  }
-}
 
 // 检查是否有元数据内容
 const hasMetadata = (metadata: any) => {
@@ -840,8 +1028,8 @@ const handleShare = async () => {
       // 降级到复制链接
       await handleCopyLink()
     }
-  } catch (error) {
-    if (error.name !== 'AbortError') {
+  } catch (error: any) {
+    if (error?.name !== 'AbortError') {
       ElMessage.error('分享失败，请稍后重试')
     }
   }
@@ -868,9 +1056,138 @@ const handleCopyLink = async () => {
   }
 }
 
-// AI分析（预留功能）
-const handleAIAnalysis = () => {
-  ElMessage.info('AI分析功能即将上线，敬请期待！')
+// AI分析提交
+const handleAIAnalysisSubmit = async () => {
+  if (!logStore.currentLog || !aiAnalysisQuery.value.trim()) return
+
+  try {
+    aiAnalysisLoading.value = true
+    aiAnalysisProgress.value = 0
+    
+    // 模拟进度更新
+    const progressInterval = setInterval(() => {
+      if (aiAnalysisProgress.value < 90) {
+        aiAnalysisProgress.value += 10
+      }
+    }, 1000)
+    
+    // 调用AI分析API
+    const response = await logApi.analyzeLog(logStore.currentLog.id, aiAnalysisQuery.value)
+    
+    clearInterval(progressInterval)
+    aiAnalysisProgress.value = 100
+    
+    if (response.success) {
+      aiAnalysisResult.value = response.data
+      ElMessage.success('AI分析完成')
+    } else {
+      throw new Error(response.message || 'AI分析失败')
+    }
+  } catch (error: any) {
+    console.error('AI分析失败:', error)
+    ElMessage.error(error.response?.data?.detail || error.message || 'AI分析失败，请稍后重试')
+  } finally {
+    aiAnalysisLoading.value = false
+  }
+}
+
+// 重置AI分析
+const resetAIAnalysis = () => {
+  aiAnalysisResult.value = null
+  aiAnalysisQuery.value = ''
+  showReasoningProcess.value = false
+  showDetailedOutput.value = false
+}
+
+// 复制分析结果
+const copyAnalysisResult = async () => {
+  if (!aiAnalysisResult.value) return
+  
+  try {
+    const resultText = `
+查询: ${aiAnalysisResult.value.query}
+
+摘要: ${aiAnalysisResult.value.summary}
+
+详细结果:
+${extractTextFromXML(aiAnalysisResult.value.result)}
+    `.trim()
+    
+    await navigator.clipboard.writeText(resultText)
+    ElMessage.success('分析结果已复制到剪贴板')
+  } catch (error) {
+    console.error('复制失败:', error)
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+// 提取思考内容文本
+const extractThoughtText = (thought: string): string => {
+  if (!thought) return '无思考内容'
+  
+  // 尝试从XML中提取文本内容
+  try {
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(thought, 'text/xml')
+    const textContent = doc.documentElement.textContent || thought
+    return textContent.trim()
+  } catch {
+    return thought
+  }
+}
+
+// 从XML提取纯文本
+const extractTextFromXML = (xml: string): string => {
+  if (!xml) return ''
+  
+  try {
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(xml, 'text/xml')
+    return doc.documentElement.textContent || xml
+  } catch {
+    return xml
+  }
+}
+
+// 格式化分析结果（将XML转换为HTML显示）
+const formatAnalysisResult = (result: string): string => {
+  if (!result) return '<p class="text-gray-500">无分析结果</p>'
+  
+  try {
+    // 简单的XML到HTML转换，保留基本结构
+    let html = result
+    
+    // 转换常见XML标签
+    html = html.replace(/<document[^>]*>/g, '<div class="document">')
+    html = html.replace(/<\/document>/g, '</div>')
+    
+    html = html.replace(/<grep_result[^>]*>/g, '<div class="grep-result bg-gray-50 p-3 rounded border border-gray-200 my-2">')
+    html = html.replace(/<\/grep_result>/g, '</div>')
+    
+    html = html.replace(/<match[^>]*>/g, '<div class="match bg-yellow-50 p-2 rounded my-1">')
+    html = html.replace(/<\/match>/g, '</div>')
+    
+    html = html.replace(/<context[^>]*>/g, '<pre class="context text-xs text-gray-600">')
+    html = html.replace(/<\/context>/g, '</pre>')
+    
+    html = html.replace(/<summary[^>]*>/g, '<div class="summary font-semibold text-purple-700 my-2">')
+    html = html.replace(/<\/summary>/g, '</div>')
+    
+    html = html.replace(/<error[^>]*>/g, '<div class="error text-red-600 font-semibold">')
+    html = html.replace(/<\/error>/g, '</div>')
+    
+    // 高亮ERROR和WARN
+    html = html.replace(/\bERROR\b/g, '<span class="text-red-600 font-bold">ERROR</span>')
+    html = html.replace(/\bWARN(ING)?\b/g, '<span class="text-yellow-600 font-bold">WARN$1</span>')
+    
+    // 换行处理
+    html = html.replace(/\n/g, '<br/>')
+    
+    return html
+  } catch (error) {
+    console.error('格式化分析结果失败:', error)
+    return `<pre class="whitespace-pre-wrap text-sm">${result}</pre>`
+  }
 }
 
 // SEO优化和页面标题设置

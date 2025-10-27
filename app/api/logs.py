@@ -1179,3 +1179,187 @@ async def download_batch_file(
     except Exception as e:
         logger.error(f"Batch download file error: {str(e)}")
         raise LogServiceException(f"下载批量文件失败: {str(e)}")
+
+
+@router.post("/{log_id}/analyze")
+async def analyze_log(
+    log_id: str = Path(..., description="日志文件ID"),
+    query: str = Form(..., description="分析查询内容"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    AI分析日志文件
+    
+    使用LangChain/LangGraph Agent分析日志，提供：
+    - 规划流程（Planning Steps）
+    - 思考过程（Reasoning Process）
+    - 最终结果（Final Analysis Result）
+    
+    - **log_id**: 要分析的日志文件ID
+    - **query**: 分析查询内容（例如："分析错误原因"、"查找天线异常"等）
+    
+    返回数据格式：
+    ```json
+    {
+        "success": true,
+        "message": "AI分析完成",
+        "data": {
+            "log_id": "uuid",
+            "query": "用户查询",
+            "plan": {
+                "steps": ["步骤1", "步骤2", ...],
+                "completed_steps": ["步骤1"]
+            },
+            "reasoning": [
+                {"step": "步骤1", "thought": "思考内容", "output": "输出内容"},
+                ...
+            ],
+            "result": "最终分析结果（XML格式）",
+            "summary": "结果摘要"
+        }
+    }
+    ```
+    """
+    
+    try:
+        # 验证日志ID格式
+        request_validator.validate_log_id(log_id)
+        
+        # 获取日志详情
+        log_info = await log_service.get_log_detail(db, log_id)
+        
+        # 检查日志是否被软删除
+        if hasattr(log_info, 'is_deleted') and log_info.is_deleted:
+            raise FileNotFoundError(file_id=log_id)
+        
+        # 获取文件路径
+        file_path = await log_service.get_download_path(db, log_id)
+        
+        logger.info(f"AI analysis started for log {log_id}: query='{query}'")
+        
+        # 导入并运行 log_agent
+        try:
+            from app.agents.log_agent import LogAnalysisAgent
+            import xml.etree.ElementTree as ET
+            
+            # 创建 Agent 实例
+            agent = LogAnalysisAgent()
+            
+            # 准备 hints（提供日志文件路径）
+            hints = {
+                "archive_path": file_path,
+                "path": file_path,
+                "log_id": log_id,
+                "filename": log_info.original_filename or log_info.filename
+            }
+            
+            # 执行分析 - 先生成计划
+            plan_xml = agent.plan(query)
+            
+            # 解析计划步骤
+            steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
+            steps = [s.strip() for s in steps]
+            
+            # 存储中间结果
+            reasoning_process = []
+            completed_steps = []
+            
+            # 执行每个步骤并收集思考过程
+            for idx, step in enumerate(steps):
+                logger.info(f"AI analysis step {idx+1}/{len(steps)}: {step}")
+                
+                try:
+                    # 执行步骤
+                    step_output = agent._execute_step(step, query, hints=hints)
+                    
+                    # 生成步骤思考（摘要）
+                    step_thought = ""
+                    try:
+                        from app.agents.log_agent import compress_outputs
+                        step_thought = compress_outputs([step_output])
+                    except Exception:
+                        step_thought = f"步骤 {idx+1} 执行完成"
+                    
+                    # 记录步骤结果
+                    reasoning_process.append({
+                        "step_number": idx + 1,
+                        "step_description": step,
+                        "thought": step_thought,
+                        "output": step_output
+                    })
+                    
+                    completed_steps.append(step)
+                    logger.info(f"AI analysis step {idx+1} completed")
+                    
+                except Exception as step_error:
+                    logger.warning(f"AI analysis step {idx+1} failed: {step_error}")
+                    reasoning_process.append({
+                        "step_number": idx + 1,
+                        "step_description": step,
+                        "thought": f"步骤执行失败: {str(step_error)}",
+                        "output": "",
+                        "error": str(step_error)
+                    })
+            
+            # 运行完整分析获取最终结果
+            try:
+                final_result_xml = agent.run(query, hints=hints)
+            except Exception as run_error:
+                logger.warning(f"Full agent run failed, using partial results: {run_error}")
+                final_result_xml = f"<document><partial_result>{''.join([r.get('output', '') for r in reasoning_process])}</partial_result></document>"
+            
+            # 生成结果摘要
+            summary = f"完成分析，执行了 {len(completed_steps)}/{len(steps)} 个步骤"
+            
+            # 构建响应数据
+            analysis_data = {
+                "log_id": log_id,
+                "query": query,
+                "plan": {
+                    "steps": steps,
+                    "completed_steps": completed_steps,
+                    "total_steps": len(steps),
+                    "completed_count": len(completed_steps)
+                },
+                "reasoning": reasoning_process,
+                "result": final_result_xml,
+                "summary": summary,
+                "status": "completed" if len(completed_steps) == len(steps) else "partial"
+            }
+            
+            logger.info(f"AI analysis completed for log {log_id}: {len(completed_steps)}/{len(steps)} steps")
+            
+            return {
+                "success": True,
+                "message": "AI分析完成",
+                "data": analysis_data
+            }
+            
+        except ImportError as e:
+            logger.error(f"AI analysis failed: log_agent module not available: {e}")
+            raise LogServiceException(
+                message="AI分析模块不可用",
+                error_code="AI_MODULE_ERROR",
+                detail=str(e)
+            )
+        except Exception as e:
+            logger.error(f"AI analysis failed: {e}")
+            raise LogServiceException(
+                message="AI分析执行失败",
+                error_code="AI_ANALYSIS_ERROR",
+                detail=str(e)
+            )
+            
+    except ValidationError as e:
+        logger.warning(f"Invalid log ID format for AI analysis: {log_id}")
+        raise e
+    except FileNotFoundError as e:
+        logger.warning(f"File not found for AI analysis: {log_id}")
+        raise e
+    except Exception as e:
+        logger.error(f"Error during AI analysis {log_id}: {str(e)}")
+        raise LogServiceException(
+            message="AI分析失败",
+            error_code="AI_ANALYSIS_ERROR",
+            detail=str(e)
+        )
