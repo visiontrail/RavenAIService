@@ -673,6 +673,9 @@ const toggleAct = toggleActOptimized
 </script>
 
 <style scoped>
+@reference;
+
+/* 主容器样式 */
 .ai-analysis-result {
   @apply max-w-none mx-auto bg-white rounded-2xl shadow-sm border border-gray-100;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
