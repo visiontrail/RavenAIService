@@ -371,18 +371,115 @@ const formatDuration = (seconds: number) => {
 const formatMarkdown = (content: string) => {
   if (!content) return ''
   
-  // 简单的markdown转HTML处理
-  return content
-    .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-    .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-    .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>')
-    .replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>')
-    .replace(/`(.*?)`/g, '<code>$1</code>')
-    .replace(/^\- (.*$)/gim, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
-    .replace(/\n/g, '<br>')
+  // 预处理：移除残留的XML标签
+  let processed = content
+    .replace(/<context_summary>.*?<\/context_summary>/gs, '')
+    .replace(/<document[^>]*>/g, '')
+    .replace(/<\/document>/g, '')
+    .replace(/<[^>]+type="[^"]*"[^>]*>/g, '')
+    .trim()
+  
+  // 处理表格（Markdown表格格式）
+  const lines = processed.split('\n')
+  let inTable = false
+  let tableHtml = ''
+  const outputLines: string[] = []
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+    
+    // 检测表格行（包含 | 分隔符）
+    if (line.includes('|') && line.split('|').length > 2) {
+      if (!inTable) {
+        inTable = true
+        tableHtml = '<table class="markdown-table"><tbody>'
+      }
+      
+      // 跳过分隔行（如 |---|---|）
+      if (/^\|[\s\-:]+\|/.test(line)) {
+        continue
+      }
+      
+      // 解析表格行
+      const cells = line.split('|').map(cell => cell.trim()).filter(cell => cell)
+      const isHeader = i === 0 || (i > 0 && !inTable)
+      
+      if (isHeader && cells.length > 0 && cells[0].includes('项目')) {
+        tableHtml += '<tr class="table-header">'
+        cells.forEach(cell => {
+          tableHtml += `<th>${escapeHtml(cell)}</th>`
+        })
+        tableHtml += '</tr>'
+      } else {
+        tableHtml += '<tr>'
+        cells.forEach(cell => {
+          tableHtml += `<td>${escapeHtml(cell)}</td>`
+        })
+        tableHtml += '</tr>'
+      }
+    } else {
+      // 如果之前在表格中，现在退出
+      if (inTable) {
+        tableHtml += '</tbody></table>'
+        outputLines.push(tableHtml)
+        tableHtml = ''
+        inTable = false
+      }
+      outputLines.push(line)
+    }
+  }
+  
+  // 如果最后还在表格中
+  if (inTable && tableHtml) {
+    tableHtml += '</tbody></table>'
+    outputLines.push(tableHtml)
+  }
+  
+  // 合并处理后的行
+  processed = outputLines.join('\n')
+  
+  // 转换Markdown语法为HTML
+  processed = processed
+    // 标题
+    .replace(/^#### (.*$)/gim, '<h4 class="text-base font-semibold text-gray-900 mt-4 mb-2">$1</h4>')
+    .replace(/^### (.*$)/gim, '<h3 class="text-lg font-semibold text-gray-900 mt-6 mb-3">$1</h3>')
+    .replace(/^## (.*$)/gim, '<h2 class="text-xl font-bold text-gray-900 mt-8 mb-4">$1</h2>')
+    .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-bold text-gray-900 mt-10 mb-5">$1</h1>')
+    // 代码块
+    .replace(/```([\s\S]*?)```/g, '<pre class="bg-gray-100 rounded p-3 my-2 overflow-x-auto"><code>$1</code></pre>')
+    // 行内代码
+    .replace(/`([^`]+)`/g, '<code class="bg-gray-100 text-red-600 px-1 rounded text-sm">$1</code>')
+    // 粗体
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-gray-900">$1</strong>')
+    // 斜体
+    .replace(/\*([^*]+)\*/g, '<em class="italic text-gray-700">$1</em>')
+    // 无序列表（需要分组处理）
+    .replace(/^[\-\*] (.+)$/gim, '<li class="ml-4">$1</li>')
+  
+  // 将连续的<li>包裹在<ul>中
+  processed = processed.replace(/(<li[^>]*>.*?<\/li>\s*)+/gs, (match) => {
+    return `<ul class="list-disc list-inside space-y-1 my-3">${match}</ul>`
+  })
+  
+  // 段落：将非HTML标签的连续文本行包裹为段落
+  const paragraphs = processed.split('\n\n')
+  processed = paragraphs.map(para => {
+    para = para.trim()
+    if (!para) return ''
+    // 如果已经是HTML标签，不需要包裹
+    if (para.startsWith('<')) return para
+    // 否则包裹为段落
+    return `<p class="my-2 text-gray-700 leading-relaxed">${para.replace(/\n/g, '<br>')}</p>`
+  }).join('\n')
+  
+  return processed
+}
+
+// HTML转义辅助函数
+const escapeHtml = (text: string) => {
+  const div = document.createElement('div')
+  div.textContent = text
+  return div.innerHTML
 }
 
 const copyResult = async () => {
@@ -1675,6 +1772,28 @@ const toggleAct = toggleActOptimized
   .pulse-ring {
     animation-duration: 2.5s;
   }
+}
+
+/* Markdown表格样式 */
+.markdown-table {
+  @apply w-full border-collapse my-4;
+  border: 1px solid #e5e7eb;
+}
+
+.markdown-table th {
+  @apply bg-blue-50 font-semibold text-gray-900 px-4 py-2 text-left border border-gray-300;
+}
+
+.markdown-table td {
+  @apply px-4 py-2 border border-gray-300 text-gray-700;
+}
+
+.markdown-table tr:nth-child(even) {
+  @apply bg-gray-50;
+}
+
+.markdown-table tr:hover {
+  @apply bg-blue-50 transition-colors duration-150;
 }
 
 /* 打印样式 */

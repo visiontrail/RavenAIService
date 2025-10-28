@@ -1486,13 +1486,29 @@ class LogAnalysisAgent:
             clean_content = re.sub(r'<context_summary>.*?</context_summary>', '', content, flags=re.DOTALL)
             
             # 移除其他XML标签但保留内容
-            clean_content = re.sub(r'<document[^>]*>|</document>', '', clean_content)
-            clean_content = re.sub(r'<[^>]+type="[^"]*"[^>]*>|</[^>]+>', '', clean_content)
+            clean_content = re.sub(r'<document[^>]*>', '', clean_content)
+            clean_content = re.sub(r'</document>', '', clean_content)
+            clean_content = re.sub(r'<reads>', '', clean_content)
+            clean_content = re.sub(r'</reads>', '', clean_content)
             
-            # 移除多余的空行
+            # 更精确地处理带type属性的标签，保留内容
+            clean_content = re.sub(r'<[^>]+\s+type="[^"]*"[^>]*>', '', clean_content)
+            clean_content = re.sub(r'</[^>]+>', '', clean_content)
+            
+            # 移除XML属性行（如 tool="xxx"）
+            clean_content = re.sub(r'^\s*\w+="[^"]*"\s*$', '', clean_content, flags=re.MULTILINE)
+            
+            # 移除多余的空行（超过2个连续换行）
             clean_content = re.sub(r'\n{3,}', '\n\n', clean_content)
             
-            return clean_content.strip()
+            # 清理首尾空白
+            clean_content = clean_content.strip()
+            
+            # 如果内容为空或过短，返回基本信息
+            if not clean_content or len(clean_content) < 10:
+                clean_content = f"根据查询 **{query}** 的分析结果如上所示。\n\n详细信息已在摘要和建议中提供。"
+            
+            return clean_content
         except Exception as e:
             logger.error("Format final content failed: %s", e)
             return content
