@@ -304,12 +304,14 @@ def compress_outputs(outputs: List[str]) -> str:
         logger.info("\n\n--- START LLM PROMPT [summary] ---\n%s\n--- END LLM PROMPT [summary] ---\n", prompt_to_log)
         if hasattr(llm, "predict"):
             summary_xml = llm.predict(prompt)
-            logger.info("\n\n--- START LLM OUTPUT [summary] ---\n%s\n--- END LLM OUTPUT [summary] ---\n", summary_xml)
+            logger.info("\n\n--- START LLM OUTPUT [summary] ---\ncontent='%s'\n--- END LLM OUTPUT [summary] ---\n", summary_xml)
             return f"<context_summary>{summary_xml}</context_summary>"
         else:
             res = llm.invoke(prompt)
-            logger.info("\n\n--- START LLM OUTPUT [summary] ---\n%s\n--- END LLM OUTPUT [summary] ---\n", str(res))
-            return wrap_document(str(res), {"type": "summary"})
+            # Extract content from LangChain response object
+            content = res.content if hasattr(res, "content") else str(res)
+            logger.info("\n\n--- START LLM OUTPUT [summary] ---\ncontent='%s'\n--- END LLM OUTPUT [summary] ---\n", content)
+            return wrap_document(content, {"type": "summary"})
     except Exception:
         return wrap_document("摘要不可用（降级为提取片段）", {"type": "summary"})
 
@@ -772,7 +774,7 @@ class LogAnalysisAgent:
         except Exception as e:
             logger.warning("Plan LLM failed, using fallback: %s", e)
             plan_xml = wrap_plan(["读取日志片段", "在相关文件中执行grep搜索"])
-        logger.info("\n\n--- START LLM OUTPUT [plan] ---\n%s\n--- END LLM OUTPUT [plan] ---\n", plan_xml)
+        logger.info("\n\n--- START LLM OUTPUT [plan] ---\ncontent='%s'\n--- END LLM OUTPUT [plan] ---\n", plan_xml)
         # Normalize: ensure XML structure
         steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
         if not steps:
@@ -935,7 +937,7 @@ class LogAnalysisAgent:
                 else:
                     raw = str(response)
             # 记录手动选择返回内容
-            logger.info("\n\n--- START LLM OUTPUT [tool_select] ---\n%s\n--- END LLM OUTPUT [tool_select] ---\n", raw)
+            logger.info("\n\n--- START LLM OUTPUT [tool_select] ---\ncontent='%s'\n--- END LLM OUTPUT [tool_select] ---\n", raw)
             cand = _extract_json_candidate(raw)
             if not cand:
                 raise ValueError("LLM未返回可解析的JSON")
@@ -1400,23 +1402,40 @@ class LogAnalysisAgent:
             }
 
     def _extract_summary(self, content: str) -> str:
-        """从内容中提取摘要"""
+        """从内容中提取摘要 - 提取LLM生成的summary内容"""
         try:
-            # 简单的摘要提取逻辑
+            # 首先尝试从<context_summary>标签中提取
+            summary_match = re.search(r'<context_summary>(.*?)</context_summary>', content, flags=re.DOTALL)
+            if summary_match:
+                summary_text = summary_match.group(1).strip()
+                # 移除XML标签
+                summary_text = re.sub(r'<[^>]+>', '', summary_text)
+                if summary_text:
+                    # 截取合理长度作为摘要
+                    return summary_text[:300] + ("..." if len(summary_text) > 300 else "")
+            
+            # 如果没有找到summary标签，使用原有逻辑
             lines = content.split('\n')
             summary_lines = []
             
             for line in lines[:10]:  # 取前10行作为摘要基础
-                if line.strip() and not line.startswith('<'):
-                    summary_lines.append(line.strip())
+                line = line.strip()
+                # 跳过XML标签行和空行
+                if line and not line.startswith('<') and not line.endswith('>'):
+                    # 移除行内XML标签
+                    clean_line = re.sub(r'<[^>]+>', '', line)
+                    if clean_line:
+                        summary_lines.append(clean_line)
                 if len(summary_lines) >= 3:
                     break
             
             if summary_lines:
-                return ' '.join(summary_lines)[:200] + "..."
+                summary = ' '.join(summary_lines)[:300]
+                return summary + ("..." if len(summary) >= 300 else "")
             else:
                 return "已完成日志分析，请查看详细结果。"
-        except Exception:
+        except Exception as e:
+            logger.warning("Extract summary failed: %s", e)
             return "分析完成"
 
     def _extract_recommendations(self, content: str) -> List[str]:
@@ -1458,32 +1477,25 @@ class LogAnalysisAgent:
             return 0.5
 
     def _format_final_content(self, query: str, content: str, summary: str, recommendations: List[str]) -> str:
-        """格式化最终内容为标准markdown"""
+        """格式化最终内容为标准markdown - 仅返回主要发现内容，不包含标题和结构（前端已提供）"""
         try:
-            markdown = f"""# 日志分析结果
-
-## 📊 执行摘要
-{summary}
-
-## 🔍 详细分析
-{content}
-
-## 💡 建议措施
-"""
-            for i, rec in enumerate(recommendations, 1):
-                markdown += f"{i}. {rec}\n"
+            # 前端已经有独立的section显示summary和recommendations
+            # 这里只返回详细分析内容，移除XML标签和元数据
             
-            from datetime import datetime
-            markdown += f"""
-## 📈 分析信息
-- **查询**: {query}
-- **分析时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-- **状态**: 已完成
-"""
-            return markdown
+            # 移除<context_summary>标签及其内容（已在summary字段单独显示）
+            clean_content = re.sub(r'<context_summary>.*?</context_summary>', '', content, flags=re.DOTALL)
+            
+            # 移除其他XML标签但保留内容
+            clean_content = re.sub(r'<document[^>]*>|</document>', '', clean_content)
+            clean_content = re.sub(r'<[^>]+type="[^"]*"[^>]*>|</[^>]+>', '', clean_content)
+            
+            # 移除多余的空行
+            clean_content = re.sub(r'\n{3,}', '\n\n', clean_content)
+            
+            return clean_content.strip()
         except Exception as e:
             logger.error("Format final content failed: %s", e)
-            return f"# 日志分析结果\n\n{content}"
+            return content
 
 
 
@@ -1634,7 +1646,7 @@ class LogAnalysisAgentDuplicate:
         except Exception as e:
             logger.warning("Plan LLM failed, using fallback: %s", e)
             plan_xml = wrap_plan(["读取日志片段", "在相关文件中执行grep搜索"])
-        logger.info("\n\n--- START LLM OUTPUT [plan] ---\n%s\n--- END LLM OUTPUT [plan] ---\n", plan_xml)
+        logger.info("\n\n--- START LLM OUTPUT [plan] ---\ncontent='%s'\n--- END LLM OUTPUT [plan] ---\n", plan_xml)
         # Normalize: ensure XML structure
         steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
         if not steps:
