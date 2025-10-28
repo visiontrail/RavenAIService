@@ -375,14 +375,31 @@ const formatMarkdown = (content: string) => {
     return ''
   }
   
-  // 预处理：移除残留的XML标签
+  // 预处理：移除残留的XML标签和log_agent相关的元数据标签
   let processed = content
-    .replace(/<context_summary>.*?<\/context_summary>/gs, '')
+    // 移除document标签及其属性
+    .replace(/<document[^>]*>.*?<\/document>/gs, '')
     .replace(/<document[^>]*>/g, '')
     .replace(/<\/document>/g, '')
-    .replace(/<[^>]+type="[^"]*"[^>]*>/g, '')
-    .replace(/<reads>/g, '')
+    // 移除meta标签及其内容
+    .replace(/<meta[^>]*>.*?<\/meta>/gs, '')
+    .replace(/<meta[^>]*>/g, '')
+    .replace(/<\/meta>/g, '')
+    // 移除type标签及其内容
+    .replace(/<type[^>]*>.*?<\/type>/gs, '')
+    .replace(/<type[^>]*>/g, '')
+    .replace(/<\/type>/g, '')
+    // 移除其他XML标签
+    .replace(/<context_summary>.*?<\/context_summary>/gs, '')
+    .replace(/<reads[^>]*>.*?<\/reads>/gs, '')
+    .replace(/<reads[^>]*>/g, '')
     .replace(/<\/reads>/g, '')
+    .replace(/<source[^>]*>.*?<\/source>/gs, '')
+    // 移除孤立的XML标签
+    .replace(/<[^>]+type="[^"]*"[^>]*>/g, '')
+    .replace(/<[^>]+source="[^"]*"[^>]*>/g, '')
+    // 清理多余的空行
+    .replace(/\n{3,}/g, '\n\n')
     .trim()
   
   // 如果处理后为空，返回提示信息

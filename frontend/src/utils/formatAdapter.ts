@@ -468,6 +468,28 @@ export class FormatAdapter {
    */
   private preprocessContent(content: string): string {
     return content
+      // 移除log_agent相关的XML标签
+      .replace(/<document[^>]*>.*?<\/document>/gs, '')
+      .replace(/<document[^>]*>/g, '')
+      .replace(/<\/document>/g, '')
+      .replace(/<meta[^>]*>.*?<\/meta>/gs, '')
+      .replace(/<meta[^>]*>/g, '')
+      .replace(/<\/meta>/g, '')
+      .replace(/<type[^>]*>.*?<\/type>/gs, '')
+      .replace(/<type[^>]*>/g, '')
+      .replace(/<\/type>/g, '')
+      .replace(/<context_summary>.*?<\/context_summary>/gs, '')
+      .replace(/<reads[^>]*>.*?<\/reads>/gs, '')
+      .replace(/<reads[^>]*>/g, '')
+      .replace(/<\/reads>/g, '')
+      .replace(/<source[^>]*>.*?<\/source>/gs, '')
+      .replace(/<source[^>]*>/g, '')
+      .replace(/<\/source>/g, '')
+      // 移除孤立的XML属性标签
+      .replace(/<[^>]+type="[^"]*"[^>]*>/g, '')
+      .replace(/<[^>]+source="[^"]*"[^>]*>/g, '')
+      // 清理多余的空行
+      .replace(/\n{3,}/g, '\n\n')
       // 修复表格格式
       .replace(/\|([^|\n]+)\|/g, (match, cell) => `|${cell.trim()}|`)
       // 修复列表格式
@@ -478,6 +500,7 @@ export class FormatAdapter {
       })
       // 修复链接格式
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '[$1]($2)')
+      .trim()
   }
   
   /**
