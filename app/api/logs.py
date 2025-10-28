@@ -1253,81 +1253,96 @@ async def analyze_log(
                 "filename": log_info.original_filename or log_info.filename
             }
             
-            # 执行分析 - 先生成计划
-            plan_xml = agent.plan(query)
-            
-            # 解析计划步骤
-            steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
-            steps = [s.strip() for s in steps]
-            
-            # 存储中间结果
-            reasoning_process = []
-            completed_steps = []
-            
-            # 执行每个步骤并收集思考过程
-            for idx, step in enumerate(steps):
-                logger.info(f"AI analysis step {idx+1}/{len(steps)}: {step}")
-                
-                try:
-                    # 执行步骤
-                    step_output = agent._execute_step(step, query, hints=hints)
-                    
-                    # 生成步骤思考（摘要）
-                    step_thought = ""
-                    try:
-                        from app.agents.log_agent import compress_outputs
-                        step_thought = compress_outputs([step_output])
-                    except Exception:
-                        step_thought = f"步骤 {idx+1} 执行完成"
-                    
-                    # 记录步骤结果
-                    reasoning_process.append({
-                        "step_number": idx + 1,
-                        "step_description": step,
-                        "thought": step_thought,
-                        "output": step_output
-                    })
-                    
-                    completed_steps.append(step)
-                    logger.info(f"AI analysis step {idx+1} completed")
-                    
-                except Exception as step_error:
-                    logger.warning(f"AI analysis step {idx+1} failed: {step_error}")
-                    reasoning_process.append({
-                        "step_number": idx + 1,
-                        "step_description": step,
-                        "thought": f"步骤执行失败: {str(step_error)}",
-                        "output": "",
-                        "error": str(step_error)
-                    })
-            
-            # 运行完整分析获取最终结果
+            # 使用新的 run_structured 方法执行分析，返回结构化结果
+            logger.info(f"Starting structured AI analysis for log {log_id}")
             try:
-                final_result_xml = agent.run(query, hints=hints)
-            except Exception as run_error:
-                logger.warning(f"Full agent run failed, using partial results: {run_error}")
-                final_result_xml = f"<document><partial_result>{''.join([r.get('output', '') for r in reasoning_process])}</partial_result></document>"
+                structured_result = agent.run_structured(query, hints=hints)
+                logger.info(f"Structured analysis completed for log {log_id}")
+                
+                # structured_result 已经包含完整的标准格式数据
+                # 包括: id, query, status, timestamp, plan, acts, final_result, metadata
+                analysis_data = structured_result
+                
+            except Exception as e:
+                logger.error(f"Structured analysis failed for log {log_id}: {e}")
+                # 降级到旧方法作为备选
+                logger.info(f"Falling back to legacy analysis method for log {log_id}")
+                
+                # 执行分析 - 先生成计划
+                plan_xml = agent.plan(query)
+                
+                # 解析计划步骤
+                steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
+                steps = [s.strip() for s in steps]
+                
+                # 存储中间结果
+                reasoning_process = []
+                completed_steps = []
+                
+                # 执行每个步骤并收集思考过程
+                for idx, step in enumerate(steps):
+                    logger.info(f"AI analysis step {idx+1}/{len(steps)}: {step}")
+                    
+                    try:
+                        # 执行步骤
+                        step_output = agent._execute_step(step, query, hints=hints)
+                        
+                        # 生成步骤思考（摘要）
+                        step_thought = ""
+                        try:
+                            from app.agents.log_agent import compress_outputs
+                            step_thought = compress_outputs([step_output])
+                        except Exception:
+                            step_thought = f"步骤 {idx+1} 执行完成"
+                        
+                        # 记录步骤结果
+                        reasoning_process.append({
+                            "step_number": idx + 1,
+                            "step_description": step,
+                            "thought": step_thought,
+                            "output": step_output
+                        })
+                        
+                        completed_steps.append(step)
+                        logger.info(f"AI analysis step {idx+1} completed")
+                        
+                    except Exception as step_error:
+                        logger.warning(f"AI analysis step {idx+1} failed: {step_error}")
+                        reasoning_process.append({
+                            "step_number": idx + 1,
+                            "step_description": step,
+                            "thought": f"步骤执行失败: {str(step_error)}",
+                            "output": "",
+                            "error": str(step_error)
+                        })
+                
+                # 运行完整分析获取最终结果
+                try:
+                    final_result_xml = agent.run(query, hints=hints)
+                except Exception as run_error:
+                    logger.warning(f"Full agent run failed, using partial results: {run_error}")
+                    final_result_xml = f"<document><partial_result>{''.join([r.get('output', '') for r in reasoning_process])}</partial_result></document>"
+                
+                # 生成结果摘要
+                summary = f"完成分析，执行了 {len(completed_steps)}/{len(steps)} 个步骤"
+                
+                # 构建响应数据（旧格式）
+                analysis_data = {
+                    "log_id": log_id,
+                    "query": query,
+                    "plan": {
+                        "steps": steps,
+                        "completed_steps": completed_steps,
+                        "total_steps": len(steps),
+                        "completed_count": len(completed_steps)
+                    },
+                    "reasoning": reasoning_process,
+                    "result": final_result_xml,
+                    "summary": summary,
+                    "status": "completed" if len(completed_steps) == len(steps) else "partial"
+                }
             
-            # 生成结果摘要
-            summary = f"完成分析，执行了 {len(completed_steps)}/{len(steps)} 个步骤"
-            
-            # 构建响应数据
-            analysis_data = {
-                "log_id": log_id,
-                "query": query,
-                "plan": {
-                    "steps": steps,
-                    "completed_steps": completed_steps,
-                    "total_steps": len(steps),
-                    "completed_count": len(completed_steps)
-                },
-                "reasoning": reasoning_process,
-                "result": final_result_xml,
-                "summary": summary,
-                "status": "completed" if len(completed_steps) == len(steps) else "partial"
-            }
-            
-            logger.info(f"AI analysis completed for log {log_id}: {len(completed_steps)}/{len(steps)} steps")
+            logger.info(f"AI analysis completed for log {log_id}")
             
             return {
                 "success": True,
