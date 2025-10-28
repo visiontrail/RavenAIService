@@ -1407,19 +1407,15 @@ class LogAnalysisAgent:
             # 首先尝试从<context_summary>标签中提取
             summary_match = re.search(r'<context_summary>(.*?)</context_summary>', content, flags=re.DOTALL)
             if summary_match:
-                summary_text = summary_match.group(1).strip()
-                # 移除XML标签
-                summary_text = re.sub(r'<[^>]+>', '', summary_text)
-                # 移除markdown格式标记（但保留内容）
-                summary_text = re.sub(r'^[\-\*]\s+', '', summary_text, flags=re.MULTILINE)  # 移除列表标记
-                summary_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', summary_text)  # 移除粗体
-                summary_text = re.sub(r'`([^`]+)`', r'\1', summary_text)  # 移除行内代码
-                summary_text = re.sub(r'^#+\s+', '', summary_text, flags=re.MULTILINE)  # 移除标题标记
-                # 将多行合并为单行，用空格分隔
-                summary_text = ' '.join(line.strip() for line in summary_text.split('\n') if line.strip())
-                if summary_text:
-                    # 截取合理长度作为摘要
-                    return summary_text[:300] + ("..." if len(summary_text) > 300 else "")
+                raw = summary_match.group(1).strip()
+                # 去除任何残留的XML标签，但保留Markdown符号
+                raw = re.sub(r'<[^>]+>', '', raw)
+                # 如果LLM返回了```markdown代码块，优先提取其中的内容，原样返回给前端做渲染
+                md_block = re.search(r'```(?:markdown|md)?\s*([\s\S]*?)```', raw, flags=re.DOTALL | re.IGNORECASE)
+                if md_block:
+                    return md_block.group(1).strip()
+                # 否则直接返回清理后的文本（保留列表/标题/加粗等Markdown标记，交给前端渲染）
+                return raw.strip()
             
             # 如果没有找到summary标签，使用原有逻辑
             lines = content.split('\n')
@@ -1442,8 +1438,9 @@ class LogAnalysisAgent:
                     break
             
             if summary_lines:
-                summary = ' '.join(summary_lines)[:300]
-                return summary + ("..." if len(summary) >= 300 else "")
+                # 保留原始的Markdown符号以便前端渲染
+                summary = ' '.join(summary_lines)
+                return summary
             else:
                 return "已完成日志分析，请查看详细结果。"
         except Exception as e:

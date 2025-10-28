@@ -48,7 +48,7 @@
         <!-- 执行摘要 -->
         <div class="summary-section">
           <h2 class="summary-title">📊 执行摘要</h2>
-          <p class="summary-content">{{ result.final_result?.summary || '暂无摘要信息' }}</p>
+          <div class="summary-content prose prose-gray max-w-none" v-html="formatMarkdown(result.final_result?.summary || '')"></div>
         </div>
 
         <!-- 主要发现 -->
