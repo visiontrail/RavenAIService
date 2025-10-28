@@ -375,32 +375,59 @@ const formatMarkdown = (content: string) => {
     return ''
   }
   
-  // 预处理：移除残留的XML标签和log_agent相关的元数据标签
-  let processed = content
-    // 移除document标签及其属性
-    .replace(/<document[^>]*>.*?<\/document>/gs, '')
-    .replace(/<document[^>]*>/g, '')
-    .replace(/<\/document>/g, '')
-    // 移除meta标签及其内容
-    .replace(/<meta[^>]*>.*?<\/meta>/gs, '')
-    .replace(/<meta[^>]*>/g, '')
-    .replace(/<\/meta>/g, '')
-    // 移除type标签及其内容
-    .replace(/<type[^>]*>.*?<\/type>/gs, '')
-    .replace(/<type[^>]*>/g, '')
-    .replace(/<\/type>/g, '')
-    // 移除其他XML标签
-    .replace(/<context_summary>.*?<\/context_summary>/gs, '')
-    .replace(/<reads[^>]*>.*?<\/reads>/gs, '')
-    .replace(/<reads[^>]*>/g, '')
-    .replace(/<\/reads>/g, '')
-    .replace(/<source[^>]*>.*?<\/source>/gs, '')
-    // 移除孤立的XML标签
-    .replace(/<[^>]+type="[^"]*"[^>]*>/g, '')
-    .replace(/<[^>]+source="[^"]*"[^>]*>/g, '')
-    // 清理多余的空行
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+  // 首先尝试提取markdown代码块中的内容（```markdown ... ```）
+  const markdownBlockMatch = content.match(/```markdown\s*([\s\S]*?)```/);
+  let processed = '';
+  
+  if (markdownBlockMatch && markdownBlockMatch[1]) {
+    // 如果找到markdown代码块，只使用其中的内容
+    processed = markdownBlockMatch[1].trim();
+    console.log('Extracted content from markdown code block');
+  } else {
+    // 否则使用原有的清理逻辑
+    processed = content
+      // 移除log_metadata标签及其内容
+      .replace(/<log_metadata[^>]*>.*?<\/log_metadata>/gs, '')
+      // 移除log_package标签及其内容
+      .replace(/<log_package[^>]*>.*?<\/log_package>/gs, '')
+      // 移除file_list标签及其内容
+      .replace(/<file_list[^>]*>.*?<\/file_list>/gs, '')
+      // 移除file标签及其内容
+      .replace(/<file[^>]*>.*?<\/file>/gs, '')
+      // 移除extraction标签（单个词）
+      .replace(/^extraction\s*/gm, '')
+      // 移除document标签及其属性
+      .replace(/<document[^>]*>.*?<\/document>/gs, '')
+      .replace(/<document[^>]*>/g, '')
+      .replace(/<\/document>/g, '')
+      // 移除meta标签及其内容
+      .replace(/<meta[^>]*>.*?<\/meta>/gs, '')
+      .replace(/<meta[^>]*>/g, '')
+      .replace(/<\/meta>/g, '')
+      // 移除type标签及其内容
+      .replace(/<type[^>]*>.*?<\/type>/gs, '')
+      .replace(/<type[^>]*>/g, '')
+      .replace(/<\/type>/g, '')
+      // 移除其他XML标签
+      .replace(/<context_summary>.*?<\/context_summary>/gs, '')
+      .replace(/<reads[^>]*>.*?<\/reads>/gs, '')
+      .replace(/<reads[^>]*>/g, '')
+      .replace(/<\/reads>/g, '')
+      .replace(/<source[^>]*>.*?<\/source>/gs, '')
+      // 移除孤立的XML标签
+      .replace(/<[^>]+type="[^"]*"[^>]*>/g, '')
+      .replace(/<[^>]+source="[^"]*"[^>]*>/g, '')
+      .replace(/<[^>]+path="[^"]*"[^>]*>/g, '')
+      // 移除任何剩余的XML标签（但保留内容）
+      .replace(/<\/?[a-zA-Z_][^>]*>/g, '')
+      // 移除看起来像元数据的行（全是数字、日期或true/false）
+      .replace(/^\d+$/gm, '')
+      .replace(/^(true|false)$/gm, '')
+      .replace(/^\d{4}-\d{2}-\d{2}T[\d:\.]+Z$/gm, '')
+      // 清理多余的空行
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
   
   // 如果处理后为空，返回提示信息
   if (!processed) {
