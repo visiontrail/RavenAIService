@@ -1410,6 +1410,13 @@ class LogAnalysisAgent:
                 summary_text = summary_match.group(1).strip()
                 # 移除XML标签
                 summary_text = re.sub(r'<[^>]+>', '', summary_text)
+                # 移除markdown格式标记（但保留内容）
+                summary_text = re.sub(r'^[\-\*]\s+', '', summary_text, flags=re.MULTILINE)  # 移除列表标记
+                summary_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', summary_text)  # 移除粗体
+                summary_text = re.sub(r'`([^`]+)`', r'\1', summary_text)  # 移除行内代码
+                summary_text = re.sub(r'^#+\s+', '', summary_text, flags=re.MULTILINE)  # 移除标题标记
+                # 将多行合并为单行，用空格分隔
+                summary_text = ' '.join(line.strip() for line in summary_text.split('\n') if line.strip())
                 if summary_text:
                     # 截取合理长度作为摘要
                     return summary_text[:300] + ("..." if len(summary_text) > 300 else "")
@@ -1424,6 +1431,11 @@ class LogAnalysisAgent:
                 if line and not line.startswith('<') and not line.endswith('>'):
                     # 移除行内XML标签
                     clean_line = re.sub(r'<[^>]+>', '', line)
+                    # 移除markdown格式标记
+                    clean_line = re.sub(r'^[\-\*]\s+', '', clean_line)
+                    clean_line = re.sub(r'\*\*([^*]+)\*\*', r'\1', clean_line)
+                    clean_line = re.sub(r'`([^`]+)`', r'\1', clean_line)
+                    clean_line = re.sub(r'^#+\s+', '', clean_line)
                     if clean_line:
                         summary_lines.append(clean_line)
                 if len(summary_lines) >= 3:
@@ -1444,11 +1456,41 @@ class LogAnalysisAgent:
             recommendations = []
             lines = content.split('\n')
             
+            in_recommendation_section = False
             for line in lines:
                 line = line.strip()
-                if any(keyword in line.lower() for keyword in ['建议', '推荐', 'recommend', 'suggest']):
-                    if line and len(line) < 200:
-                        recommendations.append(line)
+                
+                # 检测是否进入建议部分
+                if any(keyword in line.lower() for keyword in ['建议下一步', '建议措施', '下一步建议', '建议']):
+                    in_recommendation_section = True
+                    continue
+                
+                # 如果在建议部分，提取列表项
+                if in_recommendation_section:
+                    # 匹配markdown列表项（- 或 * 开头）
+                    if line.startswith(('-', '*', '•')) and len(line) > 2:
+                        # 移除列表标记
+                        rec = line[1:].strip()
+                        # 移除markdown格式标记
+                        rec = re.sub(r'\*\*([^*]+)\*\*', r'\1', rec)  # 移除粗体
+                        rec = re.sub(r'`([^`]+)`', r'\1', rec)  # 移除行内代码
+                        if rec and len(rec) < 200:
+                            recommendations.append(rec)
+                    # 如果遇到空行或新的标题，结束建议部分
+                    elif not line or line.startswith('#'):
+                        if recommendations:
+                            break
+                        in_recommendation_section = False
+                
+                # 如果还没找到建议部分，继续搜索包含建议关键词的行
+                elif not in_recommendation_section and any(keyword in line.lower() for keyword in ['建议', '推荐', 'recommend', 'suggest']):
+                    # 移除markdown格式标记
+                    clean_line = re.sub(r'\*\*([^*]+)\*\*', r'\1', line)
+                    clean_line = re.sub(r'`([^`]+)`', r'\1', clean_line)
+                    clean_line = re.sub(r'^[\-\*•]\s+', '', clean_line)
+                    if clean_line and len(clean_line) < 200:
+                        recommendations.append(clean_line)
+                
                 if len(recommendations) >= 5:
                     break
             
@@ -1456,7 +1498,8 @@ class LogAnalysisAgent:
                 recommendations = ["请根据分析结果采取相应措施", "建议定期检查日志状态"]
             
             return recommendations
-        except Exception:
+        except Exception as e:
+            logger.warning("Extract recommendations failed: %s", e)
             return ["请查看详细分析结果"]
 
     def _calculate_confidence(self, outputs: List[str]) -> float:

@@ -35,35 +35,35 @@
           <div class="header-content">
             <h1 class="result-title">分析结果</h1>
             <div class="result-meta">
-              <span class="query-text">{{ result.query }}</span>
-              <span class="timestamp">{{ formatTimestamp(result.timestamp) }}</span>
+              <span class="query-text">{{ result.query || '未知查询' }}</span>
+              <span class="timestamp">{{ formatTimestamp(result.timestamp || new Date().toISOString()) }}</span>
             </div>
           </div>
-          <div class="confidence-badge" v-if="result.final_result.confidence">
+          <div class="confidence-badge" v-if="result.final_result?.confidence !== undefined">
             <span class="confidence-label">置信度</span>
-            <span class="confidence-value">{{ Math.round(result.final_result.confidence * 100) }}%</span>
+            <span class="confidence-value">{{ Math.round((result.final_result?.confidence || 0) * 100) }}%</span>
           </div>
         </div>
 
         <!-- 执行摘要 -->
         <div class="summary-section">
           <h2 class="summary-title">📊 执行摘要</h2>
-          <p class="summary-content">{{ result.final_result.summary }}</p>
+          <p class="summary-content">{{ result.final_result?.summary || '暂无摘要信息' }}</p>
         </div>
 
         <!-- 主要发现 -->
         <div class="findings-section">
           <h2 class="findings-title">🔍 主要发现</h2>
-          <div class="findings-content prose prose-gray max-w-none" v-html="formatMarkdown(result.final_result.content)"></div>
+          <div class="findings-content prose prose-gray max-w-none" v-html="formatMarkdown(result.final_result?.content || '')"></div>
         </div>
 
         <!-- 建议措施 -->
-        <div v-if="result.final_result.recommendations?.length" class="recommendations-section">
+        <div v-if="result.final_result?.recommendations?.length" class="recommendations-section">
           <h2 class="recommendations-title">💡 建议措施</h2>
           <ul class="recommendations-list">
             <li v-for="(rec, index) in result.final_result.recommendations" :key="index" class="recommendation-item">
               <span class="rec-number">{{ index + 1 }}</span>
-              <span class="rec-content">{{ rec }}</span>
+              <span class="rec-content">{{ rec || '无建议内容' }}</span>
             </li>
           </ul>
         </div>
@@ -134,15 +134,15 @@
                       <div v-show="expandedActSubsections[act.step_id]?.thought" class="subsection-content">
                         <div class="thought-item">
                           <strong>推理过程:</strong>
-                          <p>{{ act.thought.reasoning }}</p>
+                          <p>{{ act.thought?.reasoning || '暂无推理信息' }}</p>
                         </div>
                         <div class="thought-item">
                           <strong>采用方法:</strong>
-                          <p>{{ act.thought.approach }}</p>
+                          <p>{{ act.thought?.approach || '暂无方法信息' }}</p>
                         </div>
                         <div class="thought-item">
                           <strong>预期结果:</strong>
-                          <p>{{ act.thought.expected_outcome }}</p>
+                          <p>{{ act.thought?.expected_outcome || '暂无预期结果' }}</p>
                         </div>
                       </div>
                     </Transition>
@@ -153,16 +153,16 @@
                     <div class="subsection-header" @click="toggleActSubsection(act.step_id, 'execution')" 
                          :class="{ active: expandedActSubsections[act.step_id]?.execution }">
                       <h5 class="subsection-title">⚡ 执行结果</h5>
-                      <span class="tool-badge">{{ act.execution.tool_used }}</span>
+                      <span class="tool-badge">{{ act.execution?.tool_used || '未知工具' }}</span>
                       <ChevronDown class="subsection-toggle" :class="{ rotated: expandedActSubsections[act.step_id]?.execution }" />
                     </div>
                     <Transition name="slide-fade">
                       <div v-show="expandedActSubsections[act.step_id]?.execution" class="subsection-content">
-                      <div class="execution-result prose prose-sm max-w-none" v-html="formatMarkdown(act.execution.processed_output)"></div>
+                      <div class="execution-result prose prose-sm max-w-none" v-html="formatMarkdown(act.execution?.processed_output || '')"></div>
                         
                         <div v-if="showRawOutput[act.step_id]" class="raw-output">
                           <h6 class="raw-output-title">原始输出:</h6>
-                          <pre class="raw-output-content">{{ act.execution.raw_output }}</pre>
+                          <pre class="raw-output-content">{{ act.execution?.raw_output || '暂无原始输出' }}</pre>
                         </div>
                         
                         <button @click="toggleRawOutput(act.step_id)" class="raw-output-toggle">
@@ -175,7 +175,7 @@
                   <!-- 步骤总结 -->
                   <div class="act-summary">
                     <h5 class="summary-label">📝 步骤总结</h5>
-                    <p class="summary-text">{{ act.summary }}</p>
+                    <p class="summary-text">{{ act.summary || '暂无总结信息' }}</p>
                   </div>
                 </div>
               </Transition>
@@ -369,7 +369,11 @@ const formatDuration = (seconds: number) => {
 }
 
 const formatMarkdown = (content: string) => {
-  if (!content) return ''
+  // 安全检查：确保content是字符串且不为null/undefined
+  if (!content || typeof content !== 'string') {
+    console.warn('formatMarkdown: invalid content', content)
+    return ''
+  }
   
   // 预处理：移除残留的XML标签
   let processed = content
@@ -377,7 +381,14 @@ const formatMarkdown = (content: string) => {
     .replace(/<document[^>]*>/g, '')
     .replace(/<\/document>/g, '')
     .replace(/<[^>]+type="[^"]*"[^>]*>/g, '')
+    .replace(/<reads>/g, '')
+    .replace(/<\/reads>/g, '')
     .trim()
+  
+  // 如果处理后为空，返回提示信息
+  if (!processed) {
+    return '<p class="text-gray-500">暂无内容</p>'
+  }
   
   // 处理表格（Markdown表格格式）
   const lines = processed.split('\n')
@@ -386,7 +397,7 @@ const formatMarkdown = (content: string) => {
   const outputLines: string[] = []
   
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim()
+    const line = lines[i]?.trim() || ''
     
     // 检测表格行（包含 | 分隔符）
     if (line.includes('|') && line.split('|').length > 2) {
@@ -401,10 +412,10 @@ const formatMarkdown = (content: string) => {
       }
       
       // 解析表格行
-      const cells = line.split('|').map(cell => cell.trim()).filter(cell => cell)
-      const isHeader = i === 0 || (i > 0 && !inTable)
+      const cells = line.split('|').map(cell => (cell || '').trim()).filter(cell => cell)
+      const isHeader = (i === 0 || (i > 0 && !inTable)) && cells.some(cell => cell.includes('项目') || cell.includes('说明'))
       
-      if (isHeader && cells.length > 0 && cells[0].includes('项目')) {
+      if (isHeader && cells.length > 0) {
         tableHtml += '<tr class="table-header">'
         cells.forEach(cell => {
           tableHtml += `<th>${escapeHtml(cell)}</th>`
@@ -438,41 +449,46 @@ const formatMarkdown = (content: string) => {
   // 合并处理后的行
   processed = outputLines.join('\n')
   
-  // 转换Markdown语法为HTML
+  // 转换Markdown语法为HTML（按顺序处理，避免冲突）
+  // 1. 代码块（需要先处理，避免内部语法被转换）
+  processed = processed.replace(/```([\s\S]*?)```/g, '<pre class="bg-gray-100 rounded p-3 my-2 overflow-x-auto"><code>$1</code></pre>')
+  
+  // 2. 标题
   processed = processed
-    // 标题
     .replace(/^#### (.*$)/gim, '<h4 class="text-base font-semibold text-gray-900 mt-4 mb-2">$1</h4>')
     .replace(/^### (.*$)/gim, '<h3 class="text-lg font-semibold text-gray-900 mt-6 mb-3">$1</h3>')
     .replace(/^## (.*$)/gim, '<h2 class="text-xl font-bold text-gray-900 mt-8 mb-4">$1</h2>')
     .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-bold text-gray-900 mt-10 mb-5">$1</h1>')
-    // 代码块
-    .replace(/```([\s\S]*?)```/g, '<pre class="bg-gray-100 rounded p-3 my-2 overflow-x-auto"><code>$1</code></pre>')
-    // 行内代码
-    .replace(/`([^`]+)`/g, '<code class="bg-gray-100 text-red-600 px-1 rounded text-sm">$1</code>')
-    // 粗体
-    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-gray-900">$1</strong>')
-    // 斜体
-    .replace(/\*([^*]+)\*/g, '<em class="italic text-gray-700">$1</em>')
-    // 无序列表（需要分组处理）
-    .replace(/^[\-\*] (.+)$/gim, '<li class="ml-4">$1</li>')
   
-  // 将连续的<li>包裹在<ul>中
+  // 3. 粗体（在斜体之前处理）
+  processed = processed.replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-gray-900">$1</strong>')
+  
+  // 4. 行内代码
+  processed = processed.replace(/`([^`]+)`/g, '<code class="bg-gray-100 text-red-600 px-1 rounded text-sm">$1</code>')
+  
+  // 5. 斜体（在粗体之后处理）
+  processed = processed.replace(/\*([^*\n]+)\*/g, '<em class="italic text-gray-700">$1</em>')
+  
+  // 6. 无序列表
+  processed = processed.replace(/^[\-\*] (.+)$/gim, '<li class="ml-4">$1</li>')
+  
+  // 7. 将连续的<li>包裹在<ul>中
   processed = processed.replace(/(<li[^>]*>.*?<\/li>\s*)+/gs, (match) => {
     return `<ul class="list-disc list-inside space-y-1 my-3">${match}</ul>`
   })
   
-  // 段落：将非HTML标签的连续文本行包裹为段落
+  // 8. 段落：将非HTML标签的连续文本行包裹为段落
   const paragraphs = processed.split('\n\n')
   processed = paragraphs.map(para => {
-    para = para.trim()
+    para = (para || '').trim()
     if (!para) return ''
     // 如果已经是HTML标签，不需要包裹
     if (para.startsWith('<')) return para
     // 否则包裹为段落
     return `<p class="my-2 text-gray-700 leading-relaxed">${para.replace(/\n/g, '<br>')}</p>`
-  }).join('\n')
+  }).filter(p => p).join('\n')
   
-  return processed
+  return processed || '<p class="text-gray-500">内容格式化失败</p>'
 }
 
 // HTML转义辅助函数
