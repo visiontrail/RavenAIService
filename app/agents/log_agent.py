@@ -311,7 +311,8 @@ def compress_outputs(outputs: List[str]) -> str:
             # Extract content from LangChain response object
             content = res.content if hasattr(res, "content") else str(res)
             logger.info("\n\n--- START LLM OUTPUT [summary] ---\ncontent='%s'\n--- END LLM OUTPUT [summary] ---\n", content)
-            return wrap_document(content, {"type": "summary"})
+            # Normalize format: always wrap as <context_summary> so downstream logic can strip it from main content
+            return f"<context_summary>{content}</context_summary>"
     except Exception:
         return wrap_document("摘要不可用（降级为提取片段）", {"type": "summary"})
 
@@ -1524,6 +1525,14 @@ class LogAnalysisAgent:
             
             # 移除<context_summary>标签及其内容（已在summary字段单独显示）
             clean_content = re.sub(r'<context_summary>.*?</context_summary>', '', content, flags=re.DOTALL)
+
+            # 兼容旧格式：移除被包装为<document>且meta.type为summary的整块内容，避免在主要发现中重复显示摘要
+            clean_content = re.sub(
+                r'<document[^>]*>\s*<meta>.*?<type>\s*summary\s*</type>.*?</meta>\s*<content>[\s\S]*?</content>\s*</document>',
+                '',
+                clean_content,
+                flags=re.DOTALL | re.IGNORECASE,
+            )
             
             # 移除其他XML标签但保留内容
             clean_content = re.sub(r'<document[^>]*>', '', clean_content)
