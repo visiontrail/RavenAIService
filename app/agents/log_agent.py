@@ -1521,6 +1521,61 @@ class LogAnalysisAgent:
         except Exception:
             return 0.5
 
+    def _extract_markdown_block(self, content: str) -> Optional[str]:
+        """
+        从```markdown块中提取内容，正确处理嵌套的代码块
+        使用状态机算法追踪嵌套层级
+        """
+        start = content.find('```markdown')
+        if start == -1:
+            start = content.find('```md')
+            if start == -1:
+                return None
+        
+        # 找到开始标记后的换行位置
+        line_end = content.find('\n', start)
+        if line_end == -1:
+            return None
+        
+        body_start = line_end + 1
+        inside_nested_code_block = False
+        i = body_start
+        
+        while i < len(content):
+            # 查找下一个```
+            next_fence = content.find('```', i)
+            if next_fence == -1:
+                return content[body_start:].strip()
+            
+            # 检查是否在行首
+            line_start = content.rfind('\n', 0, next_fence)
+            before_fence = content[line_start + 1:next_fence] if line_start != -1 else content[:next_fence]
+            is_line_start = before_fence.strip() == ''
+            
+            if is_line_start:
+                if inside_nested_code_block:
+                    # 当前在内层代码块中，这是内层代码块的结束
+                    inside_nested_code_block = False
+                else:
+                    # 当前在内层代码块外，判断这是内层代码块的开始还是外层markdown块的结束
+                    after_fence_pos = next_fence + 3
+                    after_fence = content[after_fence_pos:]
+                    
+                    # 检查fence后面到下一个换行之间的内容
+                    next_line_break = after_fence.find('\n')
+                    line_content = after_fence[:next_line_break] if next_line_break >= 0 else after_fence
+                    
+                    # 如果这一行只有空白且后面没有更多内容，说明这是外层markdown块的结束
+                    if line_content.strip() == '' and after_fence.strip() == '':
+                        return content[body_start:next_fence].strip()
+                    
+                    # 否则这是内层代码块的开始
+                    inside_nested_code_block = True
+            
+            i = next_fence + 3
+        
+        return content[body_start:].strip()
+
     def _format_final_content(self, query: str, content: str, summary: str, recommendations: List[str]) -> str:
         """格式化最终内容为标准markdown - 返回纯净的markdown格式内容"""
         try:
@@ -1538,11 +1593,11 @@ class LogAnalysisAgent:
                 flags=re.DOTALL | re.IGNORECASE,
             )
             
-            # 尝试从```markdown块中提取内容（如果存在）
-            md_block_match = re.search(r'```(?:markdown|md)?\s*([\s\S]*?)```', clean_content, flags=re.DOTALL | re.IGNORECASE)
-            if md_block_match:
-                logger.debug("Extracted markdown block from final content")
-                clean_content = md_block_match.group(1).strip()
+            # 尝试从```markdown块中提取内容（使用改进的嵌套处理）
+            extracted = self._extract_markdown_block(clean_content)
+            if extracted:
+                logger.debug("Extracted markdown block from final content using nested-aware parser")
+                clean_content = extracted
             else:
                 # 移除XML标签（保留内容和markdown格式）
                 # 首先移除配对的标签

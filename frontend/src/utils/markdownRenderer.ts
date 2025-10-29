@@ -58,7 +58,7 @@ const XML_CLEANUP_PATTERNS = [
 
 /**
  * 从顶层```markdown块中提取内容，支持嵌套代码块
- * 改进版：使用状态机正确处理内层嵌套的代码块
+ * 改进版v2：使用状态机+更精确的判断正确处理内层嵌套的代码块
  */
 function extractMarkdownBlock(content: string): string | null {
   const start = content.indexOf('```markdown')
@@ -70,8 +70,7 @@ function extractMarkdownBlock(content: string): string | null {
   
   let bodyStart = lineEnd + 1
   
-  // 使用状态机：true=在代码块外，false=在代码块内
-  // 初始状态：在外层markdown块内，但不在内层代码块内
+  // 使用状态机：true=在代码块内，false=在代码块外
   let insideNestedCodeBlock = false
   let i = bodyStart
   
@@ -90,20 +89,31 @@ function extractMarkdownBlock(content: string): string | null {
     
     if (isLineStart) {
       if (insideNestedCodeBlock) {
-        // 当前在内层代码块中，这个```是内层代码块的结束
+        // 当前在内层代码块中，这个```一定是内层代码块的结束
         insideNestedCodeBlock = false
       } else {
         // 当前在内层代码块外
-        // 检查后面的内容，判断这是内层代码块的开始，还是外层markdown块的结束
-        const afterFencePos = nextFence + 3
-        const afterFence = content.slice(afterFencePos, Math.min(afterFencePos + 20, content.length))
+        // 需要判断这个```是：
+        // 1. 内层代码块的开始（后面跟着语言标识或直接换行，且不是最后一个fence）
+        // 2. 外层markdown块的结束（这应该是最后一个fence）
         
-        // 如果后面紧跟换行或文件结束，这是外层markdown块的结束
-        if (afterFence.match(/^[\s\r\n]*$/)) {
+        const afterFencePos = nextFence + 3
+        const afterFence = content.slice(afterFencePos)
+        
+        // 检查这个fence后面到下一个换行之间的内容
+        const nextLineBreak = afterFence.indexOf('\n')
+        const lineContent = nextLineBreak >= 0 ? afterFence.slice(0, nextLineBreak) : afterFence
+        
+        // 如果这一行只有空白（没有语言标识符），且后面没有更多内容了，说明这是外层markdown块的结束
+        if (lineContent.trim() === '' && afterFence.trim() === '') {
           return content.slice(bodyStart, nextFence).trim()
         }
         
-        // 如果后面有内容（包括可能的语言标识符），这是内层代码块的开始
+        // 否则，这是内层代码块的开始
+        // 可能的情况：
+        // - ```python\n (有语言标识)
+        // - ```\n (无语言标识)
+        // 只要后面还有内容，就认为是内层代码块的开始
         insideNestedCodeBlock = true
       }
     }
