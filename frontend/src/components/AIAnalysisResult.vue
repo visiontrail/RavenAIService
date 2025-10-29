@@ -514,62 +514,24 @@ const formatMarkdown = (content: string) => {
     let bodyStart = lineEnd + 1
     if (bodyStart > src.length) bodyStart = src.length
 
-    // 通过嵌套计数查找结束位置：
-    // 在 ```markdown 包裹内，遇到行首且带语言的 ```xxx 视为嵌套开始；
-    // 遇到行首且不带语言的 ``` 视为关闭；当嵌套计数为0时的关闭为真正结束。
-    let searchPos = bodyStart
-    let nesting = 0
+    // 改为更稳健的做法：总是从末尾向前查找最后一个行首围栏作为顶层结束，避免内部无语言围栏造成提前截断
     let endPos = -1
-    while (searchPos < src.length) {
-      const next = src.indexOf('```', searchPos)
-      if (next === -1) break
-      const isLineStart = next === 0 || src[next - 1] === '\n' || src[next - 1] === '\r'
+    let search = src.length
+    while (true) {
+      const idx = src.lastIndexOf('```', search)
+      if (idx <= start) break
+      const isLineStart = idx === 0 || src[idx - 1] === '\n' || src[idx - 1] === '\r'
       if (!isLineStart) {
-        searchPos = next + 3
+        search = idx - 1
         continue
       }
-
-      // 计算该处反引号数
       let count = 3
-      while (src[next + count] === '`') count++
-
-      // 获取该行 fence 后的内容（直到行尾）
-      let afterPos = next + count
-      let nextLineEnd = src.indexOf('\n', afterPos)
-      if (nextLineEnd === -1) nextLineEnd = src.length
-      const afterFence = src.slice(afterPos, nextLineEnd).trim()
-
-      const hasLang = afterFence.length > 0 && /^[a-zA-Z0-9_\-+.]+$/.test(afterFence)
-
+      while (src[idx + count] === '`') count++
       if (count >= startBackticks) {
-        if (hasLang) {
-          // 开启一个嵌套代码块
-          nesting++
-        } else {
-          // 关闭一个代码块；当嵌套计数为0时这是顶层结束
-          if (nesting === 0) {
-            endPos = next
-            break
-          } else {
-            nesting--
-          }
-        }
+        endPos = idx
+        break
       }
-
-      searchPos = nextLineEnd + 1
-    }
-
-    // 兜底：如果未找到结束标记，尝试使用最后一个位于行首的 ``` 作为结束
-    if (endPos === -1) {
-      let last = src.lastIndexOf('```')
-      while (last > start) {
-        const isLineStart = last === 0 || src[last - 1] === '\n' || src[last - 1] === '\r'
-        if (isLineStart) {
-          endPos = last
-          break
-        }
-        last = src.lastIndexOf('```', last - 1)
-      }
+      search = idx - 1
     }
 
     const body = src.slice(bodyStart, endPos !== -1 ? endPos : src.length).trim()
