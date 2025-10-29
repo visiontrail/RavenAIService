@@ -513,13 +513,60 @@ const formatMarkdown = (content: string) => {
   // 5. 斜体（在粗体之后处理）
   processed = processed.replace(/\*([^*\n]+)\*/g, '<em class="italic text-gray-700">$1</em>')
   
-  // 6. 无序列表
-  processed = processed.replace(/^[\-\*] (.+)$/gim, '<li class="ml-4">$1</li>')
+  // 6. 处理多级无序列表
+  const processNestedLists = (text: string): string => {
+    const lines = text.split('\n')
+    const result: string[] = []
+    const listStack: { level: number, type: 'ul' }[] = []
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] || ''
+      
+      // 匹配列表项：支持 - 或 * 作为标记，检测缩进级别
+      const listMatch = line.match(/^(\s*)([\-\*])\s+(.+)$/)
+      
+      if (listMatch) {
+        const [, indent, marker, content] = listMatch
+        const level = Math.floor(indent.length / 2) // 每2个空格为一级
+        
+        // 处理列表层级变化
+        while (listStack.length > 0 && listStack[listStack.length - 1].level >= level) {
+          const closedList = listStack.pop()
+          result.push(`</ul>`)
+        }
+        
+        // 如果需要开启新的列表层级
+        if (listStack.length === 0 || listStack[listStack.length - 1].level < level) {
+          listStack.push({ level, type: 'ul' })
+          const levelClass = level === 0 ? 'list-disc' : level === 1 ? 'list-circle' : 'list-square'
+          const marginClass = level === 0 ? 'my-3' : 'my-1'
+          const paddingClass = level === 0 ? 'pl-0' : `pl-${Math.min(level * 4, 12)}`
+          result.push(`<ul class="${levelClass} list-inside space-y-1 ${marginClass} ${paddingClass}">`)
+        }
+        
+        // 添加列表项
+        const itemClass = level === 0 ? 'ml-0' : `ml-${Math.min(level * 2, 8)}`
+        result.push(`<li class="${itemClass}">${content}</li>`)
+      } else {
+        // 非列表行，关闭所有打开的列表
+        while (listStack.length > 0) {
+          listStack.pop()
+          result.push(`</ul>`)
+        }
+        result.push(line)
+      }
+    }
+    
+    // 关闭剩余的列表
+    while (listStack.length > 0) {
+      listStack.pop()
+      result.push(`</ul>`)
+    }
+    
+    return result.join('\n')
+  }
   
-  // 7. 将连续的<li>包裹在<ul>中
-  processed = processed.replace(/(<li[^>]*>.*?<\/li>\s*)+/gs, (match) => {
-    return `<ul class="list-disc list-inside space-y-1 my-3">${match}</ul>`
-  })
+  processed = processNestedLists(processed)
   
   // 8. 段落：将非HTML标签的连续文本行包裹为段落
   const paragraphs = processed.split('\n\n')
@@ -1854,6 +1901,76 @@ const toggleAct = toggleActOptimized
 
 .markdown-table tr:hover {
   @apply bg-blue-50 transition-colors duration-150;
+}
+
+/* 多级列表样式 */
+.findings-content ul,
+.summary-content ul,
+.execution-result ul {
+  @apply my-2;
+}
+
+/* 第一级列表 */
+.findings-content ul.list-disc,
+.summary-content ul.list-disc,
+.execution-result ul.list-disc {
+  @apply list-disc pl-6 space-y-2;
+}
+
+/* 第二级列表 */
+.findings-content ul.list-circle,
+.summary-content ul.list-circle,
+.execution-result ul.list-circle {
+  @apply list-none pl-4 space-y-1 mt-1;
+}
+
+.findings-content ul.list-circle li::before,
+.summary-content ul.list-circle li::before,
+.execution-result ul.list-circle li::before {
+  content: "◦";
+  @apply text-gray-500 font-bold mr-2;
+}
+
+/* 第三级及更深层列表 */
+.findings-content ul.list-square,
+.summary-content ul.list-square,
+.execution-result ul.list-square {
+  @apply list-none pl-4 space-y-1 mt-1;
+}
+
+.findings-content ul.list-square li::before,
+.summary-content ul.list-square li::before,
+.execution-result ul.list-square li::before {
+  content: "▪";
+  @apply text-gray-400 font-bold mr-2;
+}
+
+/* 列表项样式 */
+.findings-content li,
+.summary-content li,
+.execution-result li {
+  @apply text-gray-700 leading-relaxed;
+}
+
+/* 嵌套列表间距调整 */
+.findings-content ul ul,
+.summary-content ul ul,
+.execution-result ul ul {
+  @apply mt-1 mb-1;
+}
+
+/* 列表项内的强调文本 */
+.findings-content li strong,
+.summary-content li strong,
+.execution-result li strong {
+  @apply text-gray-900 font-semibold;
+}
+
+/* 列表项内的代码 */
+.findings-content li code,
+.summary-content li code,
+.execution-result li code {
+  @apply bg-gray-100 text-red-600 px-1 rounded text-sm;
 }
 
 /* 打印样式 */
