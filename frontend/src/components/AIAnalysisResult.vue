@@ -386,8 +386,7 @@ const formatDuration = (seconds: number) => {
 const copyResult = async () => {
   if (!props.result) return
   
-  try {
-    const text = `
+  const text = `
 分析查询: ${props.result.query}
 执行摘要: ${cleanContent(props.result.final_result.summary)}
 
@@ -396,12 +395,39 @@ ${cleanContent(props.result.final_result.content)}
 
 建议措施:
 ${props.result.final_result.recommendations?.join('\n') || '无'}
-    `.trim()
+  `.trim()
+  
+  try {
+    // 尝试使用现代 Clipboard API
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text)
+      ElMessage.success('分析结果已复制到剪贴板')
+      return
+    }
     
-    await navigator.clipboard.writeText(text)
-    ElMessage.success('分析结果已复制到剪贴板')
+    // 降级方案：使用传统的 execCommand 方法
+    const textArea = document.createElement('textarea')
+    textArea.value = text
+    textArea.style.position = 'fixed'
+    textArea.style.left = '-999999px'
+    textArea.style.top = '-999999px'
+    document.body.appendChild(textArea)
+    textArea.focus()
+    textArea.select()
+    
+    try {
+      const successful = document.execCommand('copy')
+      if (successful) {
+        ElMessage.success('分析结果已复制到剪贴板')
+      } else {
+        throw new Error('execCommand failed')
+      }
+    } finally {
+      document.body.removeChild(textArea)
+    }
   } catch (error) {
-    ElMessage.error('复制失败')
+    console.error('复制失败:', error)
+    ElMessage.error(`复制失败: ${error instanceof Error ? error.message : '未知错误'}`)
   }
 }
 
@@ -479,6 +505,9 @@ const handleKeydown = (event: KeyboardEvent) => {
     return
   }
 
+  // 检查是否有文本被选中，如果有则不拦截 Ctrl+C
+  const hasSelection = window.getSelection()?.toString().length > 0
+
   switch (event.key) {
     case 'p':
     case 'P':
@@ -490,13 +519,16 @@ const handleKeydown = (event: KeyboardEvent) => {
     case 'a':
     case 'A':
       if (event.ctrlKey || event.metaKey) {
-        event.preventDefault()
-        toggleSection('acts')
+        // 不阻止 Ctrl+A (全选)，只在 Alt 键时切换 acts 部分
+        if (event.altKey) {
+          event.preventDefault()
+          toggleSection('acts')
+        }
       }
       break
     case 'm':
     case 'M':
-      if (event.ctrlKey || event.metaKey) {
+      if ((event.ctrlKey || event.metaKey) && event.altKey) {
         event.preventDefault()
         toggleSection('metadata')
       }
@@ -504,13 +536,17 @@ const handleKeydown = (event: KeyboardEvent) => {
     case 'c':
     case 'C':
       if (event.ctrlKey || event.metaKey) {
-        event.preventDefault()
-        copyResult()
+        // 如果没有文本选中，则执行完整复制功能
+        if (!hasSelection) {
+          event.preventDefault()
+          copyResult()
+        }
+        // 如果有文本选中，让浏览器的默认复制行为生效
       }
       break
     case 'd':
     case 'D':
-      if (event.ctrlKey || event.metaKey) {
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey) {
         event.preventDefault()
         downloadResult()
       }
@@ -630,6 +666,10 @@ const toggleAct = toggleActOptimized
 .ai-analysis-result {
   @apply max-w-none mx-auto bg-white rounded-2xl shadow-sm border border-gray-100;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  user-select: text;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
 }
 
 /* 加载状态样式 */
@@ -757,6 +797,8 @@ const toggleAct = toggleActOptimized
 
 .summary-content, .findings-content {
   @apply max-w-none;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .recommendations-list {
