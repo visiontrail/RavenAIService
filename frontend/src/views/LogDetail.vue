@@ -402,7 +402,7 @@
               <el-icon class="text-purple-600" size="20">
                 <MagicStick />
               </el-icon>
-              <h2 class="text-lg font-semibold text-gray-900">AI分析</h2>
+              <h2 class="text-lg font-semibold text-gray-900">AI分析（结果将不会保存，刷新后将丢失，如需保存请使用复制结果或下载报告）</h2>
               <el-tag v-if="aiAnalysisResult" :type="aiAnalysisResult.status === 'completed' ? 'success' : 'warning'" size="small">
                 {{ aiAnalysisResult.status === 'completed' ? '已完成' : '部分完成' }}
               </el-tag>
