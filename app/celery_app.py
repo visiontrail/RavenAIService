@@ -1,6 +1,7 @@
 """Celery应用配置"""
 
 from celery import Celery
+from celery.schedules import crontab
 from app.config import settings
 
 # 创建Celery应用实例
@@ -8,7 +9,7 @@ celery_app = Celery(
     "log_staging_service",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["app.tasks.log_processing"]
+    include=["app.tasks.log_processing", "app.tasks.cleanup_tasks"]
 )
 
 # 配置Celery
@@ -38,6 +39,16 @@ celery_app.conf.update(
 # 配置队列
 celery_app.conf.task_routes = {
     'app.tasks.log_processing.*': {'queue': 'log_processing'},
+    'app.tasks.cleanup_tasks.*': {'queue': 'maintenance'},
+}
+
+# 配置定时任务
+celery_app.conf.beat_schedule = {
+    'cleanup-temp-directories-every-6-hours': {
+        'task': 'app.tasks.cleanup_tasks.cleanup_temp_directories',
+        'schedule': crontab(hour='*/6', minute=0),  # 每6小时执行一次
+        'args': (24, 48),  # processing_max_age=24小时, extracted_max_age=48小时
+    },
 }
 
 if __name__ == '__main__':

@@ -30,6 +30,7 @@ from app.exceptions import (
     FileProcessingError, BatchOperationError
 )
 from app.utils.validation import file_validator
+import glob
 
 logger = logging.getLogger(__name__)
 
@@ -333,11 +334,25 @@ class LogService(BaseCRUDService[LogRecord]):
                 file_path = Path(log_record.file_path)
                 if file_path.exists():
                     file_path.unlink()
+                    logger.info(f"删除主文件: {file_path}")
+                
+                # 清理关联的临时处理目录
+                self._cleanup_processing_directories(log_record)
                 
                 # 从数据库删除记录
                 await self.delete(db, log_id)
             else:
-                # 软删除：只标记为已删除
+                # 软删除：只标记为已删除，同时清理物理文件
+                # 删除主文件
+                file_path = Path(log_record.file_path)
+                if file_path.exists():
+                    file_path.unlink()
+                    logger.info(f"软删除-删除主文件: {file_path}")
+                
+                # 清理关联的临时处理目录
+                self._cleanup_processing_directories(log_record)
+                
+                # 更新数据库标记
                 log_record.is_deleted = True
                 log_record.deleted_at = datetime.utcnow()
                 db.add(log_record)
@@ -529,11 +544,25 @@ class LogService(BaseCRUDService[LogRecord]):
                         file_path = Path(record.file_path)
                         if file_path.exists():
                             file_path.unlink()
+                            logger.info(f"批量删除-硬删除主文件: {file_path}")
+                        
+                        # 清理关联的临时处理目录
+                        self._cleanup_processing_directories(record)
                         
                         # 删除数据库记录
                         await db.delete(record)
                     else:
-                        # 软删除：只标记为已删除
+                        # 软删除：只标记为已删除，同时清理物理文件
+                        # 删除主文件
+                        file_path = Path(record.file_path)
+                        if file_path.exists():
+                            file_path.unlink()
+                            logger.info(f"批量删除-软删除主文件: {file_path}")
+                        
+                        # 清理关联的临时处理目录
+                        self._cleanup_processing_directories(record)
+                        
+                        # 更新数据库标记
                         record.is_deleted = True
                         record.deleted_at = datetime.utcnow()
                     
@@ -852,6 +881,46 @@ class LogService(BaseCRUDService[LogRecord]):
                 pass
         
         return json.dumps(metadata, indent=2, ensure_ascii=False)
+
+    def _cleanup_processing_directories(self, log_record: LogRecord):
+        """
+        清理与日志记录相关的所有临时处理目录
+        
+        Args:
+            log_record: 日志记录
+        """
+        try:
+            # 1. 清理基于 task_id 的临时处理目录
+            if log_record.task_id:
+                processing_dir = Path(settings.temp_dir) / f"processing_{log_record.task_id}"
+                if processing_dir.exists():
+                    shutil.rmtree(processing_dir, ignore_errors=True)
+                    logger.info(f"清理临时处理目录: {processing_dir}")
+            
+            # 2. 清理所有可能的 processing_* 目录（针对 task_id 可能变更的情况）
+            # 使用 glob 查找所有匹配的目录
+            temp_base = Path(settings.temp_dir)
+            for processing_dir in temp_base.glob("processing_*"):
+                try:
+                    # 检查目录中是否有与当前日志ID相关的文件
+                    # 这样可以避免误删其他正在处理的日志的临时目录
+                    if processing_dir.is_dir():
+                        # 简单策略：如果目录存在时间超过24小时，或者为空，则删除
+                        dir_mtime = processing_dir.stat().st_mtime
+                        age_hours = (datetime.utcnow().timestamp() - dir_mtime) / 3600
+                        
+                        # 检查目录是否为空或过期
+                        is_empty = not any(processing_dir.iterdir())
+                        is_old = age_hours > 24
+                        
+                        if is_empty or is_old:
+                            shutil.rmtree(processing_dir, ignore_errors=True)
+                            logger.info(f"清理过期/空的临时处理目录: {processing_dir} (年龄: {age_hours:.1f}小时, 空目录: {is_empty})")
+                except Exception as e:
+                    logger.warning(f"清理临时处理目录失败: {processing_dir}, 错误: {e}")
+            
+        except Exception as e:
+            logger.warning(f"清理临时处理目录时发生错误: {e}")
 
     async def _check_and_trigger_protocol_stack_processing(self, log_record: LogRecord):
         """
