@@ -368,6 +368,99 @@ const formatDuration = (seconds: number) => {
   }
 }
 
+// HTML转义辅助函数
+const escapeHtml = (text: string) => {
+  const div = document.createElement('div')
+  div.textContent = text
+  return div.innerHTML
+}
+
+// 处理代码块的辅助函数，支持嵌套代码块
+const processCodeBlocks = (text: string): string => {
+  const result: string[] = []
+  let currentIndex = 0
+  
+  while (currentIndex < text.length) {
+    // 查找下一个代码块开始标记
+    const codeBlockStart = text.indexOf('```', currentIndex)
+    
+    if (codeBlockStart === -1) {
+      // 没有更多代码块，添加剩余文本
+      result.push(text.slice(currentIndex))
+      break
+    }
+    
+    // 添加代码块前的文本
+    result.push(text.slice(currentIndex, codeBlockStart))
+    
+    // 查找代码块结束标记
+    let codeBlockEnd = -1
+    let searchIndex = codeBlockStart + 3
+    let backtickCount = 0
+    
+    // 计算开始标记的反引号数量（通常是3个，但可能更多）
+    let startBackticks = 3
+    while (text[codeBlockStart + startBackticks] === '`') {
+      startBackticks++
+    }
+    
+    // 查找匹配的结束标记
+    while (searchIndex < text.length) {
+      const nextBackticks = text.indexOf('```', searchIndex)
+      if (nextBackticks === -1) {
+        break
+      }
+      
+      // 计算找到的反引号数量
+      let endBackticks = 3
+      while (text[nextBackticks + endBackticks] === '`') {
+        endBackticks++
+      }
+      
+      // 检查是否在行首或前面是换行符
+      const isLineStart = nextBackticks === 0 || text[nextBackticks - 1] === '\n'
+      
+      if (isLineStart && endBackticks >= startBackticks) {
+        codeBlockEnd = nextBackticks + endBackticks
+        break
+      }
+      
+      searchIndex = nextBackticks + 3
+    }
+    
+    if (codeBlockEnd === -1) {
+      // 没有找到结束标记，将剩余文本作为普通文本处理
+      result.push(text.slice(codeBlockStart))
+      break
+    }
+    
+    // 提取代码块内容
+    const codeContent = text.slice(codeBlockStart + startBackticks, codeBlockEnd - startBackticks)
+    
+    // 检查是否有语言标识符
+    const firstLineEnd = codeContent.indexOf('\n')
+    let language = ''
+    let actualContent = codeContent
+    
+    if (firstLineEnd !== -1) {
+      const firstLine = codeContent.slice(0, firstLineEnd).trim()
+      // 如果第一行看起来像语言标识符（只包含字母、数字、连字符）
+      if (/^[a-zA-Z0-9\-_]*$/.test(firstLine) && firstLine.length < 20) {
+        language = firstLine
+        actualContent = codeContent.slice(firstLineEnd + 1)
+      }
+    }
+    
+    // 转换为HTML
+    const languageClass = language ? ` language-${language}` : ''
+    result.push(`<pre class="bg-gray-100 rounded p-3 my-2 overflow-x-auto"><code class="text-sm${languageClass}">${escapeHtml(actualContent)}</code></pre>`)
+    
+    currentIndex = codeBlockEnd
+  }
+  
+  return result.join('')
+}
+
 const formatMarkdown = (content: string) => {
   // 安全检查：确保content是字符串且不为null/undefined
   if (!content || typeof content !== 'string') {
@@ -495,7 +588,8 @@ const formatMarkdown = (content: string) => {
   
   // 转换Markdown语法为HTML（按顺序处理，避免冲突）
   // 1. 代码块（需要先处理，避免内部语法被转换）
-  processed = processed.replace(/```([\s\S]*?)```/g, '<pre class="bg-gray-100 rounded p-3 my-2 overflow-x-auto"><code>$1</code></pre>')
+  // 改进的代码块处理逻辑，支持嵌套代码块
+  processed = processCodeBlocks(processed)
   
   // 2. 标题
   processed = processed
@@ -580,13 +674,6 @@ const formatMarkdown = (content: string) => {
   }).filter(p => p).join('\n')
   
   return processed || '<p class="text-gray-500">内容格式化失败</p>'
-}
-
-// HTML转义辅助函数
-const escapeHtml = (text: string) => {
-  const div = document.createElement('div')
-  div.textContent = text
-  return div.innerHTML
 }
 
 const copyResult = async () => {
