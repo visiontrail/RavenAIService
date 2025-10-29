@@ -52,10 +52,10 @@
         </div>
 
         <!-- 详细分析（如果有内容） -->
-        <div v-if="hasDetailedContent(result.final_result?.content)" class="findings-section">
+        <!-- <div v-if="hasDetailedContent(result.final_result?.content)" class="findings-section">
           <h2 class="findings-title">🔍 详细分析</h2>
           <div class="findings-content" v-html="renderMarkdownContent(result.final_result?.content || '')"></div>
-        </div>
+        </div> -->
 
         <!-- 建议措施 -->
         <div v-if="result.final_result?.recommendations?.length" class="recommendations-section">
