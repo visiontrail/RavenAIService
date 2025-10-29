@@ -1403,7 +1403,7 @@ class LogAnalysisAgent:
             }
 
     def _extract_summary(self, content: str) -> str:
-        """从内容中提取摘要 - 提取LLM生成的summary内容"""
+        """从内容中提取摘要 - 提取LLM生成的summary内容，返回纯markdown格式"""
         try:
             # 首先尝试从<context_summary>标签中提取
             summary_match = re.search(r'<context_summary>(.*?)</context_summary>', content, flags=re.DOTALL)
@@ -1411,14 +1411,22 @@ class LogAnalysisAgent:
                 raw = summary_match.group(1).strip()
                 # 去除任何残留的XML标签，但保留Markdown符号
                 raw = re.sub(r'<[^>]+>', '', raw)
-                # 如果LLM返回了```markdown代码块，优先提取其中的内容，原样返回给前端做渲染
+                
+                # 如果LLM返回了```markdown代码块，优先提取其中的内容
                 md_block = re.search(r'```(?:markdown|md)?\s*([\s\S]*?)```', raw, flags=re.DOTALL | re.IGNORECASE)
                 if md_block:
-                    return md_block.group(1).strip()
-                # 否则直接返回清理后的文本（保留列表/标题/加粗等Markdown标记，交给前端渲染）
-                return raw.strip()
+                    markdown_content = md_block.group(1).strip()
+                    logger.debug("Extracted markdown block from summary: %d chars", len(markdown_content))
+                    return markdown_content
+                
+                # 否则直接返回清理后的文本（保留所有Markdown标记）
+                # 不再移除markdown格式，让前端markdown-it来处理
+                cleaned = raw.strip()
+                if cleaned:
+                    logger.debug("Using cleaned summary content: %d chars", len(cleaned))
+                    return cleaned
             
-            # 如果没有找到summary标签，使用原有逻辑
+            # 如果没有找到summary标签，使用原有逻辑但保留markdown格式
             lines = content.split('\n')
             summary_lines = []
             
@@ -1426,21 +1434,17 @@ class LogAnalysisAgent:
                 line = line.strip()
                 # 跳过XML标签行和空行
                 if line and not line.startswith('<') and not line.endswith('>'):
-                    # 移除行内XML标签
+                    # 仅移除行内XML标签，保留markdown格式
                     clean_line = re.sub(r'<[^>]+>', '', line)
-                    # 移除markdown格式标记
-                    clean_line = re.sub(r'^[\-\*]\s+', '', clean_line)
-                    clean_line = re.sub(r'\*\*([^*]+)\*\*', r'\1', clean_line)
-                    clean_line = re.sub(r'`([^`]+)`', r'\1', clean_line)
-                    clean_line = re.sub(r'^#+\s+', '', clean_line)
                     if clean_line:
                         summary_lines.append(clean_line)
                 if len(summary_lines) >= 3:
                     break
             
             if summary_lines:
-                # 保留原始的Markdown符号以便前端渲染
-                summary = ' '.join(summary_lines)
+                # 保留原始的Markdown符号，用换行符连接（而非空格）
+                summary = '\n'.join(summary_lines)
+                logger.debug("Generated summary from content lines: %d chars", len(summary))
                 return summary
             else:
                 return "已完成日志分析，请查看详细结果。"
@@ -1518,7 +1522,7 @@ class LogAnalysisAgent:
             return 0.5
 
     def _format_final_content(self, query: str, content: str, summary: str, recommendations: List[str]) -> str:
-        """格式化最终内容为标准markdown - 仅返回主要发现内容，不包含标题和结构（前端已提供）"""
+        """格式化最终内容为标准markdown - 返回纯净的markdown格式内容"""
         try:
             # 前端已经有独立的section显示summary和recommendations
             # 这里只返回详细分析内容，移除XML标签和元数据
@@ -1526,7 +1530,7 @@ class LogAnalysisAgent:
             # 移除<context_summary>标签及其内容（已在summary字段单独显示）
             clean_content = re.sub(r'<context_summary>.*?</context_summary>', '', content, flags=re.DOTALL)
 
-            # 兼容旧格式：移除被包装为<document>且meta.type为summary的整块内容，避免在主要发现中重复显示摘要
+            # 兼容旧格式：移除被包装为<document>且meta.type为summary的整块内容
             clean_content = re.sub(
                 r'<document[^>]*>\s*<meta>.*?<type>\s*summary\s*</type>.*?</meta>\s*<content>[\s\S]*?</content>\s*</document>',
                 '',
@@ -1534,18 +1538,34 @@ class LogAnalysisAgent:
                 flags=re.DOTALL | re.IGNORECASE,
             )
             
-            # 移除其他XML标签但保留内容
-            clean_content = re.sub(r'<document[^>]*>', '', clean_content)
-            clean_content = re.sub(r'</document>', '', clean_content)
-            clean_content = re.sub(r'<reads>', '', clean_content)
-            clean_content = re.sub(r'</reads>', '', clean_content)
-            
-            # 更精确地处理带type属性的标签，保留内容
-            clean_content = re.sub(r'<[^>]+\s+type="[^"]*"[^>]*>', '', clean_content)
-            clean_content = re.sub(r'</[^>]+>', '', clean_content)
-            
-            # 移除XML属性行（如 tool="xxx"）
-            clean_content = re.sub(r'^\s*\w+="[^"]*"\s*$', '', clean_content, flags=re.MULTILINE)
+            # 尝试从```markdown块中提取内容（如果存在）
+            md_block_match = re.search(r'```(?:markdown|md)?\s*([\s\S]*?)```', clean_content, flags=re.DOTALL | re.IGNORECASE)
+            if md_block_match:
+                logger.debug("Extracted markdown block from final content")
+                clean_content = md_block_match.group(1).strip()
+            else:
+                # 移除XML标签（保留内容和markdown格式）
+                # 首先移除配对的标签
+                clean_content = re.sub(r'<document[^>]*>(.*?)</document>', r'\1', clean_content, flags=re.DOTALL)
+                clean_content = re.sub(r'<reads>(.*?)</reads>', r'\1', clean_content, flags=re.DOTALL)
+                clean_content = re.sub(r'<meta>.*?</meta>', '', clean_content, flags=re.DOTALL)
+                
+                # 移除单独的开闭标签
+                clean_content = re.sub(r'<document[^>]*>', '', clean_content)
+                clean_content = re.sub(r'</document>', '', clean_content)
+                clean_content = re.sub(r'<reads>', '', clean_content)
+                clean_content = re.sub(r'</reads>', '', clean_content)
+                
+                # 移除带属性的标签
+                clean_content = re.sub(r'<[^>]+\s+type="[^"]*"[^>]*>', '', clean_content)
+                clean_content = re.sub(r'<[^>]+\s+tool="[^"]*"[^>]*>', '', clean_content)
+                clean_content = re.sub(r'<[^>]+\s+source="[^"]*"[^>]*>', '', clean_content)
+                
+                # 移除所有剩余的XML标签
+                clean_content = re.sub(r'</?[a-zA-Z_][^>]*>', '', clean_content)
+                
+                # 移除XML属性行（如 tool="xxx"）
+                clean_content = re.sub(r'^\s*\w+="[^"]*"\s*$', '', clean_content, flags=re.MULTILINE)
             
             # 移除多余的空行（超过2个连续换行）
             clean_content = re.sub(r'\n{3,}', '\n\n', clean_content)
@@ -1553,13 +1573,19 @@ class LogAnalysisAgent:
             # 清理首尾空白
             clean_content = clean_content.strip()
             
-            # 如果内容为空或过短，返回基本信息
+            # 记录清理后的内容长度
+            logger.debug("Formatted final content: %d chars (original: %d chars)", 
+                        len(clean_content), len(content))
+            
+            # 如果内容为空或过短，返回基本信息（使用markdown格式）
             if not clean_content or len(clean_content) < 10:
-                clean_content = f"根据查询 **{query}** 的分析结果如上所示。\n\n详细信息已在摘要和建议中提供。"
+                clean_content = f"根据查询 **{query}** 的分析已完成。\n\n详细信息已在摘要和建议中提供。"
+                logger.debug("Using default content message due to insufficient cleaned content")
             
             return clean_content
         except Exception as e:
             logger.error("Format final content failed: %s", e)
+            # 返回原内容而非空字符串，确保有内容显示
             return content
 
 

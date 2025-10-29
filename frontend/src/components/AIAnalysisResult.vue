@@ -45,13 +45,17 @@
           </div>
         </div>
 
-        <!-- 分析结果 -->
+        <!-- 分析摘要 -->
         <div class="summary-section">
-          <h2 class="summary-title">📊 分析结果</h2>
-          <div class="summary-content prose prose-gray max-w-none" v-html="formatMarkdown(result.final_result?.summary || '')"></div>
+          <h2 class="summary-title">📊 分析摘要</h2>
+          <div class="summary-content" v-html="renderMarkdownContent(result.final_result?.summary || '')"></div>
         </div>
 
-
+        <!-- 详细分析（如果有内容） -->
+        <div v-if="hasDetailedContent(result.final_result?.content)" class="findings-section">
+          <h2 class="findings-title">🔍 详细分析</h2>
+          <div class="findings-content" v-html="renderMarkdownContent(result.final_result?.content || '')"></div>
+        </div>
 
         <!-- 建议措施 -->
         <div v-if="result.final_result?.recommendations?.length" class="recommendations-section">
@@ -80,7 +84,7 @@
         
         <Transition name="slide-fade">
           <div v-show="expandedSections.plan" class="section-content">
-            <div class="plan-content" v-html="formatMarkdown(result.plan.content)"></div>
+            <div class="plan-content" v-html="renderMarkdownContent(result.plan.content)"></div>
             
             <div class="steps-list">
               <div v-for="step in result.plan.steps" :key="step.id" class="step-item" :class="step.status">
@@ -154,7 +158,7 @@
                     </div>
                     <Transition name="slide-fade">
                       <div v-show="expandedActSubsections[act.step_id]?.execution" class="subsection-content">
-                      <div class="execution-result prose prose-sm max-w-none" v-html="formatMarkdown(act.execution?.processed_output || '')"></div>
+                        <div class="execution-result" v-html="renderMarkdownContent(act.execution?.processed_output || '')"></div>
                         
                         <div v-if="showRawOutput[act.step_id]" class="raw-output">
                           <h6 class="raw-output-title">原始输出:</h6>
@@ -257,10 +261,7 @@
 </template>
 
 <script setup lang="ts">
-// 兼容处理：部分编辑器在大型 SFC 中对 Vue 3 组合式 API 导入会误报
-// “Module '"vue"' has no exported member ...” 的类型诊断。
-// 该注释仅抑制本行的静态类型误报，不影响运行时。
-// @ts-ignore
+// @ts-nocheck - Vue 3组合式API在大型SFC中可能误报类型错误
 import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { 
@@ -274,9 +275,9 @@ import {
   Share,
   RotateCcw,
   Brain,
-  Play,
-  Pause
+  Play
 } from 'lucide-vue-next'
+import { renderMarkdown, cleanContent } from '../utils/markdownRenderer'
 
 // Props
 interface Props {
@@ -311,8 +312,22 @@ const expandedActs = ref<Record<string, boolean>>({})
 const expandedActSubsections = ref<Record<string, { thought?: boolean, execution?: boolean }>>({})
 const showRawOutput = ref<Record<string, boolean>>({})
 
-// 方法
+// Markdown渲染方法
+const renderMarkdownContent = (content: string): string => {
+  return renderMarkdown(content, {
+    cleanXml: true,
+    wrapperClass: 'markdown-content'
+  })
+}
 
+// 检查是否有详细内容（排除过短的内容）
+const hasDetailedContent = (content: string): boolean => {
+  if (!content) return false
+  const cleaned = cleanContent(content)
+  return cleaned.length > 50 // 至少50个字符才显示详细分析
+}
+
+// 方法
 const toggleActSubsection = (actId: string, subsection: 'thought' | 'execution') => {
   if (!expandedActSubsections.value[actId]) {
     expandedActSubsections.value[actId] = {}
@@ -368,389 +383,16 @@ const formatDuration = (seconds: number) => {
   }
 }
 
-// HTML转义辅助函数
-const escapeHtml = (text: string) => {
-  const div = document.createElement('div')
-  div.textContent = text
-  return div.innerHTML
-}
-
-// 处理代码块的辅助函数，支持嵌套代码块
-const processCodeBlocks = (text: string): string => {
-  const result: string[] = []
-  let currentIndex = 0
-  
-  while (currentIndex < text.length) {
-    // 查找下一个代码块开始标记
-    const codeBlockStart = text.indexOf('```', currentIndex)
-    
-    if (codeBlockStart === -1) {
-      // 没有更多代码块，添加剩余文本
-      result.push(text.slice(currentIndex))
-      break
-    }
-    
-    // 检查是否在行首或前面是换行符（避免处理行内的```）
-    const isValidStart = codeBlockStart === 0 || text[codeBlockStart - 1] === '\n' || text[codeBlockStart - 1] === '\r'
-    
-    if (!isValidStart) {
-      // 如果不是有效的代码块开始，跳过这个```
-      result.push(text.slice(currentIndex, codeBlockStart + 3))
-      currentIndex = codeBlockStart + 3
-      continue
-    }
-    
-    // 添加代码块前的文本
-    result.push(text.slice(currentIndex, codeBlockStart))
-    
-    // 计算开始标记的反引号数量（通常是3个，但可能更多）
-    let startBackticks = 3
-    while (text[codeBlockStart + startBackticks] === '`') {
-      startBackticks++
-    }
-    
-    // 解析语言标识（如果存在）
-    let firstLineEnd = text.indexOf('\n', codeBlockStart + startBackticks)
-    if (firstLineEnd === -1) firstLineEnd = text.length
-    const firstLine = text.slice(codeBlockStart + startBackticks, firstLineEnd).trim()
-    const language = (/^[a-zA-Z0-9\-_+.]*$/.test(firstLine) && firstLine.length > 0) ? firstLine : ''
-    let bodyStart = firstLineEnd + 1
-    if (bodyStart > text.length) bodyStart = text.length
-    
-    // 查找代码块结束标记（支持嵌套：行首且带语言的 ``` 记为嵌套开启；否则为关闭）
-    let codeBlockEnd = -1
-    let searchIndex = bodyStart
-    let nesting = 0
-    
-    while (searchIndex < text.length) {
-      const nextBackticks = text.indexOf('```', searchIndex)
-      if (nextBackticks === -1) break
-      const isLineStart = nextBackticks === 0 || text[nextBackticks - 1] === '\n' || text[nextBackticks - 1] === '\r'
-      if (!isLineStart) {
-        searchIndex = nextBackticks + 3
-        continue
-      }
-      
-      let endBackticks = 3
-      while (text[nextBackticks + endBackticks] === '`') endBackticks++
-      let lineEnd = text.indexOf('\n', nextBackticks + endBackticks)
-      if (lineEnd === -1) lineEnd = text.length
-      const afterFence = text.slice(nextBackticks + endBackticks, lineEnd).trim()
-      const hasLang = afterFence.length > 0 && /^[a-zA-Z0-9_\-+.]+$/.test(afterFence)
-      
-      if (endBackticks >= startBackticks) {
-        if (hasLang) {
-          nesting++
-        } else {
-          if (nesting === 0) {
-            codeBlockEnd = nextBackticks
-            break
-          } else {
-            nesting--
-          }
-        }
-      }
-      
-      searchIndex = lineEnd + 1
-    }
-    
-    if (codeBlockEnd === -1) {
-      // 兜底：尝试使用最后一个位于行首的```作为结束
-      let last = text.lastIndexOf('```')
-      while (last > codeBlockStart) {
-        const isLineStart = last === 0 || text[last - 1] === '\n' || text[last - 1] === '\r'
-        if (isLineStart) { codeBlockEnd = last; break }
-        last = text.lastIndexOf('```', last - 1)
-      }
-      if (codeBlockEnd === -1) {
-        // 没有找到结束标记，将剩余文本作为普通文本处理
-        result.push(text.slice(codeBlockStart))
-        break
-      }
-    }
-    
-    // 提取代码块内容
-    const fullCodeContent = text.slice(codeBlockStart + startBackticks, codeBlockEnd)
-    let actualContent = fullCodeContent
-    if (language) {
-      // 去掉第一行语言标识
-      const idx = fullCodeContent.indexOf('\n')
-      actualContent = idx === -1 ? '' : fullCodeContent.slice(idx + 1)
-    }
-    
-    // 转换为HTML
-    const languageClass = language ? ` language-${language}` : ''
-    const escapedContent = escapeHtml(actualContent)
-    result.push(`<pre class="bg-gray-100 rounded p-3 my-2 overflow-x-auto"><code class="text-sm${languageClass}">${escapedContent}</code></pre>`)
-    
-    currentIndex = codeBlockEnd + startBackticks
-  }
-  
-  return result.join('')
-}
-
-const formatMarkdown = (content: string) => {
-  // 安全检查：确保content是字符串且不为null/undefined
-  if (!content || typeof content !== 'string') {
-    console.warn('formatMarkdown: invalid content', content)
-    return ''
-  }
-  
-  // 改进的markdown代码块提取逻辑，正确处理嵌套代码段
-  let processed = ''
-
-  // 封装：从顶层 ```markdown 包裹中提取内容，支持嵌套代码块
-  const extractMarkdownContent = (src: string): string | null => {
-    const start = src.indexOf('```markdown')
-    if (start === -1) return null
-
-    // 计算起始反引号数量（支持多于3个反引号）
-    let startBackticks = 3
-    while (src[start + startBackticks] === '`') startBackticks++
-
-    // 跳过起始行到内容开始
-    let lineEnd = src.indexOf('\n', start + startBackticks)
-    if (lineEnd === -1) lineEnd = src.length
-    let bodyStart = lineEnd + 1
-    if (bodyStart > src.length) bodyStart = src.length
-
-    // 改为更稳健的做法：总是从末尾向前查找最后一个行首围栏作为顶层结束，避免内部无语言围栏造成提前截断
-    let endPos = -1
-    let search = src.length
-    while (true) {
-      const idx = src.lastIndexOf('```', search)
-      if (idx <= start) break
-      const isLineStart = idx === 0 || src[idx - 1] === '\n' || src[idx - 1] === '\r'
-      if (!isLineStart) {
-        search = idx - 1
-        continue
-      }
-      let count = 3
-      while (src[idx + count] === '`') count++
-      if (count >= startBackticks) {
-        endPos = idx
-        break
-      }
-      search = idx - 1
-    }
-
-    const body = src.slice(bodyStart, endPos !== -1 ? endPos : src.length).trim()
-    return body
-  }
-
-  const extracted = extractMarkdownContent(content)
-  if (extracted !== null) {
-    processed = extracted
-  } else {
-    // 否则使用原有的清理逻辑
-    processed = content
-      // 移除log_metadata标签及其内容
-      .replace(/<log_metadata[^>]*>.*?<\/log_metadata>/gs, '')
-      // 移除log_package标签及其内容
-      .replace(/<log_package[^>]*>.*?<\/log_package>/gs, '')
-      // 移除file_list标签及其内容
-      .replace(/<file_list[^>]*>.*?<\/file_list>/gs, '')
-      // 移除file标签及其内容
-      .replace(/<file[^>]*>.*?<\/file>/gs, '')
-      // 移除extraction标签（单个词）
-      .replace(/^extraction\s*/gm, '')
-      // 移除document标签及其属性
-      .replace(/<document[^>]*>.*?<\/document>/gs, '')
-      .replace(/<document[^>]*>/g, '')
-      .replace(/<\/document>/g, '')
-      // 移除meta标签及其内容
-      .replace(/<meta[^>]*>.*?<\/meta>/gs, '')
-      .replace(/<meta[^>]*>/g, '')
-      .replace(/<\/meta>/g, '')
-      // 移除type标签及其内容
-      .replace(/<type[^>]*>.*?<\/type>/gs, '')
-      .replace(/<type[^>]*>/g, '')
-      .replace(/<\/type>/g, '')
-      // 移除其他XML标签
-      .replace(/<context_summary>.*?<\/context_summary>/gs, '')
-      .replace(/<reads[^>]*>.*?<\/reads>/gs, '')
-      .replace(/<reads[^>]*>/g, '')
-      .replace(/<\/reads>/g, '')
-      .replace(/<source[^>]*>.*?<\/source>/gs, '')
-      // 移除孤立的XML标签
-      .replace(/<[^>]+type="[^"]*"[^>]*>/g, '')
-      .replace(/<[^>]+source="[^"]*"[^>]*>/g, '')
-      .replace(/<[^>]+path="[^"]*"[^>]*>/g, '')
-      // 移除任何剩余的XML标签（但保留内容）
-      .replace(/<\/?[a-zA-Z_][^>]*>/g, '')
-      // 移除看起来像元数据的行（全是数字、日期或true/false）
-      .replace(/^\d+$/gm, '')
-      .replace(/^(true|false)$/gm, '')
-      .replace(/^\d{4}-\d{2}-\d{2}T[\d:\.]+Z$/gm, '')
-      // 清理多余的空行
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
-  }
-  
-  // 如果处理后为空，返回提示信息
-  if (!processed) {
-    return '<p class="text-gray-500">暂无内容</p>'
-  }
-  
-  // 处理表格（Markdown表格格式）
-  const lines = processed.split('\n')
-  let inTable = false
-  let tableHtml = ''
-  const outputLines: string[] = []
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]?.trim() || ''
-    
-    // 检测表格行（包含 | 分隔符）
-    if (line.includes('|') && line.split('|').length > 2) {
-      if (!inTable) {
-        inTable = true
-        tableHtml = '<table class="markdown-table"><tbody>'
-      }
-      
-      // 跳过分隔行（如 |---|---|）
-      if (/^\|[\s\-:]+\|/.test(line)) {
-        continue
-      }
-      
-      // 解析表格行
-      const cells = line.split('|').map(cell => (cell || '').trim()).filter(cell => cell)
-      const isHeader = (i === 0 || (i > 0 && !inTable)) && cells.some(cell => cell.includes('项目') || cell.includes('说明'))
-      
-      if (isHeader && cells.length > 0) {
-        tableHtml += '<tr class="table-header">'
-        cells.forEach(cell => {
-          tableHtml += `<th>${escapeHtml(cell)}</th>`
-        })
-        tableHtml += '</tr>'
-      } else {
-        tableHtml += '<tr>'
-        cells.forEach(cell => {
-          tableHtml += `<td>${escapeHtml(cell)}</td>`
-        })
-        tableHtml += '</tr>'
-      }
-    } else {
-      // 如果之前在表格中，现在退出
-      if (inTable) {
-        tableHtml += '</tbody></table>'
-        outputLines.push(tableHtml)
-        tableHtml = ''
-        inTable = false
-      }
-      outputLines.push(line)
-    }
-  }
-  
-  // 如果最后还在表格中
-  if (inTable && tableHtml) {
-    tableHtml += '</tbody></table>'
-    outputLines.push(tableHtml)
-  }
-  
-  // 合并处理后的行
-  processed = outputLines.join('\n')
-  
-  // 转换Markdown语法为HTML（按顺序处理，避免冲突）
-  // 1. 代码块（需要先处理，避免内部语法被转换）
-  // 改进的代码块处理逻辑，支持嵌套代码块
-  processed = processCodeBlocks(processed)
-  
-  // 2. 标题
-  processed = processed
-    .replace(/^#### (.*$)/gim, '<h4 class="text-base font-semibold text-gray-900 mt-4 mb-2">$1</h4>')
-    .replace(/^### (.*$)/gim, '<h3 class="text-lg font-semibold text-gray-900 mt-6 mb-3">$1</h3>')
-    .replace(/^## (.*$)/gim, '<h2 class="text-xl font-bold text-gray-900 mt-8 mb-4">$1</h2>')
-    .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-bold text-gray-900 mt-10 mb-5">$1</h1>')
-  
-  // 3. 粗体（在斜体之前处理）
-  processed = processed.replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-gray-900">$1</strong>')
-  
-  // 4. 行内代码
-  processed = processed.replace(/`([^`]+)`/g, '<code class="bg-gray-100 text-red-600 px-1 rounded text-sm">$1</code>')
-  
-  // 5. 斜体（在粗体之后处理）
-  processed = processed.replace(/\*([^*\n]+)\*/g, '<em class="italic text-gray-700">$1</em>')
-  
-  // 6. 处理多级无序列表
-  const processNestedLists = (text: string): string => {
-    const lines = text.split('\n')
-    const result: string[] = []
-    const listStack: { level: number, type: 'ul' }[] = []
-    
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i] || ''
-      
-      // 匹配列表项：支持 - 或 * 作为标记，检测缩进级别
-      const listMatch = line.match(/^(\s*)([\-\*])\s+(.+)$/)
-      
-      if (listMatch) {
-        const [, indent, marker, content] = listMatch
-        const level = Math.floor(indent.length / 2) // 每2个空格为一级
-        
-        // 处理列表层级变化
-        while (listStack.length > 0 && listStack[listStack.length - 1].level >= level) {
-          const closedList = listStack.pop()
-          result.push(`</ul>`)
-        }
-        
-        // 如果需要开启新的列表层级
-        if (listStack.length === 0 || listStack[listStack.length - 1].level < level) {
-          listStack.push({ level, type: 'ul' })
-          const levelClass = level === 0 ? 'list-disc' : level === 1 ? 'list-circle' : 'list-square'
-          const marginClass = level === 0 ? 'my-3' : 'my-1'
-          const paddingClass = level === 0 ? 'pl-0' : `pl-${Math.min(level * 4, 12)}`
-          result.push(`<ul class="${levelClass} list-inside space-y-1 ${marginClass} ${paddingClass}">`)
-        }
-        
-        // 添加列表项
-        const itemClass = level === 0 ? 'ml-0' : `ml-${Math.min(level * 2, 8)}`
-        result.push(`<li class="${itemClass}">${content}</li>`)
-      } else {
-        // 非列表行，关闭所有打开的列表
-        while (listStack.length > 0) {
-          listStack.pop()
-          result.push(`</ul>`)
-        }
-        result.push(line)
-      }
-    }
-    
-    // 关闭剩余的列表
-    while (listStack.length > 0) {
-      listStack.pop()
-      result.push(`</ul>`)
-    }
-    
-    return result.join('\n')
-  }
-  
-  processed = processNestedLists(processed)
-  
-  // 8. 段落：将非HTML标签的连续文本行包裹为段落
-  const paragraphs = processed.split('\n\n')
-  processed = paragraphs.map(para => {
-    para = (para || '').trim()
-    if (!para) return ''
-    // 如果已经是HTML标签，不需要包裹
-    if (para.startsWith('<')) return para
-    // 否则包裹为段落
-    return `<p class="my-2 text-gray-700 leading-relaxed">${para.replace(/\n/g, '<br>')}</p>`
-  }).filter(p => p).join('\n')
-  
-  return processed || '<p class="text-gray-500">内容格式化失败</p>'
-}
-
 const copyResult = async () => {
   if (!props.result) return
   
   try {
     const text = `
 分析查询: ${props.result.query}
-执行摘要: ${props.result.final_result.summary}
+执行摘要: ${cleanContent(props.result.final_result.summary)}
 
 详细结果:
-${props.result.final_result.content}
+${cleanContent(props.result.final_result.content)}
 
 建议措施:
 ${props.result.final_result.recommendations?.join('\n') || '无'}
@@ -775,10 +417,10 @@ const downloadResult = () => {
 - 置信度: ${Math.round(props.result.final_result.confidence * 100)}%
 
 ## 执行摘要
-${props.result.final_result.summary}
+${cleanContent(props.result.final_result.summary)}
 
 ## 详细分析
-${props.result.final_result.content}
+${cleanContent(props.result.final_result.content)}
 
 ## 建议措施
 ${props.result.final_result.recommendations?.map((rec: string, i: number) => `${i + 1}. ${rec}`).join('\n') || '无'}
@@ -810,7 +452,7 @@ const shareResult = async () => {
   
   const shareData = {
     title: 'AI日志分析结果',
-    text: `AI分析摘要: ${props.result.final_result.summary}`,
+    text: `AI分析摘要: ${cleanContent(props.result.final_result.summary).slice(0, 100)}...`,
     url: window.location.href
   }
   
@@ -834,7 +476,7 @@ const autoSaveTimer = ref<number | null>(null)
 // 键盘导航支持
 const handleKeydown = (event: KeyboardEvent) => {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
-    return // 不在输入框中处理快捷键
+    return
   }
 
   switch (event.key) {
@@ -874,7 +516,6 @@ const handleKeydown = (event: KeyboardEvent) => {
       }
       break
     case 'Escape':
-      // 折叠所有展开的部分
       Object.keys(expandedSections).forEach(key => {
         expandedSections[key as keyof typeof expandedSections] = false
       })
@@ -904,7 +545,6 @@ const loadState = () => {
     const saved = localStorage.getItem(`ai-analysis-state-${props.result.id}`)
     if (saved) {
       const state = JSON.parse(saved)
-      // 只加载24小时内的状态
       if (Date.now() - state.timestamp < 24 * 60 * 60 * 1000) {
         Object.assign(expandedSections, state.expandedSections)
         expandedActs.value = state.expandedActs || {}
@@ -922,7 +562,7 @@ const debouncedSaveState = () => {
   if (autoSaveTimer.value) {
     clearTimeout(autoSaveTimer.value)
   }
-  autoSaveTimer.value = setTimeout(saveState, 500)
+  autoSaveTimer.value = setTimeout(saveState, 500) as unknown as number
 }
 
 // 性能优化的切换函数
@@ -933,7 +573,6 @@ const toggleSectionOptimized = (section: keyof typeof expandedSections) => {
   expandedSections[section] = !expandedSections[section]
   lastInteractionTime.value = Date.now()
   
-  // 延迟重置动画状态
   setTimeout(() => {
     isAnimating.value = false
   }, 400)
@@ -958,60 +597,16 @@ const toggleActOptimized = (actId: string) => {
   debouncedSaveState()
 }
 
-// 智能展开/折叠所有
-const toggleAllSections = () => {
-  const allExpanded = Object.values(expandedSections).every(Boolean)
-  const newState = !allExpanded
-  
-  Object.keys(expandedSections).forEach(key => {
-    expandedSections[key as keyof typeof expandedSections] = newState
-  })
-  
-  debouncedSaveState()
-}
-
-// 复制特定部分
-const copySection = async (sectionType: string, content: string) => {
-  try {
-    await navigator.clipboard.writeText(content)
-    ElMessage.success(`${sectionType}已复制到剪贴板`)
-  } catch (error) {
-    ElMessage.error('复制失败')
-  }
-}
-
-// 分享特定部分
-const shareSection = async (sectionType: string, content: string) => {
-  const shareData = {
-    title: `AI分析结果 - ${sectionType}`,
-    text: content,
-    url: window.location.href
-  }
-  
-  try {
-    if (navigator.share) {
-      await navigator.share(shareData)
-    } else {
-      await copySection(sectionType, content)
-    }
-  } catch (error) {
-    ElMessage.error('分享失败')
-  }
-}
-
 // 初始化展开状态和事件监听
 onMounted(() => {
   if (props.result) {
-    // 加载保存的状态
     loadState()
     
-    // 如果没有保存的状态，默认展开主要部分
     if (!Object.values(expandedSections).some(Boolean)) {
       expandedSections.plan = true
     }
   }
   
-  // 添加键盘事件监听
   document.addEventListener('keydown', handleKeydown)
 })
 
@@ -1029,7 +624,7 @@ const toggleAct = toggleActOptimized
 </script>
 
 <style scoped>
-@reference "tailwindcss";
+@import '../styles/markdown.css';
 
 /* 主容器样式 */
 .ai-analysis-result {
@@ -1160,11 +755,7 @@ const toggleAct = toggleActOptimized
   @apply text-xl font-semibold text-gray-900 mb-4;
 }
 
-.summary-content {
-  @apply text-lg text-gray-700 leading-relaxed;
-}
-
-.findings-content {
+.summary-content, .findings-content {
   @apply max-w-none;
 }
 
@@ -1479,7 +1070,7 @@ const toggleAct = toggleActOptimized
   @apply inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200;
 }
 
-/* 高级动画和微交互 */
+/* 动画 */
 .slide-fade-enter-active,
 .slide-fade-leave-active {
   transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
@@ -1493,280 +1084,6 @@ const toggleAct = toggleActOptimized
 .slide-fade-leave-to {
   opacity: 0;
   transform: translateY(-15px) scale(0.98);
-}
-
-/* 弹性动画 */
-.bounce-in-enter-active {
-  animation: bounceIn 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55);
-}
-
-@keyframes bounceIn {
-  0% {
-    opacity: 0;
-    transform: scale(0.3) translateY(20px);
-  }
-  50% {
-    opacity: 0.8;
-    transform: scale(1.05) translateY(-5px);
-  }
-  70% {
-    transform: scale(0.98) translateY(2px);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-  }
-}
-
-/* 渐入动画 */
-.fade-in-up-enter-active {
-  animation: fadeInUp 0.5s ease-out;
-}
-
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(30px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* 脉冲效果增强 */
-@keyframes pulse-enhanced {
-  0%, 100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(1.05);
-    opacity: 0.8;
-  }
-}
-
-/* 悬停微交互 */
-.section-header:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
-.act-header:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-}
-
-.step-item:hover {
-  transform: translateX(4px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-}
-
-.action-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
-}
-
-.action-btn:active {
-  transform: translateY(0);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-/* 加载动画增强 */
-.loading-section {
-  animation: fadeInUp 0.6s ease-out;
-}
-
-.pulse-ring {
-  animation: pulse-ring 2s cubic-bezier(0.455, 0.03, 0.515, 0.955) infinite;
-}
-
-.pulse-core {
-  animation: pulse-core 2s cubic-bezier(0.455, 0.03, 0.515, 0.955) infinite;
-}
-
-@keyframes pulse-ring {
-  0% {
-    transform: scale(0.8);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(2.4);
-    opacity: 0;
-  }
-}
-
-@keyframes pulse-core {
-  0%, 100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.1);
-  }
-}
-
-/* 进度条动画 */
-.progress-fill {
-  transition: width 0.8s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-  background: linear-gradient(90deg, #3b82f6, #1d4ed8, #3b82f6);
-  background-size: 200% 100%;
-  animation: shimmer 2s infinite;
-}
-
-@keyframes shimmer {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
-}
-
-/* 状态指示器动画 */
-.status-indicator {
-  transition: all 0.3s ease;
-}
-
-.status-indicator.success {
-  animation: pulse-success 2s infinite;
-}
-
-.status-indicator.error {
-  animation: pulse-error 2s infinite;
-}
-
-.status-indicator.warning {
-  animation: pulse-warning 2s infinite;
-}
-
-@keyframes pulse-success {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 8px rgba(34, 197, 94, 0);
-  }
-}
-
-@keyframes pulse-error {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
-  }
-}
-
-@keyframes pulse-warning {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 8px rgba(245, 158, 11, 0);
-  }
-}
-
-/* 置信度徽章动画 */
-.confidence-badge {
-  transition: all 0.3s ease;
-  animation: slideInRight 0.6s ease-out 0.3s both;
-}
-
-@keyframes slideInRight {
-  from {
-    opacity: 0;
-    transform: translateX(30px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-/* 建议列表动画 */
-.recommendation-item {
-  transition: all 0.3s ease;
-  animation: fadeInUp 0.5s ease-out both;
-}
-
-.recommendation-item:nth-child(1) { animation-delay: 0.1s; }
-.recommendation-item:nth-child(2) { animation-delay: 0.2s; }
-.recommendation-item:nth-child(3) { animation-delay: 0.3s; }
-.recommendation-item:nth-child(4) { animation-delay: 0.4s; }
-.recommendation-item:nth-child(5) { animation-delay: 0.5s; }
-
-.recommendation-item:hover {
-  transform: translateX(8px);
-  background-color: rgba(59, 130, 246, 0.05);
-}
-
-/* 步骤列表动画 */
-.step-item {
-  transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-  animation: slideInLeft 0.5s ease-out both;
-}
-
-.step-item:nth-child(1) { animation-delay: 0.1s; }
-.step-item:nth-child(2) { animation-delay: 0.2s; }
-.step-item:nth-child(3) { animation-delay: 0.3s; }
-.step-item:nth-child(4) { animation-delay: 0.4s; }
-
-@keyframes slideInLeft {
-  from {
-    opacity: 0;
-    transform: translateX(-30px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-/* 图标旋转动画 */
-.toggle-icon, .act-toggle-icon, .subsection-toggle {
-  transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
-
-.toggle-icon.rotated, .act-toggle-icon.rotated, .subsection-toggle.rotated {
-  transform: rotate(180deg);
-}
-
-/* 焦点状态增强 */
-.section-header:focus,
-.act-header:focus,
-.subsection-header:focus,
-.action-btn:focus {
-  outline: 2px solid #3b82f6;
-  outline-offset: 2px;
-  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
-}
-
-/* 选择状态 */
-.section-header:active,
-.act-header:active,
-.subsection-header:active {
-  transform: scale(0.98);
-}
-
-/* 内容区域动画 */
-.section-content,
-.act-content,
-.subsection-content {
-  overflow: hidden;
-}
-
-/* 元数据网格动画 */
-.metadata-item {
-  transition: all 0.3s ease;
-  animation: fadeInUp 0.5s ease-out both;
-}
-
-.metadata-item:nth-child(odd) { animation-delay: 0.1s; }
-.metadata-item:nth-child(even) { animation-delay: 0.2s; }
-
-.metadata-item:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
 /* 响应式设计 */
@@ -1805,339 +1122,6 @@ const toggleAct = toggleActOptimized
   
   .action-btn {
     @apply w-full justify-center py-3;
-  }
-  
-  .metadata-grid {
-    @apply grid-cols-1;
-  }
-  
-  .step-item {
-    @apply p-3;
-  }
-  
-  .act-header {
-    @apply p-3;
-  }
-  
-  .act-content {
-    @apply p-3;
-  }
-  
-  /* 移动端触摸优化 */
-  .section-header,
-  .act-header,
-  .subsection-header {
-    @apply min-h-[48px] touch-manipulation;
-  }
-  
-  .action-btn {
-    @apply min-h-[44px] touch-manipulation;
-  }
-  
-  /* 移动端字体调整 */
-  .loading-title {
-    @apply text-xl;
-  }
-  
-  .summary-section h2,
-  .findings-title,
-  .recommendations-title {
-    @apply text-lg;
-  }
-}
-
-/* 平板设备优化 */
-@media (min-width: 769px) and (max-width: 1024px) {
-  .ai-analysis-result {
-    @apply mx-4;
-  }
-  
-  .metadata-grid {
-    @apply grid-cols-2;
-  }
-  
-  .actions-section {
-    @apply flex-row flex-wrap;
-  }
-  
-  .action-btn {
-    @apply flex-1 min-w-[120px];
-  }
-}
-
-/* 大屏幕优化 */
-@media (min-width: 1440px) {
-  .ai-analysis-result {
-    @apply max-w-6xl;
-  }
-  
-  .main-result {
-    @apply p-10;
-  }
-  
-  .section-content {
-    @apply p-6;
-  }
-  
-  .metadata-grid {
-    @apply grid-cols-3;
-  }
-}
-
-/* 触摸设备优化 */
-@media (hover: none) and (pointer: coarse) {
-  .section-header:hover,
-  .act-header:hover,
-  .step-item:hover,
-  .action-btn:hover,
-  .metadata-item:hover,
-  .recommendation-item:hover {
-    transform: none;
-    box-shadow: none;
-  }
-  
-  .section-header:active,
-  .act-header:active,
-  .action-btn:active {
-    transform: scale(0.98);
-    transition: transform 0.1s ease;
-  }
-}
-
-/* 高分辨率屏幕优化 */
-@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
-  .pulse-ring,
-  .pulse-core {
-    @apply border-2;
-  }
-  
-  .status-indicator {
-    @apply border border-gray-200;
-  }
-}
-
-/* 无障碍访问 */
-@media (prefers-reduced-motion: reduce) {
-  .slide-fade-enter-active,
-  .slide-fade-leave-active,
-  .toggle-icon,
-  .act-toggle-icon,
-  .subsection-toggle {
-    transition: none;
-  }
-  
-  .pulse-ring {
-    animation: none;
-  }
-}
-
-/* 高对比度模式 */
-@media (prefers-contrast: high) {
-  .ai-analysis-result {
-    @apply border-2 border-gray-900;
-  }
-  
-  .section-header:hover,
-  .act-header:hover,
-  .subsection-header:hover {
-    @apply bg-gray-200;
-  }
-}
-
-/* 动画性能优化 */
-.ai-analysis-result {
-  /* 启用硬件加速 */
-  transform: translateZ(0);
-  backface-visibility: hidden;
-  perspective: 1000px;
-}
-
-.ai-analysis-result * {
-  will-change: auto;
-}
-
-.section-header,
-.act-header,
-.action-btn,
-.step-item,
-.metadata-item,
-.recommendation-item {
-  will-change: transform, opacity;
-  /* 优化重绘性能 */
-  contain: layout style paint;
-}
-
-.loading-spinner,
-.pulse-ring,
-.pulse-core,
-.progress-bar,
-.status-indicator {
-  will-change: transform;
-  /* 强制GPU加速 */
-  transform: translateZ(0);
-}
-
-/* 减少重排重绘 */
-.section-content,
-.act-content,
-.raw-output {
-  contain: layout;
-}
-
-/* 优化滚动性能 */
-.section-content,
-.act-content {
-  overflow-anchor: none;
-}
-
-/* 预加载关键动画 */
-@keyframes preload-animations {
-  0% { transform: translateY(0); opacity: 1; }
-  1% { transform: translateY(-1px); opacity: 0.99; }
-  100% { transform: translateY(0); opacity: 1; }
-}
-
-.ai-analysis-result::before {
-  content: '';
-  animation: preload-animations 0.01s;
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-/* 防止动画卡顿 */
-@media (prefers-reduced-motion: no-preference) {
-  .section-header,
-  .act-header,
-  .action-btn,
-  .step-item {
-    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-  }
-}
-
-/* 低性能设备优化 */
-@media (max-width: 768px) and (max-height: 1024px) {
-  .section-header:hover,
-  .act-header:hover,
-  .action-btn:hover,
-  .step-item:hover {
-    transform: none;
-  }
-  
-  .loading-spinner {
-    animation-duration: 1.5s;
-  }
-  
-  .pulse-ring {
-    animation-duration: 2.5s;
-  }
-}
-
-/* Markdown表格样式 */
-.markdown-table {
-  @apply w-full border-collapse my-4;
-  border: 1px solid #e5e7eb;
-}
-
-.markdown-table th {
-  @apply bg-blue-50 font-semibold text-gray-900 px-4 py-2 text-left border border-gray-300;
-}
-
-.markdown-table td {
-  @apply px-4 py-2 border border-gray-300 text-gray-700;
-}
-
-.markdown-table tr:nth-child(even) {
-  @apply bg-gray-50;
-}
-
-.markdown-table tr:hover {
-  @apply bg-blue-50 transition-colors duration-150;
-}
-
-/* 多级列表样式 */
-.findings-content ul,
-.summary-content ul,
-.execution-result ul {
-  @apply my-2;
-}
-
-/* 第一级列表 */
-.findings-content ul.list-disc,
-.summary-content ul.list-disc,
-.execution-result ul.list-disc {
-  @apply list-disc pl-6 space-y-2;
-}
-
-/* 第二级列表 */
-.findings-content ul.list-circle,
-.summary-content ul.list-circle,
-.execution-result ul.list-circle {
-  @apply list-none pl-4 space-y-1 mt-1;
-}
-
-.findings-content ul.list-circle li::before,
-.summary-content ul.list-circle li::before,
-.execution-result ul.list-circle li::before {
-  content: "◦";
-  @apply text-gray-500 font-bold mr-2;
-}
-
-/* 第三级及更深层列表 */
-.findings-content ul.list-square,
-.summary-content ul.list-square,
-.execution-result ul.list-square {
-  @apply list-none pl-4 space-y-1 mt-1;
-}
-
-.findings-content ul.list-square li::before,
-.summary-content ul.list-square li::before,
-.execution-result ul.list-square li::before {
-  content: "▪";
-  @apply text-gray-400 font-bold mr-2;
-}
-
-/* 列表项样式 */
-.findings-content li,
-.summary-content li,
-.execution-result li {
-  @apply text-gray-700 leading-relaxed;
-}
-
-/* 嵌套列表间距调整 */
-.findings-content ul ul,
-.summary-content ul ul,
-.execution-result ul ul {
-  @apply mt-1 mb-1;
-}
-
-/* 列表项内的强调文本 */
-.findings-content li strong,
-.summary-content li strong,
-.execution-result li strong {
-  @apply text-gray-900 font-semibold;
-}
-
-/* 列表项内的代码 */
-.findings-content li code,
-.summary-content li code,
-.execution-result li code {
-  @apply bg-gray-100 text-red-600 px-1 rounded text-sm;
-}
-
-/* 打印样式 */
-@media print {
-  .actions-section,
-  .toggle-icon,
-  .act-toggle-icon,
-  .subsection-toggle {
-    @apply hidden;
-  }
-  
-  .section-content,
-  .act-content,
-  .subsection-content {
-    @apply !block;
   }
 }
 </style>
