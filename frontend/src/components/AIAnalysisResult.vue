@@ -257,7 +257,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+// 兼容处理：部分编辑器在大型 SFC 中对 Vue 3 组合式 API 导入会误报
+// “Module '"vue"' has no exported member ...” 的类型诊断。
+// 该注释仅抑制本行的静态类型误报，不影响运行时。
+// @ts-ignore
+import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { 
   ChevronDown, 
@@ -405,68 +409,73 @@ const processCodeBlocks = (text: string): string => {
       startBackticks++
     }
     
-    // 查找代码块结束标记
-    let codeBlockEnd = -1
-    let searchIndex = codeBlockStart + startBackticks
+    // 解析语言标识（如果存在）
+    let firstLineEnd = text.indexOf('\n', codeBlockStart + startBackticks)
+    if (firstLineEnd === -1) firstLineEnd = text.length
+    const firstLine = text.slice(codeBlockStart + startBackticks, firstLineEnd).trim()
+    const language = (/^[a-zA-Z0-9\-_+.]*$/.test(firstLine) && firstLine.length > 0) ? firstLine : ''
+    let bodyStart = firstLineEnd + 1
+    if (bodyStart > text.length) bodyStart = text.length
     
-    // 查找匹配的结束标记
+    // 查找代码块结束标记（支持嵌套：行首且带语言的 ``` 记为嵌套开启；否则为关闭）
+    let codeBlockEnd = -1
+    let searchIndex = bodyStart
+    let nesting = 0
+    
     while (searchIndex < text.length) {
       const nextBackticks = text.indexOf('```', searchIndex)
-      if (nextBackticks === -1) {
-        break
-      }
-      
-      // 计算找到的反引号数量
-      let endBackticks = 3
-      while (text[nextBackticks + endBackticks] === '`') {
-        endBackticks++
-      }
-      
-      // 检查是否在行首或前面是换行符
+      if (nextBackticks === -1) break
       const isLineStart = nextBackticks === 0 || text[nextBackticks - 1] === '\n' || text[nextBackticks - 1] === '\r'
+      if (!isLineStart) {
+        searchIndex = nextBackticks + 3
+        continue
+      }
       
-      if (isLineStart && endBackticks >= startBackticks) {
-        // 检查这是否是真正的结束标记（不是嵌套在其他代码块中的）
-        const contentBetween = text.slice(codeBlockStart + startBackticks, nextBackticks)
-        
-        // 简单的平衡检查：计算中间内容的```数量
-        const innerBackticks = (contentBetween.match(/```/g) || []).length
-        
-        // 如果中间的```数量是偶数，说明都是成对的，当前找到的是真正的结束标记
-        if (innerBackticks % 2 === 0) {
-          codeBlockEnd = nextBackticks
-          break
+      let endBackticks = 3
+      while (text[nextBackticks + endBackticks] === '`') endBackticks++
+      let lineEnd = text.indexOf('\n', nextBackticks + endBackticks)
+      if (lineEnd === -1) lineEnd = text.length
+      const afterFence = text.slice(nextBackticks + endBackticks, lineEnd).trim()
+      const hasLang = afterFence.length > 0 && /^[a-zA-Z0-9_\-+.]+$/.test(afterFence)
+      
+      if (endBackticks >= startBackticks) {
+        if (hasLang) {
+          nesting++
+        } else {
+          if (nesting === 0) {
+            codeBlockEnd = nextBackticks
+            break
+          } else {
+            nesting--
+          }
         }
       }
       
-      searchIndex = nextBackticks + 3
+      searchIndex = lineEnd + 1
     }
     
     if (codeBlockEnd === -1) {
-      // 没有找到结束标记，将剩余文本作为普通文本处理
-      result.push(text.slice(codeBlockStart))
-      break
+      // 兜底：尝试使用最后一个位于行首的```作为结束
+      let last = text.lastIndexOf('```')
+      while (last > codeBlockStart) {
+        const isLineStart = last === 0 || text[last - 1] === '\n' || text[last - 1] === '\r'
+        if (isLineStart) { codeBlockEnd = last; break }
+        last = text.lastIndexOf('```', last - 1)
+      }
+      if (codeBlockEnd === -1) {
+        // 没有找到结束标记，将剩余文本作为普通文本处理
+        result.push(text.slice(codeBlockStart))
+        break
+      }
     }
     
     // 提取代码块内容
     const fullCodeContent = text.slice(codeBlockStart + startBackticks, codeBlockEnd)
-    
-    // 检查是否有语言标识符
-    const firstLineEnd = fullCodeContent.indexOf('\n')
-    let language = ''
     let actualContent = fullCodeContent
-    
-    if (firstLineEnd !== -1) {
-      const firstLine = fullCodeContent.slice(0, firstLineEnd).trim()
-      // 如果第一行看起来像语言标识符（只包含字母、数字、连字符、下划线）
-      if (/^[a-zA-Z0-9\-_]*$/.test(firstLine) && firstLine.length < 20 && firstLine.length > 0) {
-        language = firstLine
-        actualContent = fullCodeContent.slice(firstLineEnd + 1)
-      }
-    } else if (firstLineEnd === -1 && fullCodeContent.trim().length < 20 && /^[a-zA-Z0-9\-_]*$/.test(fullCodeContent.trim())) {
-      // 如果整个内容看起来像语言标识符
-      language = fullCodeContent.trim()
-      actualContent = ''
+    if (language) {
+      // 去掉第一行语言标识
+      const idx = fullCodeContent.indexOf('\n')
+      actualContent = idx === -1 ? '' : fullCodeContent.slice(idx + 1)
     }
     
     // 转换为HTML
@@ -487,66 +496,89 @@ const formatMarkdown = (content: string) => {
     return ''
   }
   
-  // 改进的markdown代码块提取逻辑，支持嵌套代码块
-  let processed = '';
-  
-  // 查找markdown代码块的开始位置
-  const markdownStart = content.indexOf('```markdown');
-  if (markdownStart !== -1) {
-    // 找到开始位置后，查找对应的结束位置
-    let searchPos = markdownStart + 11; // '```markdown'.length
-    let backtickCount = 0;
-    let endPos = -1;
-    
-    // 跳过开始标记后的换行符
-    while (searchPos < content.length && (content[searchPos] === '\n' || content[searchPos] === '\r')) {
-      searchPos++;
-    }
-    
-    // 查找匹配的结束标记
-    while (searchPos < content.length) {
-      if (content.substr(searchPos, 3) === '```') {
-        // 检查这个```是否在行首或前面是换行符
-        const isLineStart = searchPos === 0 || content[searchPos - 1] === '\n' || content[searchPos - 1] === '\r';
-        
-        if (isLineStart) {
-          // 检查这是否是最外层的结束标记
-          // 通过计算从开始到当前位置的```数量来判断
-          const contentBetween = content.slice(markdownStart + 11, searchPos);
-          const innerBackticks = (contentBetween.match(/```/g) || []).length;
-          
-          // 如果内部的```数量是偶数，说明都是成对的，当前的```是结束标记
-          if (innerBackticks % 2 === 0) {
-            endPos = searchPos;
-            break;
+  // 改进的markdown代码块提取逻辑，正确处理嵌套代码段
+  let processed = ''
+
+  // 封装：从顶层 ```markdown 包裹中提取内容，支持嵌套代码块
+  const extractMarkdownContent = (src: string): string | null => {
+    const start = src.indexOf('```markdown')
+    if (start === -1) return null
+
+    // 计算起始反引号数量（支持多于3个反引号）
+    let startBackticks = 3
+    while (src[start + startBackticks] === '`') startBackticks++
+
+    // 跳过起始行到内容开始
+    let lineEnd = src.indexOf('\n', start + startBackticks)
+    if (lineEnd === -1) lineEnd = src.length
+    let bodyStart = lineEnd + 1
+    if (bodyStart > src.length) bodyStart = src.length
+
+    // 通过嵌套计数查找结束位置：
+    // 在 ```markdown 包裹内，遇到行首且带语言的 ```xxx 视为嵌套开始；
+    // 遇到行首且不带语言的 ``` 视为关闭；当嵌套计数为0时的关闭为真正结束。
+    let searchPos = bodyStart
+    let nesting = 0
+    let endPos = -1
+    while (searchPos < src.length) {
+      const next = src.indexOf('```', searchPos)
+      if (next === -1) break
+      const isLineStart = next === 0 || src[next - 1] === '\n' || src[next - 1] === '\r'
+      if (!isLineStart) {
+        searchPos = next + 3
+        continue
+      }
+
+      // 计算该处反引号数
+      let count = 3
+      while (src[next + count] === '`') count++
+
+      // 获取该行 fence 后的内容（直到行尾）
+      let afterPos = next + count
+      let nextLineEnd = src.indexOf('\n', afterPos)
+      if (nextLineEnd === -1) nextLineEnd = src.length
+      const afterFence = src.slice(afterPos, nextLineEnd).trim()
+
+      const hasLang = afterFence.length > 0 && /^[a-zA-Z0-9_\-+.]+$/.test(afterFence)
+
+      if (count >= startBackticks) {
+        if (hasLang) {
+          // 开启一个嵌套代码块
+          nesting++
+        } else {
+          // 关闭一个代码块；当嵌套计数为0时这是顶层结束
+          if (nesting === 0) {
+            endPos = next
+            break
+          } else {
+            nesting--
           }
         }
       }
-      searchPos++;
+
+      searchPos = nextLineEnd + 1
     }
-    
-    if (endPos !== -1) {
-      // 提取markdown代码块内的内容
-      const startContent = markdownStart + 11; // '```markdown'.length
-      let actualStart = startContent;
-      
-      // 跳过开始位置的换行符
-      while (actualStart < endPos && (content[actualStart] === '\n' || content[actualStart] === '\r')) {
-        actualStart++;
+
+    // 兜底：如果未找到结束标记，尝试使用最后一个位于行首的 ``` 作为结束
+    if (endPos === -1) {
+      let last = src.lastIndexOf('```')
+      while (last > start) {
+        const isLineStart = last === 0 || src[last - 1] === '\n' || src[last - 1] === '\r'
+        if (isLineStart) {
+          endPos = last
+          break
+        }
+        last = src.lastIndexOf('```', last - 1)
       }
-      
-      processed = content.slice(actualStart, endPos).trim();
-      console.log('Extracted content from markdown code block with improved logic');
-    } else {
-      // 如果没有找到结束标记，使用从开始到文档末尾的内容
-      const startContent = markdownStart + 11;
-      let actualStart = startContent;
-      while (actualStart < content.length && (content[actualStart] === '\n' || content[actualStart] === '\r')) {
-        actualStart++;
-      }
-      processed = content.slice(actualStart).trim();
-      console.log('Using content from markdown start to end (no closing tag found)');
     }
+
+    const body = src.slice(bodyStart, endPos !== -1 ? endPos : src.length).trim()
+    return body
+  }
+
+  const extracted = extractMarkdownContent(content)
+  if (extracted !== null) {
+    processed = extracted
   } else {
     // 否则使用原有的清理逻辑
     processed = content
