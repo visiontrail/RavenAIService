@@ -45,17 +45,13 @@
           </div>
         </div>
 
-        <!-- 执行摘要 -->
+        <!-- 分析结果 -->
         <div class="summary-section">
-          <h2 class="summary-title">📊 执行摘要</h2>
+          <h2 class="summary-title">📊 分析结果</h2>
           <div class="summary-content prose prose-gray max-w-none" v-html="formatMarkdown(result.final_result?.summary || '')"></div>
         </div>
 
-        <!-- 主要发现 -->
-        <div class="findings-section">
-          <h2 class="findings-title">🔍 主要发现</h2>
-          <div class="findings-content prose prose-gray max-w-none" v-html="formatMarkdown(result.final_result?.content || '')"></div>
-        </div>
+
 
         <!-- 建议措施 -->
         <div v-if="result.final_result?.recommendations?.length" class="recommendations-section">
