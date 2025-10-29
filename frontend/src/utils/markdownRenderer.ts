@@ -58,40 +58,61 @@ const XML_CLEANUP_PATTERNS = [
 
 /**
  * 从顶层```markdown块中提取内容，支持嵌套代码块
+ * 改进版：使用状态机正确处理内层嵌套的代码块
  */
 function extractMarkdownBlock(content: string): string | null {
   const start = content.indexOf('```markdown')
   if (start === -1) return null
 
-  let startBackticks = 3
-  while (content[start + startBackticks] === '`') startBackticks++
-
-  let lineEnd = content.indexOf('\n', start + startBackticks)
-  if (lineEnd === -1) lineEnd = content.length
+  // 找到开始标记后的换行位置
+  let lineEnd = content.indexOf('\n', start)
+  if (lineEnd === -1) return null
+  
   let bodyStart = lineEnd + 1
-  if (bodyStart > content.length) bodyStart = content.length
-
-  // 从末尾向前查找最后一个行首围栏作为顶层结束
-  let endPos = -1
-  let search = content.length
-  while (true) {
-    const idx = content.lastIndexOf('```', search)
-    if (idx <= start) break
-    const isLineStart = idx === 0 || content[idx - 1] === '\n' || content[idx - 1] === '\r'
-    if (!isLineStart) {
-      search = idx - 1
-      continue
+  
+  // 使用状态机：true=在代码块外，false=在代码块内
+  // 初始状态：在外层markdown块内，但不在内层代码块内
+  let insideNestedCodeBlock = false
+  let i = bodyStart
+  
+  while (i < content.length) {
+    // 查找下一个```
+    const nextFence = content.indexOf('```', i)
+    if (nextFence === -1) {
+      // 没有找到结束标记，返回剩余所有内容
+      return content.slice(bodyStart).trim()
     }
-    let count = 3
-    while (content[idx + count] === '`') count++
-    if (count >= startBackticks) {
-      endPos = idx
-      break
+    
+    // 检查是否在行首（或前面只有空白字符）
+    const lineStart = content.lastIndexOf('\n', nextFence - 1)
+    const beforeFence = content.slice(lineStart + 1, nextFence)
+    const isLineStart = beforeFence.trim() === ''
+    
+    if (isLineStart) {
+      if (insideNestedCodeBlock) {
+        // 当前在内层代码块中，这个```是内层代码块的结束
+        insideNestedCodeBlock = false
+      } else {
+        // 当前在内层代码块外
+        // 检查后面的内容，判断这是内层代码块的开始，还是外层markdown块的结束
+        const afterFencePos = nextFence + 3
+        const afterFence = content.slice(afterFencePos, Math.min(afterFencePos + 20, content.length))
+        
+        // 如果后面紧跟换行或文件结束，这是外层markdown块的结束
+        if (afterFence.match(/^[\s\r\n]*$/)) {
+          return content.slice(bodyStart, nextFence).trim()
+        }
+        
+        // 如果后面有内容（包括可能的语言标识符），这是内层代码块的开始
+        insideNestedCodeBlock = true
+      }
     }
-    search = idx - 1
+    
+    i = nextFence + 3
   }
-
-  return content.slice(bodyStart, endPos !== -1 ? endPos : content.length).trim()
+  
+  // 如果循环结束还没找到，返回剩余内容
+  return content.slice(bodyStart).trim()
 }
 
 /**
