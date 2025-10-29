@@ -4,6 +4,8 @@
  * - Custom markdown styles with Tailwind
  */
 
+@reference "../style.css";
+
 /* ==================== Code Highlighting (github-dark theme) ==================== */
 .hljs {
   display: block;
