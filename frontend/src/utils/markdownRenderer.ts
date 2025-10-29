@@ -38,8 +38,8 @@ const XML_CLEANUP_PATTERNS = [
   /<type[^>]*>.*?<\/type>/gs,
   /<type[^>]*>/g,
   /<\/type>/g,
-  // 移除其他XML标签
-  /<context_summary>.*?<\/context_summary>/gs,
+  // 移除其他XML标签（但保留context_summary的内容）
+  /<context_summary>(.*?)<\/context_summary>/gs,  // 这个会被后面的规则处理，只移除标签本身
   /<reads[^>]*>.*?<\/reads>/gs,
   /<reads[^>]*>/g,
   /<\/reads>/g,
@@ -139,9 +139,16 @@ function cleanXmlAndMetadata(content: string): string {
     return extracted
   }
 
-  // 否则使用正则清理
+  // 特殊处理：先提取context_summary的内容（保留内容，只删除标签）
   let cleaned = content
+  cleaned = cleaned.replace(/<context_summary>(.*?)<\/context_summary>/gs, '$1')
+  
+  // 然后应用其他清理规则（跳过context_summary规则）
   for (const pattern of XML_CLEANUP_PATTERNS) {
+    // 跳过context_summary的pattern（已经在上面处理过了）
+    if (pattern.source && pattern.source.includes('context_summary')) {
+      continue
+    }
     cleaned = cleaned.replace(pattern, '')
   }
 

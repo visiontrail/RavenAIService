@@ -1412,12 +1412,11 @@ class LogAnalysisAgent:
                 # 去除任何残留的XML标签，但保留Markdown符号
                 raw = re.sub(r'<[^>]+>', '', raw)
                 
-                # 如果LLM返回了```markdown代码块，优先提取其中的内容
-                md_block = re.search(r'```(?:markdown|md)?\s*([\s\S]*?)```', raw, flags=re.DOTALL | re.IGNORECASE)
-                if md_block:
-                    markdown_content = md_block.group(1).strip()
-                    logger.debug("Extracted markdown block from summary: %d chars", len(markdown_content))
-                    return markdown_content
+                # 如果LLM返回了```markdown代码块，使用嵌套感知的提取方法
+                extracted = self._extract_markdown_block(raw)
+                if extracted:
+                    logger.debug("Extracted markdown block from summary using nested-aware parser: %d chars", len(extracted))
+                    return extracted
                 
                 # 否则直接返回清理后的文本（保留所有Markdown标记）
                 # 不再移除markdown格式，让前端markdown-it来处理
