@@ -108,6 +108,11 @@ def get_llm() -> Any:
             # 添加model_name属性，优先使用主模型名称
             self.model_name = primary_conf.get("model", "unknown")
             self._current_model = "primary"  # 跟踪当前使用的模型
+            
+            # 记录配置的模型信息
+            primary_model = primary_conf.get("model", "unknown")
+            fallback_model = fallback_conf.get("model", "none") if fallback_conf else "none"
+            logger.info("_FallbackLLM.__init__: configured primary_model=%s, fallback_model=%s", primary_model, fallback_model)
 
         def invoke(self, prompt: str):
             # 尝试主模型（DeepSeek）
@@ -117,9 +122,12 @@ def get_llm() -> Any:
                     if self._current_model != "primary":
                         self.model_name = self._primary_conf.get("model", "unknown")
                         self._current_model = "primary"
+                        logger.info("FallbackLLM: switched to primary model - %s", self.model_name)
+                    else:
+                        logger.info("FallbackLLM: using primary model - %s", self.model_name)
                     return self._primary.invoke(prompt)
                 except Exception as e:
-                    logger.warning(f"Primary model invocation failed, switching to fallback: {e}")
+                    logger.warning(f"Primary model ({self._primary_conf.get('model', 'unknown')}) invocation failed, switching to fallback: {e}")
                     # 出现HTTP错误（如404/502/超时等）时切换到备选（Qwen）
                     pass
             # 构建并尝试备选模型（Qwen）
@@ -136,9 +144,12 @@ def get_llm() -> Any:
                     if self._current_model != "fallback":
                         self.model_name = self._fallback_conf.get("model", "unknown")
                         self._current_model = "fallback"
+                        logger.info("FallbackLLM: switched to fallback model - %s", self.model_name)
+                    else:
+                        logger.info("FallbackLLM: using fallback model - %s", self.model_name)
                     return self._fallback.invoke(prompt)
                 except Exception as e:
-                    logger.warning(f"Fallback model invocation failed: {e}")
+                    logger.warning(f"Fallback model ({self._fallback_conf.get('model', 'unknown')}) invocation failed: {e}")
             # 无可用后端，抛出运行时异常以避免使用模拟LLM
             logger.error("FallbackLLM.invoke: no available backend after retry")
             raise RuntimeError("No available LLM backend; invocation failed")
@@ -345,6 +356,17 @@ class LogAnalysisAgent:
     def __init__(self):
         self.llm = get_llm()
         logger.info("LogAnalysisAgent.__init__: llm=%s", type(self.llm).__name__)
+        
+        # 显示当前使用的模型信息
+        if hasattr(self.llm, 'model_name'):
+            logger.info("LogAnalysisAgent.__init__: current model=%s", self.llm.model_name)
+        elif hasattr(self.llm, '_primary_conf'):
+            primary_model = self.llm._primary_conf.get('model', 'unknown')
+            fallback_model = self.llm._fallback_conf.get('model', 'none') if self.llm._fallback_conf else 'none'
+            logger.info("LogAnalysisAgent.__init__: primary_model=%s, fallback_model=%s", primary_model, fallback_model)
+        else:
+            logger.info("LogAnalysisAgent.__init__: model info not available")
+            
         self.memory = ShortTermMemory(window=settings.agent_short_term_window)
         self.search_backend = (
             ElasticSearchBackend(url=settings.elasticsearch_url)
