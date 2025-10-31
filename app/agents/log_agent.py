@@ -47,6 +47,7 @@ except Exception:
     LCStructuredTool = None
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 from app.config import settings
 
@@ -328,7 +329,7 @@ def compress_outputs(outputs: List[str]) -> str:
         logger.info("\n\n--- START LLM PROMPT [summary] ---\n%s\n--- END LLM PROMPT [summary] ---\n", prompt_to_log)
         if hasattr(llm, "predict"):
             summary_xml = llm.predict(prompt)
-            logger.info("\n\n--- START LLM OUTPUT [summary] ---\ncontent='%s'\n--- END LLM OUTPUT [summary] ---\n", summary_xml)
+            logger.info("\n\n--- (predict)START LLM OUTPUT [summary] ---\ncontent='%s'\n--- END LLM OUTPUT [summary] ---\n", summary_xml)
             return f"<context_summary>{summary_xml}</context_summary>"
         else:
             res = llm.invoke(prompt)
