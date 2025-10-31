@@ -397,17 +397,32 @@ ${cleanContent(props.result.final_result.content)}
 ${props.result.final_result.recommendations?.join('\n') || '无'}
   `.trim()
   
+  // 检查是否支持 Clipboard API
+  const isClipboardSupported = () => {
+    return (
+      typeof navigator !== 'undefined' &&
+      navigator.clipboard &&
+      typeof navigator.clipboard.writeText === 'function' &&
+      window.isSecureContext // 确保是安全上下文（HTTPS 或 localhost）
+    )
+  }
+  
   // 定义降级复制方法
   const fallbackCopy = (text: string): Promise<boolean> => {
     return new Promise((resolve) => {
       try {
         const textArea = document.createElement('textarea')
         textArea.value = text
-        textArea.style.position = 'fixed'
-        textArea.style.left = '-999999px'
-        textArea.style.top = '-999999px'
-        textArea.style.opacity = '0'
+        textArea.style.cssText = `
+          position: fixed;
+          left: -999999px;
+          top: -999999px;
+          opacity: 0;
+          pointer-events: none;
+          z-index: -1;
+        `
         textArea.setAttribute('readonly', '')
+        textArea.setAttribute('tabindex', '-1')
         document.body.appendChild(textArea)
         
         // 选择文本
@@ -426,9 +441,158 @@ ${props.result.final_result.recommendations?.join('\n') || '无'}
     })
   }
   
+  // 创建手动复制模态框
+  const showManualCopyModal = (text: string) => {
+    const modal = document.createElement('div')
+    modal.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 10000;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    `
+    
+    const content = document.createElement('div')
+    content.style.cssText = `
+      background: white;
+      padding: 24px;
+      border-radius: 12px;
+      max-width: 600px;
+      max-height: 80vh;
+      overflow: auto;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    `
+    
+    const title = document.createElement('h3')
+    title.textContent = '请手动复制以下内容'
+    title.style.cssText = `
+      margin: 0 0 16px 0;
+      font-size: 18px;
+      font-weight: 600;
+      color: #1f2937;
+    `
+    
+    const instruction = document.createElement('p')
+    instruction.textContent = '由于浏览器限制，无法自动复制到剪贴板。请选择下方文本并使用 Ctrl+C (或 Cmd+C) 复制。'
+    instruction.style.cssText = `
+      margin: 0 0 16px 0;
+      color: #6b7280;
+      font-size: 14px;
+      line-height: 1.5;
+    `
+    
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.style.cssText = `
+      width: 100%;
+      height: 300px;
+      margin: 0 0 16px 0;
+      padding: 12px;
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+      font-size: 12px;
+      line-height: 1.4;
+      resize: vertical;
+      outline: none;
+      box-sizing: border-box;
+    `
+    textarea.readOnly = true
+    
+    const buttonContainer = document.createElement('div')
+    buttonContainer.style.cssText = `
+      display: flex;
+      gap: 12px;
+      justify-content: flex-end;
+    `
+    
+    const selectAllBtn = document.createElement('button')
+    selectAllBtn.textContent = '全选'
+    selectAllBtn.style.cssText = `
+      padding: 8px 16px;
+      background: #f3f4f6;
+      color: #374151;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+    `
+    selectAllBtn.onmouseover = () => {
+      selectAllBtn.style.background = '#e5e7eb'
+    }
+    selectAllBtn.onmouseout = () => {
+      selectAllBtn.style.background = '#f3f4f6'
+    }
+    selectAllBtn.onclick = () => {
+      textarea.focus()
+      textarea.select()
+      textarea.setSelectionRange(0, text.length)
+    }
+    
+    const closeBtn = document.createElement('button')
+    closeBtn.textContent = '关闭'
+    closeBtn.style.cssText = `
+      padding: 8px 16px;
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+    `
+    closeBtn.onmouseover = () => {
+      closeBtn.style.background = '#2563eb'
+    }
+    closeBtn.onmouseout = () => {
+      closeBtn.style.background = '#3b82f6'
+    }
+    closeBtn.onclick = () => {
+      document.body.removeChild(modal)
+    }
+    
+    // 点击模态框外部关闭
+    modal.onclick = (e) => {
+      if (e.target === modal) {
+        document.body.removeChild(modal)
+      }
+    }
+    
+    // ESC 键关闭
+    const handleKeydown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        document.body.removeChild(modal)
+        document.removeEventListener('keydown', handleKeydown)
+      }
+    }
+    document.addEventListener('keydown', handleKeydown)
+    
+    buttonContainer.appendChild(selectAllBtn)
+    buttonContainer.appendChild(closeBtn)
+    content.appendChild(title)
+    content.appendChild(instruction)
+    content.appendChild(textarea)
+    content.appendChild(buttonContainer)
+    modal.appendChild(content)
+    document.body.appendChild(modal)
+    
+    // 自动选择文本
+    setTimeout(() => {
+      textarea.focus()
+      textarea.select()
+    }, 100)
+  }
+  
   try {
     // 方法1: 尝试使用现代 Clipboard API
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    if (isClipboardSupported()) {
       try {
         await navigator.clipboard.writeText(text)
         ElMessage.success('分析结果已复制到剪贴板')
@@ -443,87 +607,18 @@ ${props.result.final_result.recommendations?.join('\n') || '无'}
     const success = await fallbackCopy(text)
     if (success) {
       ElMessage.success('分析结果已复制到剪贴板')
-    } else {
-      throw new Error('所有复制方法都失败了')
+      return
     }
+    
+    // 方法3: 最后的降级方案 - 显示手动复制模态框
+    showManualCopyModal(text)
+    ElMessage.info('请手动复制文本内容')
     
   } catch (error) {
     console.error('复制失败:', error)
-    
-    // 方法3: 最后的降级方案 - 提示用户手动复制
-    try {
-      // 创建一个模态框显示文本供用户手动复制
-      const modal = document.createElement('div')
-      modal.style.cssText = `
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0,0,0,0.5);
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        z-index: 10000;
-      `
-      
-      const content = document.createElement('div')
-      content.style.cssText = `
-        background: white;
-        padding: 20px;
-        border-radius: 8px;
-        max-width: 80%;
-        max-height: 80%;
-        overflow: auto;
-      `
-      
-      const title = document.createElement('h3')
-      title.textContent = '请手动复制以下内容'
-      title.style.marginTop = '0'
-      
-      const textarea = document.createElement('textarea')
-      textarea.value = text
-      textarea.style.cssText = `
-        width: 100%;
-        height: 300px;
-        margin: 10px 0;
-        padding: 10px;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        font-family: monospace;
-        font-size: 12px;
-      `
-      textarea.readOnly = true
-      
-      const closeBtn = document.createElement('button')
-      closeBtn.textContent = '关闭'
-      closeBtn.style.cssText = `
-        padding: 8px 16px;
-        background: #409eff;
-        color: white;
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-      `
-      
-      closeBtn.onclick = () => document.body.removeChild(modal)
-      
-      content.appendChild(title)
-      content.appendChild(textarea)
-      content.appendChild(closeBtn)
-      modal.appendChild(content)
-      document.body.appendChild(modal)
-      
-      // 自动选择文本
-      textarea.focus()
-      textarea.select()
-      
-      ElMessage.warning('自动复制失败，请手动复制文本内容')
-      
-    } catch (modalError) {
-      console.error('创建手动复制界面失败:', modalError)
-      ElMessage.error(`复制失败: ${error instanceof Error ? error.message : '未知错误'}`)
-    }
+    // 如果所有方法都失败，显示手动复制模态框
+    showManualCopyModal(text)
+    ElMessage.warning('自动复制失败，请手动复制文本内容')
   }
 }
 
