@@ -397,37 +397,133 @@ ${cleanContent(props.result.final_result.content)}
 ${props.result.final_result.recommendations?.join('\n') || '无'}
   `.trim()
   
-  try {
-    // 尝试使用现代 Clipboard API
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text)
-      ElMessage.success('分析结果已复制到剪贴板')
-      return
-    }
-    
-    // 降级方案：使用传统的 execCommand 方法
-    const textArea = document.createElement('textarea')
-    textArea.value = text
-    textArea.style.position = 'fixed'
-    textArea.style.left = '-999999px'
-    textArea.style.top = '-999999px'
-    document.body.appendChild(textArea)
-    textArea.focus()
-    textArea.select()
-    
-    try {
-      const successful = document.execCommand('copy')
-      if (successful) {
-        ElMessage.success('分析结果已复制到剪贴板')
-      } else {
-        throw new Error('execCommand failed')
+  // 定义降级复制方法
+  const fallbackCopy = (text: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      try {
+        const textArea = document.createElement('textarea')
+        textArea.value = text
+        textArea.style.position = 'fixed'
+        textArea.style.left = '-999999px'
+        textArea.style.top = '-999999px'
+        textArea.style.opacity = '0'
+        textArea.setAttribute('readonly', '')
+        document.body.appendChild(textArea)
+        
+        // 选择文本
+        textArea.focus()
+        textArea.select()
+        textArea.setSelectionRange(0, text.length)
+        
+        // 尝试复制
+        const successful = document.execCommand('copy')
+        document.body.removeChild(textArea)
+        resolve(successful)
+      } catch (error) {
+        console.error('Fallback copy failed:', error)
+        resolve(false)
       }
-    } finally {
-      document.body.removeChild(textArea)
+    })
+  }
+  
+  try {
+    // 方法1: 尝试使用现代 Clipboard API
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      try {
+        await navigator.clipboard.writeText(text)
+        ElMessage.success('分析结果已复制到剪贴板')
+        return
+      } catch (clipboardError) {
+        console.warn('Clipboard API failed, trying fallback:', clipboardError)
+        // 如果 Clipboard API 失败，继续尝试降级方案
+      }
     }
+    
+    // 方法2: 降级方案 - 使用 execCommand
+    const success = await fallbackCopy(text)
+    if (success) {
+      ElMessage.success('分析结果已复制到剪贴板')
+    } else {
+      throw new Error('所有复制方法都失败了')
+    }
+    
   } catch (error) {
     console.error('复制失败:', error)
-    ElMessage.error(`复制失败: ${error instanceof Error ? error.message : '未知错误'}`)
+    
+    // 方法3: 最后的降级方案 - 提示用户手动复制
+    try {
+      // 创建一个模态框显示文本供用户手动复制
+      const modal = document.createElement('div')
+      modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.5);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 10000;
+      `
+      
+      const content = document.createElement('div')
+      content.style.cssText = `
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        max-width: 80%;
+        max-height: 80%;
+        overflow: auto;
+      `
+      
+      const title = document.createElement('h3')
+      title.textContent = '请手动复制以下内容'
+      title.style.marginTop = '0'
+      
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.cssText = `
+        width: 100%;
+        height: 300px;
+        margin: 10px 0;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 12px;
+      `
+      textarea.readOnly = true
+      
+      const closeBtn = document.createElement('button')
+      closeBtn.textContent = '关闭'
+      closeBtn.style.cssText = `
+        padding: 8px 16px;
+        background: #409eff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      `
+      
+      closeBtn.onclick = () => document.body.removeChild(modal)
+      
+      content.appendChild(title)
+      content.appendChild(textarea)
+      content.appendChild(closeBtn)
+      modal.appendChild(content)
+      document.body.appendChild(modal)
+      
+      // 自动选择文本
+      textarea.focus()
+      textarea.select()
+      
+      ElMessage.warning('自动复制失败，请手动复制文本内容')
+      
+    } catch (modalError) {
+      console.error('创建手动复制界面失败:', modalError)
+      ElMessage.error(`复制失败: ${error instanceof Error ? error.message : '未知错误'}`)
+    }
   }
 }
 
