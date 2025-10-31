@@ -411,26 +411,6 @@
           
           <!-- AI分析输入区域 -->
           <div v-if="!aiAnalysisLoading && !aiAnalysisResult" class="space-y-4">
-            <!-- 问题描述提示（如果存在） -->
-            <div v-if="logStore.currentLog.issue_description" class="bg-blue-50 rounded-lg p-4 border border-blue-200">
-              <div class="flex items-start space-x-2">
-                <el-icon class="text-blue-600 mt-0.5">
-                  <InfoFilled />
-                </el-icon>
-                <div class="flex-1">
-                  <p class="text-sm font-medium text-gray-700 mb-1">已有问题描述</p>
-                  <p class="text-sm text-gray-900 mb-2">{{ logStore.currentLog.issue_description }}</p>
-                  <el-button 
-                    size="small" 
-                    type="primary"
-                    @click="aiAnalysisQuery = logStore.currentLog.issue_description"
-                  >
-                    使用此问题描述进行分析
-                  </el-button>
-                </div>
-              </div>
-            </div>
-            
             <div class="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg p-6 border border-purple-200">
               <div class="flex items-start space-x-3 mb-4">
                 <el-icon class="text-purple-600 mt-1" size="24">
@@ -440,7 +420,7 @@
                   <h3 class="text-base font-semibold text-gray-900 mb-2">智能日志分析</h3>
                   <p class="text-sm text-gray-600">
                     {{ logStore.currentLog.issue_description 
-                      ? '您可以使用上面的问题描述，或输入新的分析查询' 
+                      ? '已自动填入问题描述，您可以直接分析或修改查询内容' 
                       : '请输入您想要分析的问题，AI将为您提供详细的分析结果' }}
                   </p>
                 </div>
@@ -451,7 +431,7 @@
                 type="textarea"
                 :rows="3"
                 :placeholder="logStore.currentLog.issue_description 
-                  ? '留空将使用上面的问题描述，或输入新的查询...' 
+                  ? '已自动填入问题描述，您可以修改或直接开始分析...' 
                   : '例如：分析所有错误日志、查找天线异常、统计告警信息等...'"
                 class="mb-4"
               />
@@ -475,7 +455,7 @@
             </div>
             
             <!-- 示例查询 -->
-            <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
+            <!-- <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
               <p class="text-sm font-medium text-gray-700 mb-2">示例查询：</p>
               <div class="flex flex-wrap gap-2">
                 <el-tag 
@@ -488,7 +468,7 @@
                   {{ example }}
                 </el-tag>
               </div>
-            </div>
+            </div> -->
           </div>
           
           <!-- AI分析加载中 -->
@@ -594,7 +574,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useLogStore } from '../stores/logs'
@@ -1138,6 +1118,18 @@ const updatePageMeta = () => {
     setOGMeta('og:type', 'website')
   }
 }
+
+// 监听当前日志变化，自动填入问题描述
+watch(
+  () => logStore.currentLog?.issue_description,
+  (newIssueDescription) => {
+    // 只有当输入框为空且存在问题描述时才自动填入
+    if (newIssueDescription && !aiAnalysisQuery.value) {
+      aiAnalysisQuery.value = newIssueDescription
+    }
+  },
+  { immediate: true }
+)
 
 onMounted(async () => {
   const id = props.id || route.params.id as string
