@@ -88,7 +88,11 @@ def get_llm() -> Any:
         os.environ["OPENAI_API_BASE"] = base_url
         try:
             logger.debug(f"Initializing ChatOpenAI client: base_url={base_url}, model={model}")
-            return ChatOpenAI(model=model, temperature=settings.llm_temperature)
+            llm = ChatOpenAI(model=model, temperature=settings.llm_temperature)
+            # 确保LLM实例有model_name属性
+            if not hasattr(llm, 'model_name'):
+                llm.model_name = model
+            return llm
         except Exception as e:
             logger.warning(f"ChatOpenAI init failed: base_url={base_url}, model={model}, error={e}")
             return None
@@ -101,12 +105,18 @@ def get_llm() -> Any:
             self._fallback_conf = fallback_conf
             self._primary = make_chat_openai(primary_conf.get("api_key", ""), primary_conf.get("base_url", ""), primary_conf.get("model", ""))
             self._fallback = None
+            # 添加model_name属性，优先使用主模型名称
+            self.model_name = primary_conf.get("model", "unknown")
+            self._current_model = "primary"  # 跟踪当前使用的模型
 
         def invoke(self, prompt: str):
             # 尝试主模型（DeepSeek）
             if self._primary:
                 try:
                     logger.debug("FallbackLLM.invoke: using primary model")
+                    if self._current_model != "primary":
+                        self.model_name = self._primary_conf.get("model", "unknown")
+                        self._current_model = "primary"
                     return self._primary.invoke(prompt)
                 except Exception as e:
                     logger.warning(f"Primary model invocation failed, switching to fallback: {e}")
@@ -123,6 +133,9 @@ def get_llm() -> Any:
             if self._fallback:
                 try:
                     logger.debug("FallbackLLM.invoke: using fallback model")
+                    if self._current_model != "fallback":
+                        self.model_name = self._fallback_conf.get("model", "unknown")
+                        self._current_model = "fallback"
                     return self._fallback.invoke(prompt)
                 except Exception as e:
                     logger.warning(f"Fallback model invocation failed: {e}")
