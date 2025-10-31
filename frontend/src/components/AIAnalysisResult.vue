@@ -399,12 +399,17 @@ ${props.result.final_result.recommendations?.join('\n') || '无'}
   
   // 检查是否支持 Clipboard API
   const isClipboardSupported = () => {
-    return (
-      typeof navigator !== 'undefined' &&
-      navigator.clipboard &&
-      typeof navigator.clipboard.writeText === 'function' &&
-      window.isSecureContext // 确保是安全上下文（HTTPS 或 localhost）
-    )
+    try {
+      return (
+        typeof navigator !== 'undefined' &&
+        navigator.clipboard &&
+        typeof navigator.clipboard.writeText === 'function' &&
+        window.isSecureContext // 确保是安全上下文（HTTPS 或 localhost）
+      )
+    } catch (error) {
+      console.warn('Clipboard API check failed:', error)
+      return false
+    }
   }
   
   // 定义降级复制方法
@@ -591,19 +596,25 @@ ${props.result.final_result.recommendations?.join('\n') || '无'}
   }
   
   try {
+    console.log('开始复制操作，文本长度:', text.length)
+    
     // 方法1: 尝试使用现代 Clipboard API
     if (isClipboardSupported()) {
       try {
+        console.log('使用 Clipboard API 复制')
         await navigator.clipboard.writeText(text)
         ElMessage.success('分析结果已复制到剪贴板')
         return
       } catch (clipboardError) {
-        console.warn('Clipboard API failed, trying fallback:', clipboardError)
+        console.warn('Clipboard API 失败，尝试降级方案:', clipboardError)
         // 如果 Clipboard API 失败，继续尝试降级方案
       }
+    } else {
+      console.log('Clipboard API 不支持，使用降级方案')
     }
     
     // 方法2: 降级方案 - 使用 execCommand
+    console.log('尝试使用 execCommand 复制')
     const success = await fallbackCopy(text)
     if (success) {
       ElMessage.success('分析结果已复制到剪贴板')
@@ -611,11 +622,12 @@ ${props.result.final_result.recommendations?.join('\n') || '无'}
     }
     
     // 方法3: 最后的降级方案 - 显示手动复制模态框
+    console.log('所有自动复制方法失败，显示手动复制模态框')
     showManualCopyModal(text)
     ElMessage.info('请手动复制文本内容')
     
   } catch (error) {
-    console.error('复制失败:', error)
+    console.error('复制操作异常:', error)
     // 如果所有方法都失败，显示手动复制模态框
     showManualCopyModal(text)
     ElMessage.warning('自动复制失败，请手动复制文本内容')
@@ -696,8 +708,25 @@ const handleKeydown = (event: KeyboardEvent) => {
     return
   }
 
-  // 检查是否有文本被选中，如果有则不拦截 Ctrl+C
-  const hasSelection = window.getSelection()?.toString().length > 0
+  // 更精确的文本选择检测
+  const getSelectionInfo = () => {
+    const selection = window.getSelection()
+    if (!selection) return { hasSelection: false, isInComponent: false }
+    
+    const selectedText = selection.toString().trim()
+    const hasSelection = selectedText.length > 0
+    
+    // 检查选择的文本是否在当前组件内
+    let isInComponent = false
+    if (hasSelection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0)
+      const container = range.commonAncestorContainer
+      const componentElement = document.querySelector('.ai-analysis-result')
+      isInComponent = componentElement?.contains(container.nodeType === Node.TEXT_NODE ? container.parentNode : container) || false
+    }
+    
+    return { hasSelection, isInComponent, selectedText }
+  }
 
   switch (event.key) {
     case 'p':
@@ -727,12 +756,19 @@ const handleKeydown = (event: KeyboardEvent) => {
     case 'c':
     case 'C':
       if (event.ctrlKey || event.metaKey) {
-        // 如果没有文本选中，则执行完整复制功能
-        if (!hasSelection) {
-          event.preventDefault()
-          copyResult()
+        const { hasSelection, isInComponent } = getSelectionInfo()
+        
+        // 只有在没有选中文本，或者选中的文本不在组件内时，才执行完整复制功能
+        // 这样可以避免干扰用户的正常复制操作
+        if (!hasSelection || !isInComponent) {
+          // 如果用户明确想要复制整个结果（没有选中任何文本），则执行完整复制
+          if (!hasSelection) {
+            event.preventDefault()
+            copyResult()
+          }
+          // 如果选中的文本不在组件内，也不干扰
         }
-        // 如果有文本选中，让浏览器的默认复制行为生效
+        // 如果有文本选中且在组件内，让浏览器的默认复制行为生效
       }
       break
     case 'd':
