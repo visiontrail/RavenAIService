@@ -14,6 +14,7 @@ import re
 import json
 import logging
 import shutil
+from enum import Enum
 
 # Optional LangChain imports (gracefully degrade if unavailable)
 try:
@@ -50,6 +51,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 from app.config import settings
+from app.models.log import LogType
 
 def _make_chat_openai(api_key: str, base_url: str, model: str):
     os.environ["OPENAI_API_KEY"] = api_key
@@ -262,6 +264,38 @@ def _resolve_prompts_config_path() -> str:
         path = os.path.join(project_root, os.path.normpath(path))
     return path
 
+def _normalize_log_type(log_type: Optional[Any]) -> Optional[str]:
+    """规范化日志类型值，兼容枚举与字符串。"""
+    if isinstance(log_type, LogType):
+        return log_type.value
+    if isinstance(log_type, Enum):
+        return str(log_type.value).lower()
+    if isinstance(log_type, str):
+        return log_type.lower()
+    return None
+
+def _infer_log_type_from_hints(
+    hints: Optional[Dict[str, Any]],
+    explicit: Optional[Any] = None,
+    current: Optional[str] = None,
+) -> Optional[str]:
+    """结合显式参数与hints推断日志类型，未匹配时回退当前值。"""
+    candidates: List[Any] = [explicit]
+    if isinstance(hints, dict):
+        candidates.append(hints.get("log_type") or hints.get("logType"))
+        filename = hints.get("filename") or hints.get("path")
+        if isinstance(filename, str):
+            name = filename.lower()
+            if "oam" in name or "antenna" in name:
+                candidates.append(LogType.OAM_ANTENNA)
+            elif "stack" in name:
+                candidates.append(LogType.STACK)
+    for cand in candidates:
+        normalized = _normalize_log_type(cand)
+        if normalized:
+            return normalized
+    return current
+
 def _load_prompts_config() -> Dict[str, Dict[str, Any]]:
     global _PROMPTS_CACHE
     if _PROMPTS_CACHE:
@@ -281,6 +315,27 @@ def _load_prompts_config() -> Dict[str, Dict[str, Any]]:
         logger.warning("加载提示词配置失败，使用内置回退。路径=%s，错误=%s", cfg_path, e)
         # 内置回退模板，确保功能不受影响
         _PROMPTS_CACHE = {
+            "log_types": {
+                "default": {
+                    "plan_prompt": {
+                        "template": (
+                            "你是一个日志分析Agent，需要制定执行计划。"
+                            "输出使用<plan><step>...</step></plan>的XML结构。"
+                            "根据用户需求选择：提取元数据、grep检索、全文检索、读取片段。\n\n"
+                            "{memory_context}<用户需求>{user_query}</用户需求>"
+                        ),
+                        "description": "内置回退：生成执行计划的模板"
+                    },
+                    "summary_prompt": {
+                        "template": (
+                            "请对以下日志片段进行简要总结，突出ERROR/WARN及关键事件。\n\n"
+                            "<片段>{compact_snippet}</片段>"
+                        ),
+                        "description": "内置回退：日志片段摘要模板"
+                    },
+                }
+            },
+            # 兼容旧结构
             "plan_prompt": {
                 "template": (
                     "你是一个日志分析Agent，需要制定执行计划。"
@@ -300,31 +355,47 @@ def _load_prompts_config() -> Dict[str, Dict[str, Any]]:
         }
     return _PROMPTS_CACHE
 
-def render_prompt(key: str, **kwargs: Any) -> str:
-    conf = _load_prompts_config().get(key, {})
+def _select_prompt_config(key: str, log_type: Optional[Any]) -> Dict[str, Any]:
+    """根据日志类型从配置中选择提示词条目，带默认回退。"""
+    config = _load_prompts_config()
+    lt = _normalize_log_type(log_type)
+    log_type_conf = config.get("log_types") if isinstance(config, dict) else None
+    if isinstance(log_type_conf, dict):
+        if lt and isinstance(log_type_conf.get(lt), dict):
+            conf = log_type_conf[lt].get(key)
+            if conf:
+                return conf
+        default_conf = log_type_conf.get("default")
+        if isinstance(default_conf, dict) and default_conf.get(key):
+            return default_conf.get(key, {})
+    return config.get(key, {}) if isinstance(config, dict) else {}
+
+def render_prompt(key: str, log_type: Optional[Any] = None, **kwargs: Any) -> str:
+    conf = _select_prompt_config(key, log_type)
     template_str = conf.get("template", "")
     if not template_str:
         return ""
+    cache_key = f"{key}:{_normalize_log_type(log_type) or 'default'}"
     if PromptTemplate:
         try:
-            pt = _PROMPT_TEMPLATES_CACHE.get(key)
+            pt = _PROMPT_TEMPLATES_CACHE.get(cache_key)
             if not pt:
                 input_vars = conf.get("variables") or list(kwargs.keys())
                 pt = PromptTemplate(input_variables=input_vars, template=template_str)
-                _PROMPT_TEMPLATES_CACHE[key] = pt
+                _PROMPT_TEMPLATES_CACHE[cache_key] = pt
             return pt.format(**kwargs)
         except Exception:
             return template_str.format(**kwargs)
     else:
         return template_str.format(**kwargs)
 
-def compress_outputs(outputs: List[str]) -> str:
+def compress_outputs(outputs: List[str], log_type: Optional[Any] = None) -> str:
     """Compression: extractive truncation + optional LLM summary."""
     n = min(3, len(outputs)) or 1
     compact = "".join(o[: settings.agent_max_snippet_bytes // n] for o in outputs[:n])
     llm = get_llm()
     try:
-        prompt = render_prompt("summary_prompt", compact_snippet=compact)
+        prompt = render_prompt("summary_prompt", compact_snippet=compact, log_type=log_type)
         prompt_to_log = prompt[:600] + ("..." if len(prompt) > 600 else "")
         logger.info("\n\n--- START LLM PROMPT [summary] ---\n%s\n--- END LLM PROMPT [summary] ---\n", prompt_to_log)
         if hasattr(llm, "predict"):
@@ -357,6 +428,7 @@ class LogAnalysisAgent:
     def __init__(self):
         self.llm = get_llm()
         logger.info("LogAnalysisAgent.__init__: llm=%s", type(self.llm).__name__)
+        self._active_log_type: Optional[str] = None
         
         # 显示当前使用的模型信息
         if hasattr(self.llm, 'model_name'):
@@ -509,7 +581,7 @@ class LogAnalysisAgent:
     def _plan_node(self, state: AgentState) -> AgentState:
         """Graph node that generates plan XML and step list."""
         query = state.get("query", "")
-        plan_xml = self.plan(query)
+        plan_xml = self.plan(query, hints=state.get("hints"))
         steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
         return {"plan_xml": plan_xml, "steps": steps}
 
@@ -787,12 +859,15 @@ class LogAnalysisAgent:
         return None
 
     # Backward-compatible plan() API
-    def plan(self, query: str) -> str:
+    def plan(self, query: str, hints: Optional[Dict[str, Any]] = None, log_type: Optional[Any] = None) -> str:
         logger.info("Plan: start query='%s'", query[:200])
+        self._active_log_type = _infer_log_type_from_hints(hints, explicit=log_type, current=self._active_log_type)
+        logger.debug("Plan: using log_type=%s", self._active_log_type or "default")
         prompt = render_prompt(
             "plan_prompt",
             memory_context=self.memory.context(),
             user_query=query,
+            log_type=self._active_log_type,
         )
         logger.debug("Plan: prompt chars=%d", len(prompt))
         logger.info("\n\n--- START LLM PROMPT [plan] ---\n%s\n--- END LLM PROMPT [plan] ---\n", prompt)
@@ -1081,7 +1156,7 @@ class LogAnalysisAgent:
         self.memory.add_summary(out)
         # Generate and print per-act LLM thought
         try:
-            step_thought = compress_outputs([out])
+            step_thought = compress_outputs([out], log_type=self._active_log_type)
             logger.info("\n\n--- START LLM THOUGHT [after_act] ---\n%s\n--- END LLM THOUGHT [after_act] ---\n", step_thought)
         except Exception as e:
             logger.warning("Act: step thought generation failed: %s", e)
@@ -1103,6 +1178,8 @@ class LogAnalysisAgent:
         logger.info("Run: start query='%s'", query)
         hints_local: Dict[str, Any] = dict(hints or {})
         logger.debug("Run: hints=%s", hints_local)
+        prev_log_type = self._active_log_type
+        self._active_log_type = _infer_log_type_from_hints(hints_local, current=self._active_log_type)
         pre_outputs: List[str] = []
         final_doc: str = ""
         try:
@@ -1143,7 +1220,7 @@ class LogAnalysisAgent:
                 logger.info("Run: outputs via graph=%d", len(outputs))
             else:
                 logger.debug("Run: sequential fallback")
-                plan_xml = self.plan(query)
+                plan_xml = self.plan(query, hints=hints_local)
                 steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
                 logger.info("Run: executing %d steps sequentially", len(steps))
                 outputs: List[str] = pre_outputs[:]
@@ -1152,7 +1229,7 @@ class LogAnalysisAgent:
                     out = self._execute_step(step, query, hints=hints_local)
                     outputs.append(out)
                     self.memory.add_summary(out)
-            summary = compress_outputs(outputs)
+            summary = compress_outputs(outputs, log_type=self._active_log_type)
             logger.debug("Run: summary chars=%d", len(summary))
             final_doc = wrap_document("".join(outputs) + summary, {"source": "log_agent"})
             logger.info("Run: final doc chars=%d", len(final_doc))
@@ -1161,6 +1238,7 @@ class LogAnalysisAgent:
                 self._cleanup_extracted_dirs()
             except Exception as e:
                 logger.warning("Run: cleanup extracted dirs failed: %s", e)
+            self._active_log_type = prev_log_type
         return final_doc
 
     def _cleanup_extracted_dirs(self) -> None:
@@ -1219,6 +1297,8 @@ class LogAnalysisAgent:
         try:
             # 执行分析流程
             pre_outputs: List[str] = []
+            prev_log_type = self._active_log_type
+            self._active_log_type = _infer_log_type_from_hints(hints_local, current=self._active_log_type)
             
             # 自动解压流程
             archive_path = hints_local.get("archive_path") or (hints_local.get("path") if isinstance(hints_local.get("path"), str) and hints_local.get("path").lower().endswith((".tar.gz", ".tgz", ".zip")) else None)
@@ -1242,7 +1322,7 @@ class LogAnalysisAgent:
                     pre_outputs.append(wrap_document(f"自动解压失败: {e}", {"type": "extraction_error"}))
             
             # 生成计划
-            plan_xml = self.plan(query)
+            plan_xml = self.plan(query, hints=hints_local)
             result["plan"]["content"] = self._format_plan_markdown(plan_xml)
             
             # 解析步骤
@@ -1330,7 +1410,7 @@ class LogAnalysisAgent:
                     result["plan"]["steps"][i]["status"] = "failed"
             
             # 生成最终结果
-            summary = compress_outputs(outputs)
+            summary = compress_outputs(outputs, log_type=self._active_log_type)
             final_content = "".join(outputs) + summary
             
             result["final_result"] = self._generate_final_result(query, final_content, outputs)
@@ -1354,6 +1434,7 @@ class LogAnalysisAgent:
             result["metadata"]["model_used"] = getattr(self.llm, 'model_name', 'unknown')
             
             logger.info("RunStructured: completed id=%s time=%.2fs", analysis_id, execution_time)
+            self._active_log_type = prev_log_type
         
         return result
 
@@ -1741,6 +1822,7 @@ class LogAnalysisAgentDuplicate:
     def __init__(self):
         self.llm = get_llm()
         logger.info("LogAnalysisAgent.__init__: llm=%s", type(self.llm).__name__)
+        self._active_log_type: Optional[str] = None
         self.memory = ShortTermMemory(window=settings.agent_short_term_window)
         self.search_backend = (
             ElasticSearchBackend(url=settings.elasticsearch_url)
@@ -1778,7 +1860,7 @@ class LogAnalysisAgentDuplicate:
     def _plan_node(self, state: AgentState) -> AgentState:
         """Graph node that generates plan XML and step list."""
         query = state.get("query", "")
-        plan_xml = self.plan(query)
+        plan_xml = self.plan(query, hints=state.get("hints"))
         steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
         return {"plan_xml": plan_xml, "steps": steps}
 
@@ -1803,12 +1885,15 @@ class LogAnalysisAgentDuplicate:
         return None
 
     # Backward-compatible plan() API
-    def plan(self, query: str) -> str:
+    def plan(self, query: str, hints: Optional[Dict[str, Any]] = None, log_type: Optional[Any] = None) -> str:
         logger.info("Plan: start query='%s'", query[:200])
+        self._active_log_type = _infer_log_type_from_hints(hints, explicit=log_type, current=self._active_log_type)
+        logger.debug("Plan: using log_type=%s", self._active_log_type or "default")
         prompt = render_prompt(
             "plan_prompt",
             memory_context=self.memory.context(),
             user_query=query,
+            log_type=self._active_log_type,
         )
         logger.debug("Plan: prompt chars=%d", len(prompt))
         logger.info("\n\n--- START LLM PROMPT [plan] ---\n%s\n--- END LLM PROMPT [plan] ---\n", prompt)
@@ -2053,7 +2138,7 @@ class LogAnalysisAgentDuplicate:
         self.memory.add_summary(out)
         # Generate and print per-act LLM thought
         try:
-            step_thought = compress_outputs([out])
+            step_thought = compress_outputs([out], log_type=self._active_log_type)
             logger.info("LLM Thought [after_act]:\n%s", step_thought)
         except Exception as e:
             logger.warning("Act: step thought generation failed: %s", e)
@@ -2075,6 +2160,8 @@ class LogAnalysisAgentDuplicate:
         logger.info("Run: start query='%s'", query)
         hints_local: Dict[str, Any] = dict(hints or {})
         logger.debug("Run: hints=%s", hints_local)
+        prev_log_type = self._active_log_type
+        self._active_log_type = _infer_log_type_from_hints(hints_local, current=self._active_log_type)
         pre_outputs: List[str] = []
         final_doc: str = ""
         try:
@@ -2118,7 +2205,7 @@ class LogAnalysisAgentDuplicate:
                 logger.info("Run: outputs via graph=%d", len(outputs))
             else:
                 logger.debug("Run: sequential fallback")
-                plan_xml = self.plan(query)
+                plan_xml = self.plan(query, hints=hints_local)
                 steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
                 logger.info("Run: executing %d steps sequentially", len(steps))
                 outputs: List[str] = pre_outputs[:]
@@ -2127,7 +2214,7 @@ class LogAnalysisAgentDuplicate:
                     out = self._execute_step(step, query, hints=hints_local)
                     outputs.append(out)
                     self.memory.add_summary(out)
-            summary = compress_outputs(outputs)
+            summary = compress_outputs(outputs, log_type=self._active_log_type)
             logger.debug("Run: summary chars=%d", len(summary))
             final_doc = wrap_document("".join(outputs) + summary, {"source": "log_agent"})
             logger.info("Run: final doc chars=%d", len(final_doc))
@@ -2136,6 +2223,7 @@ class LogAnalysisAgentDuplicate:
                 self._cleanup_extracted_dirs()
             except Exception as e:
                 logger.warning("Run: cleanup extracted dirs failed: %s", e)
+            self._active_log_type = prev_log_type
         return final_doc
 
     def _cleanup_extracted_dirs(self) -> None:

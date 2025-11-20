@@ -1250,7 +1250,8 @@ async def analyze_log(
                 "archive_path": file_path,
                 "path": file_path,
                 "log_id": log_id,
-                "filename": log_info.original_filename or log_info.filename
+                "filename": log_info.original_filename or log_info.filename,
+                "log_type": getattr(log_info, "log_type", None)
             }
             
             # 使用新的 run_structured 方法执行分析，返回结构化结果
@@ -1269,7 +1270,7 @@ async def analyze_log(
                 logger.info(f"Falling back to legacy analysis method for log {log_id}")
                 
                 # 执行分析 - 先生成计划
-                plan_xml = agent.plan(query)
+                plan_xml = agent.plan(query, hints=hints)
                 
                 # 解析计划步骤
                 steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
@@ -1291,7 +1292,7 @@ async def analyze_log(
                         step_thought = ""
                         try:
                             from app.agents.log_agent import compress_outputs
-                            step_thought = compress_outputs([step_output])
+                            step_thought = compress_outputs([step_output], log_type=hints.get("log_type"))
                         except Exception:
                             step_thought = f"步骤 {idx+1} 执行完成"
                         
