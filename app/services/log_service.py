@@ -307,6 +307,45 @@ class LogService(BaseCRUDService[LogRecord]):
         
         return await self._db_to_pydantic(log_record, metadata)
 
+    async def save_ai_analysis_result(
+        self,
+        db: AsyncSession,
+        log_id: str,
+        analysis_data: Dict[str, Any]
+    ) -> LogFileInfo:
+        """
+        保存AI分析结果到日志元数据中，便于后续读取
+        """
+        log_record = await self.get_by_id(db, log_id)
+
+        if not log_record or log_record.is_deleted:
+            raise FileNotFoundError(file_id=log_id)
+
+        metadata_dict: Dict[str, Any] = {}
+        try:
+            if log_record.metadata_json:
+                metadata_dict = json.loads(log_record.metadata_json) or {}
+        except Exception:
+            metadata_dict = {}
+
+        # 确保 extra_fields 可用
+        extra_fields = metadata_dict.get("extra_fields")
+        if not isinstance(extra_fields, dict):
+            extra_fields = {}
+
+        # 更新并写回元数据
+        extra_fields["ai_analysis_result"] = analysis_data
+        metadata_dict["extra_fields"] = extra_fields
+        log_record.metadata_json = json.dumps(metadata_dict, ensure_ascii=False, default=str)
+        log_record.updated_at = datetime.utcnow()
+
+        db.add(log_record)
+        await db.commit()
+        await db.refresh(log_record)
+
+        metadata = LogMetadata(**metadata_dict) if metadata_dict else LogMetadata()
+        return await self._db_to_pydantic(log_record, metadata)
+
     async def delete_log(self, db: AsyncSession, log_id: str, hard_delete: bool = False) -> bool:
         """
         删除日志文件（支持软删除和硬删除）
@@ -833,6 +872,23 @@ class LogService(BaseCRUDService[LogRecord]):
 
     async def _db_to_pydantic(self, record: LogRecord, metadata: Optional[LogMetadata] = None) -> LogFileInfo:
         """将数据库记录转换为Pydantic模型"""
+        ai_analysis_result = None
+        try:
+            if metadata and metadata.extra_fields:
+                ai_analysis_result = metadata.extra_fields.get("ai_analysis_result")
+        except Exception:
+            ai_analysis_result = None
+
+        metadata_payload = metadata or LogMetadata()
+        try:
+            if getattr(metadata_payload, "extra_fields", None) and isinstance(metadata_payload.extra_fields, dict):
+                metadata_payload.extra_fields = {
+                    k: v for k, v in metadata_payload.extra_fields.items()
+                    if k != "ai_analysis_result"
+                }
+        except Exception:
+            pass
+
         return LogFileInfo(
             id=record.id,
             filename=record.filename,
@@ -848,10 +904,11 @@ class LogService(BaseCRUDService[LogRecord]):
             checksum=record.checksum,
             mime_type=record.mime_type,
             log_level=record.log_level,
-            metadata=metadata or LogMetadata(),
+            metadata=metadata_payload,
             error_message=record.error_message,
             download_count=record.download_count,
-            issue_description=record.issue_description
+            issue_description=record.issue_description,
+            ai_analysis_result=ai_analysis_result
         )
 
     async def _create_metadata_content(self, log_record: LogRecord) -> str:

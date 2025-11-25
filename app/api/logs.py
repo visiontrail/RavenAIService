@@ -1344,6 +1344,12 @@ async def analyze_log(
                 }
             
             logger.info(f"AI analysis completed for log {log_id}")
+
+            # 持久化AI分析结果，便于后续访问时直接展示
+            try:
+                await log_service.save_ai_analysis_result(db, log_id, analysis_data)
+            except Exception as save_error:
+                logger.error(f"Failed to persist AI analysis result for log {log_id}: {save_error}")
             
             return {
                 "success": True,

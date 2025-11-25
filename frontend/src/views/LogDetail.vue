@@ -402,7 +402,7 @@
               <el-icon class="text-purple-600" size="20">
                 <MagicStick />
               </el-icon>
-              <h2 class="text-lg font-semibold text-gray-900">AI分析（结果将不会保存，刷新后将丢失，如需保存请使用复制结果或下载报告）</h2>
+              <h2 class="text-lg font-semibold text-gray-900">AI分析（结果将自动保存，刷新或再次访问时可直接查看）</h2>
               <el-tag v-if="aiAnalysisResult" :type="aiAnalysisResult.status === 'completed' ? 'success' : 'warning'" size="small">
                 {{ aiAnalysisResult.status === 'completed' ? '已完成' : '部分完成' }}
               </el-tag>
@@ -486,7 +486,7 @@
           <AIAnalysisResult 
             v-if="aiAnalysisResult"
             :result="aiAnalysisResult"
-            @reset="resetAIAnalysis"
+            @restart="resetAIAnalysis"
             @copy="copyAnalysisResult"
             @download="downloadAnalysisResult"
             @share="shareAnalysisResult"
@@ -614,6 +614,7 @@ const props = defineProps<Props>()
 const route = useRoute()
 const router = useRouter()
 const logStore = useLogStore()
+const formatAdapter = FormatAdapter.getInstance()
 
 // 响应式变量
 const downloadLoading = ref(false)
@@ -947,8 +948,10 @@ const handleAIAnalysisSubmit = async () => {
     
     if (response.success) {
       // 使用FormatAdapter处理响应数据
-      const formatAdapter = FormatAdapter.getInstance()
       aiAnalysisResult.value = formatAdapter.adaptResult(response.data)
+      if (logStore.currentLog) {
+        logStore.currentLog.ai_analysis_result = response.data
+      }
       ElMessage.success('AI分析完成')
     } else {
       throw new Error(response.message || 'AI分析失败')
@@ -999,7 +1002,6 @@ const downloadAnalysisResult = () => {
   if (!aiAnalysisResult.value) return
   
   try {
-    const formatAdapter = FormatAdapter.getInstance()
     const content = `# AI日志分析报告
 
 ## 基本信息
@@ -1129,6 +1131,31 @@ watch(
     }
   },
   { immediate: true }
+)
+
+// 监听AI分析结果的持久化数据，进入页面时优先展示最近一次结果
+watch(
+  () => logStore.currentLog?.ai_analysis_result,
+  (savedResult) => {
+    if (savedResult) {
+      aiAnalysisResult.value = formatAdapter.adaptResult(savedResult)
+    } else {
+      aiAnalysisResult.value = null
+    }
+  },
+  { immediate: true }
+)
+
+// 切换日志时，重置临时状态，等待新日志的AI分析结果填充
+watch(
+  () => logStore.currentLog?.id,
+  () => {
+    if (!logStore.currentLog?.ai_analysis_result) {
+      aiAnalysisResult.value = null
+    }
+    aiAnalysisLoading.value = false
+    aiAnalysisProgress.value = 0
+  }
 )
 
 onMounted(async () => {

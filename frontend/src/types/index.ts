@@ -33,6 +33,7 @@ export interface LogRecord {
   download_count: number
   download_url?: string
   file_size_human?: string
+  ai_analysis_result?: any
   // 兼容旧字段
   upload_time?: string
   created_at: string

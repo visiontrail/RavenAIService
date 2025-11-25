@@ -222,6 +222,10 @@ class LogFileInfo(BaseModel):
     error_message: Optional[str] = Field(None, description="错误信息")
     issue_description: Optional[str] = Field(None, description="问题描述")
     download_count: int = Field(0, description="下载次数")
+    ai_analysis_result: Optional[Dict[str, Any]] = Field(
+        None,
+        description="最近一次AI分析结果（完整数据结构）"
+    )
     
     @computed_field
     @property
