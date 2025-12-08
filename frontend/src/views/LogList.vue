@@ -188,11 +188,21 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="status" label="状态" width="110" resizable>
+        <el-table-column prop="status" label="状态" min-width="160" resizable>
           <template #default="{ row }">
-            <el-tag :type="getStatusColor(row.status)">
-              {{ getStatusText(row.status) }}
-            </el-tag>
+            <div class="status-tags">
+              <el-tag :type="getStatusColor(row.status)" size="small">
+                {{ getStatusText(row.status) }}
+              </el-tag>
+              <el-tag
+                v-if="isAIAnalysisCompleted(row)"
+                type="success"
+                effect="plain"
+                size="small"
+              >
+                AI已分析
+              </el-tag>
+            </div>
           </template>
         </el-table-column>
 
@@ -712,6 +722,13 @@ const getDisplayFilename = (row: LogRecord) => {
   console.groupEnd()
   return filename
 }
+
+const isAIAnalysisCompleted = (log: LogRecord) => {
+  const status = log.ai_analysis_status?.toLowerCase()
+  if (status === 'completed' || status === 'succeeded') return true
+  if (log.ai_analysis_result && status !== 'failed') return true
+  return false
+}
 </script>
 
 <style scoped>
@@ -735,6 +752,13 @@ const getDisplayFilename = (row: LogRecord) => {
 .pagination-wrapper {
   display: flex;
   justify-content: center;
+}
+
+.status-tags {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-wrap: wrap;
 }
 
 /* 响应式控件容器 */
