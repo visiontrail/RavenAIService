@@ -9,9 +9,20 @@ export const formatFileSize = (bytes: number): string => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
+const parseDateToLocal = (dateString?: string): Date | null => {
+  if (!dateString) return null
+  const trimmed = dateString.trim()
+  const hasTimezone = /(Z|[+-]\d{2}:?\d{2})$/i.test(trimmed)
+  // 后端存储的是UTC时间但未带时区信息，这里默认按UTC解析再转换到本地
+  const normalized = hasTimezone ? trimmed : `${trimmed.replace(' ', 'T')}Z`
+  const date = new Date(normalized)
+  return isNaN(date.getTime()) ? null : date
+}
+
 // 格式化日期时间
 export const formatDateTime = (dateString: string): string => {
-  const date = new Date(dateString)
+  const date = parseDateToLocal(dateString)
+  if (!date) return '-'
   return date.toLocaleString('zh-CN', {
     year: 'numeric',
     month: '2-digit',
@@ -19,12 +30,14 @@ export const formatDateTime = (dateString: string): string => {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
+    hour12: false,
   })
 }
 
 // 格式化相对时间
 export const formatRelativeTime = (dateString: string): string => {
-  const date = new Date(dateString)
+  const date = parseDateToLocal(dateString)
+  if (!date) return '-'
   const now = new Date()
   const diff = now.getTime() - date.getTime()
   
