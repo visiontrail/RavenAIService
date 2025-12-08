@@ -264,7 +264,7 @@ start_celery() {
   "$PYTHON_BIN" -m celery -A app.celery_app worker \
     --loglevel=info \
     --concurrency=2 \
-    --queues=log_processing,default \
+    --queues=log_processing,ai_analysis,default \
     --hostname=worker@%h \
     --pidfile="$CELERY_PIDFILE" \
     --logfile="$CELERY_LOGFILE" \

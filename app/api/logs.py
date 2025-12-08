@@ -1190,173 +1190,49 @@ async def analyze_log(
     """
     AI分析日志文件
     
-    使用LangChain/LangGraph Agent分析日志，提供：
-    - 规划流程（Planning Steps）
-    - 思考过程（Reasoning Process）
-    - 最终结果（Final Analysis Result）
-    
-    - **log_id**: 要分析的日志文件ID
-    - **query**: 分析查询内容（例如："分析错误原因"、"查找天线异常"等）
-    
-    返回数据格式：
-    ```json
-    {
-        "success": true,
-        "message": "AI分析完成",
-        "data": {
-            "log_id": "uuid",
-            "query": "用户查询",
-            "plan": {
-                "steps": ["步骤1", "步骤2", ...],
-                "completed_steps": ["步骤1"]
-            },
-            "reasoning": [
-                {"step": "步骤1", "thought": "思考内容", "output": "输出内容"},
-                ...
-            ],
-            "result": "最终分析结果（XML格式）",
-            "summary": "结果摘要"
-        }
-    }
-    ```
+    触发异步AI分析任务（Celery执行），立即返回任务信息。
     """
     
     try:
-        # 验证日志ID格式
         request_validator.validate_log_id(log_id)
-        
-        # 获取日志详情
-        log_info = await log_service.get_log_detail(db, log_id)
-        
-        # 检查日志是否被软删除
-        if hasattr(log_info, 'is_deleted') and log_info.is_deleted:
+        log_record = await log_service.get_by_id(db, log_id)
+        if not log_record or getattr(log_record, "is_deleted", False):
             raise FileNotFoundError(file_id=log_id)
-        
-        # 获取文件路径
-        file_path = await log_service.get_download_path(db, log_id)
-        
-        logger.info(f"AI analysis started for log {log_id}: query='{query}'")
-        
-        # 导入并运行 log_agent
-        try:
-            from app.agents.log_agent import LogAnalysisAgent
-            import xml.etree.ElementTree as ET
-            
-            # 创建 Agent 实例
-            agent = LogAnalysisAgent()
-            
-            # 准备 hints（提供日志文件路径）
-            hints = {
-                "archive_path": file_path,
-                "path": file_path,
-                "log_id": log_id,
-                "filename": log_info.original_filename or log_info.filename,
-                "log_type": getattr(log_info, "log_type", None)
-            }
-            
-            # 使用新的 run_structured 方法执行分析，返回结构化结果
-            logger.info(f"Starting structured AI analysis for log {log_id}")
-            try:
-                structured_result = agent.run_structured(query, hints=hints)
-                logger.info(f"Structured analysis completed for log {log_id}")
-                
-                # structured_result 已经包含完整的标准格式数据
-                # 包括: id, query, status, timestamp, plan, acts, final_result, metadata
-                analysis_data = structured_result
-                
-            except Exception as e:
-                logger.error(f"Structured analysis failed for log {log_id}: {e}")
-                # 降级到旧方法作为备选
-                logger.info(f"Falling back to legacy analysis method for log {log_id}")
-                
-                # 执行分析 - 先生成计划
-                plan_xml = agent.plan(query, hints=hints)
-                
-                # 解析计划步骤
-                steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
-                steps = [s.strip() for s in steps]
-                
-                # 存储中间结果
-                reasoning_process = []
-                completed_steps = []
-                
-                # 执行每个步骤并收集思考过程
-                for idx, step in enumerate(steps):
-                    logger.info(f"AI analysis step {idx+1}/{len(steps)}: {step}")
-                    
-                    try:
-                        # 执行步骤
-                        step_output = agent._execute_step(step, query, hints=hints)
-                        
-                        # 生成步骤思考（摘要）
-                        step_thought = ""
-                        try:
-                            from app.agents.log_agent import compress_outputs
-                            step_thought = compress_outputs([step_output], log_type=hints.get("log_type"))
-                        except Exception:
-                            step_thought = f"步骤 {idx+1} 执行完成"
-                        
-                        # 记录步骤结果
-                        reasoning_process.append({
-                            "step_number": idx + 1,
-                            "step_description": step,
-                            "thought": step_thought,
-                            "output": step_output
-                        })
-                        
-                        completed_steps.append(step)
-                        logger.info(f"AI analysis step {idx+1} completed")
-                        
-                    except Exception as step_error:
-                        logger.warning(f"AI analysis step {idx+1} failed: {step_error}")
-                        reasoning_process.append({
-                            "step_number": idx + 1,
-                            "step_description": step,
-                            "thought": f"步骤执行失败: {str(step_error)}",
-                            "output": "",
-                            "error": str(step_error)
-                        })
-                
-                # 运行完整分析获取最终结果
-                try:
-                    final_result_xml = agent.run(query, hints=hints)
-                except Exception as run_error:
-                    logger.warning(f"Full agent run failed, using partial results: {run_error}")
-                    final_result_xml = f"<document><partial_result>{''.join([r.get('output', '') for r in reasoning_process])}</partial_result></document>"
-                
-                # 生成结果摘要
-                summary = f"完成分析，执行了 {len(completed_steps)}/{len(steps)} 个步骤"
-                
-                # 构建响应数据（旧格式）
-                analysis_data = {
-                    "log_id": log_id,
-                    "query": query,
-                    "plan": {
-                        "steps": steps,
-                        "completed_steps": completed_steps,
-                        "total_steps": len(steps),
-                        "completed_count": len(completed_steps)
-                    },
-                    "reasoning": reasoning_process,
-                    "result": final_result_xml,
-                    "summary": summary,
-                    "status": "completed" if len(completed_steps) == len(steps) else "partial"
-                }
-            
-            logger.info(f"AI analysis completed for log {log_id}")
 
-            # 持久化AI分析结果，便于后续访问时直接展示
-            try:
-                await log_service.save_ai_analysis_result(db, log_id, analysis_data)
-            except Exception as save_error:
-                logger.error(f"Failed to persist AI analysis result for log {log_id}: {save_error}")
-            
+        # 确保文件存在
+        file_path = FilePath(getattr(log_record, "file_path", ""))
+        if not file_path.exists():
+            raise FileNotFoundError(filename=str(file_path))
+
+        logger.info(f"Queue AI analysis for log {log_id}: query='{query}'")
+
+        # 触发Celery异步任务
+        try:
+            from app.tasks.ai_analysis import run_ai_analysis_task
+
+            task_result = run_ai_analysis_task.delay(log_id, query)
+
+            # 记录任务信息，便于前端轮询
+            await log_service.update_ai_analysis_task(
+                db,
+                log_id,
+                task_id=task_result.id,
+                status="queued",
+                progress=0.0,
+                query=query,
+                started_at=datetime.utcnow(),
+            )
+
             return {
                 "success": True,
-                "message": "AI分析完成",
-                "data": analysis_data
+                "message": "AI分析任务已提交，后台将继续运行",
+                "data": {
+                    "task_id": task_result.id,
+                    "status": "queued",
+                    "log_id": log_id
+                }
             }
-            
+
         except ImportError as e:
             logger.error(f"AI analysis failed: log_agent module not available: {e}")
             raise LogServiceException(
@@ -1383,5 +1259,41 @@ async def analyze_log(
         raise LogServiceException(
             message="AI分析失败",
             error_code="AI_ANALYSIS_ERROR",
+            detail=str(e)
+        )
+
+
+@router.get("/{log_id}/analysis/status")
+async def get_ai_analysis_status(
+    log_id: str = Path(..., description="日志文件ID"),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    查询AI分析任务状态（含已完成结果）
+    """
+    try:
+        request_validator.validate_log_id(log_id)
+        log_info = await log_service.get_log_detail(db, log_id)
+
+        return {
+            "success": True,
+            "message": "AI分析状态获取成功",
+            "data": {
+                "log_id": log_id,
+                "task_id": getattr(log_info, "ai_analysis_task_id", None),
+                "status": getattr(log_info, "ai_analysis_status", None),
+                "progress": getattr(log_info, "ai_analysis_progress", None),
+                "query": getattr(log_info, "ai_analysis_query", None),
+                "error": getattr(log_info, "ai_analysis_error", None),
+                "started_at": getattr(log_info, "ai_analysis_started_at", None),
+                "finished_at": getattr(log_info, "ai_analysis_finished_at", None),
+                "result": getattr(log_info, "ai_analysis_result", None)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch AI analysis status for {log_id}: {e}")
+        raise LogServiceException(
+            message="查询AI分析状态失败",
+            error_code="AI_ANALYSIS_STATUS_ERROR",
             detail=str(e)
         )

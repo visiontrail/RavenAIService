@@ -34,6 +34,13 @@ export interface LogRecord {
   download_url?: string
   file_size_human?: string
   ai_analysis_result?: any
+  ai_analysis_task_id?: string
+  ai_analysis_status?: string
+  ai_analysis_progress?: number
+  ai_analysis_error?: string
+  ai_analysis_query?: string
+  ai_analysis_started_at?: string
+  ai_analysis_finished_at?: string
   // 兼容旧字段
   upload_time?: string
   created_at: string

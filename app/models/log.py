@@ -226,6 +226,34 @@ class LogFileInfo(BaseModel):
         None,
         description="最近一次AI分析结果（完整数据结构）"
     )
+    ai_analysis_task_id: Optional[str] = Field(
+        None,
+        description="AI分析任务ID"
+    )
+    ai_analysis_status: Optional[str] = Field(
+        None,
+        description="AI分析任务状态"
+    )
+    ai_analysis_progress: Optional[float] = Field(
+        None,
+        description="AI分析进度（0-100）"
+    )
+    ai_analysis_error: Optional[str] = Field(
+        None,
+        description="AI分析错误信息"
+    )
+    ai_analysis_query: Optional[str] = Field(
+        None,
+        description="本次AI分析的查询内容"
+    )
+    ai_analysis_started_at: Optional[datetime] = Field(
+        None,
+        description="AI分析开始时间"
+    )
+    ai_analysis_finished_at: Optional[datetime] = Field(
+        None,
+        description="AI分析结束时间"
+    )
     
     @computed_field
     @property

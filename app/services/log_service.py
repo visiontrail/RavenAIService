@@ -346,6 +346,69 @@ class LogService(BaseCRUDService[LogRecord]):
         metadata = LogMetadata(**metadata_dict) if metadata_dict else LogMetadata()
         return await self._db_to_pydantic(log_record, metadata)
 
+    async def update_ai_analysis_task(
+        self,
+        db: AsyncSession,
+        log_id: str,
+        *,
+        task_id: Optional[str] = None,
+        status: Optional[str] = None,
+        progress: Optional[float] = None,
+        query: Optional[str] = None,
+        error: Optional[str] = None,
+        started_at: Optional[datetime] = None,
+        finished_at: Optional[datetime] = None
+    ) -> LogFileInfo:
+        """
+        更新AI分析任务的元数据（状态/进度/错误）
+        """
+        log_record = await self.get_by_id(db, log_id)
+
+        if not log_record or log_record.is_deleted:
+            raise FileNotFoundError(file_id=log_id)
+
+        metadata_dict: Dict[str, Any] = {}
+        try:
+            if log_record.metadata_json:
+                metadata_dict = json.loads(log_record.metadata_json) or {}
+        except Exception:
+            metadata_dict = {}
+
+        extra_fields = metadata_dict.get("extra_fields")
+        if not isinstance(extra_fields, dict):
+            extra_fields = {}
+
+        task_info = extra_fields.get("ai_analysis_task")
+        if not isinstance(task_info, dict):
+            task_info = {}
+
+        if task_id:
+            task_info["task_id"] = task_id
+        if status:
+            task_info["status"] = status
+        if progress is not None:
+            task_info["progress"] = float(progress)
+        if query:
+            task_info["query"] = query
+        if error is not None:
+            task_info["error"] = error
+        if started_at:
+            task_info["started_at"] = started_at.isoformat()
+        if finished_at:
+            task_info["finished_at"] = finished_at.isoformat()
+
+        extra_fields["ai_analysis_task"] = task_info
+        metadata_dict["extra_fields"] = extra_fields
+        log_record.metadata_json = json.dumps(metadata_dict, ensure_ascii=False, default=str)
+        log_record.updated_at = datetime.utcnow()
+
+        db.add(log_record)
+        await db.commit()
+        await db.refresh(log_record)
+
+        metadata = LogMetadata(**metadata_dict) if metadata_dict else LogMetadata()
+        return await self._db_to_pydantic(log_record, metadata)
+
     async def delete_log(self, db: AsyncSession, log_id: str, hard_delete: bool = False) -> bool:
         """
         删除日志文件（支持软删除和硬删除）
@@ -873,9 +936,13 @@ class LogService(BaseCRUDService[LogRecord]):
     async def _db_to_pydantic(self, record: LogRecord, metadata: Optional[LogMetadata] = None) -> LogFileInfo:
         """将数据库记录转换为Pydantic模型"""
         ai_analysis_result = None
+        ai_analysis_task: Dict[str, Any] = {}
         try:
             if metadata and metadata.extra_fields:
                 ai_analysis_result = metadata.extra_fields.get("ai_analysis_result")
+                raw_task = metadata.extra_fields.get("ai_analysis_task")
+                if isinstance(raw_task, dict):
+                    ai_analysis_task = raw_task
         except Exception:
             ai_analysis_result = None
 
@@ -908,7 +975,14 @@ class LogService(BaseCRUDService[LogRecord]):
             error_message=record.error_message,
             download_count=record.download_count,
             issue_description=record.issue_description,
-            ai_analysis_result=ai_analysis_result
+            ai_analysis_result=ai_analysis_result,
+            ai_analysis_task_id=ai_analysis_task.get("task_id"),
+            ai_analysis_status=ai_analysis_task.get("status"),
+            ai_analysis_progress=ai_analysis_task.get("progress"),
+            ai_analysis_error=ai_analysis_task.get("error"),
+            ai_analysis_query=ai_analysis_task.get("query"),
+            ai_analysis_started_at=ai_analysis_task.get("started_at"),
+            ai_analysis_finished_at=ai_analysis_task.get("finished_at"),
         )
 
     async def _create_metadata_content(self, log_record: LogRecord) -> str:

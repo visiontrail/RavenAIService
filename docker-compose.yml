@@ -40,7 +40,7 @@ services:
 
   worker:
     build: .
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=2 --queues=log_processing,default --hostname=worker@%h
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2 --queues=log_processing,ai_analysis,default --hostname=worker@%h
     volumes:
       - app_logs:/app/logs
       - app_temp:/app/temp

@@ -480,6 +480,10 @@
               <span class="text-lg text-gray-700">AI正在分析日志，请稍候...</span>
             </div>
             <el-progress :percentage="aiAnalysisProgress" :stroke-width="8" />
+            <div class="text-center text-xs text-gray-500">
+              当前状态：{{ aiAnalysisStatus || '运行中' }}
+              <span v-if="aiAnalysisTaskId" class="ml-2">任务ID: {{ aiAnalysisTaskId }}</span>
+            </div>
           </div>
           
           <!-- AI分析结果 -->
@@ -574,7 +578,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, computed, watch } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useLogStore } from '../stores/logs'
@@ -626,6 +630,11 @@ const aiAnalysisQuery = ref('')
 const aiAnalysisLoading = ref(false)
 const aiAnalysisProgress = ref(0)
 const aiAnalysisResult = ref<any>(null)
+const aiAnalysisTaskId = ref<string | null>(null)
+const aiAnalysisStatus = ref<string | null>(null)
+const aiAnalysisError = ref<string | null>(null)
+const aiAnalysisPollTimer = ref<number | null>(null)
+const aiAnalysisProgressTimer = ref<number | null>(null)
 const showReasoningProcess = ref(false)
 const showDetailedOutput = ref(false)
 
@@ -917,6 +926,101 @@ const handleCopyLink = async () => {
   }
 }
 
+const stopAIAnalysisPolling = () => {
+  if (aiAnalysisPollTimer.value) {
+    window.clearInterval(aiAnalysisPollTimer.value)
+    aiAnalysisPollTimer.value = null
+  }
+}
+
+const stopFakeProgress = () => {
+  if (aiAnalysisProgressTimer.value) {
+    window.clearInterval(aiAnalysisProgressTimer.value)
+    aiAnalysisProgressTimer.value = null
+  }
+}
+
+const startFakeProgress = () => {
+  stopFakeProgress()
+  aiAnalysisProgressTimer.value = window.setInterval(() => {
+    if (!aiAnalysisLoading.value) return
+    if (aiAnalysisProgress.value < 90) {
+      aiAnalysisProgress.value = Math.min(aiAnalysisProgress.value + 5, 90)
+    }
+  }, 1200)
+}
+
+const fetchAIAnalysisStatus = async () => {
+  if (!logStore.currentLog) return
+
+  try {
+    const response = await logApi.getAIAnalysisStatus(logStore.currentLog.id)
+    if (response.success && response.data) {
+      const previousStatus = aiAnalysisStatus.value
+      const { status, progress, task_id, result, error, query, started_at, finished_at } = response.data
+      aiAnalysisTaskId.value = task_id || null
+      aiAnalysisStatus.value = status || null
+      aiAnalysisError.value = error || null
+
+      if (typeof progress === 'number') {
+        aiAnalysisProgress.value = Math.max(aiAnalysisProgress.value, progress)
+      }
+
+      if (logStore.currentLog) {
+        logStore.currentLog.ai_analysis_task_id = task_id
+        logStore.currentLog.ai_analysis_status = status
+        logStore.currentLog.ai_analysis_progress = progress
+        logStore.currentLog.ai_analysis_error = error
+        logStore.currentLog.ai_analysis_query = query
+        logStore.currentLog.ai_analysis_started_at = started_at
+        logStore.currentLog.ai_analysis_finished_at = finished_at
+      }
+
+      if (status === 'completed') {
+        if (result) {
+          aiAnalysisResult.value = formatAdapter.adaptResult(result)
+          if (logStore.currentLog) {
+            logStore.currentLog.ai_analysis_result = result
+          }
+          if (previousStatus !== 'completed') {
+            ElMessage.success('AI分析完成')
+          }
+        } else {
+          ElMessage.warning('AI分析已结束，但未返回结果')
+        }
+        aiAnalysisLoading.value = false
+        aiAnalysisProgress.value = 100
+        stopAIAnalysisPolling()
+        stopFakeProgress()
+      } else if (status === 'failed') {
+        aiAnalysisLoading.value = false
+        stopAIAnalysisPolling()
+        stopFakeProgress()
+        if (error) {
+          ElMessage.error(`AI分析失败: ${error}`)
+        } else {
+          ElMessage.error('AI分析失败，请稍后重试')
+        }
+      } else if (status) {
+        aiAnalysisLoading.value = true
+      } else if (!task_id) {
+        aiAnalysisLoading.value = false
+        stopFakeProgress()
+        stopAIAnalysisPolling()
+      }
+    }
+  } catch (error) {
+    console.error('获取AI分析状态失败:', error)
+  }
+}
+
+const startAIAnalysisPolling = () => {
+  stopAIAnalysisPolling()
+  aiAnalysisPollTimer.value = window.setInterval(fetchAIAnalysisStatus, 2000)
+  fetchAIAnalysisStatus()
+  startFakeProgress()
+}
+
 // AI分析提交
 const handleAIAnalysisSubmit = async () => {
   if (!logStore.currentLog) return
@@ -930,37 +1034,42 @@ const handleAIAnalysisSubmit = async () => {
   }
 
   try {
+    aiAnalysisResult.value = null
     aiAnalysisLoading.value = true
-    aiAnalysisProgress.value = 0
-    
-    // 模拟进度更新
-    const progressInterval = setInterval(() => {
-      if (aiAnalysisProgress.value < 90) {
-        aiAnalysisProgress.value += 10
-      }
-    }, 1000)
-    
-    // 调用AI分析API
+    aiAnalysisProgress.value = 5
+    aiAnalysisStatus.value = 'queued'
+    aiAnalysisError.value = null
+
     const response = await logApi.analyzeLog(logStore.currentLog.id, query)
-    
-    clearInterval(progressInterval)
-    aiAnalysisProgress.value = 100
-    
+
     if (response.success) {
-      // 使用FormatAdapter处理响应数据
-      aiAnalysisResult.value = formatAdapter.adaptResult(response.data)
+      const taskId = response.data?.task_id || response.data?.taskId || null
+      const status = response.data?.status || 'queued'
+      aiAnalysisTaskId.value = taskId
+      aiAnalysisStatus.value = status
+
       if (logStore.currentLog) {
-        logStore.currentLog.ai_analysis_result = response.data
+        logStore.currentLog.ai_analysis_task_id = taskId
+        logStore.currentLog.ai_analysis_status = status
+        logStore.currentLog.ai_analysis_progress = 5
+        logStore.currentLog.ai_analysis_query = query
       }
-      ElMessage.success('AI分析完成')
+
+      startAIAnalysisPolling()
+      ElMessage.success('AI分析任务已启动，完成后结果会自动保存')
     } else {
-      throw new Error(response.message || 'AI分析失败')
+      throw new Error(response.message || 'AI分析任务启动失败')
     }
   } catch (error: any) {
     console.error('AI分析失败:', error)
-    ElMessage.error(error.response?.data?.detail || error.message || 'AI分析失败，请稍后重试')
-  } finally {
+    stopAIAnalysisPolling()
+    stopFakeProgress()
     aiAnalysisLoading.value = false
+    aiAnalysisStatus.value = null
+    aiAnalysisTaskId.value = null
+    ElMessage.error(error.response?.data?.detail || error.message || 'AI分析启动失败，请稍后重试')
+  } finally {
+    // 加载状态将在轮询或错误时关闭
   }
 }
 
@@ -968,8 +1077,15 @@ const handleAIAnalysisSubmit = async () => {
 const resetAIAnalysis = () => {
   aiAnalysisResult.value = null
   aiAnalysisQuery.value = ''
+  aiAnalysisProgress.value = 0
+  aiAnalysisStatus.value = null
+  aiAnalysisTaskId.value = null
+  aiAnalysisError.value = null
+  aiAnalysisLoading.value = false
   showReasoningProcess.value = false
   showDetailedOutput.value = false
+  stopAIAnalysisPolling()
+  stopFakeProgress()
 }
 
 // 复制分析结果
@@ -1146,6 +1262,41 @@ watch(
   { immediate: true }
 )
 
+watch(
+  () => ({
+    status: logStore.currentLog?.ai_analysis_status,
+    progress: logStore.currentLog?.ai_analysis_progress,
+    taskId: logStore.currentLog?.ai_analysis_task_id,
+    error: logStore.currentLog?.ai_analysis_error,
+  }),
+  ({ status, progress, taskId, error }) => {
+    aiAnalysisStatus.value = status || null
+    aiAnalysisTaskId.value = taskId || null
+    aiAnalysisError.value = error || null
+
+    if (typeof progress === 'number') {
+      aiAnalysisProgress.value = progress
+    } else if (!status) {
+      aiAnalysisProgress.value = 0
+    }
+
+    if (status === 'queued' || status === 'running') {
+      aiAnalysisLoading.value = true
+      startAIAnalysisPolling()
+    } else if (status === 'completed') {
+      aiAnalysisLoading.value = false
+      stopAIAnalysisPolling()
+      stopFakeProgress()
+      aiAnalysisProgress.value = 100
+    } else if (!status) {
+      aiAnalysisLoading.value = false
+      stopAIAnalysisPolling()
+      stopFakeProgress()
+    }
+  },
+  { immediate: true }
+)
+
 // 切换日志时，重置临时状态，等待新日志的AI分析结果填充
 watch(
   () => logStore.currentLog?.id,
@@ -1153,8 +1304,13 @@ watch(
     if (!logStore.currentLog?.ai_analysis_result) {
       aiAnalysisResult.value = null
     }
+    aiAnalysisProgress.value = logStore.currentLog?.ai_analysis_progress || 0
+    aiAnalysisStatus.value = logStore.currentLog?.ai_analysis_status || null
+    aiAnalysisTaskId.value = logStore.currentLog?.ai_analysis_task_id || null
+    aiAnalysisError.value = logStore.currentLog?.ai_analysis_error || null
     aiAnalysisLoading.value = false
-    aiAnalysisProgress.value = 0
+    stopAIAnalysisPolling()
+    stopFakeProgress()
   }
 )
 
@@ -1164,6 +1320,11 @@ onMounted(async () => {
     await logStore.fetchLogDetail(id)
     updatePageMeta()
   }
+})
+
+onUnmounted(() => {
+  stopAIAnalysisPolling()
+  stopFakeProgress()
 })
 </script>
 

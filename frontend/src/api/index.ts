@@ -120,6 +120,11 @@ export const logApi = {
       },
     })
   },
+
+  // 获取AI分析状态
+  getAIAnalysisStatus: (id: string): Promise<ApiResponse<any>> => {
+    return api.get(`/api/v1/logs/${id}/analysis/status`)
+  },
 }
 
 // 任务相关API
