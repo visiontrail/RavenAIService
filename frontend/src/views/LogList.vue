@@ -199,7 +199,7 @@
         <el-table-column
           prop="metadata.service_name"
           label="研发分析"
-          min-width="200"
+          width="140"
           :show-overflow-tooltip="true"
           resizable
         >
