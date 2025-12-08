@@ -196,10 +196,15 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="progress" label="进度" width="120" resizable>
+        <el-table-column
+          prop="metadata.service_name"
+          label="研发分析"
+          min-width="200"
+          :show-overflow-tooltip="true"
+          resizable
+        >
           <template #default="{ row }">
-            <el-progress v-if="row.status === 'processing'" :percentage="Math.round(row.progress || 0)" />
-            <span v-else class="text-gray-400">-</span>
+            <span>{{ row.metadata?.service_name || '-' }}</span>
           </template>
         </el-table-column>
 
