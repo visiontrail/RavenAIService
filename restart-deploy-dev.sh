@@ -51,8 +51,13 @@ ensure_sqlite_persistence() {
              /^SQLITE_FILE=/ {print "SQLITE_FILE=data/logs.db"; updated=1; next}
              {print}
              END{if(!updated) print "SQLITE_FILE=data/logs.db"}' .env > "$tmp_file"
+        # mktemp 默认权限为 600，容器内的非 root 用户无法读取 .env，这里强制放宽为 644
+        chmod 644 "$tmp_file"
         mv "$tmp_file" .env
     fi
+
+    # 确保容器内的 appuser 能读取 .env
+    chmod u+rw,go+r .env
 }
 
 # 显示帮助信息
