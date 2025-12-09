@@ -24,6 +24,37 @@ sync_env_file() {
     fi
 }
 
+# 确保 SQLite 文件路径指向持久化卷，避免容器重建后数据丢失
+ensure_sqlite_persistence() {
+    if [ ! -f ".env" ]; then
+        echo "ℹ️ 未找到 .env 文件，跳过 SQLite 路径检查"
+        return 0
+    fi
+
+    local sqlite_line sqlite_path tmp_file
+    sqlite_line=$(grep -E '^SQLITE_FILE=' .env || true)
+
+    if [ -z "$sqlite_line" ]; then
+        echo "ℹ️ .env 未设置 SQLITE_FILE，使用默认 data/logs.db 以确保持久化"
+        echo "" >> .env
+        echo "SQLITE_FILE=data/logs.db" >> .env
+        sqlite_path="data/logs.db"
+    else
+        sqlite_path="${sqlite_line#SQLITE_FILE=}"
+    fi
+
+    if [[ "$sqlite_path" != data/* && "$sqlite_path" != /app/data/* ]]; then
+        echo "⚠️ 检测到 SQLITE_FILE=${sqlite_path:-<空>} 未指向挂载卷 (/app/data)，重启后会创建全新数据库"
+        echo "🔧 已自动调整为 data/logs.db"
+        tmp_file=$(mktemp)
+        awk 'BEGIN{updated=0}
+             /^SQLITE_FILE=/ {print "SQLITE_FILE=data/logs.db"; updated=1; next}
+             {print}
+             END{if(!updated) print "SQLITE_FILE=data/logs.db"}' .env > "$tmp_file"
+        mv "$tmp_file" .env
+    fi
+}
+
 # 显示帮助信息
 show_help() {
     echo "🔄 部署环境快速重启脚本"
@@ -111,6 +142,9 @@ else
     fi
     echo "✅ 容器内前端构建完成"
 fi
+
+# 在停止/启动容器前，确保数据库路径使用持久化目录
+ensure_sqlite_persistence
 
 # 在停止/启动容器前，同步环境变量文件，确保 .env 变更生效
 sync_env_file
