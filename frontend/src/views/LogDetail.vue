@@ -317,6 +317,20 @@
                                       <span class="text-gray-600">CUCP版本:</span>
                                       <span class="font-mono text-gray-900">{{ board.protocolVersion.cucp }}</span>
                                     </div>
+                                    <div v-if="board.protocolVersion.cuup" class="flex justify-between">
+                                      <span class="text-gray-600">CUUP版本:</span>
+                                      <span class="font-mono text-gray-900">{{ board.protocolVersion.cuup }}</span>
+                                    </div>
+                                    <div v-if="board.protocolVersion.du" class="flex justify-between">
+                                      <span class="text-gray-600">DU版本:</span>
+                                      <span class="font-mono text-gray-900">{{ board.protocolVersion.du }}</span>
+                                    </div>
+                                    <div v-if="board.protocolVersion.extra && board.protocolVersion.extra.length" class="space-y-1">
+                                      <div v-for="(item, idx) in board.protocolVersion.extra" :key="idx" class="flex justify-between">
+                                        <span class="text-gray-600">{{ item.key }}:</span>
+                                        <span class="font-mono text-gray-900">{{ item.value }}</span>
+                                      </div>
+                                    </div>
                                     <div v-if="board.protocolVersion.status" class="flex justify-between">
                                       <span class="text-gray-600">状态:</span>
                                       <el-tag size="small" :type="board.protocolVersion.status === 'Not applicable for this SOM type' ? 'info' : 'success'">
@@ -734,6 +748,12 @@ const hasMetadata = (metadata: any) => {
 const parseVersionInfo = (rawContent: string) => {
   const boards = []
   const sections = rawContent.split('-----------------------------------------------------------------')
+  const extractAfterColon = (text: string) => {
+    const parts = text.split(':')
+    if (parts.length <= 1) return text.trim()
+    const value = parts.slice(1).join(':').trim()
+    return value || text.trim()
+  }
   
   for (const section of sections) {
     if (!section.trim()) continue
@@ -762,43 +782,56 @@ const parseVersionInfo = (rawContent: string) => {
         board.title = 'Sub Board Information'
         board.type = 'sub'
       } else if (line.startsWith('Slot ID:')) {
-        board.slotId = line.split(':')[1]?.trim()
+        board.slotId = extractAfterColon(line)
       } else if (line.startsWith('CPU ID:')) {
-        board.cpuId = line.split(':')[1]?.trim()
+        board.cpuId = extractAfterColon(line)
       } else if (line.startsWith('Component Count:')) {
-        board.componentCount = line.split(':')[1]?.trim()
+        board.componentCount = extractAfterColon(line)
       } else if (line.includes('[OAM Version]')) {
         // 解析OAM版本信息
         board.oamVersion = {}
         for (let j = i + 1; j < lines.length && !lines[j].startsWith('['); j++) {
           const versionLine = lines[j]
           if (versionLine.startsWith('version:')) {
-            board.oamVersion.version = versionLine.split(':')[1]?.trim()
+            board.oamVersion.version = extractAfterColon(versionLine)
           } else if (versionLine.startsWith('git version:')) {
-            board.oamVersion.gitVersion = versionLine.split(':')[1]?.trim()
+            board.oamVersion.gitVersion = extractAfterColon(versionLine)
           } else if (versionLine.startsWith('branch:')) {
-            board.oamVersion.branch = versionLine.split(':')[1]?.trim()
+            board.oamVersion.branch = extractAfterColon(versionLine)
           } else if (versionLine.startsWith('build time:')) {
-            board.oamVersion.buildTime = versionLine.split(':')[1]?.trim()
+            board.oamVersion.buildTime = extractAfterColon(versionLine)
           }
         }
-      } else if (line.includes('[CUCP Protocol Stack Version]') || line.includes('[Protocol Stack Version]')) {
+      } else if (/\[.*Protocol Stack Version.*\]/.test(line)) {
         // 解析协议栈版本信息
         board.protocolVersion = {}
         for (let j = i + 1; j < lines.length && !lines[j].startsWith('['); j++) {
           const protocolLine = lines[j]
           if (protocolLine.startsWith('cucp_version=')) {
             board.protocolVersion.cucp = protocolLine.split('=')[1]?.trim()
+          } else if (protocolLine.startsWith('cuup_version=')) {
+            board.protocolVersion.cuup = protocolLine.split('=')[1]?.trim()
+          } else if (protocolLine.startsWith('du_version=')) {
+            board.protocolVersion.du = protocolLine.split('=')[1]?.trim()
           } else if (protocolLine.includes('Not applicable for this SOM type')) {
             board.protocolVersion.status = 'Not applicable for this SOM type'
+          } else if (protocolLine.includes('=')) {
+            const [key, value] = protocolLine.split('=')
+            if (key && value) {
+              if (!board.protocolVersion.extra) board.protocolVersion.extra = []
+              board.protocolVersion.extra.push({
+                key: key.trim(),
+                value: value.trim()
+              })
+            }
           }
         }
-      } else if (line.includes('[MOM FPGA Version]')) {
+      } else if (/\[.*FPGA Version.*\]/.test(line)) {
         // 解析FPGA版本信息
         for (let j = i + 1; j < lines.length && !lines[j].startsWith('['); j++) {
           const fpgaLine = lines[j]
           if (fpgaLine.trim() && !fpgaLine.includes('Unavailable')) {
-            board.fpgaVersion = fpgaLine.trim()
+            board.fpgaVersion = extractAfterColon(fpgaLine)
           } else if (fpgaLine.includes('Unavailable')) {
             board.fpgaVersion = 'Unavailable'
           }
