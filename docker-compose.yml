@@ -5,6 +5,9 @@ services:
     build: .
     expose:
       - "8085"
+      - "8083"
+    ports:
+      - "8083:8083"
     volumes:
       - app_logs:/app/logs
       - app_temp:/app/temp

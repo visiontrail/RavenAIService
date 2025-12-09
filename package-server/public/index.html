@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Raven 包管理系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet" />
+    <script src="./raven-config.js"></script>
+    <style>
+      :root {
+        --primary-color: #2563eb;
+        --secondary-color: #64748b;
+        --success-color: #059669;
+        --warning-color: #d97706;
+        --danger-color: #dc2626;
+        --dark-color: #1e293b;
+        --light-color: #f8fafc;
+      }
+
+      body {
+        background-color: var(--light-color);
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      }
+
+      .navbar {
+        background: linear-gradient(135deg, var(--primary-color), #3b82f6);
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        padding: 0.5rem 1rem;
+      }
+
+      .navbar-brand {
+        font-weight: 700;
+        font-size: 1.2rem;
+      }
+
+      .card {
+        border: none;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        transition: all 0.3s ease;
+      }
+
+      .card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+      }
+
+      .btn {
+        border-radius: 8px;
+        font-weight: 500;
+        transition: all 0.3s ease;
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, var(--primary-color), #3b82f6);
+        border: none;
+      }
+
+      .btn-primary:hover {
+        background: linear-gradient(135deg, #1d4ed8, var(--primary-color));
+        transform: translateY(-1px);
+      }
+
+      .stats-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+      }
+
+      .package-item {
+        border-left: 4px solid var(--primary-color);
+        transition: all 0.3s ease;
+      }
+
+      .package-item:hover {
+        border-left-color: var(--success-color);
+        background-color: #f0f9ff;
+      }
+
+      .package-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        align-items: center;
+        gap: 1rem;
+      }
+
+      .package-main {
+        min-width: 0;
+      }
+
+      .package-hash {
+        word-break: break-all;
+      }
+
+      .package-meta,
+      .package-actions {
+        white-space: nowrap;
+        justify-self: end;
+      }
+
+      .package-actions .btn {
+        min-width: 36px;
+      }
+
+      @media (max-width: 768px) {
+        .package-row {
+          grid-template-columns: 1fr;
+          align-items: flex-start;
+        }
+
+        .package-meta,
+        .package-actions {
+          justify-self: end;
+        }
+
+        .package-actions {
+          width: 100%;
+          text-align: right;
+        }
+      }
+
+      .badge {
+        font-size: 0.75rem;
+        padding: 0.5rem 0.75rem;
+      }
+
+      .search-container {
+        background: white;
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-bottom: 2rem;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+      }
+
+      .upload-zone {
+        border: 2px dashed #cbd5e1;
+        border-radius: 12px;
+        padding: 2rem;
+        text-align: center;
+        transition: all 0.3s ease;
+        cursor: pointer;
+      }
+
+      .upload-zone:hover {
+        border-color: var(--primary-color);
+        background-color: #f0f9ff;
+      }
+
+      .upload-zone.dragover {
+        border-color: var(--success-color);
+        background-color: #f0fdf4;
+      }
+
+      .loading {
+        display: none;
+      }
+
+      .package-type-badge {
+        font-size: 0.7rem;
+        padding: 0.25rem 0.5rem;
+      }
+
+      .file-size {
+        color: var(--secondary-color);
+        font-size: 0.875rem;
+      }
+
+      .modal-content {
+        border-radius: 16px;
+        border: none;
+        box-shadow:
+          0 20px 25px -5px rgba(0, 0, 0, 0.1),
+          0 10px 10px -5px rgba(0, 0, 0, 0.04);
+      }
+
+      .modal-header {
+        border-bottom: 1px solid #e2e8f0;
+        border-radius: 16px 16px 0 0;
+        padding: 1.5rem;
+      }
+
+      .modal-body {
+        max-height: 70vh;
+        overflow-y: auto;
+      }
+
+      .modal-footer {
+        border-radius: 0 0 16px 16px;
+        padding: 1.5rem;
+      }
+
+      .modal-xl {
+        max-width: 90%;
+      }
+
+      @media (min-width: 1200px) {
+        .modal-xl {
+          max-width: 1140px;
+        }
+      }
+
+      .table {
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      .table thead th {
+        background-color: #f8fafc;
+        border: none;
+        font-weight: 600;
+        color: var(--dark-color);
+      }
+
+      .pagination {
+        margin-top: 2rem;
+      }
+
+      .page-link {
+        border-radius: 6px;
+        margin: 0 2px;
+        border: none;
+        color: var(--primary-color);
+      }
+
+      .page-link:hover {
+        background-color: var(--primary-color);
+        color: white;
+      }
+
+      .page-item.active .page-link {
+        background-color: var(--primary-color);
+        border-color: var(--primary-color);
+      }
+
+      .alert {
+        border-radius: 8px;
+        border: none;
+      }
+
+      .progress {
+        height: 8px;
+        border-radius: 4px;
+      }
+
+      .tags-container {
+        background-color: white;
+        transition:
+          border-color 0.15s ease-in-out,
+          box-shadow 0.15s ease-in-out;
+      }
+
+      .tags-container:focus-within {
+        border-color: var(--primary-color) !important;
+        box-shadow: 0 0 0 0.2rem rgba(37, 99, 235, 0.25);
+      }
+
+      .tag-item {
+        background-color: var(--primary-color);
+        color: white;
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.875rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        cursor: pointer;
+        transition: background-color 0.2s ease;
+      }
+
+      .tag-item:hover {
+        background-color: #1d4ed8;
+      }
+
+      .tag-remove {
+        cursor: pointer;
+        font-weight: bold;
+        opacity: 0.8;
+      }
+
+      .tag-remove:hover {
+        opacity: 1;
+      }
+
+      #tagInput {
+        border: none !important;
+        background: transparent;
+      }
+
+      #tagInput:focus {
+        outline: none !important;
+        box-shadow: none !important;
+      }
+
+      /* Markdown 样式整体缩小（至少两个字号） */
+      .markdown-content {
+        font-size: 0.8rem; /* 全局文本缩小 */
+        line-height: 1.6;
+      }
+      .markdown-content p,
+      .markdown-content li,
+      .markdown-content td,
+      .markdown-content th {
+        font-size: 0.8rem;
+      }
+      .markdown-content h1 {
+        font-size: 1.25rem;
+      }
+      .markdown-content h2 {
+        font-size: 1.1rem;
+      }
+      .markdown-content h3 {
+        font-size: 1rem;
+      }
+      .markdown-content h4 {
+        font-size: 0.95rem;
+      }
+      .markdown-content h5 {
+        font-size: 0.9rem;
+      }
+      .markdown-content h6 {
+        font-size: 0.85rem;
+      }
+      .markdown-content code,
+      .markdown-content pre {
+        font-size: 0.75rem;
+      }
+
+      @media (max-width: 768px) {
+        .container-fluid {
+          padding: 1rem;
+        }
+
+        .card {
+          margin-bottom: 1rem;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg navbar-dark">
+      <div class="container-fluid">
+        <a class="navbar-brand" href="#" data-raven-link="home">
+          <i class="bi bi-box-seam me-2"></i>
+          Galaxy Space 信息综合部 包管理系统
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item">
+              <a class="nav-link" href="#" onclick="showPackages()">包列表</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="#" onclick="showUpload()">上传包</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="#" data-raven-link="search">
+                <i class="bi bi-robot me-1"></i>智能搜索
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container-fluid mt-4">
+      <!-- Alert Container -->
+      <div id="alertContainer"></div>
+
+      <!-- Statistics Section -->
+      <!-- <div id="statsSection" class="card mb-3">
+        <div class="card-body py-3">
+          <div class="row text-center">
+            <div class="col-6 col-md-3">
+              <div class="d-flex align-items-center justify-content-center">
+                <i class="bi bi-box-seam text-primary me-2"></i>
+                <div>
+                  <h6 class="mb-0 fw-bold" id="totalPackages">0</h6>
+                  <small class="text-muted">总包数</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="d-flex align-items-center justify-content-center">
+                <i class="bi bi-hdd text-success me-2"></i>
+                <div>
+                  <h6 class="mb-0 fw-bold" id="totalSize">0 MB</h6>
+                  <small class="text-muted">总大小</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3 mt-2 mt-md-0">
+              <div class="d-flex align-items-center justify-content-center">
+                <i class="bi bi-upload text-warning me-2"></i>
+                <div>
+                  <h6 class="mb-0 fw-bold" id="recentUploads">0</h6>
+                  <small class="text-muted">最近上传</small>
+                </div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3 mt-2 mt-md-0">
+              <div class="d-flex align-items-center justify-content-center">
+                <i class="bi bi-graph-up text-info me-2"></i>
+                <div>
+                  <h6 class="mb-0 fw-bold" id="packageTypes">0</h6>
+                  <small class="text-muted">包类型</small>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div> -->
+
+      <!-- Search and Filter Section -->
+      <div id="searchSection" class="search-container">
+        <div class="row">
+          <div class="col-md-3 mb-3">
+            <label for="searchInput" class="form-label">搜索包</label>
+            <div class="input-group">
+              <span class="input-group-text"><i class="bi bi-search"></i></span>
+              <input type="text" class="form-control" id="searchInput" placeholder="输入包名称、描述或标签..." />
+            </div>
+          </div>
+          <div class="col-md-2 mb-3">
+            <label for="typeFilter" class="form-label">包类型</label>
+            <select class="form-select" id="typeFilter">
+              <option value="">所有类型</option>
+              <option value="lingxi-10">LingXi-10</option>
+              <option value="lingxi-07a">LingXi-07A</option>
+              <option value="ka-tx">KaTx</option>
+              <option value="ka-rx">KaRx</option>
+              <option value="config">配置包</option>
+              <option value="lingxi-06-thrid">LingXi-06-TRD</option>
+            </select>
+          </div>
+          <div class="col-md-2 mb-3">
+            <label for="versionFilter" class="form-label">版本</label>
+            <input type="text" class="form-control" id="versionFilter" placeholder="版本号..." />
+          </div>
+          <div class="col-md-2 mb-3">
+            <label for="tagsFilter" class="form-label">标签</label>
+            <input type="text" class="form-control" id="tagsFilter" placeholder="输入标签..." />
+          </div>
+          <div class="col-md-2 mb-3">
+            <label for="patchFilter" class="form-label">补丁类型</label>
+            <select class="form-select" id="patchFilter">
+              <option value="">所有类型</option>
+              <option value="true">补丁包</option>
+              <option value="false">正式包</option>
+            </select>
+          </div>
+          <div class="col-md-1 mb-3 d-flex align-items-end">
+            <button class="btn btn-outline-secondary btn-sm" onclick="clearFilters()">
+              <i class="bi bi-x-circle me-1"></i>清除
+            </button>
+          </div>
+        </div>
+        <!-- <div class="row">
+          <div class="col-md-8 mb-3">
+            <label for="naturalSearchInput" class="form-label">自然语言搜索</label>
+            <div class="input-group">
+              <span class="input-group-text"><i class="bi bi-chat-dots"></i></span>
+              <input type="text" class="form-control" id="naturalSearchInput" placeholder="支持自然语言搜索" style="color: #6c757d;" />
+            </div>
+          </div>
+          <div class="col-md-4 mb-3 d-flex align-items-end">
+            <button class="btn btn-primary me-2" onclick="searchPackages()">
+              <i class="bi bi-search me-1"></i>AI搜索(TODO)
+            </button>
+          </div>
+        </div> -->
+      </div>
+
+      <!-- Upload Section -->
+      <div id="uploadSection" class="card" style="display: none">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-upload me-2"></i>上传包文件</h5>
+        </div>
+        <div class="card-body">
+          <!-- File Upload Zone -->
+          <div class="upload-zone" id="uploadZone">
+            <i class="bi bi-cloud-upload fs-2 text-muted mb-2"></i>
+            <h6>拖拽文件到此处或点击选择文件</h6>
+            <p class="text-muted mb-2">支持 .tgz 和 .tar.gz 格式，最大 500MB</p>
+            <input type="file" id="fileInput" multiple accept=".tgz,.tar.gz" style="display: none" />
+            <button class="btn btn-primary"><i class="bi bi-folder2-open me-1"></i>选择文件</button>
+          </div>
+
+          <!-- Selected Files Display -->
+          <div id="selectedFilesDisplay" class="mt-3" style="display: none">
+            <h6 class="mb-2"><i class="bi bi-files me-2"></i>已选择的文件</h6>
+            <div id="selectedFilesList" class="border rounded p-3 bg-light">
+              <!-- Selected files will be displayed here -->
+            </div>
+          </div>
+
+          <!-- Metadata Form -->
+          <div id="metadataForm" class="mt-4" style="display: none">
+            <h6 class="mb-3"><i class="bi bi-gear me-2"></i>包元数据配置</h6>
+            <div class="row">
+              <div class="col-md-6">
+                <div class="mb-3">
+                  <label for="isPatch" class="form-label">包类型</label>
+                  <select class="form-select" id="isPatch">
+                    <option value="false">正式包</option>
+                    <option value="true">补丁包</option>
+                  </select>
+                </div>
+                <div class="mb-3">
+                  <label for="description" class="form-label">描述</label>
+                  <textarea class="form-control" id="description" rows="3" placeholder="请输入包的描述信息"></textarea>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="mb-3">
+                  <label for="components" class="form-label">组件列表</label>
+                  <div
+                    class="tags-container border rounded p-2"
+                    id="componentsContainer"
+                    style="min-height: 38px; cursor: text">
+                    <div class="tags-display d-flex flex-wrap gap-1 mb-1" id="componentsDisplay"></div>
+                    <input
+                      type="text"
+                      class="border-0 outline-0"
+                      id="componentInput"
+                      placeholder="输入组件后按回车键添加"
+                      style="outline: none; box-shadow: none; flex: 1; min-width: 200px" />
+                  </div>
+                  <small class="text-muted">输入组件后按回车键添加，点击组件可删除</small>
+                </div>
+                <div class="mb-3">
+                  <label for="tags" class="form-label">标签</label>
+                  <div
+                    class="tags-container border rounded p-2"
+                    id="tagsContainer"
+                    style="min-height: 38px; cursor: text">
+                    <div class="tags-display d-flex flex-wrap gap-1 mb-1" id="tagsDisplay"></div>
+                    <input
+                      type="text"
+                      class="border-0 outline-0"
+                      id="tagInput"
+                      placeholder="输入标签后按回车键添加"
+                      style="outline: none; box-shadow: none; flex: 1; min-width: 200px" />
+                  </div>
+                  <small class="text-muted">输入标签后按回车键添加，点击标签可删除</small>
+                </div>
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-md-6">
+                <div class="mb-3">
+                  <label for="packageType" class="form-label">包类型</label>
+                  <select class="form-select" id="packageType">
+                    <option value="lingxi-10">LingXi-10</option>
+                    <option value="lingxi-07a">LingXi-07A</option>
+                    <option value="ka-tx">KaTx</option>
+                    <option value="ka-rx">KaRx</option>
+                    <option value="config">配置包</option>
+                    <option value="lingxi-06-thrid">LingXi-06-TRD</option>
+                  </select>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="mb-3">
+                  <label for="version" class="form-label">版本</label>
+                  <input type="text" class="form-control" id="version" placeholder="请输入版本号，如：1.0.0.0" />
+                </div>
+              </div>
+            </div>
+            <div class="d-flex gap-2">
+              <button class="btn btn-success" onclick="uploadWithMetadata()">
+                <i class="bi bi-upload me-1"></i>上传包文件
+              </button>
+              <button class="btn btn-outline-secondary" onclick="resetMetadataForm()">
+                <i class="bi bi-arrow-clockwise me-1"></i>重置表单
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Package List Section -->
+      <div id="packageListSection" class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5 class="mb-0"><i class="bi bi-list-ul me-2"></i>包列表</h5>
+          <div>
+            <button class="btn btn-outline-primary btn-sm me-2" onclick="refreshPackages()">
+              <i class="bi bi-arrow-clockwise me-1"></i>刷新
+            </button>
+            <button class="btn btn-success btn-sm" onclick="showUpload()">
+              <i class="bi bi-plus-circle me-1"></i>上传新包
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div id="loadingSpinner" class="text-center py-5">
+            <div class="spinner-border text-primary" role="status">
+              <span class="visually-hidden">加载中...</span>
+            </div>
+          </div>
+          <div id="packageList"></div>
+          <nav id="pagination" class="d-flex justify-content-center"></nav>
+        </div>
+      </div>
+    </div>
+
+    <!-- Upload Progress Modal -->
+    <div class="modal fade" id="uploadProgressModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header border-0 pb-0">
+            <h5 class="modal-title fw-bold"><i class="bi bi-cloud-upload me-2 text-primary"></i>文件上传中</h5>
+          </div>
+          <div class="modal-body px-4 py-3">
+            <div class="text-center mb-4">
+              <div class="spinner-border text-primary mb-3" role="status" style="width: 3rem; height: 3rem">
+                <span class="visually-hidden">上传中...</span>
+              </div>
+              <h6 class="mb-2" id="uploadModalFileName">准备上传文件...</h6>
+              <p class="text-muted mb-0" id="uploadModalStatus">正在初始化上传...</p>
+            </div>
+
+            <div class="progress mb-3" style="height: 12px">
+              <div
+                class="progress-bar progress-bar-striped progress-bar-animated"
+                role="progressbar"
+                style="width: 0%"
+                aria-valuenow="0"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                id="uploadModalProgressBar"></div>
+            </div>
+
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <small class="text-muted" id="uploadModalProgressText">准备上传...</small>
+              <small class="text-muted fw-bold" id="uploadModalProgressPercent">0%</small>
+            </div>
+
+            <div class="d-flex justify-content-between align-items-center">
+              <small class="text-muted" id="uploadModalSpeedText"></small>
+              <small class="text-muted" id="uploadModalEtaText"></small>
+            </div>
+          </div>
+          <div class="modal-footer border-0 pt-0">
+            <button type="button" class="btn btn-outline-danger" id="cancelUploadBtn">
+              <i class="bi bi-x-circle me-1"></i>取消上传
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

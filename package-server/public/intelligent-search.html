@@ -1,0 +1,678 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>智能搜索 - Raven 包管理系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet" />
+    <script src="./raven-config.js"></script>
+    <style>
+      :root {
+        --primary-color: #2563eb;
+        --secondary-color: #64748b;
+        --success-color: #059669;
+        --warning-color: #d97706;
+        --danger-color: #dc2626;
+        --dark-color: #1e293b;
+        --light-color: #f8fafc;
+      }
+
+      body {
+        background-color: var(--light-color);
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      }
+
+      .navbar {
+        background: linear-gradient(135deg, var(--primary-color), #3b82f6);
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        padding: 0.5rem 1rem;
+      }
+
+      .navbar-brand {
+        font-weight: 700;
+        font-size: 1.2rem;
+      }
+
+      .search-hero {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 3rem 0;
+        margin-bottom: 2rem;
+        border-radius: 0 0 20px 20px;
+      }
+
+      .search-box {
+        background: white;
+        border-radius: 15px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        padding: 0.5rem;
+      }
+
+      .search-input {
+        border: none;
+        font-size: 1.1rem;
+        padding: 1rem 1.5rem;
+      }
+
+      .search-input:focus {
+        outline: none;
+        box-shadow: none;
+      }
+
+      .search-btn {
+        background: linear-gradient(135deg, var(--primary-color), #3b82f6);
+        border: none;
+        padding: 1rem 2rem;
+        border-radius: 10px;
+        font-weight: 600;
+        transition: all 0.3s ease;
+      }
+
+      .search-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(37, 99, 235, 0.4);
+      }
+
+      .suggestion-badge {
+        background: rgba(255, 255, 255, 0.2);
+        color: white;
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        margin: 0.25rem;
+        display: inline-block;
+      }
+
+      .suggestion-badge:hover {
+        background: rgba(255, 255, 255, 0.3);
+        transform: translateY(-2px);
+      }
+
+      .card {
+        border: none;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        transition: all 0.3s ease;
+      }
+
+      .card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+      }
+
+      .answer-card {
+        background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+        border-left: 4px solid var(--primary-color);
+      }
+
+      .package-card {
+        border-left: 4px solid var(--success-color);
+      }
+
+      .relevance-score {
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        color: white;
+        padding: 0.25rem 0.75rem;
+        border-radius: 20px;
+        font-size: 0.875rem;
+        font-weight: 600;
+      }
+
+      .relevance-score.recommended-score {
+        background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+      }
+
+      .badge-ai {
+        background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
+        color: #1e293b;
+      }
+
+      .badge {
+        font-size: 0.75rem;
+        padding: 0.5rem 0.75rem;
+      }
+
+      .loading-spinner {
+        display: none;
+        text-align: center;
+        padding: 2rem;
+      }
+
+      .loading-spinner.show {
+        display: block;
+      }
+
+      .status-indicator {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1rem;
+        border-radius: 8px;
+        font-size: 0.875rem;
+      }
+
+      .status-online {
+        background: #d1fae5;
+        color: #065f46;
+      }
+
+      .status-warning {
+        background: #fef3c7;
+        color: #92400e;
+      }
+
+      .status-offline {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+
+      .btn {
+        border-radius: 8px;
+        font-weight: 500;
+        transition: all 0.3s ease;
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, var(--primary-color), #3b82f6);
+        border: none;
+      }
+
+      .btn-outline-primary {
+        border: 2px solid var(--primary-color);
+        color: var(--primary-color);
+      }
+
+      .btn-outline-primary:hover {
+        background: var(--primary-color);
+        color: white;
+      }
+
+      .empty-state {
+        text-align: center;
+        padding: 3rem;
+        color: var(--secondary-color);
+      }
+
+      .empty-state i {
+        font-size: 4rem;
+        opacity: 0.3;
+      }
+
+      @media (max-width: 768px) {
+        .search-hero {
+          padding: 2rem 0;
+        }
+
+        .search-input {
+          font-size: 1rem;
+          padding: 0.75rem 1rem;
+        }
+
+        .search-btn {
+          padding: 0.75rem 1.5rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 导航栏 -->
+    <nav class="navbar navbar-expand-lg navbar-dark">
+      <div class="container-fluid">
+        <a class="navbar-brand" href="#" data-raven-link="home">
+          <i class="bi bi-box-seam"></i>
+          Raven 包管理系统
+        </a>
+        <button
+          class="navbar-toggler"
+          type="button"
+          data-bs-toggle="collapse"
+          data-bs-target="#navbarNav"
+          aria-controls="navbarNav"
+          aria-expanded="false"
+          aria-label="Toggle navigation"
+        >
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item">
+              <a class="nav-link" href="#" data-raven-link="home">
+                <i class="bi bi-house-door"></i>
+                首页
+              </a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link active" href="#" data-raven-link="search">
+                <i class="bi bi-robot"></i>
+                智能搜索
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <!-- 搜索英雄区 -->
+    <div class="search-hero">
+      <div class="container">
+        <div class="text-center mb-4">
+          <h1 class="display-5 fw-bold mb-3">
+            <i class="bi bi-robot"></i>
+            AI 智能搜索
+          </h1>
+          <p class="lead">使用自然语言描述你的需求，让 AI 帮你找到最合适的软件包</p>
+          <div id="statusIndicator" class="mt-3"></div>
+        </div>
+
+        <div class="row justify-content-center">
+          <div class="col-lg-10">
+            <div class="search-box">
+              <div class="d-flex">
+                <input
+                  type="text"
+                  class="form-control search-input"
+                  id="searchQuery"
+                  placeholder="例如：寻找适用于 LingXi-10 的最新完整版本..."
+                />
+                <button class="btn btn-primary search-btn" id="searchBtn" onclick="performSearch()">
+                  <i class="bi bi-search"></i>
+                  搜索
+                </button>
+              </div>
+            </div>
+
+            <!-- 搜索建议 -->
+            <div class="mt-3 text-center" id="suggestionsContainer"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 主内容区 -->
+    <div class="container mb-5">
+      <!-- 操作按钮 -->
+      <div class="row mb-3">
+        <div class="col-12">
+          <button class="btn btn-outline-primary" onclick="rebuildIndex()">
+            <i class="bi bi-arrow-repeat"></i>
+            重建索引
+          </button>
+          <button class="btn btn-outline-primary" onclick="checkStatus()">
+            <i class="bi bi-info-circle"></i>
+            检查状态
+          </button>
+        </div>
+      </div>
+
+      <!-- 加载动画 -->
+      <div class="loading-spinner" id="loadingSpinner">
+        <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem">
+          <span class="visually-hidden">搜索中...</span>
+        </div>
+        <p class="mt-3 text-muted">AI 正在分析你的需求...</p>
+      </div>
+
+      <!-- 搜索结果 -->
+      <div id="resultsContainer"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+      const DEFAULT_BASE_PATH = '/raven'
+      const RAVEN_BASE_PATH =
+        (window.__RAVEN_BASE_PATH__ || DEFAULT_BASE_PATH).replace(/\/$/, '') || DEFAULT_BASE_PATH
+      const API_BASE = `${RAVEN_BASE_PATH}/api`
+
+      // 页面加载时检查状态
+      document.addEventListener('DOMContentLoaded', () => {
+        syncNavigationLinks()
+        checkStatus()
+        loadSuggestions()
+
+        // 回车搜索
+        document.getElementById('searchQuery').addEventListener('keypress', (e) => {
+          if (e.key === 'Enter') {
+            performSearch()
+          }
+        })
+      })
+
+      function syncNavigationLinks() {
+        const homeUrl = `${RAVEN_BASE_PATH}/`
+        document.querySelectorAll('.navbar-brand, [data-raven-link="home"]').forEach((link) => {
+          link.setAttribute('href', homeUrl)
+        })
+        document.querySelectorAll('[data-raven-link="upload"]').forEach((link) => {
+          link.setAttribute('href', `${homeUrl}#uploadSection`)
+        })
+        document.querySelectorAll('[data-raven-link="search"]').forEach((link) => {
+          link.setAttribute('href', `${RAVEN_BASE_PATH}/intelligent-search.html`)
+        })
+      }
+
+      // 检查服务状态
+      async function checkStatus() {
+        try {
+          const response = await fetch(`${API_BASE}/search/status`)
+          const result = await response.json()
+
+          if (result.success) {
+            const status = result.data
+            const indicator = document.getElementById('statusIndicator')
+            const isOnline = status.initialized && status.vectorStoreExists
+            const isRebuilding = status.rebuilding
+
+            let stateClass = 'status-offline'
+            let icon = 'exclamation-triangle-fill'
+            let label = '索引未就绪'
+
+            if (isRebuilding) {
+              stateClass = 'status-warning'
+              icon = 'arrow-repeat'
+              label = '正在重建索引'
+            } else if (isOnline) {
+              stateClass = 'status-online'
+              icon = 'check-circle-fill'
+              label = '服务在线'
+            }
+
+            indicator.innerHTML = `
+              <span class="status-indicator ${stateClass}">
+                <i class="bi bi-${icon}"></i>
+                ${label} | 已索引 ${status.totalPackages} 个包
+              </span>
+            `
+          }
+        } catch (error) {
+          console.error('检查状态失败:', error)
+        }
+      }
+
+      // 加载搜索建议
+      function loadSuggestions() {
+        const suggestions = [
+          '寻找 LingXi-10 的最新版本',
+          '查找所有补丁包',
+          '需要包含 OAM 组件的包',
+          '找到 CUCP 和 CUUP 组件的完整版',
+          '最近上传的 LingXi-07A 版本'
+        ]
+
+        const container = document.getElementById('suggestionsContainer')
+        container.innerHTML = suggestions
+          .map((s) => `<span class="suggestion-badge" onclick="searchSuggestion('${s}')">${s}</span>`)
+          .join('')
+      }
+
+      // 点击建议进行搜索
+      function searchSuggestion(query) {
+        document.getElementById('searchQuery').value = query
+        performSearch()
+      }
+
+      // 执行搜索
+      async function performSearch() {
+        const query = document.getElementById('searchQuery').value.trim()
+
+        if (!query) {
+          showAlert('请输入搜索内容', 'warning')
+          return
+        }
+
+        // 显示加载动画
+        document.getElementById('loadingSpinner').classList.add('show')
+        document.getElementById('resultsContainer').innerHTML = ''
+
+        try {
+          const response = await fetch(`${API_BASE}/search/intelligent`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ query, limit: 5 })
+          })
+
+          const result = await response.json()
+
+          if (result.success) {
+            displayResults(result.data)
+          } else {
+            showAlert(result.message || '搜索失败', 'danger')
+          }
+        } catch (error) {
+          console.error('搜索失败:', error)
+          showAlert('搜索失败: ' + error.message, 'danger')
+        } finally {
+          document.getElementById('loadingSpinner').classList.remove('show')
+        }
+      }
+
+      // 显示搜索结果
+      function displayResults(data) {
+        const container = document.getElementById('resultsContainer')
+
+        if (!data.relevantPackages || data.relevantPackages.length === 0) {
+          container.innerHTML = `
+            <div class="empty-state">
+              <i class="bi bi-inbox"></i>
+              <h3 class="mt-3">未找到相关包</h3>
+              <p class="text-muted">尝试使用不同的关键词或重建索引</p>
+            </div>
+          `
+          return
+        }
+
+        let html = ''
+
+        // AI 回答卡片
+        if (data.answer) {
+          html += `
+            <div class="card answer-card mb-4">
+              <div class="card-body">
+                <h5 class="card-title">
+                  <i class="bi bi-robot"></i>
+                  AI 分析结果
+                </h5>
+                <div class="card-text" style="white-space: pre-wrap;">${escapeHtml(data.answer)}</div>
+              </div>
+            </div>
+          `
+        }
+
+        // 相关包列表
+        html += `<h5 class="mb-3"><i class="bi bi-box-seam"></i> 找到 ${data.relevantPackages.length} 个相关包</h5>`
+
+        const recommendedIds = new Set(data.recommendedPackageIds || [])
+        const recommendedPackages = []
+        const otherPackages = []
+
+        data.relevantPackages.forEach((pkg) => {
+          if (recommendedIds.has(pkg.id)) {
+            recommendedPackages.push(pkg)
+          } else {
+            otherPackages.push(pkg)
+          }
+        })
+
+        const sortedPackages = [...recommendedPackages, ...otherPackages]
+
+        sortedPackages.forEach((pkg) => {
+          const isRecommended = recommendedIds.has(pkg.id)
+          const relevancePercent = formatRelevancePercent(pkg.relevanceScore, isRecommended)
+          html += `
+            <div class="card package-card mb-3">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                  <div>
+                    <h5 class="card-title mb-0">
+                      <i class="bi bi-box"></i>
+                      ${escapeHtml(pkg.name)}
+                    </h5>
+                    ${
+                      isRecommended
+                        ? `<span class="badge badge-ai mt-2"><i class="bi bi-stars"></i> AI 推荐</span>`
+                        : ''
+                    }
+                  </div>
+                  ${
+                    relevancePercent !== null
+                      ? `<span class="relevance-score ${isRecommended ? 'recommended-score' : ''}">
+                    <i class="bi bi-bullseye"></i>
+                    ${relevancePercent}% 匹配
+                  </span>`
+                      : ''
+                  }
+                </div>
+
+                <div class="mb-3">
+                  <span class="badge bg-primary me-2">
+                    <i class="bi bi-tag"></i>
+                    ${escapeHtml(pkg.packageType)}
+                  </span>
+                  <span class="badge bg-info me-2">
+                    <i class="bi bi-code-square"></i>
+                    ${escapeHtml(pkg.version)}
+                  </span>
+                  ${
+                    pkg.metadata?.isPatch
+                      ? '<span class="badge bg-warning me-2"><i class="bi bi-patch-check"></i> 补丁</span>'
+                      : ''
+                  }
+                  <span class="badge bg-secondary">
+                    <i class="bi bi-hdd"></i>
+                    ${formatFileSize(pkg.size)}
+                  </span>
+                </div>
+
+                ${
+                  pkg.metadata?.components && pkg.metadata.components.length > 0
+                    ? `
+                  <div class="mb-2">
+                    <strong>组件：</strong>
+                    ${pkg.metadata.components.map((c) => `<span class="badge bg-success me-1">${escapeHtml(c.name)}</span>`).join('')}
+                  </div>
+                `
+                    : ''
+                }
+
+                <div class="mb-2">
+                  <strong>创建时间：</strong>
+                  <span class="text-muted">${formatDate(pkg.createdAt)}</span>
+                </div>
+
+                <div class="d-flex gap-2 mt-3">
+                  <button class="btn btn-primary btn-sm" onclick="viewPackageDetail('${pkg.id}')">
+                    <i class="bi bi-eye"></i>
+                    查看详情
+                  </button>
+                  <a href="${API_BASE}/download/${pkg.id}" class="btn btn-success btn-sm">
+                    <i class="bi bi-download"></i>
+                    下载
+                  </a>
+                </div>
+              </div>
+            </div>
+          `
+        })
+
+        container.innerHTML = html
+      }
+
+      // 查看包详情
+      function viewPackageDetail(id) {
+        if (!id) return
+        window.location.href = `${RAVEN_BASE_PATH}/package/${encodeURIComponent(id)}`
+      }
+
+      // 重建索引
+      async function rebuildIndex() {
+        if (!confirm('确定要重建向量索引吗？这可能需要一些时间。')) {
+          return
+        }
+
+        const btn = event.target
+        btn.disabled = true
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>重建中...'
+
+        try {
+          const response = await fetch(`${API_BASE}/search/rebuild-index`, {
+            method: 'POST'
+          })
+
+          const result = await response.json()
+
+          if (result.success) {
+            showAlert(result.message, 'success')
+            checkStatus()
+          } else {
+            showAlert(result.message || '重建失败', 'danger')
+          }
+        } catch (error) {
+          console.error('重建索引失败:', error)
+          showAlert('重建索引失败: ' + error.message, 'danger')
+        } finally {
+          btn.disabled = false
+          btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> 重建索引'
+        }
+      }
+
+      // 显示警告
+      function showAlert(message, type = 'info') {
+        const alertHtml = `
+          <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+            ${escapeHtml(message)}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+          </div>
+        `
+        document.getElementById('resultsContainer').insertAdjacentHTML('afterbegin', alertHtml)
+      }
+
+      // 工具函数
+      function formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' B'
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB'
+        if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB'
+        return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
+      }
+
+      function formatDate(dateString) {
+        const date = new Date(dateString)
+        return date.toLocaleString('zh-CN', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit'
+        })
+      }
+
+      function formatRelevancePercent(score, isRecommended = false) {
+        if (typeof score !== 'number' || Number.isNaN(score)) {
+          return null
+        }
+        const safeScore = Math.max(0, score)
+        let percent = (1 / (1 + safeScore)) * 100
+        if (isRecommended) {
+          percent = Math.min(100, percent + 10)
+        }
+        return percent.toFixed(1)
+      }
+
+      function escapeHtml(text) {
+        if (!text) return ''
+        const map = {
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#039;'
+        }
+        return text.replace(/[&<>"']/g, (m) => map[m])
+      }
+    </script>
+  </body>
+</html>

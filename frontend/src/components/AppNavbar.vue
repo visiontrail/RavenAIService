@@ -35,6 +35,17 @@
             </el-icon>
             <span class="font-medium">上传日志</span>
           </router-link>
+
+          <a
+            href="/raven"
+            class="nav-link"
+            target="_self"
+          >
+            <el-icon class="mr-2">
+              <Box />
+            </el-icon>
+            <span class="font-medium">Raven包管理</span>
+          </a>
         </div>
 
         <!-- 用户操作区域 -->
@@ -46,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { Document, List, Upload, Plus } from '@element-plus/icons-vue'
+import { Box, Document, List, Upload } from '@element-plus/icons-vue'
 </script>
 
 <style scoped>

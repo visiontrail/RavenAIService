@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     npm \
     gcc \
     g++ \
+    cmake \
     python3-dev \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
@@ -47,7 +48,7 @@ RUN pip install --no-cache-dir \
 COPY . .
 
 # Create necessary directories and set permissions
-RUN mkdir -p /app/logs /app/temp/logs /app/temp/downloads /app/data
+RUN mkdir -p /app/logs /app/temp/logs /app/temp/downloads /app/data /app/uploads/packages
 
 # Make cleanup script executable
 RUN chmod +x /app/cleanup_runtime_data.py
@@ -61,9 +62,16 @@ RUN if [ -f package.json ]; then \
     npm run build; \
     fi
 
+# Install Raven package server dependencies
+WORKDIR /app/package-server
+RUN if [ -f package.json ]; then \
+    npm ci --omit=dev; \
+    fi
+
 # Change ownership and switch back to app directory
 WORKDIR /app
 RUN chown -R appuser:appuser /app
+RUN chmod +x /app/start_combined.sh
 
 # Switch to non-root user
 USER appuser
@@ -73,5 +81,5 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
   CMD [ "curl", "-f", "http://localhost:8085/health" ]
 
 # Expose port and run the application
-EXPOSE 8085
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8085"]
+EXPOSE 8085 8083
+CMD ["./start_combined.sh"]
