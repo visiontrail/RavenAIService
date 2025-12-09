@@ -110,7 +110,8 @@ class Settings(BaseSettings):
     thread_num_for_decompress: int = 4  # 默认线程数
     
     # SQLite配置（开发环境）
-    sqlite_file: str = "logs.db"
+    # 默认放在 data 目录，避免与代码目录冲突，方便卷持久化
+    sqlite_file: str = "data/logs.db"
     
     # PostgreSQL配置（生产环境）
     postgres_host: str = "localhost"
