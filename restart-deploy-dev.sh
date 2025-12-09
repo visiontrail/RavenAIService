@@ -133,7 +133,8 @@ else
 fi
 
 echo "🔧 重启服务（无需重新构建）..."
-docker-compose -f $COMPOSE_FILE up -d
+# 为确保最新镜像（含 Node/Raven 和前端静态文件），默认带 --build
+docker-compose -f $COMPOSE_FILE up -d --build
 
 echo "⏳ 等待服务启动..."
 sleep 3
