@@ -5,11 +5,13 @@ services:
     build: .
     expose:
       - "8085"
+      - "8083"
+    ports:
+      - "8083:8083"
     volumes:
       - app_logs:/app/logs
       - app_temp:/app/temp
       - app_data:/app/data
-      - app_db:/app
       # 添加源代码热重载挂载
       - ./app:/app/app:ro  # 只读挂载，防止容器内意外修改
       - ./requirements.txt:/app/requirements.txt:ro
@@ -59,7 +61,6 @@ services:
       - app_logs:/app/logs
       - app_temp:/app/temp
       - app_data:/app/data
-      - app_db:/app
       # 添加源代码热重载挂载
       - ./app:/app/app:ro
       - ./requirements.txt:/app/requirements.txt:ro
@@ -106,4 +107,3 @@ volumes:
   app_logs:
   app_temp:
   app_data:
-  app_db:
