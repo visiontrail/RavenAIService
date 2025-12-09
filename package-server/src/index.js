@@ -22,6 +22,7 @@ const normalizeBasePath = (basePath) => {
 }
 const BASE_PATH = normalizeBasePath(process.env.RAVEN_BASE_PATH || process.env.BASE_PATH)
 const API_PREFIX = `${BASE_PATH}/api`
+const ENABLE_LEGACY_PATHS = (process.env.RAVEN_ENABLE_LEGACY_PATHS || 'true').toLowerCase() !== 'false'
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '../uploads')
 const packageService = new PackageServiceSingleton()
 const ragService = getRAGServiceInstance()
@@ -81,11 +82,39 @@ app.get([BASE_PATH, `${BASE_PATH}/`], (req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'))
 })
 
+// 兼容旧版根路径（直接访问 8083 端口时可用 /api 和 / 静态）
+if (ENABLE_LEGACY_PATHS && BASE_PATH !== '/') {
+  app.use(
+    '/',
+    express.static(path.join(__dirname, '../public'), {
+      index: 'index.html'
+    })
+  )
+  app.get(['/package/:id', '/intelligent-search'], (req, res, next) => {
+    const target =
+      req.path.startsWith('/package/')
+        ? 'package-detail.html'
+        : req.path.startsWith('/intelligent-search')
+        ? 'intelligent-search.html'
+        : null
+    if (!target) return next()
+    res.sendFile(path.join(__dirname, '../public', target))
+  })
+}
+
 // API 路由
 app.use(`${API_PREFIX}/packages`, packagesRouter)
 app.use(`${API_PREFIX}/upload`, uploadRouter)
 app.use(`${API_PREFIX}/download`, downloadRouter)
 app.use(`${API_PREFIX}/search`, searchRouter)
+
+// 兼容旧版 /api 前缀
+if (ENABLE_LEGACY_PATHS && BASE_PATH !== '/') {
+  app.use('/api/packages', packagesRouter)
+  app.use('/api/upload', uploadRouter)
+  app.use('/api/download', downloadRouter)
+  app.use('/api/search', searchRouter)
+}
 
 // 健康检查
 app.get('/health', (req, res) => {

@@ -39,7 +39,8 @@
    ```
 
 3. **访问应用**
-   打开浏览器访问: http://localhost:8083
+   - 直接端口：`http://localhost:8083`（保留旧版入口 `/api/*`）
+   - 统一入口（容器内）：`/raven`，API 路径 `/raven/api/*`
 
 ### 使用Docker Compose
 
@@ -101,20 +102,20 @@ package-server/
 
 ### 包管理
 
-- `GET /api/packages` - 获取包列表（支持搜索和分页）
-- `GET /api/packages/:id` - 获取包详情
-- `DELETE /api/packages/:id` - 删除包
-- `GET /api/packages/stats` - 获取统计信息
+- `GET /raven/api/packages`（兼容：`/api/packages`）- 获取包列表（支持搜索和分页）
+- `GET /raven/api/packages/:id`（兼容：`/api/packages/:id`）- 获取包详情
+- `DELETE /raven/api/packages/:id`（兼容：`/api/packages/:id`）- 删除包
+- `GET /raven/api/packages/stats`（兼容：`/api/packages/stats`）- 获取统计信息
 
 ### 文件上传
 
-- `POST /api/upload` - 单文件上传
-- `POST /api/upload/batch` - 批量文件上传
+- `POST /raven/api/upload`（兼容：`/api/upload`）- 单文件上传
+- `POST /raven/api/upload/batch`（兼容：`/api/upload/batch`）- 批量文件上传
 
 ### 文件下载
 
-- `GET /api/download/:id` - 下载单个包
-- `POST /api/download/batch` - 批量下载（ZIP格式）
+- `GET /raven/api/download/:id`（兼容：`/api/download/:id`）- 下载单个包
+- `POST /raven/api/download/batch`（兼容：`/api/download/batch`）- 批量下载（ZIP格式）
 
 ## 配置说明
 
