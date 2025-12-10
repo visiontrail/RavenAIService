@@ -5,10 +5,12 @@
         <!-- Logo和标题 -->
         <div class="flex items-center space-x-4">
           <router-link to="/" class="flex items-center space-x-2">
-            <el-icon size="24" class="text-blue-600">
-              <Document />
-            </el-icon>
-            <span class="text-xl font-semibold text-gray-900">日志管理系统</span>
+            <img
+              :src="ravenLogo"
+              alt="Raven Logo"
+              class="h-9 w-9 rounded-xl shadow-sm ring-1 ring-gray-200 object-contain"
+            />
+            <span class="text-xl font-semibold text-gray-900">Raven智能测试平台</span>
           </router-link>
         </div>
 
@@ -59,7 +61,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Box, Document, List, Upload } from '@element-plus/icons-vue'
+import { Box, List, Upload } from '@element-plus/icons-vue'
+import ravenLogo from '@/assets/raven-logo.png'
 
 const route = useRoute()
 const isRavenRoute = computed(() =>

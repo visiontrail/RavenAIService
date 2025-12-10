@@ -18,10 +18,12 @@
             </el-button>
             <div class="h-8 w-px bg-gray-300"></div>
             <div class="flex items-center space-x-2">
-              <el-icon class="text-blue-600" size="24">
-                <Document />
-              </el-icon>
-              <span class="text-lg font-semibold text-gray-900">日志管理系统</span>
+              <img
+                :src="ravenLogo"
+                alt="Raven Logo"
+                class="h-9 w-9 rounded-xl shadow-sm ring-1 ring-gray-200 object-contain"
+              />
+              <span class="text-lg font-semibold text-gray-900">Raven智能测试平台</span>
             </div>
           </div>
         </div>
@@ -606,7 +608,6 @@ import AIAnalysisResult from '../components/AIAnalysisResult.vue'
 import { FormatAdapter } from '../utils/formatAdapter'
 import {
   ArrowLeft,
-  Document,
   Download,
   Delete,
   Operation,
@@ -623,6 +624,7 @@ import {
   ArrowDown,
   Refresh,
 } from '@element-plus/icons-vue'
+import ravenLogo from '@/assets/raven-logo.png'
 
 interface Props {
   id: string
