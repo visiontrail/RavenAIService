@@ -225,8 +225,8 @@ watch(
 
     <el-skeleton v-if="loading" :rows="8" animated />
 
-    <div v-else-if="pkg" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div class="space-y-4 lg:col-span-2">
+    <div v-else-if="pkg" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="space-y-4">
         <el-card shadow="never" class="border border-gray-100">
           <template #header>
             <div class="flex items-center gap-2">
@@ -274,41 +274,6 @@ watch(
         <el-card shadow="never" class="border border-gray-100">
           <template #header>
             <div class="flex items-center gap-2">
-              <el-icon><Collection /></el-icon>
-              <span class="font-semibold text-gray-800">组件</span>
-            </div>
-          </template>
-          <div class="flex flex-wrap gap-2">
-            <el-tag
-              v-for="comp in normalizeComponents(pkg.metadata?.components)"
-              :key="`${comp.name}-${comp.version || 'na'}`"
-              size="small"
-              effect="plain"
-              type="success"
-            >
-              {{ comp.name }} <span v-if="comp.version">· {{ comp.version }}</span>
-            </el-tag>
-            <span v-if="!normalizeComponents(pkg.metadata?.components).length" class="text-gray-400 text-sm">
-              暂无组件
-            </span>
-          </div>
-        </el-card>
-
-        <el-card shadow="never" class="border border-gray-100">
-          <template #header>
-            <div class="flex items-center gap-2">
-              <el-icon><Memo /></el-icon>
-              <span class="font-semibold text-gray-800">描述</span>
-            </div>
-          </template>
-          <div class="markdown-content text-sm text-gray-800" v-html="renderedDescription" />
-        </el-card>
-      </div>
-
-      <div class="space-y-4">
-        <el-card shadow="never" class="border border-gray-100">
-          <template #header>
-            <div class="flex items-center gap-2">
               <el-icon><PriceTag /></el-icon>
               <span class="font-semibold text-gray-800">标签</span>
             </div>
@@ -331,24 +296,36 @@ watch(
         <el-card shadow="never" class="border border-gray-100">
           <template #header>
             <div class="flex items-center gap-2">
-              <el-icon><Link /></el-icon>
-              <span class="font-semibold text-gray-800">快速操作</span>
+              <el-icon><Collection /></el-icon>
+              <span class="font-semibold text-gray-800">组件</span>
             </div>
           </template>
-          <div class="space-y-3">
-            <div class="flex items-center justify-between text-sm">
-              <span class="text-gray-600">详情链接</span>
-              <el-button size="small" text type="primary" @click="copyShareLink(shareLink)">复制</el-button>
-            </div>
-            <div class="flex items-center justify-between text-sm">
-              <span class="text-gray-600">下载链接</span>
-              <el-button size="small" text type="primary" @click="copyShareLink(downloadLink)">复制</el-button>
-            </div>
-            <el-button type="primary" class="w-full" @click="downloadPackage(pkg)">
-              <el-icon class="mr-1"><Download /></el-icon>
-              下载包
-            </el-button>
+          <div class="flex flex-wrap gap-2">
+            <el-tag
+              v-for="comp in normalizeComponents(pkg.metadata?.components)"
+              :key="`${comp.name}-${comp.version || 'na'}`"
+              size="small"
+              effect="plain"
+              type="success"
+            >
+              {{ comp.name }} <span v-if="comp.version">· {{ comp.version }}</span>
+            </el-tag>
+            <span v-if="!normalizeComponents(pkg.metadata?.components).length" class="text-gray-400 text-sm">
+              暂无组件
+            </span>
           </div>
+        </el-card>
+      </div>
+
+      <div class="space-y-4">
+        <el-card shadow="never" class="border border-gray-100">
+          <template #header>
+            <div class="flex items-center gap-2">
+              <el-icon><Memo /></el-icon>
+              <span class="font-semibold text-gray-800">描述</span>
+            </div>
+          </template>
+          <div class="markdown-content text-sm text-gray-800" v-html="renderedDescription" />
         </el-card>
       </div>
     </div>
