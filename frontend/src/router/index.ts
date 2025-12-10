@@ -36,6 +36,15 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/raven/package/:id',
+    name: 'RavenPackageDetail',
+    component: () => import('../views/RavenPackageDetail.vue'),
+    meta: {
+      title: '包详情',
+    },
+    props: true,
+  },
+  {
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
     component: () => import('../views/NotFound.vue'),

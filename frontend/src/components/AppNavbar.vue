@@ -39,7 +39,7 @@
           <router-link
             to="/raven-manager"
             class="nav-link"
-            :class="{ 'nav-link-active': $route.name === 'RavenManager' }"
+            :class="{ 'nav-link-active': isRavenRoute }"
           >
             <el-icon class="mr-2">
               <Box />
@@ -57,7 +57,14 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { Box, Document, List, Upload } from '@element-plus/icons-vue'
+
+const route = useRoute()
+const isRavenRoute = computed(() =>
+  ['RavenManager', 'RavenPackageDetail'].includes((route.name as string) || '')
+)
 </script>
 
 <style scoped>

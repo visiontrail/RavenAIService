@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   listRavenPackages,
-  getRavenPackageDetail,
   deleteRavenPackage,
   rebuildRavenIndex,
   getRavenSearchStatus,
@@ -14,7 +14,7 @@ import {
   ravenBaseUrl,
   ravenBasePath,
 } from '@/api/raven'
-import { copyToClipboard, downloadFile, formatDateTime, formatFileSize } from '@/utils'
+import { downloadFile, formatDateTime, formatFileSize } from '@/utils'
 import { renderMarkdown } from '@/utils/markdownRenderer'
 import type {
   RavenComponent,
@@ -23,6 +23,8 @@ import type {
   RavenSearchStatus,
   RavenUploadMetadata,
 } from '@/types'
+
+const router = useRouter()
 
 const activeTab = ref('list')
 
@@ -45,9 +47,6 @@ const pagination = reactive({
 })
 
 const loadingList = ref(false)
-const detailDrawerVisible = ref(false)
-const detailLoading = ref(false)
-const selectedPackage = ref<RavenPackage | null>(null)
 
 const stats = reactive({
   totalPackages: 0,
@@ -86,13 +85,6 @@ const searchSuggestions = ref<string[]>([
   '包含 OAM 组件的版本',
   'KaTx 最新发布',
 ])
-
-const shareLink = computed(() =>
-  selectedPackage.value ? `${ravenBaseUrl}/package/${encodeURIComponent(selectedPackage.value.id)}` : ''
-)
-const downloadLink = computed(() =>
-  selectedPackage.value ? `${ravenBaseUrl}/api/download/${encodeURIComponent(selectedPackage.value.id)}` : ''
-)
 
 const normalizeTags = (value?: unknown) => {
   if (!value) return []
@@ -221,35 +213,9 @@ const resetFilters = () => {
   fetchPackages()
 }
 
-const openPackageDetail = async (payload: string | RavenPackage) => {
+const openPackageDetail = (payload: string | RavenPackage) => {
   const id = typeof payload === 'string' ? payload : payload.id
-  detailDrawerVisible.value = true
-  detailLoading.value = true
-  selectedPackage.value = null
-  try {
-    const { data } = await getRavenPackageDetail(id)
-    if (data?.success && data.data) {
-      selectedPackage.value = data.data
-    } else {
-      throw new Error(data?.message || '获取包详情失败')
-    }
-  } catch (error: any) {
-    console.error(error)
-    ElMessage.error(error.message || '加载包详情失败')
-    detailDrawerVisible.value = false
-  } finally {
-    detailLoading.value = false
-  }
-}
-
-const copyShareLink = async (link: string) => {
-  if (!link) return
-  const ok = await copyToClipboard(link)
-  if (ok) {
-    ElMessage.success('链接已复制')
-  } else {
-    ElMessage.warning('复制失败，请手动复制')
-  }
+  router.push({ name: 'RavenPackageDetail', params: { id } })
 }
 
 const downloadPackage = async (pkg: RavenPackage) => {
@@ -282,10 +248,6 @@ const deletePackage = async (pkg: RavenPackage) => {
     if (!data?.success) throw new Error(data?.message || '删除失败')
     ElMessage.success('包已删除')
     fetchPackages()
-    if (selectedPackage.value?.id === pkg.id) {
-      detailDrawerVisible.value = false
-      selectedPackage.value = null
-    }
   } catch (error: any) {
     if (error === 'cancel' || error === 'close') return
     console.error(error)
@@ -739,121 +701,6 @@ onMounted(() => {
           </div>
         </section>
 
-        <el-drawer v-model="detailDrawerVisible" size="50%" :with-header="false" destroy-on-close>
-          <template #default>
-            <div class="p-4 h-full flex flex-col gap-4">
-              <div class="flex justify-between items-start gap-4">
-                <div>
-                  <p class="text-sm text-gray-500">包详情</p>
-                  <h2 class="text-xl font-semibold text-gray-900 flex items-center gap-2">
-                    <span>{{ selectedPackage?.name || '加载中' }}</span>
-                    <el-tag v-if="selectedPackage" size="small" type="info" effect="plain">
-                      v{{ selectedPackage.version || '未知' }}
-                    </el-tag>
-                    <el-tag v-if="selectedPackage" size="small" :type="packageTypeTag(selectedPackage.packageType)">
-                      {{ packageTypeText(selectedPackage?.packageType) }}
-                    </el-tag>
-                    <el-tag v-if="selectedPackage" size="small" effect="plain" :type="isPatchPackage(selectedPackage) ? 'warning' : 'success'">
-                      {{ humanizePatch(selectedPackage) }}
-                    </el-tag>
-                  </h2>
-                  <p class="text-gray-500 text-sm mt-1">
-                    创建于 {{ selectedPackage ? formatDateTime(selectedPackage.createdAt) : '-' }}
-                  </p>
-                </div>
-                <div class="flex gap-2">
-                  <el-button v-if="selectedPackage" size="small" @click="copyShareLink(shareLink)">
-                    <el-icon class="mr-1"><Link /></el-icon>
-                    复制链接
-                  </el-button>
-                  <el-button v-if="selectedPackage" size="small" @click="copyShareLink(downloadLink)">
-                    复制下载链接
-                  </el-button>
-                  <el-button
-                    v-if="selectedPackage"
-                    size="small"
-                    type="primary"
-                    @click="downloadPackage(selectedPackage)"
-                  >
-                    下载
-                  </el-button>
-                </div>
-              </div>
-
-              <el-skeleton v-if="detailLoading" :rows="6" animated />
-
-              <div v-else-if="selectedPackage" class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                <el-card shadow="never" class="col-span-1" header="基础信息">
-                  <ul class="space-y-3 text-sm text-gray-700">
-                    <li class="flex justify-between items-center">
-                      <span class="text-gray-500">包 ID</span>
-                      <span class="font-mono text-gray-800">{{ selectedPackage.id }}</span>
-                    </li>
-                    <li class="flex justify-between items-center">
-                      <span class="text-gray-500">大小</span>
-                      <span class="text-gray-800">{{ formatFileSize(selectedPackage.size) }}</span>
-                    </li>
-                    <li class="flex justify-between items-center">
-                      <span class="text-gray-500">SHA-256</span>
-                      <span class="text-gray-800 truncate" :title="selectedPackage.metadata?.sha256">
-                        {{ selectedPackage.metadata?.sha256 || '暂无' }}
-                      </span>
-                    </li>
-                    <li class="flex justify-between items-center">
-                      <span class="text-gray-500">存储路径</span>
-                      <span class="text-gray-800 truncate" :title="selectedPackage.path || '-'">
-                        {{ selectedPackage.path || '-' }}
-                      </span>
-                    </li>
-                  </ul>
-                </el-card>
-
-                <el-card shadow="never" class="col-span-1" header="标签">
-                  <div class="flex flex-wrap gap-2">
-                    <el-tag
-                      v-for="tag in normalizeTags(selectedPackage.metadata?.tags)"
-                      :key="tag"
-                      size="small"
-                      effect="light"
-                    >
-                      {{ tag }}
-                    </el-tag>
-                    <span v-if="!normalizeTags(selectedPackage.metadata?.tags).length" class="text-gray-400 text-sm">
-                      暂无标签
-                    </span>
-                  </div>
-                </el-card>
-
-                <el-card shadow="never" class="col-span-1" header="组件">
-                  <div class="flex flex-wrap gap-2">
-                    <el-tag
-                      v-for="comp in normalizeComponents(selectedPackage.metadata?.components)"
-                      :key="`${comp.name}-${comp.version || 'na'}`"
-                      size="small"
-                      effect="plain"
-                      type="success"
-                    >
-                      {{ comp.name }} <span v-if="comp.version">· {{ comp.version }}</span>
-                    </el-tag>
-                    <span
-                      v-if="!normalizeComponents(selectedPackage.metadata?.components).length"
-                      class="text-gray-400 text-sm"
-                    >
-                      暂无组件
-                    </span>
-                  </div>
-                </el-card>
-
-                <el-card shadow="never" class="col-span-1 lg:col-span-3" header="描述">
-                  <div
-                    class="markdown-content text-sm text-gray-800"
-                    v-html="renderMarkdown(selectedPackage.metadata?.description || '暂无描述')"
-                  />
-                </el-card>
-              </div>
-            </div>
-          </template>
-        </el-drawer>
       </el-tab-pane>
 
       <el-tab-pane label="上传包" name="upload">
