@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import type { RouteRecordRaw } from 'vue-router'
+import type { RouteLocationNormalized, RouteRecordRaw } from 'vue-router'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -61,8 +61,33 @@ const router = createRouter({
   routes,
 })
 
+const normalizePort = (value?: unknown) => {
+  if (value === null || value === undefined) return ''
+  return String(value)
+}
+
+const shouldRedirectToRaven = (to: RouteLocationNormalized, from: RouteLocationNormalized) => {
+  // 仅在首次访问根路径（默认日志列表）时尝试重定向
+  if (from?.name) return false
+  if (to.name !== 'LogList' && to.path !== '/') return false
+  if (typeof window === 'undefined') return false
+
+  const configuredPort =
+    normalizePort((window as any).__RAVEN_SERVER_PORT__) ||
+    normalizePort(import.meta.env.VITE_RAVEN_PORT) ||
+    '8083'
+  const currentPort = normalizePort(window.location.port)
+
+  return configuredPort !== '' && currentPort === configuredPort
+}
+
 // 路由守卫
 router.beforeEach((to, from, next) => {
+  if (shouldRedirectToRaven(to, from)) {
+    next({ name: 'RavenManager', replace: true })
+    return
+  }
+
   // 设置页面标题
   if (to.meta?.title) {
     document.title = `${to.meta.title} - Raven智能测试平台`

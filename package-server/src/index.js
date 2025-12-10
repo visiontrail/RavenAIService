@@ -74,6 +74,7 @@ const writeFrontendConfig = () => {
     `  };\n` +
     `  window.__RAVEN_BASE_PATH__ = defaultBasePath;\n` +
     `  window.__LOG_API_BASE_URL__ = deriveLogApiBase();\n` +
+    `  window.__RAVEN_SERVER_PORT__ = serverPort;\n` +
     `})();\n`
 
   for (const dir of targets) {
