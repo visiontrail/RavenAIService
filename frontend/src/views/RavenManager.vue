@@ -12,7 +12,6 @@ import {
   downloadRavenPackage,
   fetchRavenSuggestions,
   ravenBaseUrl,
-  ravenBasePath,
 } from '@/api/raven'
 import { downloadFile, formatDateTime, formatFileSize } from '@/utils'
 import { renderMarkdown } from '@/utils/markdownRenderer'
@@ -47,11 +46,6 @@ const pagination = reactive({
 })
 
 const loadingList = ref(false)
-
-const stats = reactive({
-  totalPackages: 0,
-  patchCount: 0,
-})
 
 const uploadZoneActive = ref(false)
 const uploadFiles = ref<File[]>([])
@@ -180,9 +174,6 @@ const fetchPackages = async () => {
       pagination.totalPages = data.data.pagination.totalPages
       pagination.totalItems = data.data.pagination.totalItems
       pagination.itemsPerPage = data.data.pagination.itemsPerPage
-
-      stats.totalPackages = data.data.pagination.totalItems
-      stats.patchCount = (data.data.packages || []).filter((item) => isPatchPackage(item)).length
     } else {
       throw new Error(data?.message || '获取包列表失败')
     }
@@ -471,7 +462,6 @@ onMounted(() => {
       <div>
         <p class="text-sm text-gray-500">Raven 包管理</p>
         <h1 class="text-2xl font-bold text-gray-900">升级包与分发中心</h1>
-        <p class="text-gray-500 mt-1">与日志平台同样的体验，集中查看、上传与智能检索</p>
       </div>
       <div class="flex items-center gap-2">
         <el-button size="small" @click="refreshAll" :loading="loadingList || statusLoading">
@@ -484,81 +474,16 @@ onMounted(() => {
       </div>
     </div>
 
-    <el-row :gutter="16" class="stats-row">
-      <el-col :xs="24" :sm="12" :md="6">
-        <el-card shadow="never" class="stat-card">
-          <div class="flex items-center justify-between">
-            <div>
-              <p class="text-sm text-gray-500">包总数</p>
-              <p class="text-2xl font-bold text-gray-900">{{ stats.totalPackages }}</p>
-              <p class="text-xs text-gray-400 mt-1">当前页显示 {{ packages.length }} 个</p>
-            </div>
-            <div class="rounded-xl bg-blue-50 text-blue-600 p-3">
-              <el-icon size="22"><Box /></el-icon>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :xs="24" :sm="12" :md="6">
-        <el-card shadow="never" class="stat-card">
-          <div class="flex items-center justify-between">
-            <div>
-              <p class="text-sm text-gray-500">补丁包</p>
-              <p class="text-2xl font-bold text-gray-900">{{ stats.patchCount }}</p>
-              <p class="text-xs text-gray-400 mt-1">当前页统计</p>
-            </div>
-            <div class="rounded-xl bg-amber-50 text-amber-600 p-3">
-              <el-icon size="22"><Tools /></el-icon>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :xs="24" :sm="12" :md="6">
-        <el-card shadow="never" class="stat-card">
-          <div class="flex items-center justify-between">
-            <div>
-              <p class="text-sm text-gray-500">智能搜索</p>
-              <p class="text-lg font-semibold text-gray-900">
-                {{ searchStatus?.initialized ? '可用' : '待初始化' }}
-              </p>
-              <p class="text-xs text-gray-400 mt-1">
-                {{ searchStatus?.rebuilding ? '索引重建中' : '索引已准备' }}
-              </p>
-            </div>
-            <div
-              class="rounded-xl p-3"
-              :class="searchStatus?.initialized ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'"
-            >
-              <el-icon size="22"><Cpu /></el-icon>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      <el-col :xs="24" :sm="12" :md="6">
-        <el-card shadow="never" class="stat-card">
-          <div class="flex items-center justify-between">
-            <div>
-              <p class="text-sm text-gray-500">独立入口</p>
-              <p class="text-lg font-semibold text-gray-900">8083 · {{ ravenBasePath }}</p>
-              <p class="text-xs text-gray-400 mt-1">保留原有访问方式</p>
-            </div>
-            <div class="rounded-xl bg-indigo-50 text-indigo-600 p-3">
-              <el-icon size="22"><Link /></el-icon>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
-
     <el-tabs v-model="activeTab" class="raven-tabs">
       <el-tab-pane label="包列表" name="list">
         <section class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-4">
-          <div class="flex flex-wrap items-center gap-3">
+          <div class="flex flex-wrap md:flex-nowrap items-center gap-3 w-full" style="gap: 0.75rem;">
             <el-input
               v-model="filters.search"
               placeholder="按名称、版本或描述搜索"
               clearable
-              class="w-72"
+              class="flex-1 min-w-[260px]"
+              style="width: 280px"
               @change="fetchPackages"
               @clear="fetchPackages"
             >
@@ -566,7 +491,14 @@ onMounted(() => {
                 <el-icon><Search /></el-icon>
               </template>
             </el-input>
-            <el-select v-model="filters.type" placeholder="包类型" clearable class="w-48" @change="fetchPackages">
+            <el-select
+              v-model="filters.type"
+              placeholder="包类型"
+              clearable
+              class="w-40"
+              style="width: 170px"
+              @change="fetchPackages"
+            >
               <el-option label="LingXi-10" value="lingxi-10" />
               <el-option label="LingXi-07A" value="lingxi-07a" />
               <el-option label="KaTx" value="ka-tx" />
@@ -579,6 +511,7 @@ onMounted(() => {
               placeholder="版本号"
               clearable
               class="w-32"
+              style="width: 140px"
               @change="fetchPackages"
               @clear="fetchPackages"
             />
@@ -587,14 +520,22 @@ onMounted(() => {
               placeholder="标签包含"
               clearable
               class="w-40"
+              style="width: 170px"
               @change="fetchPackages"
               @clear="fetchPackages"
             />
-            <el-select v-model="filters.isPatch" placeholder="补丁/正式" clearable class="w-32" @change="fetchPackages">
+            <el-select
+              v-model="filters.isPatch"
+              placeholder="补丁/正式"
+              clearable
+              class="w-32"
+              style="width: 140px"
+              @change="fetchPackages"
+            >
               <el-option label="正式包" value="false" />
               <el-option label="补丁包" value="true" />
             </el-select>
-            <div class="flex gap-2">
+            <div class="flex gap-2 flex-shrink-0">
               <el-button type="primary" @click="fetchPackages">
                 <el-icon class="mr-1"><Search /></el-icon>
                 搜索
