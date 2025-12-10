@@ -115,8 +115,26 @@ export const downloadFileByUrl = (url: string, filename?: string): void => {
 // 复制到剪贴板
 export const copyToClipboard = async (text: string): Promise<boolean> => {
   try {
-    await navigator.clipboard.writeText(text)
-    return true
+    const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+    if (clipboard && typeof clipboard.writeText === 'function') {
+      await clipboard.writeText(text)
+      return true
+    }
+
+    if (typeof document === 'undefined') return false
+
+    // 回退到 execCommand 以兼容不支持 navigator.clipboard 的环境
+    const textarea = document.createElement('textarea')
+    textarea.value = text
+    textarea.setAttribute('readonly', '')
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    textarea.style.pointerEvents = 'none'
+    document.body.appendChild(textarea)
+    textarea.select()
+    const success = document.execCommand('copy')
+    document.body.removeChild(textarea)
+    return success
   } catch (error) {
     console.error('Failed to copy to clipboard:', error)
     return false
