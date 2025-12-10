@@ -28,6 +28,14 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   {
+    path: '/raven-manager',
+    name: 'RavenManager',
+    component: () => import('../views/RavenManager.vue'),
+    meta: {
+      title: 'Raven包管理',
+    },
+  },
+  {
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
     component: () => import('../views/NotFound.vue'),

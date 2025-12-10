@@ -95,3 +95,64 @@ export interface NotificationOptions {
   type: 'success' | 'warning' | 'info' | 'error'
   duration?: number
 }
+
+// Raven 包管理类型
+export interface RavenComponent {
+  name: string
+  version?: string
+}
+
+export interface RavenMetadata {
+  description?: string
+  tags?: string[]
+  components?: RavenComponent[]
+  sha256?: string
+  isPatch?: boolean | string
+}
+
+export interface RavenPackage {
+  id: string
+  name: string
+  version?: string
+  packageType?: string
+  size: number
+  createdAt: string
+  path?: string
+  metadata?: RavenMetadata
+}
+
+export interface RavenPagination {
+  currentPage: number
+  totalPages: number
+  totalItems: number
+  itemsPerPage: number
+}
+
+export interface RavenPackageList {
+  packages: RavenPackage[]
+  pagination: RavenPagination
+}
+
+export interface RavenUploadMetadata {
+  isPatch?: boolean
+  description?: string
+  packageType?: string
+  version?: string
+  tags?: string[]
+  components?: RavenComponent[]
+}
+
+export interface RavenSearchStatus {
+  initialized: boolean
+  vectorStoreExists: boolean
+  rebuilding: boolean
+  totalPackages: number
+}
+
+export interface RavenSearchResult {
+  answer: string
+  relevantPackages: RavenPackage[]
+  query: string
+  recommendedPackageIds?: string[]
+  searchResultsCount?: number
+}

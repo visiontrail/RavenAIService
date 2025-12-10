@@ -36,16 +36,16 @@
             <span class="font-medium">上传日志</span>
           </router-link>
 
-          <a
-            href="/raven"
+          <router-link
+            to="/raven-manager"
             class="nav-link"
-            target="_self"
+            :class="{ 'nav-link-active': $route.name === 'RavenManager' }"
           >
             <el-icon class="mr-2">
               <Box />
             </el-icon>
             <span class="font-medium">Raven包管理</span>
-          </a>
+          </router-link>
         </div>
 
         <!-- 用户操作区域 -->
