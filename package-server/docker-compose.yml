@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  package-server:
+    build: .
+    container_name: galaxy-package-server
+    ports:
+      - '8083:8083'
+    volumes:
+      - ./uploads:/app/uploads
+      - ./data:/app/data
+      # 可选：挂载 HuggingFace 缓存目录，避免每次重建容器时重新下载模型
+      # - ./huggingface_cache:/home/node/.cache/huggingface
+    environment:
+      - NODE_ENV=production
+      - PORT=8083
+      - UPLOAD_DIR=/app/uploads
+      - DATA_DIR=/app/data
+      # 可选：如果 HuggingFace 下载慢，可以使用镜像站点
+      # - HF_ENDPOINT=https://hf-mirror.com
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'node', '-e', "require('http').get('http://localhost:8083/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # RAG 服务首次启动需要加载 AI 模型，增加等待时间
+      start_period: 90s
+    networks:
+      - package-network
+    # 资源限制（可选，根据实际情况调整）
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+networks:
+  package-network:
+    driver: bridge
+
+volumes:
+  uploads:
+  data:
