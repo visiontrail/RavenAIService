@@ -33,7 +33,7 @@ const routes: RouteRecordRaw[] = [
     name: 'RavenManager',
     component: () => import('../views/RavenManager.vue'),
     meta: {
-      title: 'Raven包管理',
+      title: '重构包列表',
     },
   },
   {

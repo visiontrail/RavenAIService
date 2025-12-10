@@ -460,7 +460,7 @@ onMounted(() => {
   <div class="space-y-6 raven-page">
     <div class="flex flex-wrap justify-between items-start gap-4">
       <div>
-        <p class="text-sm text-gray-500">Raven 包管理</p>
+        <p class="text-sm text-gray-500">重构包列表</p>
         <h1 class="text-2xl font-bold text-gray-900">升级包与分发中心</h1>
       </div>
       <div class="flex items-center gap-2">

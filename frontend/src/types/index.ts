@@ -96,7 +96,7 @@ export interface NotificationOptions {
   duration?: number
 }
 
-// Raven 包管理类型
+// 重构包列表类型
 export interface RavenComponent {
   name: string
   version?: string

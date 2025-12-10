@@ -26,17 +26,6 @@
             </el-icon>
             <span class="font-medium">日志列表</span>
           </router-link>
-          
-          <router-link
-            to="/upload"
-            class="nav-link"
-            :class="{ 'nav-link-active': $route.name === 'Upload' }"
-          >
-            <el-icon class="mr-2">
-              <Upload />
-            </el-icon>
-            <span class="font-medium">上传日志</span>
-          </router-link>
 
           <router-link
             to="/raven-manager"
@@ -46,7 +35,7 @@
             <el-icon class="mr-2">
               <Box />
             </el-icon>
-            <span class="font-medium">Raven包管理</span>
+            <span class="font-medium">重构包列表</span>
           </router-link>
         </div>
 
@@ -61,7 +50,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Box, List, Upload } from '@element-plus/icons-vue'
+import { Box, List } from '@element-plus/icons-vue'
 import ravenLogo from '@/assets/raven-logo.png'
 
 const route = useRoute()
