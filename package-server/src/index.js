@@ -4,6 +4,7 @@ const cors = require('cors')
 const fs = require('fs')
 const PackageServiceSingleton = require('./services/PackageServiceSingleton')
 const getRAGServiceInstance = require('./services/RAGServiceSingleton')
+const { getUploadsDir } = require('./config/paths')
 
 // 导入路由
 const packagesRouter = require('./routes/packages')
@@ -23,7 +24,7 @@ const normalizeBasePath = (basePath) => {
 const BASE_PATH = normalizeBasePath(process.env.RAVEN_BASE_PATH || process.env.BASE_PATH)
 const API_PREFIX = `${BASE_PATH}/api`
 const ENABLE_LEGACY_PATHS = (process.env.RAVEN_ENABLE_LEGACY_PATHS || 'true').toLowerCase() !== 'false'
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '../uploads')
+const UPLOAD_DIR = getUploadsDir()
 const packageService = new PackageServiceSingleton()
 const ragService = getRAGServiceInstance()
 

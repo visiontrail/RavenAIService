@@ -10,6 +10,7 @@ const { StringOutputParser } = require('@langchain/core/output_parsers')
 const { Embeddings } = require('@langchain/core/embeddings')
 const fs = require('fs-extra')
 const path = require('path')
+const { getVectorStorePath } = require('../config/paths')
 
 // 动态加载 @xenova/transformers
 async function loadPipeline() {
@@ -81,7 +82,7 @@ class RAGService {
     })
 
     this.vectorStore = null
-    this.vectorStorePath = path.join(__dirname, '../../data/vector-store')
+    this.vectorStorePath = getVectorStorePath()
     this.isInitialized = false
     this.isRebuilding = false
     this.initializationPromise = null

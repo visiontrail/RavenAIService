@@ -4,9 +4,10 @@ const path = require('path')
 const fs = require('fs-extra')
 const PackageServiceSingleton = require('../services/PackageServiceSingleton')
 const getRAGServiceInstance = require('../services/RAGServiceSingleton')
+const { getUploadsDir } = require('../config/paths')
 
 const router = express.Router()
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '../../uploads')
+const UPLOAD_DIR = getUploadsDir()
 const packageService = new PackageServiceSingleton()
 const ragService = getRAGServiceInstance()
 

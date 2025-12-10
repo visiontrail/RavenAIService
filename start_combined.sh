@@ -5,13 +5,21 @@ set -euo pipefail
 LOG_SERVER_PORT="${LOG_SERVER_PORT:-8085}"
 RAVEN_PORT="${RAVEN_PORT:-8083}"
 RAVEN_BASE_PATH="${RAVEN_BASE_PATH:-/raven}"
-RAVEN_UPLOAD_DIR="${RAVEN_UPLOAD_DIR:-/app/uploads/packages}"
+RAVEN_DATA_DIR="${RAVEN_DATA_DIR:-/app/data/raven}"
 
-echo "Starting Raven package server on port ${RAVEN_PORT} (base path: ${RAVEN_BASE_PATH})"
-mkdir -p "${RAVEN_UPLOAD_DIR}"
+if ! mkdir -p "${RAVEN_DATA_DIR}" 2>/dev/null; then
+  echo "⚠️ 无法创建 ${RAVEN_DATA_DIR}，改用 /app/package-server/data"
+  RAVEN_DATA_DIR="/app/package-server/data"
+fi
+
+RAVEN_UPLOAD_DIR="${RAVEN_UPLOAD_DIR:-${RAVEN_DATA_DIR}/uploads}"
+
+mkdir -p "${RAVEN_DATA_DIR}" "${RAVEN_UPLOAD_DIR}"
+
+echo "Starting Raven package server on port ${RAVEN_PORT} (base path: ${RAVEN_BASE_PATH}, data dir: ${RAVEN_DATA_DIR})"
 
 pushd /app/package-server >/dev/null
-PORT="${RAVEN_PORT}" RAVEN_BASE_PATH="${RAVEN_BASE_PATH}" UPLOAD_DIR="${RAVEN_UPLOAD_DIR}" node src/index.js &
+PORT="${RAVEN_PORT}" RAVEN_BASE_PATH="${RAVEN_BASE_PATH}" RAVEN_DATA_DIR="${RAVEN_DATA_DIR}" UPLOAD_DIR="${RAVEN_UPLOAD_DIR}" node src/index.js &
 PACKAGE_PID=$!
 popd >/dev/null
 

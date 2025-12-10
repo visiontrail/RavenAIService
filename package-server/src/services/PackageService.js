@@ -2,6 +2,7 @@ const fs = require('fs-extra')
 const path = require('path')
 const crypto = require('crypto')
 const { v4: uuidv4 } = require('uuid')
+const { getUploadsDir, getMetadataFilePath } = require('../config/paths')
 
 // Package types enum
 const PackageType = {
@@ -13,14 +14,12 @@ const PackageType = {
   LINGXI_06TRD: 'lingxi-06-thrid'
 }
 
-const resolveUploadsDir = () => process.env.UPLOAD_DIR || path.join(__dirname, '../../uploads')
-
 class PackageService {
   constructor() {
     console.log('🔧 创建新的PackageService实例')
     this.packages = new Map()
-    this.metadataFilePath = path.join(__dirname, '../../data/package-metadata.json')
-    this.uploadsDir = resolveUploadsDir()
+    this.metadataFilePath = getMetadataFilePath()
+    this.uploadsDir = getUploadsDir()
     console.log(`📁 元数据文件路径: ${this.metadataFilePath}`)
     console.log('📁 上传目录路径:', this.uploadsDir)
     this.loadPackageMetadata()
