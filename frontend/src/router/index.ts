@@ -29,6 +29,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/raven-manager',
+    alias: ['/raven', '/raven/'],
     name: 'RavenManager',
     component: () => import('../views/RavenManager.vue'),
     meta: {
@@ -37,6 +38,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/raven/package/:id',
+    alias: ['/package/:id'],
     name: 'RavenPackageDetail',
     component: () => import('../views/RavenPackageDetail.vue'),
     meta: {

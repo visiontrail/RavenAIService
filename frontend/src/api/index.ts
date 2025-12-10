@@ -2,10 +2,18 @@ import axios from 'axios'
 import type { ApiResponse, LogRecord } from '@/types'
 import type { LogListData, DownloadInfo } from '@/types'
 
+const normalizeBase = (value?: string | null) => (value ? value.replace(/\/+$/, '') : '')
 const defaultBase = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8085'
-const computedBaseURL = import.meta.env.PROD
-  ? defaultBase
-  : (import.meta.env.VITE_API_BASE_URL || defaultBase)
+const runtimeLogBase = typeof window !== 'undefined' ? (window as any).__LOG_API_BASE_URL__ : undefined
+const envLogBase =
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ||
+  (typeof (globalThis as any).__VITE_API_BASE_URL__ !== 'undefined'
+    ? ((globalThis as any).__VITE_API_BASE_URL__ as string | undefined)
+    : undefined)
+const computedBaseURL =
+  normalizeBase(runtimeLogBase) ||
+  normalizeBase(envLogBase) ||
+  normalizeBase(defaultBase)
 
 // 创建axios实例
 const api = axios.create({
