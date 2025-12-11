@@ -186,3 +186,8 @@ logs.db
 .env.production
 bin/tool_log_decompress
 
+# 部署脚本缓存文件
+.build_cache_lock
+.npm_install_cache
+.env.example.bak_*
+
