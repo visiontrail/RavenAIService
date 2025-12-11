@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useAppStore } from './stores/app'
 import AppNavbar from './components/AppNavbar.vue'
 import AppNotifications from './components/AppNotifications.vue'
 import AppLoading from './components/AppLoading.vue'
 
 const appStore = useAppStore()
+const route = useRoute()
 
-// 判断是否应该显示导航栏（8083 端口不显示）
+// 判断是否应该显示导航栏
 const shouldShowNavbar = computed(() => {
   if (typeof window === 'undefined') return true
   
@@ -15,7 +17,16 @@ const shouldShowNavbar = computed(() => {
   const currentPort = window.location.port
   
   // 如果当前端口是 package-server 端口（默认 8083），则不显示 NavBar
-  return currentPort !== configuredPort
+  if (currentPort === configuredPort) {
+    return false
+  }
+  
+  // 如果访问路径是 /logs，也不显示 NavBar
+  if (route.path === '/logs') {
+    return false
+  }
+  
+  return true
 })
 
 onMounted(() => {

@@ -11,6 +11,14 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/logs',
+    name: 'Logs',
+    component: () => import('../views/LogList.vue'),
+    meta: {
+      title: '日志列表',
+    },
+  },
+  {
     path: '/upload',
     name: 'Upload',
     component: () => import('../views/Upload.vue'),
@@ -69,6 +77,8 @@ const normalizePort = (value?: unknown) => {
 const shouldRedirectToRaven = (to: RouteLocationNormalized, from: RouteLocationNormalized) => {
   // 仅在首次访问根路径（默认日志列表）时尝试重定向
   if (from?.name) return false
+  // 如果访问 /logs 路径，不进行重定向
+  if (to.path === '/logs' || to.name === 'Logs') return false
   if (to.name !== 'LogList' && to.path !== '/') return false
   if (typeof window === 'undefined') return false
 
