@@ -382,6 +382,18 @@ const renderedAnswer = computed(() =>
   searchResult.value ? renderMarkdown(searchResult.value.answer || '', { cleanXml: true }) : ''
 )
 
+const recommendedIdSet = computed(() => new Set(searchResult.value?.recommendedPackageIds || []))
+
+const sortedRelevantPackages = computed<RavenPackage[]>(() => {
+  const packages = searchResult.value?.relevantPackages || []
+  if (!recommendedIdSet.value.size) return packages
+  const recommended = packages.filter((pkg) => recommendedIdSet.value.has(pkg.id))
+  const others = packages.filter((pkg) => !recommendedIdSet.value.has(pkg.id))
+  return [...recommended, ...others]
+})
+
+const isRecommendedPackage = (pkg: RavenPackage) => recommendedIdSet.value.has(pkg.id)
+
 const performSearch = async () => {
   if (!searchQuery.value.trim()) {
     ElMessage.warning('请输入搜索内容')
@@ -847,9 +859,10 @@ onMounted(() => {
               </template>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div
-                  v-for="pkg in searchResult.relevantPackages"
+                  v-for="pkg in sortedRelevantPackages"
                   :key="pkg.id"
-                  class="border border-gray-100 rounded-lg p-3 hover:border-blue-200 transition"
+                  class="package-card border border-gray-100 rounded-lg p-3 hover:border-blue-200 transition"
+                  :class="{ 'recommended-card': isRecommendedPackage(pkg) }"
                 >
                   <div class="flex justify-between items-start gap-2">
                     <div>
@@ -869,9 +882,26 @@ onMounted(() => {
                         {{ pkg.metadata?.description || '暂无描述' }}
                       </p>
                     </div>
-                    <el-tag v-if="(pkg as any).relevanceScore" size="small" type="success" effect="plain">
-                      {{ ((pkg as any).relevanceScore * 100).toFixed(0) }}%
-                    </el-tag>
+                    <div class="flex flex-col items-end gap-1">
+                      <el-tag
+                        v-if="isRecommendedPackage(pkg)"
+                        size="small"
+                        type="warning"
+                        effect="dark"
+                        class="ai-recommend-badge"
+                      >
+                        <el-icon class="mr-1"><StarFilled /></el-icon>
+                        AI 推荐
+                      </el-tag>
+                      <el-tag
+                        v-if="(pkg as any).relevanceScore"
+                        size="small"
+                        :type="isRecommendedPackage(pkg) ? 'warning' : 'success'"
+                        effect="plain"
+                      >
+                        {{ ((pkg as any).relevanceScore * 100).toFixed(0) }}%
+                      </el-tag>
+                    </div>
                   </div>
                   <div class="flex flex-wrap gap-1 mt-2">
                     <el-tag
@@ -913,5 +943,28 @@ onMounted(() => {
 
 .markdown-content :deep(img) {
   max-width: 100%;
+}
+
+.package-card {
+  position: relative;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.package-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px -14px rgba(37, 99, 235, 0.2);
+}
+
+.recommended-card {
+  border-color: #f59e0b;
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.12), rgba(255, 255, 255, 0.94));
+  box-shadow: 0 18px 38px -18px rgba(251, 191, 36, 0.65);
+}
+
+.ai-recommend-badge {
+  background: linear-gradient(90deg, #f59e0b, #f97316);
+  color: #fff;
+  border: none;
+  box-shadow: 0 8px 18px -12px rgba(249, 115, 22, 0.9);
 }
 </style>
