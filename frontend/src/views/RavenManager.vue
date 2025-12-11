@@ -587,12 +587,14 @@ onMounted(() => {
             :row-class-name="() => 'cursor-pointer'"
             @row-click="openPackageDetail"
           >
-            <el-table-column prop="name" label="名称 / 版本" min-width="260">
+            <el-table-column prop="name" label="名称 / 版本" min-width="340">
               <template #default="{ row }">
                 <div class="flex items-start gap-2">
-                  <div class="flex-1">
-                    <div class="flex items-center gap-2">
-                      <span class="font-medium text-gray-900">{{ row.name }}</span>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <span class="font-medium text-gray-900 package-name" :title="row.name">
+                        {{ row.name }}
+                      </span>
                       <el-tag size="small" effect="plain" :type="packageTypeTag(row.packageType)">
                         {{ packageTypeText(row.packageType) }}
                       </el-tag>
@@ -608,7 +610,7 @@ onMounted(() => {
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="标签" min-width="180">
+            <el-table-column label="标签" min-width="140">
               <template #default="{ row }">
                 <div class="flex flex-wrap gap-1">
                   <el-tag
@@ -1064,6 +1066,14 @@ onMounted(() => {
 
 .upload-zone {
   transition: all 0.25s ease;
+}
+
+.package-name {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .markdown-content :deep(img) {
