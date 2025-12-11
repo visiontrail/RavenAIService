@@ -11,6 +11,7 @@ import {
   uploadRavenPackages,
   downloadRavenPackage,
   fetchRavenSuggestions,
+  getRavenPackageDetail,
 } from '@/api/raven'
 import { downloadFile, formatDateTime, formatFileSize } from '@/utils'
 import { renderMarkdown } from '@/utils/markdownRenderer'
@@ -78,6 +79,9 @@ const searchSuggestions = ref<string[]>([
   '包含 OAM 组件的版本',
   'KaTx 最新发布',
 ])
+const searchDetailVisible = ref(false)
+const searchDetailLoading = ref(false)
+const searchDetailPackage = ref<RavenPackage | null>(null)
 
 const normalizeTags = (value?: unknown) => {
   if (!value) return []
@@ -382,6 +386,10 @@ const renderedAnswer = computed(() =>
   searchResult.value ? renderMarkdown(searchResult.value.answer || '', { cleanXml: true }) : ''
 )
 
+const searchDetailDescription = computed(() =>
+  renderMarkdown(searchDetailPackage.value?.metadata?.description || '暂无描述', { cleanXml: true })
+)
+
 const recommendedIdSet = computed(() => new Set(searchResult.value?.recommendedPackageIds || []))
 
 const sortedRelevantPackages = computed<RavenPackage[]>(() => {
@@ -393,6 +401,26 @@ const sortedRelevantPackages = computed<RavenPackage[]>(() => {
 })
 
 const isRecommendedPackage = (pkg: RavenPackage) => recommendedIdSet.value.has(pkg.id)
+
+const openSearchPackageDetail = async (payload: RavenPackage) => {
+  searchDetailVisible.value = true
+  searchDetailLoading.value = true
+  searchDetailPackage.value = null
+  try {
+    const { data } = await getRavenPackageDetail(payload.id)
+    if (data?.success && data.data) {
+      searchDetailPackage.value = data.data
+    } else {
+      throw new Error(data?.message || '获取包详情失败')
+    }
+  } catch (error: any) {
+    console.error(error)
+    searchDetailPackage.value = payload
+    ElMessage.error(error.message || '加载详情失败')
+  } finally {
+    searchDetailLoading.value = false
+  }
+}
 
 const performSearch = async () => {
   if (!searchQuery.value.trim()) {
@@ -915,7 +943,7 @@ onMounted(() => {
                     </el-tag>
                   </div>
                   <div class="flex gap-2 mt-3">
-                    <el-button size="small" type="primary" plain @click="openPackageDetail(pkg.id)">详情</el-button>
+                    <el-button size="small" type="primary" plain @click="openSearchPackageDetail(pkg)">详情</el-button>
                     <el-button size="small" type="success" plain @click="downloadPackage(pkg)">下载</el-button>
                   </div>
                 </div>
@@ -929,6 +957,103 @@ onMounted(() => {
         </section>
       </el-tab-pane>
     </el-tabs>
+
+    <el-dialog
+      v-model="searchDetailVisible"
+      width="780px"
+      destroy-on-close
+      :close-on-click-modal="false"
+      class="raven-detail-dialog"
+    >
+      <template #header>
+        <div class="flex items-center gap-2">
+          <el-icon><Box /></el-icon>
+          <span class="font-semibold text-gray-800">包详情</span>
+        </div>
+      </template>
+
+      <div v-loading="searchDetailLoading" class="space-y-4">
+        <div class="flex flex-wrap items-center gap-2">
+          <h2 class="text-xl font-bold text-gray-900">
+            {{ searchDetailPackage?.name || '加载中...' }}
+          </h2>
+          <el-tag v-if="searchDetailPackage" size="small" effect="plain" type="info">
+            v{{ searchDetailPackage.version || '未知' }}
+          </el-tag>
+          <el-tag v-if="searchDetailPackage" size="small" :type="packageTypeTag(searchDetailPackage.packageType)">
+            {{ packageTypeText(searchDetailPackage.packageType) }}
+          </el-tag>
+          <el-tag
+            v-if="searchDetailPackage"
+            size="small"
+            effect="plain"
+            :type="isPatchPackage(searchDetailPackage) ? 'warning' : 'success'"
+          >
+            {{ humanizePatch(searchDetailPackage) }}
+          </el-tag>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-600">
+          <div>创建时间：{{ searchDetailPackage ? formatDateTime(searchDetailPackage.createdAt) : '-' }}</div>
+          <div>大小：{{ searchDetailPackage ? formatFileSize(searchDetailPackage.size) : '-' }}</div>
+        </div>
+
+        <div class="space-y-2">
+          <h3 class="text-sm font-semibold text-gray-800">描述</h3>
+          <div class="markdown-content text-sm text-gray-700" v-html="searchDetailDescription" />
+        </div>
+
+        <div v-if="normalizeTags(searchDetailPackage?.metadata?.tags).length" class="space-y-2">
+          <h3 class="text-sm font-semibold text-gray-800">标签</h3>
+          <div class="flex flex-wrap gap-1">
+            <el-tag
+              v-for="tag in normalizeTags(searchDetailPackage?.metadata?.tags)"
+              :key="tag"
+              size="small"
+              effect="plain"
+              type="info"
+            >
+              {{ tag }}
+            </el-tag>
+          </div>
+        </div>
+
+        <div v-if="normalizeComponents(searchDetailPackage?.metadata?.components).length" class="space-y-2">
+          <h3 class="text-sm font-semibold text-gray-800">组件</h3>
+          <div class="flex flex-wrap gap-1">
+            <el-tag
+              v-for="comp in normalizeComponents(searchDetailPackage?.metadata?.components)"
+              :key="`${comp.name}-${comp.version || 'na'}`"
+              size="small"
+              effect="plain"
+              type="success"
+            >
+              {{ comp.name }} <span v-if="comp.version">· {{ comp.version }}</span>
+            </el-tag>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="flex items-center justify-between">
+          <div class="text-xs text-gray-500">
+            仅在智能搜索中以弹窗展示，其他入口依然跳转详情页
+          </div>
+          <div class="flex gap-2">
+            <el-button
+              v-if="searchDetailPackage"
+              type="success"
+              plain
+              size="small"
+              @click="downloadPackage(searchDetailPackage)"
+            >
+              下载
+            </el-button>
+            <el-button type="primary" size="small" @click="searchDetailVisible = false">关闭</el-button>
+          </div>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -966,5 +1091,9 @@ onMounted(() => {
   color: #fff;
   border: none;
   box-shadow: 0 8px 18px -12px rgba(249, 115, 22, 0.9);
+}
+
+.raven-detail-dialog :deep(.el-dialog__body) {
+  padding-top: 8px;
 }
 </style>
