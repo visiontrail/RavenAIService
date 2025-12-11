@@ -11,7 +11,6 @@ import {
   uploadRavenPackages,
   downloadRavenPackage,
   fetchRavenSuggestions,
-  ravenBaseUrl,
 } from '@/api/raven'
 import { downloadFile, formatDateTime, formatFileSize } from '@/utils'
 import { renderMarkdown } from '@/utils/markdownRenderer'
@@ -446,10 +445,6 @@ const loadSuggestions = async () => {
   }
 }
 
-const openLegacyEntry = () => {
-  window.open(ravenBaseUrl, '_blank')
-}
-
 onMounted(() => {
   fetchPackages()
   checkSearchStatus()
@@ -464,12 +459,9 @@ onMounted(() => {
         <h1 class="text-2xl font-bold text-gray-900">升级包与分发中心</h1>
       </div>
       <div class="flex items-center gap-2">
-        <el-button size="small" @click="refreshAll" :loading="loadingList || statusLoading">
+        <el-button @click="refreshAll" :loading="loadingList || statusLoading">
           <el-icon class="mr-1"><Refresh /></el-icon>
           刷新
-        </el-button>
-        <el-button size="small" type="primary" plain @click="openLegacyEntry">
-          独立访问
         </el-button>
       </div>
     </div>
