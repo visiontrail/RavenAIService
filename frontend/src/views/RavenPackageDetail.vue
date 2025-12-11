@@ -133,7 +133,12 @@ const fetchDetail = async () => {
 }
 
 const goBack = () => {
-  router.back()
+  // 如果有历史记录，则返回上一页；否则跳转到重构包列表
+  if (window.history.length > 1) {
+    router.back()
+  } else {
+    router.push({ name: 'RavenManager' })
+  }
 }
 
 const copyShareLink = async (link: string) => {
