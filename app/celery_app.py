@@ -50,6 +50,10 @@ celery_app.conf.beat_schedule = {
         'schedule': crontab(hour='*/6', minute=0),  # 每6小时执行一次
         'args': (24, 48),  # processing_max_age=24小时, extracted_max_age=48小时
     },
+    'cleanup-expired-logs-daily': {
+        'task': 'app.tasks.cleanup_tasks.cleanup_expired_logs',
+        'schedule': crontab(hour=3, minute=30),  # 每天03:30清理超过30天的日志
+    },
 }
 
 if __name__ == '__main__':

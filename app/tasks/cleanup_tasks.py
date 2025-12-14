@@ -3,8 +3,11 @@
 用于清理临时文件和过期数据
 """
 
+import asyncio
 import logging
 from app.celery_app import celery_app
+from app.models.database import db_manager
+from app.services.log_service import log_service
 from app.utils.temp_directory_cleaner import temp_directory_cleaner
 
 logger = logging.getLogger(__name__)
@@ -55,3 +58,35 @@ def cleanup_temp_directories(self, processing_max_age: int = 24, extracted_max_a
             "error": error_msg
         }
 
+
+@celery_app.task(bind=True, name='app.tasks.cleanup_tasks.cleanup_expired_logs')
+def cleanup_expired_logs(self):
+    """
+    清理超过30天的日志（物理文件 + 数据库记录），固定周期执行。
+    """
+    try:
+        logger.info("开始定时清理超过30天的日志...")
+
+        # 确保数据库初始化
+        if db_manager.engine is None or db_manager.session_factory is None:
+            db_manager.initialize()
+
+        async def _run_cleanup():
+            deleted = 0
+            async for session in db_manager.get_session():
+                deleted = await log_service.cleanup_expired_logs(session)
+            return deleted
+
+        deleted_count = asyncio.run(_run_cleanup())
+
+        logger.info(f"定时清理完成，删除 {deleted_count} 条过期日志")
+        return {
+            "status": "success",
+            "deleted": deleted_count
+        }
+    except Exception as e:
+        logger.error(f"定时清理过期日志失败: {e}", exc_info=True)
+        return {
+            "status": "failed",
+            "error": str(e)
+        }

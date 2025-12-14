@@ -900,7 +900,10 @@ class LogService(BaseCRUDService[LogRecord]):
         cutoff_date = datetime.utcnow() - timedelta(days=30)
         
         # 查找过期的日志
-        query = select(LogRecord).where(LogRecord.created_at < cutoff_date)
+        query = select(LogRecord).where(
+            LogRecord.created_at < cutoff_date,
+            LogRecord.is_deleted == False  # 仅清理未被标记删除的记录
+        )
         result = await db.execute(query)
         expired_logs = result.scalars().all()
         
@@ -918,6 +921,12 @@ class LogService(BaseCRUDService[LogRecord]):
             except Exception:
                 # 忽略删除错误，继续处理其他文件
                 pass
+
+        try:
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            raise StorageError(f"清理过期日志失败: {str(e)}")
         
         return cleaned_count
 
