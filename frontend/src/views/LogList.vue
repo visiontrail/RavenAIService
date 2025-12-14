@@ -188,7 +188,7 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="status" label="状态" min-width="160" resizable>
+        <el-table-column prop="status" label="解压状态" min-width="160" resizable>
           <template #default="{ row }">
             <div class="status-tags">
               <el-tag :type="getStatusColor(row.status)" size="small">
