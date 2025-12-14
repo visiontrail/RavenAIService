@@ -5,9 +5,20 @@ import { useAppStore } from './stores/app'
 import AppNavbar from './components/AppNavbar.vue'
 import AppNotifications from './components/AppNotifications.vue'
 import AppLoading from './components/AppLoading.vue'
+import AIOrb from './components/AIOrb.vue'
 
 const appStore = useAppStore()
 const route = useRoute()
+
+// 判断是否是 AI Chat 路由
+const isChatRoute = computed(() => route.name === 'AIChat' || route.path === '/ai-chat')
+
+// 判断是否应该显示 AI Orb
+const showAIOrb = computed(() => {
+  // 只在首页/日志列表显示
+  // 在切换到 ai-chat 时，该值会变为 false，触发 Orb 的淡出效果
+  return route.path === '/' || route.path === '/logs' || route.name === 'LogList'
+})
 
 // 判断是否应该显示导航栏
 const shouldShowNavbar = computed(() => {
@@ -25,6 +36,11 @@ const shouldShowNavbar = computed(() => {
   if (route.path === '/logs') {
     return false
   }
+
+  // 如果是 AI Chat 页面，不显示 NavBar
+  if (route.name === 'AIChat' || route.path === '/ai-chat') {
+    return false
+  }
   
   return true
 })
@@ -40,7 +56,9 @@ onMounted(() => {
     <AppNavbar v-if="shouldShowNavbar" />
     
     <!-- 主要内容区域 -->
-    <main class="container mx-auto px-4 py-6">
+    <main 
+      :class="isChatRoute ? 'w-full h-screen' : 'container mx-auto px-4 py-6'"
+    >
       <router-view />
     </main>
     
@@ -49,6 +67,9 @@ onMounted(() => {
     
     <!-- 全局加载状态 -->
     <AppLoading v-if="appStore.loading" />
+    
+    <!-- AI Assistant Orb -->
+    <AIOrb :visible="showAIOrb" />
   </div>
 </template>
 
