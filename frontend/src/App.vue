@@ -15,9 +15,9 @@ const isChatRoute = computed(() => route.name === 'AIChat' || route.path === '/a
 
 // 判断是否应该显示 AI Orb
 const showAIOrb = computed(() => {
-  // 只在首页/日志列表显示
-  // 在切换到 ai-chat 时，该值会变为 false，触发 Orb 的淡出效果
-  return route.path === '/' || route.path === '/logs' || route.name === 'LogList'
+  // 不在 AI Chat 页面时，都显示 Orb
+  // 当切换到 AI Chat 时，该值变为 false，触发淡出效果
+  return !isChatRoute.value
 })
 
 // 判断是否应该显示导航栏
