@@ -39,14 +39,6 @@ class Settings(BaseSettings):
     agent_search_backend: str = "regex"  # 可选：regex | elasticsearch
     elasticsearch_url: Optional[str] = None
     
-    # LLM配置
-    # llm_provider: str = "deepseek"
-    # deepseek_api_key: Optional[str] = "sk-rebTXHBiV7Nr1PRzaODQOZKztKqpv7bPoQE10dNItF9yIyBh"
-    # deepseek_base_url: str = "http://oneapi.yhroot.com/v1"
-    # llm_model_name: str = "deepseek-v3.1"
-    # llm_reasoning_model: str = "deepseek-v3.1"  # 推理模型
-    # llm_temperature: float = 0.0
-    
     # 仅使用 DeepSeek，本地部署统一入口
     llm_provider: str = "deepseek"
     
@@ -54,8 +46,8 @@ class Settings(BaseSettings):
     deepseek_api_key: Optional[str] = "sk-rebTXHBiV7Nr1PRzaODQOZKztKqpv7bPoQE10dNItF9yIyBh"
     # 使用 OpenAI 兼容客户端的基础URL（不包含 /chat/completions 以避免重复）
     deepseek_base_url: str = "http://oneapi.yhroot.com/v1"
-    llm_model_name: str = "deepseek-v3.1"
-    llm_reasoning_model: str = "deepseek-v3.1"
+    llm_model_name: str = "glm-4.6"
+    llm_reasoning_model: str = "glm-4.6"
     
     llm_temperature: float = 0.0
     
