@@ -148,7 +148,6 @@ class AIChatService(BaseService):
                 "session_id": session_id,
                 "answer": answer_text,
                 "model": self.agent.model_name,
-                "messages": self._chat_messages_to_dicts(self._to_chat_messages(messages)),
             }
         )
         logger.info("==================== AIChatService.chat_stream 完成 ====================")

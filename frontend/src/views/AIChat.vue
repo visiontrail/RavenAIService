@@ -100,22 +100,23 @@ const applyStreamEvent = (payload: any, targetMessage: { content: string }) => {
 }
 
 const processSseBuffer = (buffer: string, targetMessage: { content: string }) => {
-  const parts = buffer.split('\n\n')
-  const remaining = parts.pop() ?? ''
-
-  parts.forEach(part => {
-    const trimmed = part.trim()
-    if (!trimmed.startsWith('data:')) return
+  let remaining = buffer.replace(/\r\n/g, '\n')
+  while (true) {
+    const idx = remaining.indexOf('\n\n')
+    if (idx === -1) break
+    const raw = remaining.slice(0, idx)
+    remaining = remaining.slice(idx + 2)
+    const trimmed = raw.trim()
+    if (!trimmed.startsWith('data:')) continue
     const jsonStr = trimmed.replace(/^data:\s*/, '')
-    if (!jsonStr) return
+    if (!jsonStr) continue
     try {
       const payload = JSON.parse(jsonStr)
       applyStreamEvent(payload, targetMessage)
     } catch (err) {
       console.error('解析流式数据失败', err, jsonStr)
     }
-  })
-
+  }
   return remaining
 }
 
@@ -172,21 +173,43 @@ const sendMessage = async () => {
       throw new Error('响应体为空，无法流式读取')
     }
 
-    const reader = resp.body.getReader()
-    const decoder = new TextDecoder('utf-8')
+    const textStream = resp.body && typeof TextDecoderStream !== 'undefined'
+      ? resp.body.pipeThrough(new TextDecoderStream())
+      : null
+
+    const reader = textStream
+      ? textStream.getReader()
+      : null
+    const binaryReader = !textStream && resp.body ? resp.body.getReader() : null
+    const decoder = !textStream ? new TextDecoder('utf-8') : null
     let buffer = ''
 
-    while (true) {
-      const { value, done } = await reader.read()
-      if (value) {
-        buffer += decoder.decode(value, { stream: !done })
-        buffer = processSseBuffer(buffer, thinkingMessage)
+    if (reader) {
+      while (true) {
+        const { value, done } = await reader.read()
+        if (value) {
+          buffer += value
+          buffer = processSseBuffer(buffer, thinkingMessage)
+        }
+        if (done) break
       }
-      if (done) break
+    } else if (binaryReader && decoder) {
+      while (true) {
+        const { value, done } = await binaryReader.read()
+        if (value) {
+          buffer += decoder.decode(value, { stream: !done })
+          buffer = processSseBuffer(buffer, thinkingMessage)
+        }
+        if (done) break
+      }
     }
 
     if (buffer.trim()) {
       processSseBuffer(buffer + '\n\n', thinkingMessage)
+    }
+
+    if (thinkingMessage.content === '正在思考...') {
+      thinkingMessage.content = '（无回复内容）'
     }
   } catch (error: any) {
     console.error('===== 请求失败 =====')
