@@ -87,14 +87,23 @@ const applyStreamEvent = (payload: any, messageIndex: number) => {
   if (!targetMessage) return
 
   if (type === 'chunk' && typeof payload?.content === 'string') {
+    const chunk = payload.content
+    // 如果还在"正在思考..."状态，等待有实际内容才清除
     if (targetMessage.content === '正在思考...') {
-      targetMessage.content = ''
+      // 跳过开头的空白字符
+      const trimmedChunk = chunk.trimStart()
+      if (trimmedChunk) {
+        targetMessage.content = trimmedChunk
+      }
+      // 如果是纯空白，保持"正在思考..."状态
+    } else {
+      targetMessage.content += chunk
     }
-    targetMessage.content += payload.content
   } else if (type === 'done') {
     if (typeof payload?.answer === 'string' && payload.answer) {
-      targetMessage.content = payload.answer
-    } else if (!targetMessage.content) {
+      // 去除开头的空白字符
+      targetMessage.content = payload.answer.trimStart()
+    } else if (!targetMessage.content || targetMessage.content === '正在思考...') {
       targetMessage.content = '（无回复内容）'
     }
   } else if (type === 'error') {
