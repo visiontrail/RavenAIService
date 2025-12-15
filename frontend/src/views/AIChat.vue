@@ -77,11 +77,14 @@ const getServiceUrl = (path: string) => {
   return `http://${hostname}:8085${path}`
 }
 
-const applyStreamEvent = (payload: any, targetMessage: { content: string }) => {
+const applyStreamEvent = (payload: any, messageIndex: number) => {
   const type = payload?.event || payload?.type
   if (payload?.session_id) {
     sessionId.value = payload.session_id
   }
+
+  const targetMessage = chatHistory.value[messageIndex]
+  if (!targetMessage) return
 
   if (type === 'chunk' && typeof payload?.content === 'string') {
     if (targetMessage.content === '正在思考...') {
@@ -99,7 +102,7 @@ const applyStreamEvent = (payload: any, targetMessage: { content: string }) => {
   }
 }
 
-const processSseBuffer = (buffer: string, targetMessage: { content: string }) => {
+const processSseBuffer = (buffer: string, messageIndex: number) => {
   let remaining = buffer.replace(/\r\n/g, '\n')
   while (true) {
     const idx = remaining.indexOf('\n\n')
@@ -112,7 +115,7 @@ const processSseBuffer = (buffer: string, targetMessage: { content: string }) =>
     if (!jsonStr) continue
     try {
       const payload = JSON.parse(jsonStr)
-      applyStreamEvent(payload, targetMessage)
+      applyStreamEvent(payload, messageIndex)
     } catch (err) {
       console.error('解析流式数据失败', err, jsonStr)
     }
@@ -140,11 +143,12 @@ const sendMessage = async () => {
   }))
 
   // 占位回复
-  const thinkingMessage = {
+  chatHistory.value.push({
     role: 'ai',
     content: '正在思考...'
-  }
-  chatHistory.value.push(thinkingMessage)
+  })
+  // 记录 AI 消息在数组中的索引，用于后续更新
+  const aiMessageIndex = chatHistory.value.length - 1
 
   inputMessage.value = ''
   isSending.value = true
@@ -197,7 +201,7 @@ const sendMessage = async () => {
         if (value) {
           console.log('[SSE] 收到数据:', value.substring(0, 200))
           buffer += value
-          buffer = processSseBuffer(buffer, thinkingMessage)
+          buffer = processSseBuffer(buffer, aiMessageIndex)
         }
         if (done) break
       }
@@ -210,7 +214,7 @@ const sendMessage = async () => {
           const decoded = decoder.decode(value, { stream: !done })
           console.log('[SSE] 解码后数据:', decoded.substring(0, 200))
           buffer += decoded
-          buffer = processSseBuffer(buffer, thinkingMessage)
+          buffer = processSseBuffer(buffer, aiMessageIndex)
         }
         if (done) break
       }
@@ -221,16 +225,16 @@ const sendMessage = async () => {
     console.log('[SSE] 循环结束，剩余 buffer:', buffer)
 
     if (buffer.trim()) {
-      processSseBuffer(buffer + '\n\n', thinkingMessage)
+      processSseBuffer(buffer + '\n\n', aiMessageIndex)
     }
 
-    if (thinkingMessage.content === '正在思考...') {
-      thinkingMessage.content = '（无回复内容）'
+    if (chatHistory.value[aiMessageIndex].content === '正在思考...') {
+      chatHistory.value[aiMessageIndex].content = '（无回复内容）'
     }
   } catch (error: any) {
     console.error('===== 请求失败 =====')
     console.error('错误信息:', error)
-    thinkingMessage.content = `调用后端失败：${error?.message || String(error)}`
+    chatHistory.value[aiMessageIndex].content = `调用后端失败：${error?.message || String(error)}`
   } finally {
     isSending.value = false
     console.log('===== 请求结束 =====')
