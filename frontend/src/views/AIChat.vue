@@ -48,6 +48,8 @@ const chatHistory = ref([
     content: '你好！我是 Raven AI。有什么我可以帮你的吗？'
   }
 ])
+const sessionId = ref<string | null>(null)
+const isSending = ref(false)
 
 const toggleSidebar = () => {
   sidebarOpen.value = !sidebarOpen.value
@@ -75,23 +77,64 @@ const getServiceUrl = (path: string) => {
   return `http://${hostname}:8085${path}`
 }
 
-const sendMessage = () => {
-  if (!inputMessage.value.trim()) return
-  
-  chatHistory.value.push({
+const sendMessage = async () => {
+  if (isSending.value) return
+  const content = inputMessage.value.trim()
+  if (!content) return
+
+  // 记录用户消息
+  const userMessage = {
     role: 'user',
-    content: inputMessage.value
-  })
-  
-  // Simulate AI response
-  setTimeout(() => {
-    chatHistory.value.push({
-      role: 'ai',
-      content: '这是一个模拟的回复。后端接口尚未连接。'
-    })
-  }, 1000)
-  
+    content
+  }
+  chatHistory.value.push(userMessage)
+
+  // 构造历史（不含占位回复）
+  const historyPayload = chatHistory.value.map(msg => ({
+    role: msg.role,
+    content: msg.content
+  }))
+
+  // 占位回复
+  const thinkingMessage = {
+    role: 'ai',
+    content: '正在思考...'
+  }
+  chatHistory.value.push(thinkingMessage)
+
   inputMessage.value = ''
+  isSending.value = true
+
+  try {
+    const payload = {
+      message: content,
+      session_id: sessionId.value || undefined,
+      history: historyPayload,
+      remember: true
+    }
+
+    const resp = await fetch(getServiceUrl('/api/v1/ai-chat/chat'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    })
+
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`)
+    }
+
+    const data = await resp.json()
+    if (data.session_id) {
+      sessionId.value = data.session_id
+    }
+    thinkingMessage.content = data.answer || '（无回复内容）'
+  } catch (error: any) {
+    thinkingMessage.content = `调用后端失败：${error?.message || String(error)}`
+  } finally {
+    isSending.value = false
+  }
 }
 </script>
 
@@ -314,4 +357,3 @@ const sendMessage = () => {
   }
 }
 </style>
-
