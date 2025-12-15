@@ -94,6 +94,7 @@ class ChatAgent:
     def _call_model(self, state: ChatState) -> ChatState:
         """单节点调用 LLM 并返回新的状态。"""
         logger.info("========== _call_model 开始执行 ==========")
+        logger.info(f"_call_model: 使用模型: {self.model_name}")
         logger.info(f"_call_model: 收到的消息数量: {len(state.get('messages', []))}")
         
         system_prompt = state.get("system_prompt") or self.default_system_prompt
@@ -106,13 +107,13 @@ class ChatAgent:
         )
         logger.info(f"_call_model: Prompt 格式化完成，消息数量: {len(prompt_messages)}")
         
-        logger.info("_call_model: 正在调用 LLM...")
+        logger.info(f"_call_model: 正在调用 LLM (模型: {self.model_name})...")
         try:
             ai_message: AIMessage = self.llm.invoke(prompt_messages)
-            logger.info(f"_call_model: LLM 调用成功，回复长度: {len(ai_message.content)} 字符")
+            logger.info(f"_call_model: LLM 调用成功 (模型: {self.model_name})，回复长度: {len(ai_message.content)} 字符")
             logger.info(f"_call_model: 回复内容预览: {ai_message.content[:100]}...")
         except Exception as e:
-            logger.error(f"_call_model: LLM 调用失败: {str(e)}", exc_info=True)
+            logger.error(f"_call_model: LLM 调用失败 (模型: {self.model_name}): {str(e)}", exc_info=True)
             raise
         
         updated_messages = list(state.get("messages", [])) + [ai_message]
