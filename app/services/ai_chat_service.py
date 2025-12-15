@@ -40,36 +40,64 @@ class AIChatService(BaseService):
         self.memory = _SessionMemory(max_turns=getattr(settings, "agent_short_term_window", 5))
 
     async def chat(self, payload: ChatRequest) -> ChatResponse:
+        logger.info("==================== AIChatService.chat 开始 ====================")
+        logger.info(f"chat: 用户消息: {payload.message[:100]}...")
+        logger.info(f"chat: session_id: {payload.session_id}")
+        logger.info(f"chat: remember: {payload.remember}")
+        
         session_id = payload.session_id or str(uuid.uuid4())
+        logger.info(f"chat: 使用的 session_id: {session_id}")
+        
         # 前端传入的历史优先，其次取服务端记忆
-        history_messages = (
-            self._to_langchain_messages(payload.history)
-            if payload.history
-            else self.memory.get_history(session_id)
-        )
+        if payload.history:
+            logger.info(f"chat: 使用前端传入的历史记录，条数: {len(payload.history)}")
+            history_messages = self._to_langchain_messages(payload.history)
+        else:
+            logger.info("chat: 使用服务端记忆中的历史记录")
+            history_messages = self.memory.get_history(session_id)
+            logger.info(f"chat: 从记忆中获取到 {len(history_messages)} 条历史消息")
+        
         history_messages.append(HumanMessage(content=payload.message))
+        logger.info(f"chat: 添加用户消息后，总消息数: {len(history_messages)}")
 
         # 调用 LangGraph 智能体
-        state = await self.agent.ainvoke(
-            messages=history_messages,
-            system_prompt=payload.system_prompt,
-        )
+        logger.info("chat: 正在调用 agent.ainvoke...")
+        try:
+            state = await self.agent.ainvoke(
+                messages=history_messages,
+                system_prompt=payload.system_prompt,
+            )
+            logger.info("chat: agent.ainvoke 调用成功")
+        except Exception as e:
+            logger.error(f"chat: agent.ainvoke 调用失败: {str(e)}", exc_info=True)
+            raise
+        
         messages = state.get("messages", history_messages)
+        logger.info(f"chat: 从 state 中获取到 {len(messages)} 条消息")
 
         # 写回会话记忆
         if payload.remember:
+            logger.info("chat: 保存会话记忆")
             self.memory.save_history(session_id, messages)
 
         ai_message = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
-        answer_text = ai_message.content if ai_message else ""
+        if ai_message:
+            answer_text = ai_message.content
+            logger.info(f"chat: AI 回复长度: {len(answer_text)} 字符")
+            logger.info(f"chat: AI 回复预览: {answer_text[:100]}...")
+        else:
+            answer_text = ""
+            logger.warning("chat: 未找到 AI 回复消息")
 
-        return ChatResponse(
+        response = ChatResponse(
             session_id=session_id,
             answer=answer_text,
             model=self.agent.model_name,
             messages=self._to_chat_messages(messages),
             message="ok",
         )
+        logger.info("==================== AIChatService.chat 完成 ====================")
+        return response
 
     @staticmethod
     def _to_langchain_messages(history: List[ChatMessage]) -> List[BaseMessage]:
