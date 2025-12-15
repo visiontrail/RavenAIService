@@ -173,6 +173,9 @@ const sendMessage = async () => {
       throw new Error('响应体为空，无法流式读取')
     }
 
+    console.log('[SSE] resp.body 存在，开始流式读取')
+    console.log('[SSE] TextDecoderStream 支持:', typeof TextDecoderStream !== 'undefined')
+
     const textStream = resp.body && typeof TextDecoderStream !== 'undefined'
       ? resp.body.pipeThrough(new TextDecoderStream())
       : null
@@ -184,25 +187,38 @@ const sendMessage = async () => {
     const decoder = !textStream ? new TextDecoder('utf-8') : null
     let buffer = ''
 
+    console.log('[SSE] reader:', !!reader, 'binaryReader:', !!binaryReader)
+
     if (reader) {
+      console.log('[SSE] 使用 TextDecoderStream reader')
       while (true) {
         const { value, done } = await reader.read()
+        console.log('[SSE] read result - done:', done, 'value length:', value?.length)
         if (value) {
+          console.log('[SSE] 收到数据:', value.substring(0, 200))
           buffer += value
           buffer = processSseBuffer(buffer, thinkingMessage)
         }
         if (done) break
       }
     } else if (binaryReader && decoder) {
+      console.log('[SSE] 使用 binary reader')
       while (true) {
         const { value, done } = await binaryReader.read()
+        console.log('[SSE] read result - done:', done, 'value:', value?.length)
         if (value) {
-          buffer += decoder.decode(value, { stream: !done })
+          const decoded = decoder.decode(value, { stream: !done })
+          console.log('[SSE] 解码后数据:', decoded.substring(0, 200))
+          buffer += decoded
           buffer = processSseBuffer(buffer, thinkingMessage)
         }
         if (done) break
       }
+    } else {
+      console.error('[SSE] 没有可用的 reader!')
     }
+
+    console.log('[SSE] 循环结束，剩余 buffer:', buffer)
 
     if (buffer.trim()) {
       processSseBuffer(buffer + '\n\n', thinkingMessage)
