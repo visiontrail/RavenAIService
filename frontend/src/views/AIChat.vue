@@ -352,7 +352,12 @@ const sendMessage = async () => {
                      : 'bg-transparent text-gray-900 px-0'
                  ]"
                >
-                 {{ msg.content }}
+                 <template v-if="msg.content === '正在思考...'">
+                   <span class="thinking-text">正在思考...</span>
+                 </template>
+                 <template v-else>
+                   {{ msg.content }}
+                 </template>
                </div>
              </div>
           </template>
@@ -415,6 +420,25 @@ const sendMessage = async () => {
   }
   50% {
     opacity: .7;
+  }
+}
+.thinking-text {
+  display: inline-block;
+  background: linear-gradient(90deg, #9ca3af 0%, #e5e7eb 50%, #9ca3af 100%);
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: thinking-shimmer 1.6s ease-in-out infinite;
+  font-weight: 600;
+}
+@keyframes thinking-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
   }
 }
 </style>
