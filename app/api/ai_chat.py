@@ -3,6 +3,7 @@ AI 对话相关 API
 """
 import logging
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.models.chat import ChatRequest, ChatResponse
 from app.services.ai_chat_service import ai_chat_service
@@ -25,4 +26,20 @@ async def chat_endpoint(request: ChatRequest) -> ChatResponse:
         return response
     except Exception as exc:  # noqa: BLE001
         logger.exception("AI chat request failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/chat/stream", summary="AI 对话（流式）")
+async def chat_stream_endpoint(request: ChatRequest):
+    logger.info("=" * 80)
+    logger.info("接收到 AI 对话流式请求")
+    logger.info(f"请求消息: {request.message[:100]}...")
+    logger.info(f"session_id: {request.session_id}")
+    logger.info(f"历史记录条数: {len(request.history) if request.history else 0}")
+    logger.info("=" * 80)
+    try:
+        generator = ai_chat_service.chat_stream(request)
+        return StreamingResponse(generator, media_type="text/event-stream")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("AI chat stream request failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc

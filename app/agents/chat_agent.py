@@ -4,7 +4,7 @@ LangChain + LangGraph 对话智能体
 """
 import logging
 import os
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, AsyncIterator, Dict, List, Optional, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -40,6 +40,7 @@ def _make_llm() -> Any:
         llm = ChatOpenAI(
             model=model,
             temperature=settings.llm_temperature,
+            streaming=True,
         )
         # 记录模型名称，便于响应时回传
         if not hasattr(llm, "model_name"):
@@ -171,3 +172,41 @@ class ChatAgent:
         except Exception as e:
             logger.error(f"ainvoke: graph.ainvoke 调用失败: {str(e)}", exc_info=True)
             raise
+
+    @staticmethod
+    def _chunk_to_text(chunk: Any) -> str:
+        """提取流式分片的文本内容，兼容不同格式。"""
+        content = getattr(chunk, "content", None)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if isinstance(item, dict) and "text" in item:
+                    parts.append(str(item.get("text", "")))
+                else:
+                    parts.append(str(item))
+            return "".join(parts)
+        return str(content) if content else ""
+
+    async def astream(
+        self,
+        messages: List[BaseMessage],
+        system_prompt: Optional[str] = None,
+    ) -> AsyncIterator[str]:
+        """流式返回模型输出的分片文本。"""
+        logger.info("==================== astream 流式调用开始 ====================")
+        system_prompt = system_prompt or self.default_system_prompt
+        prompt_messages = self.prompt.format_messages(
+            system_prompt=system_prompt,
+            messages=messages,
+        )
+        logger.info(f"astream: 准备流式输出，消息数: {len(prompt_messages)}")
+
+        async for chunk in self.llm.astream(prompt_messages):
+            text = self._chunk_to_text(chunk)
+            if not text:
+                continue
+            yield text
+
+        logger.info("==================== astream 流式调用完成 ====================")

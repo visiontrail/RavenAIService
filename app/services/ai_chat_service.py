@@ -2,8 +2,9 @@
 AI 对话服务：封装 LangGraph 智能体与简单会话记忆。
 """
 import logging
+import json
 import uuid
-from typing import Dict, List
+from typing import AsyncIterator, Dict, List
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
@@ -99,6 +100,59 @@ class AIChatService(BaseService):
         logger.info("==================== AIChatService.chat 完成 ====================")
         return response
 
+    async def chat_stream(self, payload: ChatRequest) -> AsyncIterator[str]:
+        """流式返回模型回复，SSE 格式。"""
+        logger.info("==================== AIChatService.chat_stream 开始 ====================")
+        logger.info(f"chat_stream: 用户消息: {payload.message[:100]}...")
+
+        session_id = payload.session_id or str(uuid.uuid4())
+        logger.info(f"chat_stream: 使用的 session_id: {session_id}")
+
+        if payload.history:
+            history_messages = self._to_langchain_messages(payload.history)
+            logger.info(f"chat_stream: 前端传入历史记录 {len(history_messages)} 条")
+        else:
+            history_messages = self.memory.get_history(session_id)
+            logger.info(f"chat_stream: 从记忆读取历史记录 {len(history_messages)} 条")
+
+        history_messages.append(HumanMessage(content=payload.message))
+        logger.info(f"chat_stream: 添加用户消息后共 {len(history_messages)} 条")
+
+        # 先返回 session 事件，便于前端更新会话
+        yield self._sse_event({"event": "session", "session_id": session_id})
+
+        ai_chunks: List[str] = []
+        try:
+            async for token in self.agent.astream(
+                messages=history_messages,
+                system_prompt=payload.system_prompt,
+            ):
+                ai_chunks.append(token)
+                yield self._sse_event({"event": "chunk", "content": token})
+        except Exception as exc:  # noqa: BLE001
+            logger.error("chat_stream: LLM 流式输出失败: %s", exc, exc_info=True)
+            yield self._sse_event({"event": "error", "message": str(exc)})
+            return
+
+        answer_text = "".join(ai_chunks)
+        logger.info(f"chat_stream: 拼接后的回复长度 {len(answer_text)}")
+
+        messages = history_messages + [AIMessage(content=answer_text)]
+        if payload.remember:
+            logger.info("chat_stream: 写入会话记忆")
+            self.memory.save_history(session_id, messages)
+
+        yield self._sse_event(
+            {
+                "event": "done",
+                "session_id": session_id,
+                "answer": answer_text,
+                "model": self.agent.model_name,
+                "messages": self._to_chat_messages(messages),
+            }
+        )
+        logger.info("==================== AIChatService.chat_stream 完成 ====================")
+
     @staticmethod
     def _to_langchain_messages(history: List[ChatMessage]) -> List[BaseMessage]:
         """将前端消息转换为 LangChain 消息"""
@@ -128,6 +182,11 @@ class AIChatService(BaseService):
                 continue
             result.append(ChatMessage(role=role, content=str(msg.content)))
         return result
+
+    @staticmethod
+    def _sse_event(payload: Dict[str, object]) -> str:
+        """格式化 SSE 数据行。"""
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 ai_chat_service = AIChatService()

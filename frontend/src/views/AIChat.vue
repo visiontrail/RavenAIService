@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { 
   Menu, 
   Plus, 
@@ -77,6 +77,48 @@ const getServiceUrl = (path: string) => {
   return `http://${hostname}:8085${path}`
 }
 
+const applyStreamEvent = (payload: any, targetMessage: { content: string }) => {
+  const type = payload?.event || payload?.type
+  if (payload?.session_id) {
+    sessionId.value = payload.session_id
+  }
+
+  if (type === 'chunk' && typeof payload?.content === 'string') {
+    if (targetMessage.content === '正在思考...') {
+      targetMessage.content = ''
+    }
+    targetMessage.content += payload.content
+  } else if (type === 'done') {
+    if (typeof payload?.answer === 'string' && payload.answer) {
+      targetMessage.content = payload.answer
+    } else if (!targetMessage.content) {
+      targetMessage.content = '（无回复内容）'
+    }
+  } else if (type === 'error') {
+    targetMessage.content = `调用后端失败：${payload?.message || '未知错误'}`
+  }
+}
+
+const processSseBuffer = (buffer: string, targetMessage: { content: string }) => {
+  const parts = buffer.split('\n\n')
+  const remaining = parts.pop() ?? ''
+
+  parts.forEach(part => {
+    const trimmed = part.trim()
+    if (!trimmed.startsWith('data:')) return
+    const jsonStr = trimmed.replace(/^data:\s*/, '')
+    if (!jsonStr) return
+    try {
+      const payload = JSON.parse(jsonStr)
+      applyStreamEvent(payload, targetMessage)
+    } catch (err) {
+      console.error('解析流式数据失败', err, jsonStr)
+    }
+  })
+
+  return remaining
+}
+
 const sendMessage = async () => {
   if (isSending.value) return
   const content = inputMessage.value.trim()
@@ -114,11 +156,7 @@ const sendMessage = async () => {
       remember: true
     }
 
-    console.log('===== 发送请求到后端 =====')
-    console.log('URL:', getServiceUrl('/api/v1/ai-chat/chat'))
-    console.log('Payload:', payload)
-
-    const resp = await fetch(getServiceUrl('/api/v1/ai-chat/chat'), {
+    const resp = await fetch(getServiceUrl('/api/v1/ai-chat/chat/stream'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -126,38 +164,34 @@ const sendMessage = async () => {
       body: JSON.stringify(payload)
     })
 
-    console.log('===== 收到后端响应 =====')
-    console.log('Status:', resp.status)
-    console.log('OK:', resp.ok)
-
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`)
     }
 
-    const data = await resp.json()
-    console.log('===== 解析后的数据 =====')
-    console.log('完整响应数据:', data)
-    console.log('data.answer:', data.answer)
-    console.log('data.session_id:', data.session_id)
-    
-    if (data.session_id) {
-      sessionId.value = data.session_id
-      console.log('更新 session_id:', sessionId.value)
+    if (!resp.body) {
+      throw new Error('响应体为空，无法流式读取')
     }
-    
-    console.log('===== 更新消息内容 =====')
-    console.log('更新前 thinkingMessage.content:', thinkingMessage.content)
-    // 直接更新 chatHistory 中最后一条消息的内容，触发响应式更新
-    const lastIndex = chatHistory.value.length - 1
-    chatHistory.value[lastIndex].content = data.answer || '（无回复内容）'
-    console.log('更新后 chatHistory[lastIndex].content:', chatHistory.value[lastIndex].content)
-    console.log('chatHistory 长度:', chatHistory.value.length)
+
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done })
+        buffer = processSseBuffer(buffer, thinkingMessage)
+      }
+      if (done) break
+    }
+
+    if (buffer.trim()) {
+      processSseBuffer(buffer + '\n\n', thinkingMessage)
+    }
   } catch (error: any) {
     console.error('===== 请求失败 =====')
     console.error('错误信息:', error)
-    // 直接更新 chatHistory 中最后一条消息的内容
-    const lastIndex = chatHistory.value.length - 1
-    chatHistory.value[lastIndex].content = `调用后端失败：${error?.message || String(error)}`
+    thinkingMessage.content = `调用后端失败：${error?.message || String(error)}`
   } finally {
     isSending.value = false
     console.log('===== 请求结束 =====')
