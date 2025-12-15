@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
@@ -49,6 +49,8 @@ def _make_llm() -> Any:
         os.environ["OPENAI_API_BASE"] = base_url
         llm = ChatOpenAI(
             model=model,
+            api_key=api_key,
+            base_url=base_url,
             temperature=settings.llm_temperature,
             streaming=True,
         )
