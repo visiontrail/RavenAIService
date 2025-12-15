@@ -6,7 +6,7 @@ import json
 import uuid
 from typing import AsyncIterator, Dict, List
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from app.agents.chat_agent import ChatAgent
 from app.config import settings
@@ -45,6 +45,10 @@ class AIChatService(BaseService):
         logger.info(f"chat: 用户消息: {payload.message[:100]}...")
         logger.info(f"chat: session_id: {payload.session_id}")
         logger.info(f"chat: remember: {payload.remember}")
+        logger.info(
+            "chat: target device",
+            extra={"target_device_id": payload.target_device_id, "target_device_name": payload.target_device_name},
+        )
         
         session_id = payload.session_id or str(uuid.uuid4())
         logger.info(f"chat: 使用的 session_id: {session_id}")
@@ -67,6 +71,9 @@ class AIChatService(BaseService):
             state = await self.agent.ainvoke(
                 messages=history_messages,
                 system_prompt=payload.system_prompt,
+                session_id=session_id,
+                target_device_id=payload.target_device_id,
+                target_device_name=payload.target_device_name,
             )
             logger.info("chat: agent.ainvoke 调用成功")
         except Exception as e:
@@ -83,7 +90,7 @@ class AIChatService(BaseService):
 
         ai_message = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
         if ai_message:
-            answer_text = ai_message.content
+            answer_text = str(ai_message.content)
             logger.info(f"chat: AI 回复长度: {len(answer_text)} 字符")
             logger.info(f"chat: AI 回复预览: {answer_text[:100]}...")
         else:
@@ -104,6 +111,11 @@ class AIChatService(BaseService):
         """流式返回模型回复，SSE 格式。"""
         logger.info("==================== AIChatService.chat_stream 开始 ====================")
         logger.info(f"chat_stream: 用户消息: {payload.message[:100]}...")
+        logger.info(f"chat_stream: remember: {payload.remember}")
+        logger.info(
+            "chat_stream: target device",
+            extra={"target_device_id": payload.target_device_id, "target_device_name": payload.target_device_name},
+        )
 
         session_id = payload.session_id or str(uuid.uuid4())
         logger.info(f"chat_stream: 使用的 session_id: {session_id}")
@@ -121,11 +133,55 @@ class AIChatService(BaseService):
         # 先返回 session 事件，便于前端更新会话
         yield self._sse_event({"event": "session", "session_id": session_id})
 
+        # 需要设备联动时不做逐字流式，确保工具调用后再返回。
+        if payload.target_device_id:
+            logger.info("chat_stream: 目标设备存在，使用非流式工具分支")
+            try:
+                state = await self.agent.ainvoke(
+                    messages=history_messages,
+                    system_prompt=payload.system_prompt,
+                    session_id=session_id,
+                    target_device_id=payload.target_device_id,
+                    target_device_name=payload.target_device_name,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error("chat_stream: 工具分支执行失败: %s", exc, exc_info=True)
+                yield self._sse_event({"event": "error", "message": str(exc)})
+                return
+
+            messages = state.get("messages", history_messages)
+            ai_message = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
+            answer_text = str(ai_message.content) if ai_message else ""
+            logger.info(
+                "chat_stream: 工具分支完成",
+                extra={"has_answer": bool(answer_text), "message_count": len(messages)},
+            )
+
+            if payload.remember:
+                logger.info("chat_stream: 保存会话记忆（工具分支）")
+                self.memory.save_history(session_id, messages)
+
+            if answer_text:
+                yield self._sse_event({"event": "chunk", "content": answer_text})
+
+            yield self._sse_event(
+                {
+                    "event": "done",
+                    "session_id": session_id,
+                    "answer": answer_text,
+                    "model": self.agent.model_name,
+                    "messages": self._to_chat_messages(messages),
+                }
+            )
+            logger.info("==================== AIChatService.chat_stream 完成（工具分支） ====================")
+            return
+
         ai_chunks: List[str] = []
         try:
             async for token in self.agent.astream(
                 messages=history_messages,
                 system_prompt=payload.system_prompt,
+                session_id=session_id,
             ):
                 ai_chunks.append(token)
                 yield self._sse_event({"event": "chunk", "content": token})
@@ -148,6 +204,7 @@ class AIChatService(BaseService):
                 "session_id": session_id,
                 "answer": answer_text,
                 "model": self.agent.model_name,
+                "messages": self._to_chat_messages(messages),
             }
         )
         logger.info("==================== AIChatService.chat_stream 完成 ====================")
@@ -176,6 +233,8 @@ class AIChatService(BaseService):
             elif isinstance(msg, AIMessage):
                 role = "ai"
             elif isinstance(msg, SystemMessage):
+                role = "system"
+            elif isinstance(msg, ToolMessage):
                 role = "system"
             else:
                 continue

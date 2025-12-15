@@ -19,6 +19,14 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/devices',
+    name: 'DeviceList',
+    component: () => import('../views/DeviceList.vue'),
+    meta: {
+      title: '设备列表',
+    },
+  },
+  {
     path: '/upload',
     name: 'Upload',
     component: () => import('../views/Upload.vue'),

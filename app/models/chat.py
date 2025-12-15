@@ -19,6 +19,8 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="会话ID，未提供时由服务端生成")
     history: List[ChatMessage] = Field(default_factory=list, description="可选的历史消息，由前端传入")
     system_prompt: Optional[str] = Field(None, description="可选系统提示词，未提供时使用默认提示")
+    target_device_id: Optional[str] = Field(None, description="可选的目标设备ID，用于设备联动")
+    target_device_name: Optional[str] = Field(None, description="可选的目标设备名称，用于设备联动提示")
     remember: bool = Field(True, description="是否将本轮对话写入服务端内存会话")
 
 

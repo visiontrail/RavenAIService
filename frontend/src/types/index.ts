@@ -75,6 +75,23 @@ export interface DownloadInfo {
   expires_at: string
 }
 
+// 设备长链类型
+export type DeviceStatus = 'online' | 'offline'
+
+export interface DeviceInfo {
+  id: string
+  name: string
+  host?: string | null
+  models: string[]
+  capabilities: Record<string, any>
+  last_seen?: string | null
+  status: DeviceStatus
+}
+
+export interface DeviceListResponse {
+  devices: DeviceInfo[]
+}
+
 // 上传文件类型
 export interface UploadFile {
   file: File

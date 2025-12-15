@@ -26,6 +26,17 @@
             </el-icon>
             <span class="font-medium">日志列表</span>
           </router-link>
+          
+          <router-link
+            to="/devices"
+            class="nav-link"
+            :class="{ 'nav-link-active': isDeviceRoute }"
+          >
+            <el-icon class="mr-2">
+              <Monitor />
+            </el-icon>
+            <span class="font-medium">设备列表</span>
+          </router-link>
 
           <router-link
             to="/raven-manager"
@@ -50,13 +61,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Box, List } from '@element-plus/icons-vue'
+import { Box, List, Monitor } from '@element-plus/icons-vue'
 import ravenLogo from '@/assets/raven-logo.png'
 
 const route = useRoute()
 const isRavenRoute = computed(() =>
   ['RavenManager', 'RavenPackageDetail'].includes((route.name as string) || '')
 )
+const isDeviceRoute = computed(() => route.name === 'DeviceList')
 </script>
 
 <style scoped>
