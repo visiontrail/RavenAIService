@@ -89,8 +89,9 @@ const sendMessage = async () => {
   }
   chatHistory.value.push(userMessage)
 
-  // 构造历史（不含占位回复）
-  const historyPayload = chatHistory.value.map(msg => ({
+  // 构造历史（不含当前用户消息，因为会通过message字段单独发送）
+  // 只发送之前的对话历史
+  const historyPayload = chatHistory.value.slice(0, -1).map(msg => ({
     role: msg.role,
     content: msg.content
   }))
@@ -113,6 +114,10 @@ const sendMessage = async () => {
       remember: true
     }
 
+    console.log('===== 发送请求到后端 =====')
+    console.log('URL:', getServiceUrl('/api/v1/ai-chat/chat'))
+    console.log('Payload:', payload)
+
     const resp = await fetch(getServiceUrl('/api/v1/ai-chat/chat'), {
       method: 'POST',
       headers: {
@@ -121,19 +126,37 @@ const sendMessage = async () => {
       body: JSON.stringify(payload)
     })
 
+    console.log('===== 收到后端响应 =====')
+    console.log('Status:', resp.status)
+    console.log('OK:', resp.ok)
+
     if (!resp.ok) {
       throw new Error(`HTTP ${resp.status}`)
     }
 
     const data = await resp.json()
+    console.log('===== 解析后的数据 =====')
+    console.log('完整响应数据:', data)
+    console.log('data.answer:', data.answer)
+    console.log('data.session_id:', data.session_id)
+    
     if (data.session_id) {
       sessionId.value = data.session_id
+      console.log('更新 session_id:', sessionId.value)
     }
+    
+    console.log('===== 更新消息内容 =====')
+    console.log('更新前 thinkingMessage.content:', thinkingMessage.content)
     thinkingMessage.content = data.answer || '（无回复内容）'
+    console.log('更新后 thinkingMessage.content:', thinkingMessage.content)
+    console.log('chatHistory 长度:', chatHistory.value.length)
   } catch (error: any) {
+    console.error('===== 请求失败 =====')
+    console.error('错误信息:', error)
     thinkingMessage.content = `调用后端失败：${error?.message || String(error)}`
   } finally {
     isSending.value = false
+    console.log('===== 请求结束 =====')
   }
 }
 </script>
