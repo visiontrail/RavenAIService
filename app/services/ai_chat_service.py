@@ -148,7 +148,7 @@ class AIChatService(BaseService):
                 "session_id": session_id,
                 "answer": answer_text,
                 "model": self.agent.model_name,
-                "messages": self._to_chat_messages(messages),
+                "messages": self._chat_messages_to_dicts(self._to_chat_messages(messages)),
             }
         )
         logger.info("==================== AIChatService.chat_stream 完成 ====================")
@@ -182,6 +182,17 @@ class AIChatService(BaseService):
                 continue
             result.append(ChatMessage(role=role, content=str(msg.content)))
         return result
+
+    @staticmethod
+    def _chat_messages_to_dicts(messages: List[ChatMessage]) -> List[Dict[str, str]]:
+        """将 ChatMessage 转为可 JSON 序列化的字典。"""
+        dicts: List[Dict[str, str]] = []
+        for msg in messages:
+            try:
+                dicts.append(msg.model_dump())
+            except Exception:
+                dicts.append({"role": msg.role, "content": msg.content})
+        return dicts
 
     @staticmethod
     def _sse_event(payload: Dict[str, object]) -> str:
