@@ -147,13 +147,17 @@ const sendMessage = async () => {
     
     console.log('===== 更新消息内容 =====')
     console.log('更新前 thinkingMessage.content:', thinkingMessage.content)
-    thinkingMessage.content = data.answer || '（无回复内容）'
-    console.log('更新后 thinkingMessage.content:', thinkingMessage.content)
+    // 直接更新 chatHistory 中最后一条消息的内容，触发响应式更新
+    const lastIndex = chatHistory.value.length - 1
+    chatHistory.value[lastIndex].content = data.answer || '（无回复内容）'
+    console.log('更新后 chatHistory[lastIndex].content:', chatHistory.value[lastIndex].content)
     console.log('chatHistory 长度:', chatHistory.value.length)
   } catch (error: any) {
     console.error('===== 请求失败 =====')
     console.error('错误信息:', error)
-    thinkingMessage.content = `调用后端失败：${error?.message || String(error)}`
+    // 直接更新 chatHistory 中最后一条消息的内容
+    const lastIndex = chatHistory.value.length - 1
+    chatHistory.value[lastIndex].content = `调用后端失败：${error?.message || String(error)}`
   } finally {
     isSending.value = false
     console.log('===== 请求结束 =====')
