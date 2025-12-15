@@ -42,13 +42,13 @@ class Settings(BaseSettings):
     # LLM配置
     # llm_provider: str = "deepseek"
     # deepseek_api_key: Optional[str] = "sk-rebTXHBiV7Nr1PRzaODQOZKztKqpv7bPoQE10dNItF9yIyBh"
-    # deepseek_base_url: str = "http://oneapi.yhroot.com/v1/chat/completions"
-    # llm_model_name: str = "deepseek-v3.1-chat"
+    # deepseek_base_url: str = "http://oneapi.yhroot.com/v1"
+    # llm_model_name: str = "deepseek-v3.1"
     # llm_reasoning_model: str = "deepseek-v3.1"  # 推理模型
     # llm_temperature: float = 0.0
     
-    
-    llm_provider: str = "auto"  # deepseek 优先，不可用时回退到 qwen
+    # 仅使用 DeepSeek，本地部署统一入口
+    llm_provider: str = "deepseek"
     
     # DeepSeek 配置
     deepseek_api_key: Optional[str] = "sk-rebTXHBiV7Nr1PRzaODQOZKztKqpv7bPoQE10dNItF9yIyBh"
@@ -56,11 +56,6 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "http://oneapi.yhroot.com/v1"
     llm_model_name: str = "deepseek-v3.1"
     llm_reasoning_model: str = "deepseek-v3.1"
-    
-    # Qwen 配置（OpenAI 兼容模式）
-    qwen_api_key: Optional[str] = "sk-700b5dceea294f099b30f097718b854d"
-    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    qwen_model_name: str = "qwen-plus-2025-09-11"
     
     llm_temperature: float = 0.0
     

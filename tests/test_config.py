@@ -21,20 +21,9 @@ class TestConfig:
         # DeepSeek配置（用于测试）
         self.deepseek_config = {
             "api_key": "sk-test-deepseek-key-for-testing",  # 测试用密钥
-            "base_url": "http://oneapi.yhroot.com",
-            "model_name": "deepseek-v3.1-chat",
+            "base_url": "http://oneapi.yhroot.com/v1",
+            "model_name": "deepseek-v3.1",
             "reasoning_model": "deepseek-v3.1",
-            "timeout": 30,
-            "max_retries": 3,
-            "temperature": 0.1,
-            "max_tokens": 2048
-        }
-        
-        # Qwen配置（用于测试，OpenAI兼容模式）
-        self.qwen_config = {
-            "api_key": "sk-test-qwen-key-for-testing",  # 测试用密钥
-            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "model_name": "qwen-plus-2025-09-11",
             "timeout": 30,
             "max_retries": 3,
             "temperature": 0.1,
@@ -193,8 +182,7 @@ class TestConfig:
             "required_modules": True,
             "test_directories": True,
             "test_data": True,
-            "deepseek_config": True,
-            "qwen_config": True
+            "deepseek_config": True
         }
         
         # 检查Python版本
@@ -231,10 +219,6 @@ class TestConfig:
         # 检查DeepSeek配置
         if not self.deepseek_config.get("api_key") or not self.deepseek_config.get("base_url"):
             validation_results["deepseek_config"] = False
-        
-        # 检查Qwen配置
-        if not self.qwen_config.get("api_key") or not self.qwen_config.get("base_url"):
-            validation_results["qwen_config"] = False
         
         return validation_results
     
@@ -279,10 +263,6 @@ class TestConfig:
                 "model_name": self.deepseek_config["model_name"],
                 "reasoning_model": self.deepseek_config["reasoning_model"]
             },
-            "qwen_config": {
-                "base_url": self.qwen_config["base_url"],
-                "model_name": self.qwen_config["model_name"],
-            },
             "validation_results": self.validate_test_environment()
         }
 
@@ -326,7 +306,6 @@ if __name__ == "__main__":
     # 显示配置摘要
     print(f"\n📊 配置摘要:")
     print(f"  DeepSeek模型: {config.deepseek_config['model_name']}")
-    print(f"  Qwen模型: {config.qwen_config['model_name']}")
     print(f"  测试数据集: {len(config.test_data_config)}个")
     print(f"  测试查询: {len(config.agent_test_config['test_queries'])}个")
     print(f"  工具测试: {len(config.tool_test_config)}个")

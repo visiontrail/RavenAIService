@@ -59,8 +59,8 @@ pip install pytest coverage memory-profiler
 # config.py
 llm_provider = "deepseek"
 deepseek_api_key = "your-deepseek-api-key"
-deepseek_base_url = "http://oneapi.yhroot.com"
-llm_model_name = "deepseek-v3.1-chat"
+deepseek_base_url = "http://oneapi.yhroot.com/v1"
+llm_model_name = "deepseek-v3.1"
 llm_reasoning_model = "deepseek-v3.1"
 ```
 

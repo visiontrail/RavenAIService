@@ -16,7 +16,7 @@ class RAGService {
     this.config = {
       apiKey: 'sk-rebTXHBiV7Nr1PRzaODQOZKztKqpv7bPoQE10dNItF9yIyBh',
       baseURL: 'http://oneapi.yhroot.com/v1',
-      modelName: 'deepseek-v3.1-chat'
+      modelName: 'deepseek-v3.1'
     }
 
     // 初始化 embeddings
@@ -364,4 +364,3 @@ SHA256: ${pkg.metadata?.sha256 || '无'}
 }
 
 module.exports = RAGService
-

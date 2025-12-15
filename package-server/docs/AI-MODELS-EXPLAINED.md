@@ -31,7 +31,7 @@
 // src/services/RAGService.js
 this.llm = new ChatOpenAI({
   openAIApiKey: this.config.apiKey,
-  modelName: 'deepseek-v3.1-chat',  // 远程模型
+  modelName: 'deepseek-v3.1',  // 统一远程模型
   configuration: {
     baseURL: 'http://oneapi.yhroot.com/v1'
   }
@@ -264,4 +264,3 @@ curl http://oneapi.yhroot.com/v1/models
 **文档版本**: 1.0  
 **更新日期**: 2024-11-13  
 **相关文档**: DEPLOYMENT-SUMMARY.md, RAG-SEARCH-README.md
-

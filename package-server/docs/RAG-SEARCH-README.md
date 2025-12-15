@@ -111,7 +111,7 @@
     "totalPackages": 10,
     "config": {
       "baseURL": "http://oneapi.yhroot.com/v1",
-      "modelName": "deepseek-v3.1-chat"
+      "modelName": "deepseek-v3.1"
     }
   }
 }
@@ -161,7 +161,7 @@
 this.config = {
   apiKey: 'your-api-key',
   baseURL: 'http://oneapi.yhroot.com/v1',
-  modelName: 'deepseek-v3.1-chat'
+  modelName: 'deepseek-v3.1'
 }
 ```
 
@@ -306,4 +306,3 @@ node scripts/generate-test-data.js
 ## 支持
 
 如有问题或建议，请联系开发团队。
-

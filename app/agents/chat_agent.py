@@ -24,56 +24,30 @@ class ChatState(TypedDict):
 
 def _make_llm() -> Any:
     """
-    构建 OpenAI 兼容的聊天模型，优先 DeepSeek，失败时回退到 Qwen。
+    构建 OpenAI 兼容的聊天模型，统一使用 DeepSeek 配置。
     """
-    providers: List[Dict[str, Optional[str]]] = []
+    api_key = getattr(settings, "deepseek_api_key", None)
+    base_url = getattr(settings, "deepseek_base_url", None)
+    model = getattr(settings, "llm_model_name", None)
 
-    if settings.llm_provider in ("auto", "deepseek"):
-        providers.append(
-            {
-                "name": "deepseek",
-                "api_key": settings.deepseek_api_key,
-                "base_url": settings.deepseek_base_url,
-                "model": settings.llm_model_name,
-            }
+    if not api_key or not base_url or not model:
+        raise RuntimeError("DeepSeek 配置缺失，无法初始化聊天模型")
+
+    try:
+        os.environ["OPENAI_API_KEY"] = api_key
+        os.environ["OPENAI_BASE_URL"] = base_url
+        os.environ["OPENAI_API_BASE"] = base_url
+        llm = ChatOpenAI(
+            model=model,
+            temperature=settings.llm_temperature,
         )
-
-    if settings.llm_provider in ("auto", "qwen"):
-        providers.append(
-            {
-                "name": "qwen",
-                "api_key": settings.qwen_api_key,
-                "base_url": settings.qwen_base_url,
-                "model": settings.qwen_model_name,
-            }
-        )
-
-    last_error: Optional[Exception] = None
-    for conf in providers:
-        if not conf.get("api_key") or not conf.get("base_url") or not conf.get("model"):
-            continue
-        try:
-            os.environ["OPENAI_API_KEY"] = conf["api_key"] or ""
-            os.environ["OPENAI_BASE_URL"] = conf["base_url"] or ""
-            os.environ["OPENAI_API_BASE"] = conf["base_url"] or ""
-            llm = ChatOpenAI(
-                model=conf["model"],
-                temperature=settings.llm_temperature,
-            )
-            # 记录模型名称，便于响应时回传
-            if not hasattr(llm, "model_name"):
-                llm.model_name = conf["model"]
-            logger.info("ChatAgent: using %s backend model %s", conf["name"], llm.model_name)
-            return llm
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
-            logger.warning(
-                "ChatAgent: failed to init %s backend (%s), trying next provider",
-                conf.get("name", "unknown"),
-                exc,
-            )
-
-    raise RuntimeError(f"无法初始化聊天模型: {last_error}")
+        # 记录模型名称，便于响应时回传
+        if not hasattr(llm, "model_name"):
+            llm.model_name = model
+        logger.info("ChatAgent: using DeepSeek model %s", llm.model_name)
+        return llm
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"无法初始化聊天模型: {exc}") from exc
 
 
 class ChatAgent:

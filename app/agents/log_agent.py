@@ -74,164 +74,27 @@ from app.tools.archive_tool import auto_extract_archive_xml, list_tree_xml, nest
 
 
 def get_llm() -> Any:
-    """Return an LLM client with runtime fallback: deepseek → qwen.
-    - Provider 'auto' tries deepseek first, then qwen.
-    - Provider 'deepseek' uses deepseek config, falls back to qwen if network/API failure at call time.
-    - Provider 'qwen' uses qwen config directly.
-    """
-    logger.debug(f"get_llm: provider={getattr(settings, 'llm_provider', 'auto')}")
-    # If ChatOpenAI class unavailable, error out and return None
+    """Return an LLM client using the unified DeepSeek configuration."""
+    logger.debug("get_llm: provider=deepseek (unified)")
     if not ChatOpenAI:
         logger.error("get_llm: ChatOpenAI unavailable")
         return None
 
-    def make_chat_openai(api_key: str, base_url: str, model: str):
-        os.environ["OPENAI_API_KEY"] = api_key
-        os.environ["OPENAI_BASE_URL"] = base_url
-        os.environ["OPENAI_API_BASE"] = base_url
-        try:
-            logger.debug(f"Initializing ChatOpenAI client: base_url={base_url}, model={model}")
-            llm = ChatOpenAI(model=model, temperature=settings.llm_temperature)
-            # 确保LLM实例有model_name属性
-            if not hasattr(llm, 'model_name'):
-                llm.model_name = model
-            return llm
-        except Exception as e:
-            logger.warning(f"ChatOpenAI init failed: base_url={base_url}, model={model}, error={e}")
-            return None
+    api_key = getattr(settings, "deepseek_api_key", None)
+    base_url = getattr(settings, "deepseek_base_url", None)
+    model = getattr(settings, "llm_model_name", None)
 
-    # 封装一个具有运行时回退能力的LLM包装器：调用失败时自动切换到Qwen
-    class _FallbackLLM:
-        def __init__(self, primary_conf: Dict[str, str], fallback_conf: Optional[Dict[str, str]], temperature: float):
-            self.temperature = temperature
-            self._primary_conf = primary_conf
-            self._fallback_conf = fallback_conf
-            self._primary = make_chat_openai(primary_conf.get("api_key", ""), primary_conf.get("base_url", ""), primary_conf.get("model", ""))
-            self._fallback = None
-            # 添加model_name属性，优先使用主模型名称
-            self.model_name = primary_conf.get("model", "unknown")
-            self._current_model = "primary"  # 跟踪当前使用的模型
-            
-            # 记录配置的模型信息
-            primary_model = primary_conf.get("model", "unknown")
-            fallback_model = fallback_conf.get("model", "none") if fallback_conf else "none"
-            logger.info("_FallbackLLM.__init__: configured primary_model=%s, fallback_model=%s", primary_model, fallback_model)
+    if not api_key or not base_url or not model:
+        raise RuntimeError("DeepSeek 配置缺失，无法初始化 LLM")
 
-        def invoke(self, prompt: str):
-            # 尝试主模型（DeepSeek）
-            if self._primary:
-                try:
-                    logger.debug("FallbackLLM.invoke: using primary model")
-                    if self._current_model != "primary":
-                        self.model_name = self._primary_conf.get("model", "unknown")
-                        self._current_model = "primary"
-                        logger.info("FallbackLLM: switched to primary model - %s", self.model_name)
-                    else:
-                        logger.info("FallbackLLM: using primary model - %s", self.model_name)
-                    return self._primary.invoke(prompt)
-                except Exception as e:
-                    logger.warning(f"Primary model ({self._primary_conf.get('model', 'unknown')}) invocation failed, switching to fallback: {e}")
-                    # 出现HTTP错误（如404/502/超时等）时切换到备选（Qwen）
-                    pass
-            # 构建并尝试备选模型（Qwen）
-            if self._fallback_conf and not self._fallback:
-                logger.debug("FallbackLLM.invoke: building fallback model")
-                self._fallback = make_chat_openai(
-                    self._fallback_conf.get("api_key", ""),
-                    self._fallback_conf.get("base_url", ""),
-                    self._fallback_conf.get("model", "")
-                )
-            if self._fallback:
-                try:
-                    logger.debug("FallbackLLM.invoke: using fallback model")
-                    if self._current_model != "fallback":
-                        self.model_name = self._fallback_conf.get("model", "unknown")
-                        self._current_model = "fallback"
-                        logger.info("FallbackLLM: switched to fallback model - %s", self.model_name)
-                    else:
-                        logger.info("FallbackLLM: using fallback model - %s", self.model_name)
-                    return self._fallback.invoke(prompt)
-                except Exception as e:
-                    logger.warning(f"Fallback model ({self._fallback_conf.get('model', 'unknown')}) invocation failed: {e}")
-            # 无可用后端，抛出运行时异常以避免使用模拟LLM
-            logger.error("FallbackLLM.invoke: no available backend after retry")
-            raise RuntimeError("No available LLM backend; invocation failed")
+    llm = _make_chat_openai(api_key, base_url, model)
+    if not llm:
+        raise RuntimeError("无法初始化 DeepSeek LLM，请检查配置")
 
-        def bind_tools(self, tools: List[Any]):
-            return _BoundFallbackLLM(self._primary, self._fallback_conf, tools)
-
-    # Helper: try deepseek, then qwen (初始化阶段)
-    def try_deepseek_first_then_qwen():
-        # Try DeepSeek
-        if getattr(settings, "deepseek_api_key", None) and getattr(settings, "deepseek_base_url", None):
-            llm = make_chat_openai(settings.deepseek_api_key, settings.deepseek_base_url, settings.llm_model_name)
-            if llm:
-                return llm
-        # Fallback to Qwen
-        if getattr(settings, "qwen_api_key", None) and getattr(settings, "qwen_base_url", None):
-            llm = make_chat_openai(settings.qwen_api_key, settings.qwen_base_url, getattr(settings, "qwen_model_name", "qwen-plus-2025-09-11"))
-            if llm:
-                return llm
-        return None
-
-    # Provider routing
-    provider = getattr(settings, "llm_provider", "auto")
-    if provider == "auto":
-        # 优先返回具有运行时回退能力的DeepSeek→Qwen包装器
-        if getattr(settings, "deepseek_api_key", None) and getattr(settings, "deepseek_base_url", None):
-            primary = {
-                "api_key": settings.deepseek_api_key,
-                "base_url": settings.deepseek_base_url,
-                "model": settings.llm_model_name,
-            }
-            fallback = None
-            if getattr(settings, "qwen_api_key", None) and getattr(settings, "qwen_base_url", None):
-                fallback = {
-                    "api_key": settings.qwen_api_key,
-                    "base_url": settings.qwen_base_url,
-                    "model": getattr(settings, "qwen_model_name", "qwen-plus-2025-09-11"),
-                }
-            return _FallbackLLM(primary, fallback, settings.llm_temperature)
-        # 若DeepSeek未配置，尝试直接Qwen
-        if getattr(settings, "qwen_api_key", None) and getattr(settings, "qwen_base_url", None):
-            llm = make_chat_openai(settings.qwen_api_key, settings.qwen_base_url, getattr(settings, "qwen_model_name", "qwen-plus-2025-09-11"))
-            return llm
-        return None
-
-    if provider == "deepseek":
-        # 始终使用运行时回退包装器：DeepSeek失败时自动切换到Qwen
-        primary = {
-            "api_key": getattr(settings, "deepseek_api_key", ""),
-            "base_url": getattr(settings, "deepseek_base_url", ""),
-            "model": getattr(settings, "llm_model_name", "deepseek-v3.1-chat"),
-        }
-        fallback = None
-        if getattr(settings, "qwen_api_key", None) and getattr(settings, "qwen_base_url", None):
-            fallback = {
-                "api_key": settings.qwen_api_key,
-                "base_url": settings.qwen_base_url,
-                "model": getattr(settings, "qwen_model_name", "qwen-plus-2025-09-11"),
-            }
-        return _FallbackLLM(primary, fallback, settings.llm_temperature)
-
-    if provider == "qwen":
-        if getattr(settings, "qwen_api_key", None) and getattr(settings, "qwen_base_url", None):
-            llm = make_chat_openai(settings.qwen_api_key, settings.qwen_base_url, getattr(settings, "qwen_model_name", "qwen-plus-2025-09-11"))
-            if llm:
-                return llm
-        # fallback if qwen missing
-        return None
-
-    # OpenAI direct (kept for compatibility)
-    if provider == "openai" and getattr(settings, "openai_api_key", None):
-        os.environ["OPENAI_API_KEY"] = settings.openai_api_key
-        try:
-            return ChatOpenAI(model=settings.llm_model_name, temperature=settings.llm_temperature)
-        except Exception:
-            return None
-
-    # Final fallback
-    return None
+    # 确保LLM实例有model_name属性
+    if not hasattr(llm, "model_name"):
+        llm.model_name = model
+    return llm
 
 
 class ShortTermMemory:
@@ -433,12 +296,8 @@ class LogAnalysisAgent:
         # 显示当前使用的模型信息
         if hasattr(self.llm, 'model_name'):
             logger.info("LogAnalysisAgent.__init__: current model=%s", self.llm.model_name)
-        elif hasattr(self.llm, '_primary_conf'):
-            primary_model = self.llm._primary_conf.get('model', 'unknown')
-            fallback_model = self.llm._fallback_conf.get('model', 'none') if self.llm._fallback_conf else 'none'
-            logger.info("LogAnalysisAgent.__init__: primary_model=%s, fallback_model=%s", primary_model, fallback_model)
         else:
-            logger.info("LogAnalysisAgent.__init__: model info not available")
+            logger.info("LogAnalysisAgent.__init__: current model=%s", getattr(settings, "llm_model_name", "unknown"))
             
         self.memory = ShortTermMemory(window=settings.agent_short_term_window)
         self.search_backend = (
@@ -1774,48 +1633,6 @@ def demo_agent_run(query: str, hints: Optional[Dict[str, Any]] = None) -> str:
 # Prompt缓存（全局），用于存储配置与模板实例
 _PROMPTS_CACHE: Dict[str, Dict[str, Any]] = {}
 _PROMPT_TEMPLATES_CACHE: Dict[str, Any] = {}
-class _BoundFallbackLLM:
-    def __init__(self, primary: Any, fallback_conf: Optional[Dict[str, str]], tools: List[Any]):
-        self._primary_bound = primary.bind_tools(tools) if (primary and hasattr(primary, "bind_tools")) else None
-        self._fallback_conf = fallback_conf
-        self._tools = tools
-        # 增加日志：初始化时记录工具数量与主/备状态
-        try:
-            logger.info(
-                "BoundFallbackLLM.init: tools=%s, primary_bound=%s, fallback_model=%s",
-                [getattr(t, "name", str(t)) for t in tools],
-                bool(self._primary_bound),
-                (fallback_conf or {}).get("model")
-            )
-        except Exception:
-            logger.debug("BoundFallbackLLM.init: logging failed")
-
-    def invoke(self, prompt: str):
-        if self._primary_bound:
-            try:
-                logger.debug("BoundFallbackLLM.invoke: using primary bound model")
-                logger.info("\n\n--- START LLM PROMPT [BoundPrimary] ---\n%s\n--- END LLM PROMPT [BoundPrimary] ---\n", prompt)
-                return self._primary_bound.invoke(prompt)
-            except Exception as e:
-                logger.warning(f"Bound primary invocation failed, switching to fallback: {e}")
-        # Build and try fallback bound model
-        if self._fallback_conf:
-            logger.debug("BoundFallbackLLM.invoke: building fallback model and binding tools")
-            fb = _make_chat_openai(
-                self._fallback_conf.get("api_key", ""),
-                self._fallback_conf.get("base_url", ""),
-                self._fallback_conf.get("model", "")
-            )
-            if fb and hasattr(fb, "bind_tools"):
-                fb_bound = fb.bind_tools(self._tools)
-                try:
-                    logger.debug("BoundFallbackLLM.invoke: using fallback bound model")
-                    logger.info("\n\n--- START LLM PROMPT [BoundFallback] ---\n%s\n--- END LLM PROMPT [BoundFallback] ---\n", prompt)
-                    return fb_bound.invoke(prompt)
-                except Exception as e:
-                    logger.warning(f"Bound fallback invocation failed: {e}")
-        logger.error("BoundFallbackLLM.invoke: no available backend after retry")
-        raise RuntimeError("No available LLM backend; bound invocation failed")
 
 class LogAnalysisAgentDuplicate:
     """Main Agent orchestrating planning and tool execution via LangGraph."""
