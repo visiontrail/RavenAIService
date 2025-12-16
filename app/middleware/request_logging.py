@@ -48,7 +48,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         request_info = await self._get_request_info(request, request_id)
         
         # 记录请求开始日志
-        logger.info(f"Request started: {json.dumps(request_info, ensure_ascii=False)}")
+        logger.debug(f"Request started: {json.dumps(request_info, ensure_ascii=False)}")
         
         # 处理请求
         try:
@@ -61,7 +61,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             response_info = self._get_response_info(response, process_time, request_id)
             
             # 记录请求完成日志
-            logger.info(f"Request completed: {json.dumps(response_info, ensure_ascii=False)}")
+            logger.debug(f"Request completed: {json.dumps(response_info, ensure_ascii=False)}")
             
             # 添加响应头
             response.headers["X-Request-ID"] = request_id

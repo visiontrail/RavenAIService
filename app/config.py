@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     # 日志配置
     log_level: str = "INFO"
     log_file_path: str = "logs/app.log"
+    debug_log_file_path: str = "logs/debug.log"
+    console_log_level: str = "INFO"
     
     # 文件配置
     max_file_size: int = 1073741824  # 1GB

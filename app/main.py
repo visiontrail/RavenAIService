@@ -3,6 +3,7 @@
 """
 
 import logging
+import logging.config
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -19,26 +20,72 @@ from app.models.database import db_manager
 
 
 def setup_logging():
-    """设置日志配置"""
-    # 确保日志目录存在
+    """配置日志：普通日志、调试日志分别落盘，stdout 仅输出普通日志"""
     os.makedirs(settings.logs_dir, exist_ok=True)
-    
-    # 配置日志格式
+    for path in {settings.log_file_path, settings.debug_log_file_path}:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    
-    # 配置根日志记录器
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level),
-        format=log_format,
-        handlers=[
-            logging.FileHandler(settings.log_file_path, encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
-    
-    # 设置uvicorn日志级别
-    logging.getLogger("uvicorn").setLevel(getattr(logging, settings.log_level))
-    logging.getLogger("uvicorn.access").setLevel(getattr(logging, settings.log_level))
+    log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
+    app_file_level = log_level if log_level > logging.DEBUG else logging.INFO
+    console_level_value = getattr(logging, settings.console_log_level.upper(), logging.INFO)
+    console_level = max(app_file_level, console_level_value)
+
+    logging_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "standard": {"format": log_format},
+        },
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+                "level": console_level,
+                "formatter": "standard",
+            },
+            "app_file": {
+                "class": "logging.FileHandler",
+                "level": app_file_level,
+                "formatter": "standard",
+                "filename": settings.log_file_path,
+                "encoding": "utf-8",
+            },
+            "debug_file": {
+                "class": "logging.FileHandler",
+                "level": "DEBUG",
+                "formatter": "standard",
+                "filename": settings.debug_log_file_path,
+                "encoding": "utf-8",
+            },
+        },
+        "loggers": {
+            "uvicorn": {
+                "handlers": ["console", "app_file", "debug_file"],
+                "level": log_level,
+                "propagate": False,
+            },
+            "uvicorn.error": {
+                "handlers": ["console", "app_file", "debug_file"],
+                "level": log_level,
+                "propagate": False,
+            },
+            "app.middleware.request_logging": {
+                "level": "DEBUG",
+                "propagate": True,
+            },
+            "uvicorn.access": {
+                "handlers": ["debug_file"],
+                "level": logging.INFO,
+                "propagate": False,
+            },
+        },
+        "root": {
+            "handlers": ["console", "app_file", "debug_file"],
+            "level": logging.DEBUG,
+        },
+    }
+
+    logging.config.dictConfig(logging_config)
 
 
 @asynccontextmanager
