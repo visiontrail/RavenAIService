@@ -7,7 +7,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState
@@ -32,13 +32,20 @@ class _DeviceState:
     metadata: Dict[str, object] = field(default_factory=dict)
 
 
+@dataclass
+class _PendingPrompt:
+    future: asyncio.Future
+    device_id: str
+    started_at: float
+
+
 class DeviceLinkManager(BaseService):
     """Manage connected device WebSocket links and prompt routing."""
 
     def __init__(self):
         super().__init__()
         self._devices: Dict[str, _DeviceState] = {}
-        self._pending_prompts: Dict[str, Tuple[asyncio.Future, str]] = {}
+        self._pending_prompts: Dict[str, _PendingPrompt] = {}
         self._lock = asyncio.Lock()
 
     async def register_device(self, websocket: WebSocket, payload: RegisterMessage) -> DeviceInfo:
@@ -119,26 +126,46 @@ class DeviceLinkManager(BaseService):
         message = {"type": "prompt", **payload.model_dump(exclude_none=True)}
 
         loop = asyncio.get_running_loop()
+        started_at = loop.time()
         future: asyncio.Future = loop.create_future()
         async with self._lock:
-            self._pending_prompts[payload.request_id] = (future, device_id)
+            self._pending_prompts[payload.request_id] = _PendingPrompt(
+                future=future, device_id=device_id, started_at=started_at
+            )
             state.info.last_seen = datetime.utcnow()
 
         timeout = getattr(settings, "device_link_timeout_sec", 120)
         try:
             await state.websocket.send_text(json.dumps(message))
-            self.log_info("Prompt dispatched to device", extra={"device_id": device_id, "request_id": payload.request_id})
+            self.log_info(
+                "Prompt dispatched to device",
+                extra={
+                    "device_id": device_id,
+                    "request_id": payload.request_id,
+                    "session_id": payload.session_id,
+                    "timeout": timeout,
+                },
+            )
             result = await asyncio.wait_for(future, timeout=timeout)
             await self.update_heartbeat(device_id)
             return result  # type: ignore[return-value]
         except asyncio.TimeoutError as exc:
+            elapsed_ms = int((loop.time() - started_at) * 1000)
             self.log_warning(
                 "Device prompt timed out",
-                extra={"device_id": device_id, "request_id": payload.request_id, "timeout": timeout},
+                extra={
+                    "device_id": device_id,
+                    "request_id": payload.request_id,
+                    "timeout": timeout,
+                    "duration_ms": elapsed_ms,
+                },
             )
             raise RuntimeError(f"Device {device_id} did not respond within {timeout} seconds") from exc
         except Exception:
-            self.log_error("Failed to send prompt to device", extra={"device_id": device_id})
+            self.log_error(
+                "Failed to send prompt to device",
+                extra={"device_id": device_id, "request_id": payload.request_id, "session_id": payload.session_id},
+            )
             raise
         finally:
             self._pending_prompts.pop(payload.request_id, None)
@@ -151,16 +178,28 @@ class DeviceLinkManager(BaseService):
             self.log_warning("Received prompt_result without request_id", extra={"device_id": device_id})
             return
 
-        entry = self._pending_prompts.get(request_id)
-        if not entry:
+        pending = self._pending_prompts.get(request_id)
+        if not pending:
             self.log_warning("No pending prompt for result", extra={"device_id": device_id, "request_id": request_id})
             return
 
-        future, owner = entry
+        future = pending.future
+        owner = pending.device_id
         if owner != device_id:
             self.log_warning(
                 "Prompt result device mismatch",
                 extra={"expected_device": owner, "device_id": device_id, "request_id": request_id},
+            )
+        else:
+            elapsed_ms = int((asyncio.get_running_loop().time() - pending.started_at) * 1000)
+            self.log_info(
+                "Prompt result received",
+                extra={
+                    "device_id": device_id,
+                    "request_id": request_id,
+                    "session_id": payload.get("session_id"),
+                    "duration_ms": elapsed_ms,
+                },
             )
         if not future.done():
             future.set_result(payload)
@@ -186,9 +225,10 @@ class DeviceLinkManager(BaseService):
             return state
 
     def _fail_pending_for_device(self, device_id: str, exc: Exception) -> None:
-        for request_id, (future, owner) in list(self._pending_prompts.items()):
-            if owner != device_id:
+        for request_id, pending in list(self._pending_prompts.items()):
+            if pending.device_id != device_id:
                 continue
+            future = pending.future
             if not future.done():
                 future.set_exception(exc)
             self._pending_prompts.pop(request_id, None)

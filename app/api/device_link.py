@@ -29,7 +29,9 @@ async def device_link_websocket(websocket: WebSocket):
     """Handle device link WebSocket handshake and messages."""
     await websocket.accept()
     device_id: Optional[str] = None
-    logger.info("Device link websocket connected")
+    client = websocket.client
+    client_addr = f"{client.host}:{client.port}" if client else "unknown"
+    logger.info("Device link websocket connected", extra={"client": client_addr})
 
     try:
         while True:
@@ -60,6 +62,10 @@ async def device_link_websocket(websocket: WebSocket):
                         }
                     )
                 )
+                logger.info(
+                    "Device register acknowledged",
+                    extra={"device_id": info.id, "client": client_addr, "device_name": info.name},
+                )
             elif message_type == "ping":
                 if device_id:
                     await device_link_manager.update_heartbeat(device_id)
@@ -80,7 +86,9 @@ async def device_link_websocket(websocket: WebSocket):
                     json.dumps({"type": "error", "message": f"Unsupported message type: {message_type}"})
                 )
     except WebSocketDisconnect:
-        logger.info("Device websocket disconnected: %s", device_id or "<unregistered>")
+        logger.info(
+            "Device websocket disconnected", extra={"device_id": device_id or "<unregistered>", "client": client_addr}
+        )
         if device_id:
             await device_link_manager.mark_offline(device_id)
     except Exception as exc:  # noqa: BLE001
