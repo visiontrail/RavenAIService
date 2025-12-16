@@ -17,6 +17,7 @@ import {
 } from 'lucide-vue-next'
 import { deviceLinkApi } from '@/api/deviceLink'
 import type { DeviceInfo } from '@/types'
+import { renderMarkdown } from '@/utils/markdownRenderer'
 
 const sidebarOpen = ref(true)
 const inputMessage = ref('')
@@ -146,6 +147,11 @@ const resetMentionState = () => {
   mentionSelectedIndex.value = 0
   mentionStart.value = null
 }
+
+const renderAiMessage = (content: string) =>
+  renderMarkdown(content || '', {
+    wrapperClass: 'markdown-content text-gray-900'
+  })
 
 const updateMentionState = (event?: Event) => {
   const value = inputMessage.value
@@ -577,15 +583,18 @@ const sendMessage = async () => {
 
                <!-- Message Content Bubble -->
                <div 
-                 class="max-w-[80%] rounded-2xl px-5 py-3 text-base leading-relaxed whitespace-pre-wrap"
+                 class="max-w-[80%] rounded-2xl px-5 py-3 text-base leading-relaxed"
                  :class="[
                    msg.role === 'user' 
-                     ? 'bg-[#F0F4F9] text-gray-900 rounded-tr-sm' 
+                     ? 'bg-[#F0F4F9] text-gray-900 rounded-tr-sm whitespace-pre-wrap' 
                      : 'bg-transparent text-gray-900 px-0'
                  ]"
                >
                  <template v-if="msg.content === '正在思考...'">
                    <span class="thinking-text">正在思考...</span>
+                 </template>
+                 <template v-else-if="msg.role === 'ai'">
+                   <div v-html="renderAiMessage(msg.content)"></div>
                  </template>
                  <template v-else>
                    {{ msg.content }}
