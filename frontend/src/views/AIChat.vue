@@ -1,41 +1,67 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { 
-  Menu, 
-  Plus, 
-  MessageSquare, 
-  HelpCircle, 
-  Send, 
-  Mic, 
+import { computed, onMounted, onUnmounted, nextTick, ref, watch } from 'vue'
+import {
+  Menu,
+  Plus,
+  MessageSquare,
+  HelpCircle,
+  Send,
+  Mic,
   Image as ImageIcon,
   MoreVertical,
-  Settings,
   List,
   Box,
   LogOut,
-  ExternalLink
+  ExternalLink,
+  X
 } from 'lucide-vue-next'
+import { deviceLinkApi } from '@/api/deviceLink'
+import type { DeviceInfo } from '@/types'
 
 const sidebarOpen = ref(true)
 const inputMessage = ref('')
 const showUserMenu = ref(false)
 const chatContainerRef = ref<HTMLElement | null>(null)
+const textareaRef = ref<HTMLTextAreaElement | null>(null)
+const inputAreaRef = ref<HTMLElement | null>(null)
+const mentionDropdownRef = ref<HTMLElement | null>(null)
 const userMenuRef = ref<HTMLElement | null>(null)
 const userButtonRef = ref<HTMLElement | null>(null)
+const devices = ref<DeviceInfo[]>([])
+const isLoadingDevices = ref(false)
+const mentionVisible = ref(false)
+const mentionKeyword = ref('')
+const mentionSelectedIndex = ref(0)
+const mentionStart = ref<number | null>(null)
+const targetDeviceId = ref<string | null>(null)
+const targetDeviceName = ref<string | null>(null)
 
 // Handle click outside to close menu
 const handleClickOutside = (event: MouseEvent) => {
-  if (showUserMenu.value && 
-      userMenuRef.value && 
-      userButtonRef.value && 
+  if (showUserMenu.value &&
+      userMenuRef.value &&
+      userButtonRef.value &&
       !userMenuRef.value.contains(event.target as Node) && 
       !userButtonRef.value.contains(event.target as Node)) {
     showUserMenu.value = false
+  }
+
+  if (
+    mentionVisible.value &&
+    mentionDropdownRef.value &&
+    inputAreaRef.value &&
+    !mentionDropdownRef.value.contains(event.target as Node) &&
+    !inputAreaRef.value.contains(event.target as Node)
+  ) {
+    mentionVisible.value = false
+    mentionKeyword.value = ''
+    mentionStart.value = null
   }
 }
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
+  fetchDevices()
 })
 
 onUnmounted(() => {
@@ -75,6 +101,99 @@ watch(chatHistory, () => {
 const getServiceUrl = (path: string) => {
   const hostname = window.location.hostname
   return `http://${hostname}:8085${path}`
+}
+
+const fetchDevices = async () => {
+  isLoadingDevices.value = true
+  try {
+    const res = await deviceLinkApi.listDevices()
+    devices.value = res.devices || []
+  } catch (error) {
+    console.error('加载设备列表失败', error)
+  } finally {
+    isLoadingDevices.value = false
+  }
+}
+
+const filteredDevices = computed(() => {
+  const keyword = mentionKeyword.value.trim().toLowerCase()
+  const list = devices.value.slice().sort((a, b) => {
+    if (a.status === b.status) return 0
+    return a.status === 'online' ? -1 : 1
+  })
+  if (!keyword) return list
+  return list.filter(device => {
+    const name = device.name || ''
+    return (
+      name.toLowerCase().includes(keyword) ||
+      device.id.toLowerCase().includes(keyword)
+    )
+  })
+})
+
+watch(filteredDevices, (list) => {
+  if (mentionSelectedIndex.value >= list.length) {
+    mentionSelectedIndex.value = 0
+  }
+})
+
+const deviceStatusDotClass = (status: DeviceInfo['status']) =>
+  status === 'online' ? 'bg-green-500' : 'bg-gray-300'
+
+const resetMentionState = () => {
+  mentionVisible.value = false
+  mentionKeyword.value = ''
+  mentionSelectedIndex.value = 0
+  mentionStart.value = null
+}
+
+const updateMentionState = (event?: Event) => {
+  const value = inputMessage.value
+  const target = (event?.target as HTMLTextAreaElement | null) || textareaRef.value
+  const cursor = target?.selectionStart ?? value.length
+  const lastAt = value.lastIndexOf('@', cursor - 1)
+  if (lastAt === -1) {
+    resetMentionState()
+    return
+  }
+  const afterAt = value.slice(lastAt + 1, cursor)
+  if (afterAt.includes(' ') || afterAt.includes('\n') || afterAt.includes('\t')) {
+    resetMentionState()
+    return
+  }
+  mentionVisible.value = true
+  mentionKeyword.value = afterAt
+  mentionSelectedIndex.value = 0
+  mentionStart.value = lastAt
+}
+
+const applyDeviceSelection = (device: DeviceInfo) => {
+  targetDeviceId.value = device.id
+  targetDeviceName.value = device.name || device.id
+
+  // Replace the mention keyword with the selected device name for clarity
+  const value = inputMessage.value
+  const cursor = textareaRef.value?.selectionStart ?? value.length
+  if (mentionStart.value !== null) {
+    const before = value.slice(0, mentionStart.value)
+    const after = value.slice(cursor)
+    const insertion = `@${targetDeviceName.value} `
+    inputMessage.value = `${before}${insertion}${after}`
+    nextTick(() => {
+      const pos = before.length + insertion.length
+      textareaRef.value?.setSelectionRange(pos, pos)
+    })
+  } else {
+    const insertion = `@${targetDeviceName.value} `
+    inputMessage.value = value ? `${value} ${insertion}` : insertion
+  }
+
+  resetMentionState()
+}
+
+const clearTargetDevice = () => {
+  targetDeviceId.value = null
+  targetDeviceName.value = null
 }
 
 const applyStreamEvent = (payload: any, messageIndex: number) => {
@@ -132,6 +251,43 @@ const processSseBuffer = (buffer: string, messageIndex: number) => {
   return remaining
 }
 
+const handleKeydown = (event: KeyboardEvent) => {
+  if (mentionVisible.value && filteredDevices.value.length > 0) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      mentionSelectedIndex.value =
+        (mentionSelectedIndex.value + 1) % filteredDevices.value.length
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      mentionSelectedIndex.value =
+        (mentionSelectedIndex.value - 1 + filteredDevices.value.length) % filteredDevices.value.length
+      return
+    }
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault()
+      const device = filteredDevices.value[mentionSelectedIndex.value]
+      if (device) applyDeviceSelection(device)
+      return
+    }
+  }
+
+  if (event.key === 'Escape' && mentionVisible.value) {
+    resetMentionState()
+    return
+  }
+
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault()
+    sendMessage()
+  }
+}
+
+const handleInput = (event: Event) => {
+  updateMentionState(event)
+}
+
 const sendMessage = async () => {
   if (isSending.value) return
   const content = inputMessage.value.trim()
@@ -160,6 +316,7 @@ const sendMessage = async () => {
   const aiMessageIndex = chatHistory.value.length - 1
 
   inputMessage.value = ''
+  resetMentionState()
   isSending.value = true
 
   try {
@@ -167,7 +324,9 @@ const sendMessage = async () => {
       message: content,
       session_id: sessionId.value || undefined,
       history: historyPayload,
-      remember: true
+      remember: true,
+      target_device_id: targetDeviceId.value || undefined,
+      target_device_name: targetDeviceName.value || undefined
     }
 
     const resp = await fetch(getServiceUrl('/api/v1/ai-chat/chat/stream'), {
@@ -343,8 +502,29 @@ const sendMessage = async () => {
     <div class="flex-1 flex flex-col h-full relative">
       <!-- Top Bar -->
       <div class="h-16 flex items-center justify-between px-6">
-        <div class="flex items-center gap-2 cursor-pointer">
-          <span class="text-xl font-medium bg-gradient-to-r from-blue-400 via-purple-400 to-red-400 bg-clip-text text-transparent">Raven AI</span>
+        <div class="flex items-center gap-3 flex-wrap">
+          <div class="flex items-center gap-2">
+            <span class="text-xl font-medium bg-gradient-to-r from-blue-400 via-purple-400 to-red-400 bg-clip-text text-transparent">Raven AI</span>
+          </div>
+          <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#F0F4F9] text-xs text-gray-700">
+            <span class="font-medium text-gray-800">目标设备</span>
+            <span
+              v-if="targetDeviceName"
+              class="px-2 py-0.5 rounded-full bg-white border border-gray-200 text-gray-900 font-semibold"
+            >
+              {{ targetDeviceName }}
+            </span>
+            <span v-else class="text-gray-500">未选择</span>
+            <button
+              v-if="targetDeviceName"
+              class="p-1 rounded-full hover:bg-gray-200 text-gray-500"
+              @click="clearTargetDevice"
+              title="清除已选设备"
+              type="button"
+            >
+              <X class="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
         <div class="flex items-center gap-4">
             <a 
@@ -419,7 +599,62 @@ const sendMessage = async () => {
 
       <!-- Input Area -->
       <div class="p-4 md:pb-6">
-        <div class="max-w-3xl mx-auto bg-[#F0F4F9] rounded-3xl p-2 md:p-3 relative group focus-within:bg-gray-100 transition-colors">
+        <div
+          ref="inputAreaRef"
+          class="max-w-3xl mx-auto bg-[#F0F4F9] rounded-3xl p-2 md:p-3 relative group focus-within:bg-gray-100 transition-colors"
+        >
+          <div
+            v-if="mentionVisible"
+            ref="mentionDropdownRef"
+            class="absolute left-0 right-0 bottom-full mb-3 bg-white border border-gray-200 rounded-2xl shadow-xl overflow-hidden max-h-64 z-30"
+          >
+            <div class="px-4 py-3 text-sm text-gray-600 border-b border-gray-100 flex items-center justify-between">
+              <span>选择要发送指令的设备</span>
+              <span class="text-xs text-gray-400">输入 @ 或设备名进行过滤</span>
+            </div>
+            <div v-if="isLoadingDevices" class="px-4 py-3 text-sm text-gray-500">设备列表加载中...</div>
+            <div v-else-if="!filteredDevices.length" class="px-4 py-3 text-sm text-gray-500">暂无匹配的设备</div>
+            <template v-else>
+              <button
+                v-for="(device, idx) in filteredDevices"
+                :key="device.id"
+                type="button"
+                class="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+                :class="{ 'bg-gray-100': idx === mentionSelectedIndex }"
+                @mousedown.prevent="applyDeviceSelection(device)"
+                @mouseenter="mentionSelectedIndex = idx"
+              >
+                <span
+                  class="w-2 h-2 rounded-full"
+                  :class="deviceStatusDotClass(device.status)"
+                ></span>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="font-medium text-gray-900 truncate">{{ device.name || device.id }}</span>
+                    <span class="text-[11px] text-gray-500 uppercase">{{ device.status === 'online' ? '在线' : '离线' }}</span>
+                  </div>
+                  <div class="text-xs text-gray-500 truncate">ID: {{ device.id }}</div>
+                </div>
+                <div v-if="device.models?.length" class="text-[11px] text-gray-500 truncate max-w-[120px] text-right">
+                  {{ device.models.slice(0, 2).join(', ') }}<span v-if="device.models.length > 2"> ...</span>
+                </div>
+              </button>
+            </template>
+          </div>
+          <div
+            v-if="targetDeviceName"
+            class="flex items-center gap-2 mb-2 px-3 py-2 rounded-2xl bg-white border border-gray-200 text-sm text-gray-700"
+          >
+            <span class="text-gray-500">当前目标</span>
+            <span class="font-semibold text-gray-900">{{ targetDeviceName }}</span>
+            <button
+              class="ml-auto p-1 rounded-full hover:bg-gray-100 text-gray-500"
+              type="button"
+              @click="clearTargetDevice"
+            >
+              <X class="w-4 h-4" />
+            </button>
+          </div>
           <div class="flex items-end gap-2">
             <button class="p-2 rounded-full hover:bg-gray-200 text-gray-500 hover:text-gray-900 transition-colors">
               <ImageIcon class="w-5 h-5" />
@@ -427,7 +662,9 @@ const sendMessage = async () => {
             
             <textarea 
               v-model="inputMessage"
-              @keydown.enter.prevent="sendMessage"
+              ref="textareaRef"
+              @keydown="handleKeydown"
+              @input="handleInput"
               placeholder="在这里输入指令"
               class="flex-1 bg-transparent border-0 focus:ring-0 text-gray-900 resize-none max-h-32 py-2 scrollbar-hide placeholder-gray-500"
               rows="1"
@@ -448,7 +685,7 @@ const sendMessage = async () => {
           </div>
         </div>
         <div class="text-center text-xs text-gray-500 mt-2">
-          Raven AI 可能会犯错。请核对重要信息。
+          Raven AI 可能会犯错。请核对重要信息 · 输入 @ 选择要连接的设备。
         </div>
       </div>
     </div>
