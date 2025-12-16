@@ -15,6 +15,7 @@ from app.api import ai_chat, device_link
 from app.middleware import RequestLoggingMiddleware, FileSizeLimitMiddleware
 from app.exceptions import register_exception_handlers
 from app.database import init_database, close_database
+from app.models.database import db_manager
 
 
 def setup_logging():
@@ -62,6 +63,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"数据库初始化失败: {str(e)}")
         raise
+    
+    # 启动时重试失败的协议栈日志处理
+    try:
+        from app.services.log_service import log_service
+        retriggered = 0
+        async for session in db_manager.get_session():
+            retriggered = await log_service.retry_failed_protocol_stack_logs(session)
+            break
+        
+        if retriggered > 0:
+            logger.info(f"启动检查: 已重新触发 {retriggered} 个失败的协议栈日志处理任务")
+        else:
+            logger.info("启动检查: 无需重试协议栈日志处理任务")
+    except Exception as e:
+        logger.error(f"启动检查: 重试失败的协议栈日志处理时出错: {str(e)}")
     
     yield
     

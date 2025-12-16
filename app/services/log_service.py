@@ -929,6 +929,71 @@ class LogService(BaseCRUDService[LogRecord]):
             raise StorageError(f"清理过期日志失败: {str(e)}")
         
         return cleaned_count
+    
+    async def retry_failed_protocol_stack_logs(self, db: AsyncSession, limit: int = 50) -> int:
+        """
+        在服务启动时重试失败的协议栈日志处理任务
+        
+        Args:
+            db: 数据库会话
+            limit: 本次重试的最大条数，避免启动时一次拉起过多任务
+        
+        Returns:
+            int: 成功重新触发的任务数量
+        """
+        try:
+            query = select(LogRecord).where(
+                LogRecord.status == LogStatus.FAILED,
+                LogRecord.is_deleted == False,
+                LogRecord.log_type != LogType.OAM_ANTENNA  # OAM类型无需解压处理
+            ).order_by(LogRecord.updated_at.desc())
+            
+            if limit and limit > 0:
+                query = query.limit(limit)
+            
+            result = await db.execute(query)
+            failed_logs = result.scalars().all()
+            
+            if not failed_logs:
+                logger.info("LogService - 启动检查: 未发现需要重试的失败协议栈日志")
+                return 0
+            
+            # 动态导入，避免循环依赖
+            from app.tasks.log_processing import process_protocol_stack_log
+            
+            retriggered = 0
+            for log_record in failed_logs:
+                if not os.path.exists(log_record.file_path):
+                    logger.warning(
+                        f"LogService - 启动重试跳过: 文件不存在, 日志ID={log_record.id}, 路径={log_record.file_path}"
+                    )
+                    continue
+                
+                log_record.status = LogStatus.PENDING
+                log_record.progress = 0.0
+                log_record.error_message = None
+                log_record.task_id = None
+                log_record.processing_started_at = None
+                
+                task_result = process_protocol_stack_log.apply_async(
+                    args=[log_record.id],
+                    countdown=1
+                )
+                log_record.task_id = task_result.id
+                retriggered += 1
+                
+                logger.info(
+                    f"LogService - 启动重试已提交: 日志ID={log_record.id}, 任务ID={task_result.id}, "
+                    f"文件={log_record.original_filename}"
+                )
+            
+            await db.commit()
+            return retriggered
+        
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"LogService - 启动重试失败协议栈日志时出错: {str(e)}", exc_info=True)
+            return 0
 
     # 私有方法
     async def _save_file(self, file: UploadFile, file_path: Path):

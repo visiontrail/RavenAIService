@@ -106,6 +106,53 @@ def _check_and_log_directory_status(directory_path: str, operation_name: str, re
     return exists and is_dir
 
 
+def _collect_directory_stats(directory_path: str) -> dict:
+    """
+    收集目录统计信息，用于判断外部工具是否生成了有效输出
+    """
+    stats = {
+        "file_count": 0,
+        "total_size": 0,
+        "decompressed_count": 0,
+        "files": set()
+    }
+    
+    try:
+        for root, _, files in os.walk(directory_path):
+            for file_name in files:
+                full_path = os.path.join(root, file_name)
+                stats["file_count"] += 1
+                stats["files"].add(os.path.relpath(full_path, directory_path))
+                
+                try:
+                    stats["total_size"] += os.path.getsize(full_path)
+                except OSError:
+                    # 如果个别文件无法读取大小，不阻塞整体统计
+                    continue
+                
+                # 记录解压产物数量（常见命名模式）
+                if file_name.endswith("_decompressed.log") or "_decompressed" in file_name:
+                    stats["decompressed_count"] += 1
+    except Exception as e:
+        logger.warning(f"DirectoryStats - 无法收集目录统计信息: 路径={directory_path}, 错误={str(e)}")
+    
+    return stats
+
+
+def _has_effective_output(before_stats: dict, after_stats: dict, size_threshold: int = 1024 * 1024) -> bool:
+    """
+    判断处理前后是否产生了有效输出
+    
+    Returns:
+        bool: True 表示检测到新增文件/解压产物或显著的体积增长
+    """
+    new_files = after_stats.get("files", set()) - before_stats.get("files", set())
+    size_delta = after_stats.get("total_size", 0) - before_stats.get("total_size", 0)
+    decompressed_delta = after_stats.get("decompressed_count", 0) - before_stats.get("decompressed_count", 0)
+    
+    return len(new_files) > 0 or decompressed_delta > 0 or size_delta > size_threshold
+
+
 @celery_app.task(bind=True, max_retries=settings.max_retry_attempts)
 def process_protocol_stack_log(self, log_id: str) -> dict:
     """
@@ -518,6 +565,7 @@ def _process_with_external_tool(
     
     # 对每个STACK_*子文件夹分别调用tool_log_decompress
     successful_processes = 0
+    partial_successes = 0
     total_processes = len(stack_folders)
     
     for i, stack_folder in enumerate(stack_folders):
@@ -529,6 +577,9 @@ def _process_with_external_tool(
             if not _check_and_log_directory_status(stack_folder_path, f"ExternalToolTask - STACK_*子文件夹 {stack_folder}", required=True):
                 logger.error(f"ExternalToolTask - STACK_*子文件夹不可访问: {stack_folder_path}")
                 continue
+            
+            # 记录处理前的目录状态，用于后续判定部分成功
+            before_stats = _collect_directory_stats(stack_folder_path)
             
             # 构建外部工具命令 - 使用绝对路径确保外部工具能正确找到子文件夹
             abs_stack_folder_path = os.path.abspath(stack_folder_path)
@@ -620,46 +671,60 @@ def _process_with_external_tool(
             except Exception as e:
                 logger.error(f"ExternalToolTask - 无法读取输出目录内容 ({stack_folder}): {str(e)}")
             
-            if process.returncode != 0:
-                # 提供更详细的错误信息
-                error_details = []
-                error_details.append(f"返回码: {process.returncode}")
-                
-                if stderr:
-                    error_details.append(f"错误输出: {stderr}")
-                else:
-                    error_details.append("错误输出: 无")
-                
-                if stdout:
-                    error_details.append(f"标准输出: {stdout}")
-                else:
-                    error_details.append("标准输出: 无")
-                
-                error_details.append(f"执行时间: {total_time:.2f}秒")
-                error_details.append(f"工作目录: {stack_folder_path}")
-                error_details.append(f"命令: {' '.join(cmd)}")
-                
-                # 常见错误码的解释
-                error_code_meanings = {
-                    1: "一般错误",
-                    2: "误用shell命令",
-                    126: "命令不可执行",
-                    127: "命令未找到",
-                    128: "无效的退出参数",
-                    130: "脚本被Ctrl+C终止",
-                    255: "退出状态超出范围或其他严重错误"
-                }
-                
-                if process.returncode in error_code_meanings:
-                    error_details.append(f"错误码含义: {error_code_meanings[process.returncode]}")
-                
-                full_error_msg = "; ".join(error_details)
-                logger.error(f"ExternalToolTask - 外部工具执行失败 ({stack_folder}): {full_error_msg}")
+            # 记录处理后的目录状态，结合返回码判定是否可视为成功
+            after_stats = _collect_directory_stats(stack_folder_path)
+            outputs_generated = _has_effective_output(before_stats, after_stats)
+            
+            # 提供更详细的错误信息
+            error_details = []
+            error_details.append(f"返回码: {process.returncode}")
+            
+            if stderr:
+                error_details.append(f"错误输出: {stderr}")
+            else:
+                error_details.append("错误输出: 无")
+            
+            if stdout:
+                error_details.append(f"标准输出: {stdout}")
+            else:
+                error_details.append("标准输出: 无")
+            
+            error_details.append(f"执行时间: {total_time:.2f}秒")
+            error_details.append(f"工作目录: {stack_folder_path}")
+            error_details.append(f"命令: {' '.join(cmd)}")
+            
+            # 常见错误码的解释
+            error_code_meanings = {
+                1: "一般错误",
+                2: "误用shell命令",
+                126: "命令不可执行",
+                127: "命令未找到",
+                128: "无效的退出参数",
+                130: "脚本被Ctrl+C终止",
+                255: "退出状态超出范围或其他严重错误"
+            }
+            
+            if process.returncode in error_code_meanings:
+                error_details.append(f"错误码含义: {error_code_meanings[process.returncode]}")
+            
+            full_error_msg = "; ".join(error_details)
+            
+            if process.returncode != 0 and not outputs_generated:
+                logger.error(f"ExternalToolTask - 外部工具执行失败且未检测到输出 ({stack_folder}): {full_error_msg}")
                 # 对于单个子文件夹的失败，记录错误但继续处理其他子文件夹
                 continue
             
             successful_processes += 1
-            logger.info(f"ExternalToolTask - 外部工具处理成功完成 ({stack_folder})")
+            if process.returncode == 0:
+                logger.info(f"ExternalToolTask - 外部工具处理成功完成 ({stack_folder})")
+            else:
+                partial_successes += 1
+                logger.warning(
+                    f"ExternalToolTask - 返回码非0但检测到新增输出，判定为部分成功 ({stack_folder}): {full_error_msg}; "
+                    f"新增文件数={len(after_stats.get('files', set()) - before_stats.get('files', set()))}, "
+                    f"解压产物新增={after_stats.get('decompressed_count', 0) - before_stats.get('decompressed_count', 0)}, "
+                    f"容量增量={after_stats.get('total_size', 0) - before_stats.get('total_size', 0)}字节"
+                )
             
         except FileNotFoundError as e:
             error_msg = f"外部工具未找到: tool_log_decompress, 详细错误: {str(e)}"
@@ -685,6 +750,9 @@ def _process_with_external_tool(
         logger.warning(f"ExternalToolTask - 部分STACK_*子文件夹处理失败: 总数={total_processes}, 成功数={successful_processes}")
     else:
         logger.info(f"ExternalToolTask - 所有STACK_*子文件夹处理成功: 总数={total_processes}, 成功数={successful_processes}")
+    
+    if partial_successes > 0:
+        logger.warning(f"ExternalToolTask - {partial_successes} 个子任务返回码非0但生成了有效输出，已按成功处理")
     
     # 最终进度设为80%
     _update_progress(db_session, log_record, 80.0)
@@ -727,6 +795,9 @@ def _process_single_directory_with_tool(
     logger.info(f"ExternalToolTask - 外部工具命令配置: 命令={cmd}, 线程数={settings.thread_num_for_decompress}")
     logger.info(f"ExternalToolTask - 路径信息: 输入目录(相对)={input_dir}, 输入目录(绝对)={abs_input_dir}")
     logger.info(f"ExternalToolTask - 注意: tool_log_decompress工具会直接在输入目录中生成处理结果")
+    
+    # 记录处理前的目录状态，用于判定非零返回码时是否已产生有效输出
+    before_stats = _collect_directory_stats(input_dir)
     
     try:
         # 启动外部进程 - 使用临时目录作为工作目录
@@ -807,46 +878,59 @@ def _process_single_directory_with_tool(
         except Exception as e:
             logger.error(f"ExternalToolTask - 无法读取输出目录内容: {str(e)}")
         
-        if process.returncode != 0:
-            # 提供更详细的错误信息
-            error_details = []
-            error_details.append(f"返回码: {process.returncode}")
-            
-            if stderr:
-                error_details.append(f"错误输出: {stderr}")
-            else:
-                error_details.append("错误输出: 无")
-            
-            if stdout:
-                error_details.append(f"标准输出: {stdout}")
-            else:
-                error_details.append("标准输出: 无")
-            
-            error_details.append(f"执行时间: {total_time:.2f}秒")
-            error_details.append(f"工作目录: {temp_dir}")
-            error_details.append(f"命令: {' '.join(cmd)}")
-            
-            # 常见错误码的解释
-            error_code_meanings = {
-                1: "一般错误",
-                2: "误用shell命令",
-                126: "命令不可执行",
-                127: "命令未找到",
-                128: "无效的退出参数",
-                130: "脚本被Ctrl+C终止",
-                255: "退出状态超出范围或其他严重错误"
-            }
-            
-            if process.returncode in error_code_meanings:
-                error_details.append(f"错误码含义: {error_code_meanings[process.returncode]}")
-            
-            full_error_msg = "; ".join(error_details)
-            logger.error(f"ExternalToolTask - 外部工具执行失败: {full_error_msg}")
+        # 记录处理后的目录状态，结合返回码判定是否可视为成功
+        after_stats = _collect_directory_stats(input_dir)
+        outputs_generated = _has_effective_output(before_stats, after_stats)
+        
+        # 提供更详细的错误信息
+        error_details = []
+        error_details.append(f"返回码: {process.returncode}")
+        
+        if stderr:
+            error_details.append(f"错误输出: {stderr}")
+        else:
+            error_details.append("错误输出: 无")
+        
+        if stdout:
+            error_details.append(f"标准输出: {stdout}")
+        else:
+            error_details.append("标准输出: 无")
+        
+        error_details.append(f"执行时间: {total_time:.2f}秒")
+        error_details.append(f"工作目录: {temp_dir}")
+        error_details.append(f"命令: {' '.join(cmd)}")
+        
+        # 常见错误码的解释
+        error_code_meanings = {
+            1: "一般错误",
+            2: "误用shell命令",
+            126: "命令不可执行",
+            127: "命令未找到",
+            128: "无效的退出参数",
+            130: "脚本被Ctrl+C终止",
+            255: "退出状态超出范围或其他严重错误"
+        }
+        
+        if process.returncode in error_code_meanings:
+            error_details.append(f"错误码含义: {error_code_meanings[process.returncode]}")
+        
+        full_error_msg = "; ".join(error_details)
+        
+        if process.returncode != 0 and not outputs_generated:
+            logger.error(f"ExternalToolTask - 外部工具执行失败且未检测到输出: {full_error_msg}")
             raise RuntimeError(f"External tool failed with return code {process.returncode}: {full_error_msg}")
+        elif process.returncode != 0 and outputs_generated:
+            logger.warning(
+                f"ExternalToolTask - 返回码非0但检测到新增输出，判定为部分成功: {full_error_msg}; "
+                f"新增文件数={len(after_stats.get('files', set()) - before_stats.get('files', set()))}, "
+                f"解压产物新增={after_stats.get('decompressed_count', 0) - before_stats.get('decompressed_count', 0)}, "
+                f"容量增量={after_stats.get('total_size', 0) - before_stats.get('total_size', 0)}字节"
+            )
+        else:
+            logger.info(f"ExternalToolTask - 外部工具处理成功完成")
         
         # 最终进度设为80%
         _update_progress(db_session, log_record, 80.0)
-        logger.info(f"ExternalToolTask - 外部工具处理成功完成")
         
     except FileNotFoundError as e:
         error_msg = f"外部工具未找到: tool_log_decompress, 详细错误: {str(e)}"
