@@ -212,6 +212,24 @@ class DeviceLinkManager(BaseService):
         await self.update_heartbeat(device_id)
         return DeviceInfo(**state.info.model_dump())
 
+    async def delete_device(self, device_id: str) -> DeviceInfo:
+        """Remove device tracking info and close the websocket if needed."""
+        async with self._lock:
+            state = self._devices.pop(device_id, None)
+        if not state:
+            raise RuntimeError(f"Device {device_id} not found")
+
+        websocket = state.websocket
+        if websocket and websocket.application_state == WebSocketState.CONNECTED:
+            try:
+                await websocket.close()
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to close websocket when deleting %s", device_id, exc_info=True)
+
+        self._fail_pending_for_device(device_id, RuntimeError(f"Device {device_id} removed"))
+        self.log_info("Device deleted", extra={"device_id": device_id})
+        return DeviceInfo(**state.info.model_dump())
+
     async def _get_active_state(self, device_id: str) -> _DeviceState:
         async with self._lock:
             state = self._devices.get(device_id)

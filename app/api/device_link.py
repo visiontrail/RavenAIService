@@ -117,3 +117,14 @@ async def ping_device(device_id: str) -> DeviceInfo:
         detail = str(exc)
         status_code = 404 if "not registered" in detail else 503
         raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.delete("/api/v1/device-links/{device_id}", response_model=DeviceInfo)
+async def delete_device(device_id: str) -> DeviceInfo:
+    """Delete a device record and close its connection if present."""
+    try:
+        return await device_link_manager.delete_device(device_id)
+    except RuntimeError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail else 500
+        raise HTTPException(status_code=status_code, detail=detail) from exc

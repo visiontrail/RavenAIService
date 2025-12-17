@@ -12,6 +12,12 @@ export const deviceLinkApi = {
    */
   pingDevice: (deviceId: string) =>
     api.get<DeviceInfo>(`/api/v1/device-links/${encodeURIComponent(deviceId)}/ping`),
+
+  /**
+   * 删除设备记录
+   */
+  deleteDevice: (deviceId: string) =>
+    api.delete<DeviceInfo>(`/api/v1/device-links/${encodeURIComponent(deviceId)}`),
 }
 
 export default deviceLinkApi

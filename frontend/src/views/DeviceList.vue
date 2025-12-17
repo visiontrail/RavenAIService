@@ -112,20 +112,41 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="140" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
-            <el-button
-              size="small"
-              plain
-              type="primary"
-              :loading="pingingId === row.id"
-              @click="handlePing(row)"
-            >
-              <el-icon class="mr-1">
-                <Connection />
-              </el-icon>
-              Ping
-            </el-button>
+            <div class="flex justify-end gap-2">
+              <el-button
+                size="small"
+                plain
+                type="primary"
+                :loading="pingingId === row.id"
+                @click="handlePing(row)"
+              >
+                <el-icon class="mr-1">
+                  <Connection />
+                </el-icon>
+                Ping
+              </el-button>
+              <el-popconfirm
+                width="200"
+                confirm-button-text="删除"
+                cancel-button-text="取消"
+                confirm-button-type="danger"
+                title="确定删除该设备记录？"
+                @confirm="handleDelete(row)"
+              >
+                <template #reference>
+                  <el-button
+                    size="small"
+                    plain
+                    type="danger"
+                    :loading="deletingId === row.id"
+                  >
+                    删除
+                  </el-button>
+                </template>
+              </el-popconfirm>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -144,6 +165,7 @@ import type { DeviceInfo } from '@/types'
 const devices = ref<DeviceInfo[]>([])
 const loading = ref(false)
 const pingingId = ref<string | null>(null)
+const deletingId = ref<string | null>(null)
 const autoRefreshEnabled = ref(true)
 const lastUpdated = ref<Date | null>(null)
 const refreshIntervalMs = 15000
@@ -166,6 +188,13 @@ const upsertDevice = (info: DeviceInfo) => {
     devices.value[idx] = info
   } else {
     devices.value.push(info)
+  }
+}
+
+const removeDevice = (deviceId: string) => {
+  const idx = devices.value.findIndex((d) => d.id === deviceId)
+  if (idx !== -1) {
+    devices.value.splice(idx, 1)
   }
 }
 
@@ -198,6 +227,22 @@ const handlePing = async (device: DeviceInfo) => {
     ElMessage.error(detail)
   } finally {
     pingingId.value = null
+  }
+}
+
+const handleDelete = async (device: DeviceInfo) => {
+  deletingId.value = device.id
+  try {
+    await deviceLinkApi.deleteDevice(device.id)
+    removeDevice(device.id)
+    lastUpdated.value = new Date()
+    ElMessage.success(`已删除 ${device.name || device.id}`)
+  } catch (error: any) {
+    console.error('Delete device failed:', error)
+    const detail = error?.response?.data?.detail || error?.message || '删除失败'
+    ElMessage.error(detail)
+  } finally {
+    deletingId.value = null
   }
 }
 
