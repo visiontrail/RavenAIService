@@ -151,6 +151,20 @@ const copyShareLink = async (link: string) => {
   }
 }
 
+const copyRebuildPrompt = async () => {
+  if (!pkg.value || !downloadLink.value) {
+    ElMessage.warning('暂无可用的下载链接')
+    return
+  }
+  const prompt = `请你帮忙下载${downloadLink.value}并上传到设备ftp，然后请向基带处理机发送重构包下载请求后，启动卫星升级流程`
+  const ok = await copyToClipboard(prompt)
+  if (ok) {
+    ElMessage.success('提示词已复制')
+  } else {
+    ElMessage.warning('复制失败，请手动复制')
+  }
+}
+
 const downloadPackage = async (value: RavenPackage) => {
   try {
     const response = await downloadRavenPackage(value.id)
@@ -211,6 +225,9 @@ watch(
         </el-button>
         <el-button v-if="pkg" size="small" @click="copyShareLink(downloadLink)">
           复制下载链接
+        </el-button>
+        <el-button v-if="pkg" size="small" @click="copyRebuildPrompt">
+          复制重构提示词
         </el-button>
         <el-button v-if="pkg" size="small" type="primary" @click="downloadPackage(pkg)">
           <el-icon class="mr-1"><Download /></el-icon>
