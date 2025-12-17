@@ -7,6 +7,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional
 
 from fastapi import WebSocket
@@ -47,6 +48,8 @@ class DeviceLinkManager(BaseService):
         self._devices: Dict[str, _DeviceState] = {}
         self._pending_prompts: Dict[str, _PendingPrompt] = {}
         self._lock = asyncio.Lock()
+        self._store_path = Path(getattr(settings, "device_link_store_file", "data/device_links.json"))
+        self._restore_devices()
 
     async def register_device(self, websocket: WebSocket, payload: RegisterMessage) -> DeviceInfo:
         """Record a device registration and keep its WebSocket reference."""
@@ -78,6 +81,7 @@ class DeviceLinkManager(BaseService):
                 except Exception:  # noqa: BLE001
                     logger.debug("Failed to close previous websocket for %s", device_id, exc_info=True)
             self._devices[device_id] = state
+            self._persist_devices()
         self.log_info("Device registered", extra={"device_id": device_id, "host": info.host})
         return info
 
@@ -89,6 +93,7 @@ class DeviceLinkManager(BaseService):
                 return None
             state.info.last_seen = datetime.utcnow()
             state.info.status = "online"
+            self._persist_devices()
             return state.info
 
     async def mark_offline(self, device_id: str) -> None:
@@ -100,6 +105,7 @@ class DeviceLinkManager(BaseService):
             state.info.status = "offline"
             state.info.last_seen = datetime.utcnow()
             state.websocket = None
+            self._persist_devices()
         self._fail_pending_for_device(device_id, RuntimeError(f"Device {device_id} disconnected"))
         self.log_info("Device disconnected", extra={"device_id": device_id})
 
@@ -216,6 +222,7 @@ class DeviceLinkManager(BaseService):
         """Remove device tracking info and close the websocket if needed."""
         async with self._lock:
             state = self._devices.pop(device_id, None)
+            self._persist_devices()
         if not state:
             raise RuntimeError(f"Device {device_id} not found")
 
@@ -250,6 +257,44 @@ class DeviceLinkManager(BaseService):
             if not future.done():
                 future.set_exception(exc)
             self._pending_prompts.pop(request_id, None)
+
+    def _restore_devices(self) -> None:
+        """Load cached device snapshots so restart keeps known devices."""
+        try:
+            if not self._store_path.exists():
+                return
+            raw = self._store_path.read_text(encoding="utf-8")
+            if not raw.strip():
+                return
+            data = json.loads(raw)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to load cached devices: %s", exc)
+            return
+
+        restored = 0
+        for item in data or []:
+            try:
+                info = DeviceInfo.model_validate(item)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Skip invalid cached device: %s", exc, exc_info=True)
+                continue
+            info.status = "offline"
+            self._devices[info.id] = _DeviceState(
+                websocket=None, info=info, client_version=None, metadata={"restored": True}
+            )
+            restored += 1
+
+        if restored:
+            self.log_info("Restored device list from cache", extra={"count": restored})
+
+    def _persist_devices(self) -> None:
+        """Persist current device list to disk so restart can restore it."""
+        try:
+            self._store_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = [state.info.model_dump(mode="json") for state in self._devices.values()]
+            self._store_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to persist device cache: %s", exc, exc_info=True)
 
 
 device_link_manager = DeviceLinkManager()

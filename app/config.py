@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     # 设备长链接配置（仅暴露常量，后续实现 WebSocket 心跳与超时逻辑）
     device_link_heartbeat_sec: int = 30  # 环境变量: DEVICE_LINK_HEARTBEAT_SEC
     device_link_timeout_sec: int = 120  # 环境变量: DEVICE_LINK_TIMEOUT_SEC
+    device_link_store_file: str = "data/device_links.json"
     
     # 日志配置
     log_level: str = "INFO"
