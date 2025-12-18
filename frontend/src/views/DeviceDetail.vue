@@ -256,21 +256,30 @@ onMounted(fetchDevice)
 }
 
 .chip {
-  display: block;
-  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  height: auto;
+  white-space: normal;
+  word-break: break-all;
+  line-height: 1.4;
+  padding: 0.55rem 0.7rem;
+  flex: 1 1 260px;
+  box-sizing: border-box;
 }
 
 .chip-title {
   font-weight: 600;
   color: #111827;
   display: block;
+  line-height: 1.3;
 }
 
 .chip-desc {
   font-size: 0.85rem;
   color: #6b7280;
   display: block;
-  margin-top: 0.15rem;
-  line-height: 1.4;
+  line-height: 1.5;
 }
 </style>
