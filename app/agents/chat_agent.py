@@ -30,6 +30,7 @@ class ChatState(TypedDict, total=False):
     session_id: Optional[str]
     target_device_id: Optional[str]
     target_device_name: Optional[str]
+    device_capabilities_prompt: Optional[str]
 
 
 def _make_llm() -> Any:
@@ -129,6 +130,7 @@ class ChatAgent:
             target_device_id=state.get("target_device_id"),
             target_device_name=state.get("target_device_name"),
             session_id=state.get("session_id"),
+            device_capabilities_prompt=state.get("device_capabilities_prompt"),
         )
         logger.info(f"_call_model: 系统提示词长度: {len(system_prompt)} 字符")
 
@@ -157,6 +159,7 @@ class ChatAgent:
             "session_id": state.get("session_id"),
             "target_device_id": state.get("target_device_id"),
             "target_device_name": state.get("target_device_name"),
+            "device_capabilities_prompt": state.get("device_capabilities_prompt"),
         }
 
     async def _call_tools(self, state: ChatState) -> ChatState:
@@ -184,6 +187,7 @@ class ChatAgent:
             "session_id": state.get("session_id"),
             "target_device_id": state.get("target_device_id"),
             "target_device_name": state.get("target_device_name"),
+            "device_capabilities_prompt": state.get("device_capabilities_prompt"),
         }
 
     @staticmethod
@@ -201,6 +205,7 @@ class ChatAgent:
         target_device_id: Optional[str],
         target_device_name: Optional[str],
         session_id: Optional[str],
+        device_capabilities_prompt: Optional[str] = None,
     ) -> str:
         """为当前轮次拼接设备上下文的系统提示。"""
         prompt = base_prompt or self.default_system_prompt
@@ -216,6 +221,8 @@ class ChatAgent:
             f"并携带 session_id={session_hint} 与 target_device_id。"
             "收到工具结果后，用中文向用户总结其中的 answer，并保留 topic_id 供追踪。"
         )
+        if device_capabilities_prompt:
+            prompt = f"{prompt}\n\n[设备能力提示]\n{device_capabilities_prompt}"
         return prompt
 
     def invoke(
@@ -225,6 +232,7 @@ class ChatAgent:
         session_id: Optional[str] = None,
         target_device_id: Optional[str] = None,
         target_device_name: Optional[str] = None,
+        device_capabilities_prompt: Optional[str] = None,
     ) -> ChatState:
         """同步调用（主要用于调试或同步场景）"""
         logger.info("==================== invoke 同步调用开始 ====================")
@@ -237,6 +245,7 @@ class ChatAgent:
             "session_id": session_id,
             "target_device_id": target_device_id,
             "target_device_name": target_device_name,
+            "device_capabilities_prompt": device_capabilities_prompt,
         }
         logger.info("invoke: 正在调用 graph.invoke...")
         try:
@@ -255,6 +264,7 @@ class ChatAgent:
         session_id: Optional[str] = None,
         target_device_id: Optional[str] = None,
         target_device_name: Optional[str] = None,
+        device_capabilities_prompt: Optional[str] = None,
     ) -> ChatState:
         """异步调用，供 FastAPI 路由使用"""
         logger.info("==================== ainvoke 异步调用开始 ====================")
@@ -267,6 +277,7 @@ class ChatAgent:
             "session_id": session_id,
             "target_device_id": target_device_id,
             "target_device_name": target_device_name,
+            "device_capabilities_prompt": device_capabilities_prompt,
         }
         logger.info("ainvoke: 正在调用 graph.ainvoke...")
         set_device_prompt_context(
@@ -308,6 +319,7 @@ class ChatAgent:
         session_id: Optional[str] = None,
         target_device_id: Optional[str] = None,
         target_device_name: Optional[str] = None,
+        device_capabilities_prompt: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """流式返回模型输出的分片文本；若需要设备工具则退回整段输出。"""
         logger.info("==================== astream 流式调用开始 ====================")
@@ -322,6 +334,7 @@ class ChatAgent:
                 session_id=session_id,
                 target_device_id=target_device_id,
                 target_device_name=target_device_name,
+                device_capabilities_prompt=device_capabilities_prompt,
             )
             ai_message = next((m for m in reversed(state.get("messages", [])) if isinstance(m, AIMessage)), None)
             if ai_message and ai_message.content:

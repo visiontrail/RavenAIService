@@ -48,6 +48,12 @@ Message types (all frames are JSON text):
       "answer": "...",
       "raw_messages": [...]  # optional LLM/raw message history
   }
+- capabilities_update (client -> server)
+  {
+      "type": "capabilities_update",
+      "device_id": "...",   # optional; inferred from the websocket session
+      "capabilities": {...} # latest capability metadata (e.g., MCP tools/prompts/resources)
+  }
 - error (bidirectional): {"type": "error", "request_id": "...", "message": "..."} (request_id optional)
 
 Server keeps: device_id -> connection with status/last_seen/metadata, and a pending map request_id -> future.
@@ -131,6 +137,14 @@ class ErrorMessage(TypedDict, total=False):
     type: Literal["error"]
     request_id: Optional[str]
     message: str
+
+
+class CapabilitiesUpdateMessage(TypedDict, total=False):
+    """Client -> Server capabilities update payload."""
+
+    type: Literal["capabilities_update"]
+    device_id: Optional[str]
+    capabilities: Dict[str, object]
 
 
 DeviceStatus = Literal["online", "offline"]

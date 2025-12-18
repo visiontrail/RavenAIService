@@ -81,6 +81,13 @@ async def device_link_websocket(websocket: WebSocket):
             elif message_type == "prompt_ack":
                 if device_id:
                     await device_link_manager.update_heartbeat(device_id)
+            elif message_type == "capabilities_update":
+                if not device_id:
+                    await websocket.send_text(json.dumps({"type": "error", "message": "Device not registered"}))
+                    continue
+                await device_link_manager.update_capabilities(
+                    device_id, message.get("capabilities") or {}
+                )  # type: ignore[arg-type]
             else:
                 await websocket.send_text(
                     json.dumps({"type": "error", "message": f"Unsupported message type: {message_type}"})

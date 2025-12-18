@@ -4,14 +4,16 @@ AI 对话服务：封装 LangGraph 智能体与简单会话记忆。
 import logging
 import json
 import uuid
-from typing import AsyncIterator, Dict, List
+from typing import AsyncIterator, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from app.agents.chat_agent import ChatAgent
 from app.config import settings
 from app.models.chat import ChatMessage, ChatRequest, ChatResponse
+from app.models.device_link import DeviceInfo
 from app.services.base import BaseService
+from app.services.device_link_service import device_link_manager
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,90 @@ class AIChatService(BaseService):
         self.agent = ChatAgent()
         self.memory = _SessionMemory(max_turns=getattr(settings, "agent_short_term_window", 5))
 
+    async def _build_device_capabilities_prompt(self, device_id: Optional[str]) -> Optional[str]:
+        """Fetch device info and format its capabilities for system prompt injection."""
+        if not device_id:
+            return None
+        try:
+            device = await device_link_manager.get_device(device_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to load device info for capabilities", exc_info=True, extra={"device_id": device_id})
+            return None
+        return self._format_device_capabilities(device)
+
+    @staticmethod
+    def _format_device_capabilities(device: Optional[DeviceInfo]) -> Optional[str]:
+        if not device:
+            return None
+        capabilities = device.capabilities or {}
+        mcp = capabilities.get("mcp") if isinstance(capabilities, dict) else None
+        servers = (mcp or {}).get("servers") if isinstance(mcp, dict) else None
+        if not servers:
+            return None
+
+        lines: list[str] = ["设备已上报的 MCP 能力如下，请在生成指令时参考："]
+        for server in servers:
+            if not isinstance(server, dict):
+                continue
+            name = server.get("name") or server.get("id") or "未知服务器"
+            provider = server.get("provider")
+            server_type = server.get("type")
+            base_url = server.get("baseUrl") or server.get("base_url")
+            description = server.get("description")
+
+            header_parts = [name]
+            detail_parts = [part for part in [provider, server_type, base_url] if part]
+            if detail_parts:
+                header_parts.append(f"({', '.join(str(p) for p in detail_parts)})")
+            if description:
+                header_parts.append(f"- {description}")
+            lines.append(f"- {' '.join(header_parts)}")
+
+            tools = server.get("tools") if isinstance(server.get("tools"), list) else []
+            if tools:
+                tool_lines = []
+                for tool in tools:
+                    if not isinstance(tool, dict):
+                        continue
+                    tool_name = tool.get("name") or "未命名工具"
+                    tool_desc = tool.get("description")
+                    entry = tool_name if not tool_desc else f"{tool_name}（{tool_desc}）"
+                    tool_lines.append(entry)
+                if tool_lines:
+                    lines.append("  工具: " + "; ".join(tool_lines))
+
+            prompts = server.get("prompts") if isinstance(server.get("prompts"), list) else []
+            if prompts:
+                prompt_lines = []
+                for prompt in prompts:
+                    if not isinstance(prompt, dict):
+                        continue
+                    prompt_name = prompt.get("name") or "未命名提示词"
+                    prompt_desc = prompt.get("description")
+                    entry = prompt_name if not prompt_desc else f"{prompt_name}（{prompt_desc}）"
+                    prompt_lines.append(entry)
+                if prompt_lines:
+                    lines.append("  提示词: " + "; ".join(prompt_lines))
+
+            resources = server.get("resources") if isinstance(server.get("resources"), list) else []
+            if resources:
+                resource_lines = []
+                for resource in resources:
+                    if not isinstance(resource, dict):
+                        continue
+                    res_name = resource.get("name") or resource.get("uri") or "资源"
+                    res_desc = resource.get("description")
+                    entry = res_name if not res_desc else f"{res_name}（{res_desc}）"
+                    resource_lines.append(entry)
+                if resource_lines:
+                    lines.append("  资源: " + "; ".join(resource_lines))
+
+        collected_at = (mcp or {}).get("collectedAt") or (mcp or {}).get("collected_at")
+        if collected_at:
+            lines.append(f"(以上能力同步时间: {collected_at})")
+
+        return "\n".join(lines)
+
     async def chat(self, payload: ChatRequest) -> ChatResponse:
         logger.info("==================== AIChatService.chat 开始 ====================")
         logger.info(f"chat: 用户消息: {payload.message[:100]}...")
@@ -65,6 +151,8 @@ class AIChatService(BaseService):
         history_messages.append(HumanMessage(content=payload.message))
         logger.info(f"chat: 添加用户消息后，总消息数: {len(history_messages)}")
 
+        device_capabilities_prompt = await self._build_device_capabilities_prompt(payload.target_device_id)
+
         # 调用 LangGraph 智能体
         logger.info("chat: 正在调用 agent.ainvoke...")
         try:
@@ -74,6 +162,7 @@ class AIChatService(BaseService):
                 session_id=session_id,
                 target_device_id=payload.target_device_id,
                 target_device_name=payload.target_device_name,
+                device_capabilities_prompt=device_capabilities_prompt,
             )
             logger.info("chat: agent.ainvoke 调用成功")
         except Exception as e:
@@ -133,6 +222,8 @@ class AIChatService(BaseService):
         # 先返回 session 事件，便于前端更新会话
         yield self._sse_event({"event": "session", "session_id": session_id})
 
+        device_capabilities_prompt = await self._build_device_capabilities_prompt(payload.target_device_id)
+
         # 需要设备联动时不做逐字流式，确保工具调用后再返回。
         if payload.target_device_id:
             logger.info("chat_stream: 目标设备存在，使用非流式工具分支")
@@ -143,6 +234,7 @@ class AIChatService(BaseService):
                     session_id=session_id,
                     target_device_id=payload.target_device_id,
                     target_device_name=payload.target_device_name,
+                    device_capabilities_prompt=device_capabilities_prompt,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.error("chat_stream: 工具分支执行失败: %s", exc, exc_info=True)

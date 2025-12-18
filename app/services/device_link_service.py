@@ -109,6 +109,28 @@ class DeviceLinkManager(BaseService):
         self._fail_pending_for_device(device_id, RuntimeError(f"Device {device_id} disconnected"))
         self.log_info("Device disconnected", extra={"device_id": device_id})
 
+    async def update_capabilities(self, device_id: str, capabilities: dict) -> Optional[DeviceInfo]:
+        """Update device capabilities metadata (e.g., MCP tools/prompts/resources)."""
+        normalized = capabilities if isinstance(capabilities, dict) else {"value": capabilities}
+        async with self._lock:
+            state = self._devices.get(device_id)
+            if not state:
+                raise RuntimeError(f"Device {device_id} not registered")
+            state.info.capabilities = normalized or {}
+            state.metadata["capabilities"] = normalized or {}
+            state.info.last_seen = datetime.utcnow()
+            self._persist_devices()
+            info = DeviceInfo(**state.info.model_dump())
+        self.log_info(
+            "Device capabilities updated",
+            extra={
+                "device_id": device_id,
+                "capability_keys": list((normalized or {}).keys()),
+                "mcp_servers": len((normalized or {}).get("mcp", {}).get("servers", [])),
+            },
+        )
+        return info
+
     def list_devices(self) -> list[DeviceInfo]:
         """Return a snapshot list of devices."""
         return [DeviceInfo(**device.info.model_dump()) for device in self._devices.values()]
