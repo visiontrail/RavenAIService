@@ -68,7 +68,7 @@ const route = useRoute()
 const isRavenRoute = computed(() =>
   ['RavenManager', 'RavenPackageDetail'].includes((route.name as string) || '')
 )
-const isDeviceRoute = computed(() => route.name === 'DeviceList')
+const isDeviceRoute = computed(() => ['DeviceList', 'DeviceDetail'].includes((route.name as string) || ''))
 </script>
 
 <style scoped>

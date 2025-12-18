@@ -62,10 +62,10 @@
       >
         <el-table-column prop="name" label="设备" min-width="220">
           <template #default="{ row }">
-            <div class="flex flex-col">
-              <span class="text-gray-900 font-medium">{{ row.name || row.id }}</span>
+            <router-link :to="`/devices/${row.id}`" class="flex flex-col name-link">
+              <span class="text-gray-900 font-medium hover:text-blue-600">{{ row.name || row.id }}</span>
               <span class="text-xs text-gray-500">ID: {{ row.id }}</span>
-            </div>
+            </router-link>
           </template>
         </el-table-column>
 
@@ -316,6 +316,10 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem;
+}
+
+.name-link {
+  text-decoration: none;
 }
 
 @media (min-width: 640px) {
