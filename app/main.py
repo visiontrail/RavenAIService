@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config import settings
-from app.api import health, logs, tasks
+from app.api import health, logs, tasks, admin
 from app.api import ai_chat, device_link
 from app.middleware import RequestLoggingMiddleware, FileSizeLimitMiddleware
 from app.exceptions import register_exception_handlers
@@ -182,6 +182,7 @@ def create_app() -> FastAPI:
     app.include_router(tasks.router, prefix="/api/v1", tags=["任务管理"])
     app.include_router(ai_chat.router, prefix="/api/v1/ai-chat", tags=["AI Chat"])
     app.include_router(device_link.router, tags=["设备链接"])
+    app.include_router(admin.router, tags=["Admin"])
     
     # 挂载前端静态站点（若已构建）
     try:

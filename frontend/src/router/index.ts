@@ -80,6 +80,14 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/admin/prompts',
+    name: 'AdminPrompts',
+    component: () => import('../views/AdminPrompts.vue'),
+    meta: {
+      title: 'Prompt 配置管理',
+    },
+  },
+  {
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
     component: () => import('../views/NotFound.vue'),

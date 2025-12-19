@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     # Prompt配置（外部化模板路径，可通过环境变量覆盖）
     prompts_config_path: str = "app/prompts/prompts_config.yaml"
     
+    # 后台管理配置
+    admin_auth_config_path: str = "app/admin_auth.yaml"
+    admin_token_ttl_minutes: int = 120
+    
     # CORS配置
     cors_origins: List[str] = ["*"]
     cors_credentials: bool = True

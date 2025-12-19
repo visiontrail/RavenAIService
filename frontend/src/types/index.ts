@@ -173,3 +173,26 @@ export interface RavenSearchResult {
   recommendedPackageIds?: string[]
   searchResultsCount?: number
 }
+
+// 管理端
+export interface AdminAuthData {
+  username: string
+  token: string
+  expires_at: string
+  ttl_minutes: number
+}
+
+export interface PromptsSummary {
+  log_type_keys: string[]
+  has_default_plan: boolean
+  has_default_summary: boolean
+}
+
+export interface PromptsConfigData {
+  path: string
+  content: string
+  updated_at: string
+  size: number
+  checksum: string
+  summary: PromptsSummary
+}

@@ -218,6 +218,13 @@ def _load_prompts_config() -> Dict[str, Dict[str, Any]]:
         }
     return _PROMPTS_CACHE
 
+def refresh_prompts_config() -> Dict[str, Dict[str, Any]]:
+    """Clear prompt caches and reload from disk."""
+    global _PROMPTS_CACHE, _PROMPT_TEMPLATES_CACHE
+    _PROMPTS_CACHE = {}
+    _PROMPT_TEMPLATES_CACHE = {}
+    return _load_prompts_config()
+
 def _select_prompt_config(key: str, log_type: Optional[Any]) -> Dict[str, Any]:
     """根据日志类型从配置中选择提示词条目，带默认回退。"""
     config = _load_prompts_config()

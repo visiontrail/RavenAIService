@@ -15,6 +15,8 @@ const computedBaseURL =
   normalizeBase(envLogBase) ||
   normalizeBase(defaultBase)
 
+export const API_BASE_URL = computedBaseURL
+
 // 创建axios实例
 const api = axios.create({
   baseURL: computedBaseURL,

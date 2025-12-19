@@ -1,0 +1,10 @@
+# Raven admin console credentials (internal use)
+token_ttl_minutes: 240
+users:
+  - username: admin
+    password: "admin123!"
+    roles: ["superuser"]
+  # 示例：使用哈希存储密码（推荐）
+  # - username: ops
+  #   password_hash: "pbkdf2_sha256$260000$bb78ef15fc27e53a5c8396996be9d007$a286c1730cb18a0d0c027f1aa76fd52bd0d2e3e47bb6cb92117612ddc59ff140"
+  #   roles: ["ops"]

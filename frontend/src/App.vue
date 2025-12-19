@@ -37,6 +37,11 @@ const shouldShowNavbar = computed(() => {
     return false
   }
 
+  // 后台管理路径不显示主导航，避免暴露入口
+  if (route.path.startsWith('/admin')) {
+    return false
+  }
+
   // 如果是 AI Chat 页面，不显示 NavBar
   if (route.name === 'AIChat' || route.path === '/ai-chat') {
     return false
