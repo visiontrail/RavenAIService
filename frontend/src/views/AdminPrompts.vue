@@ -1,10 +1,22 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import type { PromptsConfigData, PromptsSummary } from '@/types'
 
 const appStore = useAppStore()
+const router = useRouter()
+const route = useRoute()
+
+const navItems = [
+  {
+    key: 'prompts',
+    label: 'Prompt 配置',
+    path: '/admin/prompts',
+    description: '编辑 prompts_config.yaml 并刷新缓存',
+  },
+]
 
 const emptySummary: PromptsSummary = {
   log_type_keys: [],
@@ -96,6 +108,8 @@ const readableUpdatedAt = computed(() => {
 })
 
 const summaryBadges = computed(() => configState.summary?.log_type_keys || [])
+
+const activeNavKey = computed(() => (route.path.startsWith('/admin') ? 'prompts' : ''))
 
 const parseErrorMessage = (err: any) => {
   if (err?.response?.data?.detail) return err.response.data.detail
@@ -245,6 +259,12 @@ const handleLogout = async () => {
   }
 }
 
+const handleNavClick = (item: (typeof navItems)[number]) => {
+  if (item.path && route.path !== item.path) {
+    router.push(item.path)
+  }
+}
+
 const bootstrap = async () => {
   const token = adminToken.get()
   if (!token) return
@@ -288,10 +308,8 @@ onBeforeUnmount(() => {
       <div class="p-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div class="space-y-2">
           <p class="text-xs uppercase tracking-[0.25em] text-slate-300">Raven Admin</p>
-          <h1 class="text-2xl font-semibold">Prompt 配置中心</h1>
-          <p class="text-sm text-slate-200">
-            针对 prompts_config.yaml 的实时更新，内置登录保护、冲突检测与强制保存
-          </p>
+          <h1 class="text-2xl font-semibold">管理后台</h1>
+          <p class="text-sm text-slate-200">受保护的后台入口，请先登录以管理配置</p>
         </div>
         <div class="flex items-center gap-3">
           <span
@@ -310,7 +328,10 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <div class="px-6 pb-6 grid gap-3 md:grid-cols-3 text-sm text-slate-200">
+      <div
+        v-if="isAuthenticated"
+        class="px-6 pb-6 grid gap-3 md:grid-cols-3 text-sm text-slate-200"
+      >
         <div class="flex items-center gap-2">
           <span class="text-slate-400">当前文件</span>
           <span class="font-mono text-xs bg-white/10 px-2 py-1 rounded">
@@ -337,14 +358,14 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <section v-if="!isAuthenticated" class="grid gap-6 md:grid-cols-3">
-      <div class="md:col-span-2 bg-white rounded-xl shadow-sm border border-slate-100 p-6">
+    <section v-if="!isAuthenticated" class="max-w-3xl">
+      <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-6">
         <div class="flex items-center justify-between mb-4">
           <div>
             <h2 class="text-lg font-semibold text-slate-900">登录后台</h2>
-            <p class="text-sm text-slate-500">内部使用，用户名密码在 app/admin_auth.yaml 配置</p>
+            <p class="text-sm text-slate-500">请输入管理员凭证继续</p>
           </div>
-          <span class="text-xs text-slate-500">文件：app/prompts/prompts_config.yaml</span>
+          <span class="text-xs text-slate-500">内部安全访问</span>
         </div>
         <div class="grid gap-4 md:grid-cols-2">
           <div class="space-y-4">
@@ -377,212 +398,250 @@ onBeforeUnmount(() => {
                 {{ isLoggingIn ? '登录中…' : '登录' }}
               </button>
               <p class="text-xs text-slate-500">
-                默认账户可从 app/admin_auth.yaml 查看，建议登录后立即更改
+                凭证在 admin_auth.yaml 配置，建议登录后立即更改
               </p>
             </div>
           </div>
           <div class="bg-slate-50 rounded-lg p-4 space-y-3 text-sm text-slate-700">
             <div class="flex items-center gap-2">
               <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
-              <span>只读加载 prompts_config.yaml</span>
+              <span>仅限内部管理访问，凭证按需分发</span>
             </div>
             <div class="flex items-center gap-2">
               <span class="h-2 w-2 rounded-full bg-cyan-400"></span>
-              <span>保存前先做 YAML 语法校验和冲突检测</span>
+              <span>登录后可进行配置维护，未登录状态不会读取数据</span>
             </div>
             <div class="flex items-center gap-2">
               <span class="h-2 w-2 rounded-full bg-amber-400"></span>
-              <span>支持强制保存覆盖磁盘版本</span>
+              <span>会话基于 Bearer Token，关闭标签后自动清除</span>
             </div>
-            <div class="rounded-lg border border-dashed border-slate-200 p-3 text-xs text-slate-500 leading-5">
-              提示：token 默认保存在 sessionStorage，关闭标签页后自动清除。若想禁用账号，
-              可在 admin_auth.yaml 中将用户的 <code>disabled</code> 设为 true。
+            <div
+              class="rounded-lg border border-dashed border-slate-200 p-3 text-xs text-slate-500 leading-5"
+            >
+              提示：token 默认保存在 sessionStorage，退出或关闭标签页后会被清理。可在
+              admin_auth.yaml 中禁用或调整账号。
             </div>
           </div>
         </div>
-      </div>
-      <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-5 space-y-3">
-        <h3 class="text-base font-semibold text-slate-900">设计原则</h3>
-        <ul class="list-disc pl-5 space-y-2 text-sm text-slate-700">
-          <li>独立 URL（/admin/prompts），不在主导航暴露入口</li>
-          <li>会话基于 Bearer Token，磁盘密码配置化</li>
-          <li>保存采用乐观锁校验，避免覆盖他人改动</li>
-          <li>支持强制保存，确保紧急调整可落盘</li>
-        </ul>
       </div>
     </section>
 
-    <section v-else class="grid gap-6 lg:grid-cols-3">
-      <div class="lg:col-span-2 space-y-4">
-        <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-4">
-          <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-3">
-            <div>
-              <h2 class="text-lg font-semibold text-slate-900">prompts_config.yaml</h2>
-              <p class="text-sm text-slate-500">
-                输入框内即为磁盘内容，保存后立即刷新 Agent 缓存；Ctrl/Cmd + S 可快速保存
-              </p>
-            </div>
-            <div class="flex items-center gap-2">
-              <button
-                class="px-3 py-2 text-sm rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50"
-                :disabled="loadingConfig"
-                @click="handleReload"
-              >
-                重新加载
-              </button>
-              <button
-                class="px-3 py-2 text-sm rounded-lg bg-cyan-600 text-white hover:bg-cyan-700 transition disabled:opacity-60"
-                :disabled="saving || !hasUnsavedChanges"
-                @click="handleSave"
-              >
-                {{ saving ? '保存中…' : '保存更改' }}
-              </button>
-              <button
-                v-if="conflict"
-                class="px-3 py-2 text-sm rounded-lg border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100"
-                :disabled="saving"
-                @click="handleSave(true)"
-              >
-                强制保存
-              </button>
-            </div>
-          </div>
-          <div class="rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
-            <textarea
-              v-model="configState.content"
-              class="w-full h-[520px] resize-none bg-white font-mono text-xs text-slate-800 p-4 focus:outline-none"
-              spellcheck="false"
-              :disabled="loadingConfig"
-            ></textarea>
-          </div>
-          <div class="flex items-center justify-between text-xs text-slate-500 mt-2">
-            <div class="flex items-center gap-3">
-              <span>长度：{{ configState.content.length }} 字符</span>
-              <span
-                :class="hasUnsavedChanges ? 'text-amber-600' : 'text-emerald-600'"
-              >{{ hasUnsavedChanges ? '有未保存的修改' : '已与磁盘同步' }}</span>
-              <span v-if="conflict" class="text-amber-700 font-semibold">
-                {{ conflictMessage || '文件在其他位置被更新' }}
-              </span>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="px-2 py-1 rounded bg-slate-100 border border-slate-200">
-                {{ readableUpdatedAt }}
-              </span>
-              <span class="px-2 py-1 rounded bg-slate-100 border border-slate-200">
-                校验和：{{ lastChecksum || configState.checksum }}
-              </span>
-            </div>
-          </div>
+    <section v-else class="grid gap-6 lg:grid-cols-[240px,1fr]">
+      <aside class="bg-white rounded-xl shadow-sm border border-slate-100 p-4 space-y-4">
+        <div>
+          <p class="text-xs uppercase tracking-[0.25em] text-slate-400">管理导航</p>
+          <h2 class="text-lg font-semibold text-slate-900">后台</h2>
         </div>
-
-        <div class="grid gap-4 md:grid-cols-2">
-          <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-4 space-y-3">
+        <nav class="space-y-2">
+          <button
+            v-for="item in navItems"
+            :key="item.key"
+            class="w-full text-left px-3 py-2 rounded-lg border transition"
+            :class="
+              activeNavKey === item.key
+                ? 'border-cyan-200 bg-cyan-50 text-cyan-800 shadow-[0_6px_30px_-16px_rgba(14,165,233,0.5)]'
+                : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+            "
+            @click="handleNavClick(item)"
+          >
             <div class="flex items-center justify-between">
-              <h3 class="text-base font-semibold text-slate-900">模板摘要</h3>
-              <span class="text-xs text-slate-500">
-                默认计划模板：{{ configState.summary?.has_default_plan ? '已配置' : '缺失' }} /
-                摘要模板：{{ configState.summary?.has_default_summary ? '已配置' : '缺失' }}
-              </span>
-            </div>
-            <div class="flex flex-wrap gap-2">
+              <span class="text-sm font-semibold">{{ item.label }}</span>
               <span
-                v-for="key in summaryBadges"
-                :key="key"
-                class="px-3 py-1 rounded-full bg-cyan-50 text-cyan-800 text-xs border border-cyan-100"
+                v-if="activeNavKey === item.key"
+                class="text-[11px] font-medium text-cyan-700"
               >
-                {{ key }}
-              </span>
-              <span v-if="!summaryBadges.length" class="text-sm text-slate-500">
-                暂无日志类型，保存后会实时解析摘要
+                当前
               </span>
             </div>
-            <p class="text-xs text-slate-500 leading-5">
-              修改后保存即可刷新 Agent 的缓存；如果新增日志类型，请确保包含 plan_prompt 与 summary_prompt 字段。
+            <p v-if="item.description" class="text-xs text-slate-500 mt-1">
+              {{ item.description }}
             </p>
-          </div>
-
-          <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-4 space-y-3">
-            <div class="flex items-center justify-between">
-              <h3 class="text-base font-semibold text-slate-900">变更与安全</h3>
-              <button class="text-xs text-cyan-700 hover:underline" @click="handleReload">
-                检查磁盘版本
-              </button>
-            </div>
-            <ul class="space-y-2 text-sm text-slate-700">
-              <li class="flex items-center gap-2">
-                <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
-                保存前会做 YAML 语法校验
-              </li>
-              <li class="flex items-center gap-2">
-                <span class="h-2 w-2 rounded-full bg-amber-500"></span>
-                检测到磁盘版本变化会提示强制保存
-              </li>
-              <li class="flex items-center gap-2">
-                <span class="h-2 w-2 rounded-full bg-slate-400"></span>
-                快捷键：Ctrl / Cmd + S 立即保存
-              </li>
-            </ul>
-            <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-              提示：强制保存会覆盖磁盘版本，请确认无并发编辑后再使用。保存完成后 Agent 立即读取新模板，无需重启。
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="space-y-4">
-        <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-4 space-y-3">
+          </button>
+        </nav>
+        <div class="pt-3 border-t border-slate-100">
           <div class="flex items-center justify-between">
-            <h3 class="text-base font-semibold text-slate-900">文件信息</h3>
-            <button class="text-xs text-slate-500 hover:text-slate-700" @click="handleLogout">
+            <span class="text-xs text-slate-500">{{ statusLabel }}</span>
+            <button class="text-xs text-slate-600 hover:text-slate-900" @click="handleLogout">
               退出
             </button>
           </div>
-          <div class="space-y-2 text-sm text-slate-700">
-            <div class="flex justify-between">
-              <span class="text-slate-500">路径</span>
-              <span class="font-mono text-xs text-slate-800">{{ configState.path }}</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-slate-500">大小</span>
-              <span>{{ formatBytes(configState.size) }}</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-slate-500">最近更新</span>
-              <span>{{ readableUpdatedAt }}</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-slate-500">校验和</span>
-              <span class="font-mono text-[11px] text-slate-600 break-all">
-                {{ configState.checksum }}
-              </span>
-            </div>
-          </div>
-          <div class="flex gap-2">
-            <button
-              class="flex-1 px-3 py-2 rounded-lg text-sm border border-slate-200 hover:bg-slate-50"
-              @click="handleReload"
-            >
-              从磁盘刷新
-            </button>
-            <button
-              class="flex-1 px-3 py-2 rounded-lg text-sm border border-slate-200 text-amber-700 bg-amber-50 hover:bg-amber-100"
-              :disabled="saving"
-              @click="handleSave(true)"
-            >
-              覆盖保存
-            </button>
-          </div>
         </div>
+      </aside>
 
-        <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-4 space-y-3">
-          <h3 class="text-base font-semibold text-slate-900">使用提示</h3>
-          <ul class="list-disc pl-5 space-y-2 text-sm text-slate-700">
-            <li>建议先复制一份内容备份再修改</li>
-            <li>保持 YAML 缩进，避免混用 Tab</li>
-            <li>新增日志类型时，务必提供描述与变量列表</li>
-            <li>完成后可在日志分析 Agent 直接验证新模板</li>
-          </ul>
+      <div class="space-y-6">
+        <div class="grid gap-6 lg:grid-cols-3">
+          <div class="lg:col-span-2 space-y-4">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-4">
+              <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-3">
+                <div>
+                  <h2 class="text-lg font-semibold text-slate-900">prompts_config.yaml</h2>
+                  <p class="text-sm text-slate-500">
+                    输入框内即为磁盘内容，保存后立即刷新 Agent 缓存；Ctrl/Cmd + S 可快速保存
+                  </p>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button
+                    class="px-3 py-2 text-sm rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50"
+                    :disabled="loadingConfig"
+                    @click="handleReload"
+                  >
+                    重新加载
+                  </button>
+                  <button
+                    class="px-3 py-2 text-sm rounded-lg bg-cyan-600 text-white hover:bg-cyan-700 transition disabled:opacity-60"
+                    :disabled="saving || !hasUnsavedChanges"
+                    @click="handleSave"
+                  >
+                    {{ saving ? '保存中…' : '保存更改' }}
+                  </button>
+                  <button
+                    v-if="conflict"
+                    class="px-3 py-2 text-sm rounded-lg border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100"
+                    :disabled="saving"
+                    @click="handleSave(true)"
+                  >
+                    强制保存
+                  </button>
+                </div>
+              </div>
+              <div class="rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
+                <textarea
+                  v-model="configState.content"
+                  class="w-full h-[520px] resize-none bg-white font-mono text-xs text-slate-800 p-4 focus:outline-none"
+                  spellcheck="false"
+                  :disabled="loadingConfig"
+                ></textarea>
+              </div>
+              <div class="flex items-center justify-between text-xs text-slate-500 mt-2">
+                <div class="flex items-center gap-3">
+                  <span>长度：{{ configState.content.length }} 字符</span>
+                  <span
+                    :class="hasUnsavedChanges ? 'text-amber-600' : 'text-emerald-600'"
+                  >{{ hasUnsavedChanges ? '有未保存的修改' : '已与磁盘同步' }}</span>
+                  <span v-if="conflict" class="text-amber-700 font-semibold">
+                    {{ conflictMessage || '文件在其他位置被更新' }}
+                  </span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="px-2 py-1 rounded bg-slate-100 border border-slate-200">
+                    {{ readableUpdatedAt }}
+                  </span>
+                  <span class="px-2 py-1 rounded bg-slate-100 border border-slate-200">
+                    校验和：{{ lastChecksum || configState.checksum }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid gap-4 md:grid-cols-2">
+              <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-4 space-y-3">
+                <div class="flex items-center justify-between">
+                  <h3 class="text-base font-semibold text-slate-900">模板摘要</h3>
+                  <span class="text-xs text-slate-500">
+                    默认计划模板：{{ configState.summary?.has_default_plan ? '已配置' : '缺失' }} /
+                    摘要模板：{{ configState.summary?.has_default_summary ? '已配置' : '缺失' }}
+                  </span>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <span
+                    v-for="key in summaryBadges"
+                    :key="key"
+                    class="px-3 py-1 rounded-full bg-cyan-50 text-cyan-800 text-xs border border-cyan-100"
+                  >
+                    {{ key }}
+                  </span>
+                  <span v-if="!summaryBadges.length" class="text-sm text-slate-500">
+                    暂无日志类型，保存后会实时解析摘要
+                  </span>
+                </div>
+                <p class="text-xs text-slate-500 leading-5">
+                  修改后保存即可刷新 Agent 的缓存；如果新增日志类型，请确保包含 plan_prompt 与 summary_prompt 字段。
+                </p>
+              </div>
+
+              <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-4 space-y-3">
+                <div class="flex items-center justify-between">
+                  <h3 class="text-base font-semibold text-slate-900">变更与安全</h3>
+                  <button class="text-xs text-cyan-700 hover:underline" @click="handleReload">
+                    检查磁盘版本
+                  </button>
+                </div>
+                <ul class="space-y-2 text-sm text-slate-700">
+                  <li class="flex items-center gap-2">
+                    <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+                    保存前会做 YAML 语法校验
+                  </li>
+                  <li class="flex items-center gap-2">
+                    <span class="h-2 w-2 rounded-full bg-amber-500"></span>
+                    检测到磁盘版本变化会提示强制保存
+                  </li>
+                  <li class="flex items-center gap-2">
+                    <span class="h-2 w-2 rounded-full bg-slate-400"></span>
+                    快捷键：Ctrl / Cmd + S 立即保存
+                  </li>
+                </ul>
+                <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                  提示：强制保存会覆盖磁盘版本，请确认无并发编辑后再使用。保存完成后 Agent 立即读取新模板，无需重启。
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="space-y-4">
+            <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-4 space-y-3">
+              <div class="flex items-center justify-between">
+                <h3 class="text-base font-semibold text-slate-900">文件信息</h3>
+                <button class="text-xs text-slate-500 hover:text-slate-700" @click="handleLogout">
+                  退出
+                </button>
+              </div>
+              <div class="space-y-2 text-sm text-slate-700">
+                <div class="flex justify-between">
+                  <span class="text-slate-500">路径</span>
+                  <span class="font-mono text-xs text-slate-800">{{ configState.path }}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-slate-500">大小</span>
+                  <span>{{ formatBytes(configState.size) }}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-slate-500">最近更新</span>
+                  <span>{{ readableUpdatedAt }}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-slate-500">校验和</span>
+                  <span class="font-mono text-[11px] text-slate-600 break-all">
+                    {{ configState.checksum }}
+                  </span>
+                </div>
+              </div>
+              <div class="flex gap-2">
+                <button
+                  class="flex-1 px-3 py-2 rounded-lg text-sm border border-slate-200 hover:bg-slate-50"
+                  @click="handleReload"
+                >
+                  从磁盘刷新
+                </button>
+                <button
+                  class="flex-1 px-3 py-2 rounded-lg text-sm border border-slate-200 text-amber-700 bg-amber-50 hover:bg-amber-100"
+                  :disabled="saving"
+                  @click="handleSave(true)"
+                >
+                  覆盖保存
+                </button>
+              </div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-slate-100 p-4 space-y-3">
+              <h3 class="text-base font-semibold text-slate-900">使用提示</h3>
+              <ul class="list-disc pl-5 space-y-2 text-sm text-slate-700">
+                <li>建议先复制一份内容备份再修改</li>
+                <li>保持 YAML 缩进，避免混用 Tab</li>
+                <li>新增日志类型时，务必提供描述与变量列表</li>
+                <li>完成后可在日志分析 Agent 直接验证新模板</li>
+              </ul>
+            </div>
+          </div>
         </div>
       </div>
     </section>

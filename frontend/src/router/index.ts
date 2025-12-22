@@ -80,11 +80,19 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/admin',
+    name: 'AdminHome',
+    component: () => import('../views/AdminPrompts.vue'),
+    meta: {
+      title: '后台管理',
+    },
+  },
+  {
     path: '/admin/prompts',
     name: 'AdminPrompts',
     component: () => import('../views/AdminPrompts.vue'),
     meta: {
-      title: 'Prompt 配置管理',
+      title: '后台管理',
     },
   },
   {
