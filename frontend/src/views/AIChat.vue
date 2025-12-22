@@ -16,8 +16,21 @@ import {
   X
 } from 'lucide-vue-next'
 import { deviceLinkApi } from '@/api/deviceLink'
-import type { DeviceInfo } from '@/types'
+import { intelligentSearchPackages, ravenBaseUrl } from '@/api/raven'
+import type { DeviceInfo, RavenPackage, RavenSearchResult } from '@/types'
 import { renderMarkdown } from '@/utils/markdownRenderer'
+
+type MentionOption =
+  | { type: 'agent'; id: string; name: string; description?: string; agentType: 'package-manager' }
+  | { type: 'device'; id: string; name: string; status: DeviceInfo['status']; device: DeviceInfo }
+
+const packageAgentOption: MentionOption = {
+  type: 'agent',
+  id: 'package-manager',
+  name: '重构包配置管理员',
+  agentType: 'package-manager',
+  description: '调用重构包智能搜索，返回详情、下载链接与重构提示词'
+}
 
 const sidebarOpen = ref(true)
 const inputMessage = ref('')
@@ -36,6 +49,7 @@ const mentionSelectedIndex = ref(0)
 const mentionStart = ref<number | null>(null)
 const targetDeviceId = ref<string | null>(null)
 const targetDeviceName = ref<string | null>(null)
+const targetAgent = ref<{ id: string; name: string; agentType: 'package-manager' } | null>(null)
 
 // Handle click outside to close menu
 const handleClickOutside = (event: MouseEvent) => {
@@ -116,23 +130,35 @@ const fetchDevices = async () => {
   }
 }
 
-const filteredDevices = computed(() => {
+const mentionOptions = computed<MentionOption[]>(() => {
+  const deviceOptions: MentionOption[] = devices.value
+    .slice()
+    .sort((a, b) => {
+      if (a.status === b.status) return 0
+      return a.status === 'online' ? -1 : 1
+    })
+    .map((device) => ({
+      type: 'device',
+      id: device.id,
+      name: device.name || device.id,
+      status: device.status,
+      device,
+    }))
+
+  return [packageAgentOption, ...deviceOptions]
+})
+
+const filteredMentionOptions = computed(() => {
   const keyword = mentionKeyword.value.trim().toLowerCase()
-  const list = devices.value.slice().sort((a, b) => {
-    if (a.status === b.status) return 0
-    return a.status === 'online' ? -1 : 1
-  })
+  const list = mentionOptions.value
   if (!keyword) return list
-  return list.filter(device => {
-    const name = device.name || ''
-    return (
-      name.toLowerCase().includes(keyword) ||
-      device.id.toLowerCase().includes(keyword)
-    )
+  return list.filter((option) => {
+    const text = `${option.name} ${option.id}`.toLowerCase()
+    return text.includes(keyword)
   })
 })
 
-watch(filteredDevices, (list) => {
+watch(filteredMentionOptions, (list) => {
   if (mentionSelectedIndex.value >= list.length) {
     mentionSelectedIndex.value = 0
   }
@@ -140,6 +166,9 @@ watch(filteredDevices, (list) => {
 
 const deviceStatusDotClass = (status: DeviceInfo['status']) =>
   status === 'online' ? 'bg-green-500' : 'bg-gray-300'
+
+const targetAgentName = computed(() => targetAgent.value?.name || null)
+const isPackageAgentSelected = computed(() => targetAgent.value?.agentType === 'package-manager')
 
 const resetMentionState = () => {
   mentionVisible.value = false
@@ -152,6 +181,66 @@ const renderAiMessage = (content: string) =>
   renderMarkdown(content || '', {
     wrapperClass: 'markdown-content text-gray-900'
   })
+
+const packageTypeText = (type?: string) => {
+  const map: Record<string, string> = {
+    'lingxi-10': 'LingXi-10',
+    'lingxi-07a': 'LingXi-07A',
+    'ka-tx': 'KaTx',
+    'ka-rx': 'KaRx',
+    config: '配置包',
+    'lingxi-06-thrid': 'LingXi-06-TRD',
+  }
+  return map[type || ''] || type || '未知类型'
+}
+
+const buildRebuildPrompt = (downloadLink: string) =>
+  `请你帮忙下载${downloadLink}并上传到设备ftp，然后请向基带处理机发送重构包下载请求后，启动卫星升级流程`
+
+const buildPackageLinks = (pkg: RavenPackage) => {
+  const detailLink = `${ravenBaseUrl}/package/${encodeURIComponent(pkg.id)}`
+  const downloadLink = `${ravenBaseUrl}/api/download/${encodeURIComponent(pkg.id)}`
+  return {
+    detailLink,
+    downloadLink,
+    prompt: buildRebuildPrompt(downloadLink),
+  }
+}
+
+const formatPackageAgentAnswer = (result: RavenSearchResult, rawQuery: string) => {
+  const query = rawQuery.trim() || '（未提供查询）'
+  const packages = result.relevantPackages || []
+  const lines: string[] = [
+    `**重构包配置管理员** 已为你执行智能搜索：\`${query}\``
+  ]
+
+  if (result.answer) {
+    lines.push('', result.answer)
+  }
+
+  if (packages.length) {
+    lines.push('', `匹配的重构包（${packages.length} 个）：`)
+    packages.forEach((pkg, index) => {
+      const links = buildPackageLinks(pkg)
+      lines.push(
+        `${index + 1}. **${pkg.name || pkg.id}** （${packageTypeText(pkg.packageType)} · v${pkg.version || '未知'}）`
+      )
+      if (pkg.metadata?.description) {
+        lines.push(`   - 描述：${pkg.metadata.description}`)
+      }
+      lines.push(
+        `   - 详情链接：[${links.detailLink}](${links.detailLink})`,
+        `   - 下载链接：[${links.downloadLink}](${links.downloadLink})`,
+        '   - 重构提示词：',
+        `     \`${links.prompt}\``
+      )
+    })
+  } else {
+    lines.push('', '未找到匹配的重构包。')
+  }
+
+  return lines.join('\n')
+}
 
 const updateMentionState = (event?: Event) => {
   const value = inputMessage.value
@@ -173,9 +262,20 @@ const updateMentionState = (event?: Event) => {
   mentionStart.value = lastAt
 }
 
-const applyDeviceSelection = (device: DeviceInfo) => {
-  targetDeviceId.value = device.id
-  targetDeviceName.value = device.name || device.id
+const applyMentionSelection = (option: MentionOption) => {
+  if (option.type === 'device') {
+    targetDeviceId.value = option.id
+    targetDeviceName.value = option.name
+    targetAgent.value = null
+  } else {
+    targetAgent.value = {
+      id: option.id,
+      name: option.name,
+      agentType: option.agentType
+    }
+    targetDeviceId.value = null
+    targetDeviceName.value = null
+  }
 
   // Replace the mention keyword with the selected device name for clarity
   const value = inputMessage.value
@@ -183,14 +283,14 @@ const applyDeviceSelection = (device: DeviceInfo) => {
   if (mentionStart.value !== null) {
     const before = value.slice(0, mentionStart.value)
     const after = value.slice(cursor)
-    const insertion = `@${targetDeviceName.value} `
+    const insertion = `@${option.name} `
     inputMessage.value = `${before}${insertion}${after}`
     nextTick(() => {
       const pos = before.length + insertion.length
       textareaRef.value?.setSelectionRange(pos, pos)
     })
   } else {
-    const insertion = `@${targetDeviceName.value} `
+    const insertion = `@${option.name} `
     inputMessage.value = value ? `${value} ${insertion}` : insertion
   }
 
@@ -200,6 +300,10 @@ const applyDeviceSelection = (device: DeviceInfo) => {
 const clearTargetDevice = () => {
   targetDeviceId.value = null
   targetDeviceName.value = null
+}
+
+const clearTargetAgent = () => {
+  targetAgent.value = null
 }
 
 const applyStreamEvent = (payload: any, messageIndex: number) => {
@@ -258,23 +362,23 @@ const processSseBuffer = (buffer: string, messageIndex: number) => {
 }
 
 const handleKeydown = (event: KeyboardEvent) => {
-  if (mentionVisible.value && filteredDevices.value.length > 0) {
+  if (mentionVisible.value && filteredMentionOptions.value.length > 0) {
     if (event.key === 'ArrowDown') {
       event.preventDefault()
       mentionSelectedIndex.value =
-        (mentionSelectedIndex.value + 1) % filteredDevices.value.length
+        (mentionSelectedIndex.value + 1) % filteredMentionOptions.value.length
       return
     }
     if (event.key === 'ArrowUp') {
       event.preventDefault()
       mentionSelectedIndex.value =
-        (mentionSelectedIndex.value - 1 + filteredDevices.value.length) % filteredDevices.value.length
+        (mentionSelectedIndex.value - 1 + filteredMentionOptions.value.length) % filteredMentionOptions.value.length
       return
     }
     if (event.key === 'Enter' || event.key === 'Tab') {
       event.preventDefault()
-      const device = filteredDevices.value[mentionSelectedIndex.value]
-      if (device) applyDeviceSelection(device)
+      const option = filteredMentionOptions.value[mentionSelectedIndex.value]
+      if (option) applyMentionSelection(option)
       return
     }
   }
@@ -294,10 +398,46 @@ const handleInput = (event: Event) => {
   updateMentionState(event)
 }
 
+const extractPackageQuery = (content: string) =>
+  content.replace(/@重构包配置管理员/g, '').trim()
+
+const runPackageAgent = async (content: string, aiMessageIndex: number) => {
+  const query = extractPackageQuery(content)
+  if (!query) {
+    chatHistory.value[aiMessageIndex].content = '请描述需要查找的重构包需求，例如型号、版本或用途。'
+    return
+  }
+
+  try {
+    const { data } = await intelligentSearchPackages(query, 6)
+    if (!data?.success || !data.data) {
+      throw new Error(data?.message || '智能搜索失败')
+    }
+    chatHistory.value[aiMessageIndex].content = formatPackageAgentAnswer(data.data, query)
+  } catch (error: any) {
+    console.error('重构包配置管理员调用失败', error)
+    chatHistory.value[aiMessageIndex].content = `重构包配置管理员调用失败：${error?.message || String(error)}`
+  }
+}
+
 const sendMessage = async () => {
   if (isSending.value) return
   const content = inputMessage.value.trim()
   if (!content) return
+
+  const shouldUsePackageAgent =
+    isPackageAgentSelected.value || content.includes(`@${packageAgentOption.name}`)
+
+  // 如果用户手动输入了 @重构包配置管理员，则自动选中该助手并清空设备目标
+  if (shouldUsePackageAgent && !isPackageAgentSelected.value) {
+    targetAgent.value = {
+      id: packageAgentOption.id,
+      name: packageAgentOption.name,
+      agentType: packageAgentOption.agentType,
+    }
+    targetDeviceId.value = null
+    targetDeviceName.value = null
+  }
 
   // 记录用户消息
   const userMessage = {
@@ -326,6 +466,11 @@ const sendMessage = async () => {
   isSending.value = true
 
   try {
+    if (shouldUsePackageAgent) {
+      await runPackageAgent(content, aiMessageIndex)
+      return
+    }
+
     const payload = {
       message: content,
       session_id: sessionId.value || undefined,
@@ -513,23 +658,39 @@ const sendMessage = async () => {
             <span class="text-xl font-medium bg-gradient-to-r from-blue-400 via-purple-400 to-red-400 bg-clip-text text-transparent">Raven AI</span>
           </div>
           <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#F0F4F9] text-xs text-gray-700">
-            <span class="font-medium text-gray-800">目标设备</span>
-            <span
-              v-if="targetDeviceName"
-              class="px-2 py-0.5 rounded-full bg-white border border-gray-200 text-gray-900 font-semibold"
-            >
-              {{ targetDeviceName }}
-            </span>
+            <span class="font-medium text-gray-800">当前目标</span>
+            <template v-if="targetAgentName">
+              <span
+                class="px-2 py-0.5 rounded-full bg-white border border-blue-200 text-blue-700 font-semibold flex items-center gap-1"
+              >
+                <Box class="w-3.5 h-3.5" />
+                {{ targetAgentName }}
+              </span>
+              <button
+                class="p-1 rounded-full hover:bg-gray-200 text-gray-500"
+                @click="clearTargetAgent"
+                title="清除已选助手"
+                type="button"
+              >
+                <X class="w-3.5 h-3.5" />
+              </button>
+            </template>
+            <template v-else-if="targetDeviceName">
+              <span
+                class="px-2 py-0.5 rounded-full bg-white border border-gray-200 text-gray-900 font-semibold"
+              >
+                {{ targetDeviceName }}
+              </span>
+              <button
+                class="p-1 rounded-full hover:bg-gray-200 text-gray-500"
+                @click="clearTargetDevice"
+                title="清除已选设备"
+                type="button"
+              >
+                <X class="w-3.5 h-3.5" />
+              </button>
+            </template>
             <span v-else class="text-gray-500">未选择</span>
-            <button
-              v-if="targetDeviceName"
-              class="p-1 rounded-full hover:bg-gray-200 text-gray-500"
-              @click="clearTargetDevice"
-              title="清除已选设备"
-              type="button"
-            >
-              <X class="w-3.5 h-3.5" />
-            </button>
           </div>
         </div>
         <div class="flex items-center gap-4">
@@ -618,48 +779,69 @@ const sendMessage = async () => {
             class="absolute left-0 right-0 bottom-full mb-3 bg-white border border-gray-200 rounded-2xl shadow-xl overflow-hidden max-h-64 z-30"
           >
             <div class="px-4 py-3 text-sm text-gray-600 border-b border-gray-100 flex items-center justify-between">
-              <span>选择要发送指令的设备</span>
-              <span class="text-xs text-gray-400">输入 @ 或设备名进行过滤</span>
+              <span>选择目标（设备或重构包配置管理员）</span>
+              <span class="text-xs text-gray-400">输入 @ 或名称进行过滤</span>
             </div>
             <div v-if="isLoadingDevices" class="px-4 py-3 text-sm text-gray-500">设备列表加载中...</div>
-            <div v-else-if="!filteredDevices.length" class="px-4 py-3 text-sm text-gray-500">暂无匹配的设备</div>
+            <div v-if="!filteredMentionOptions.length" class="px-4 py-3 text-sm text-gray-500">暂无匹配的目标</div>
             <template v-else>
               <button
-                v-for="(device, idx) in filteredDevices"
-                :key="device.id"
+                v-for="(option, idx) in filteredMentionOptions"
+                :key="`${option.type}-${option.id}`"
                 type="button"
                 class="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors"
                 :class="{ 'bg-gray-100': idx === mentionSelectedIndex }"
-                @mousedown.prevent="applyDeviceSelection(device)"
+                @mousedown.prevent="applyMentionSelection(option)"
                 @mouseenter="mentionSelectedIndex = idx"
               >
-                <span
-                  class="w-2 h-2 rounded-full"
-                  :class="deviceStatusDotClass(device.status)"
-                ></span>
-                <div class="flex-1 min-w-0">
-                  <div class="flex items-center gap-2">
-                    <span class="font-medium text-gray-900 truncate">{{ device.name || device.id }}</span>
-                    <span class="text-[11px] text-gray-500 uppercase">{{ device.status === 'online' ? '在线' : '离线' }}</span>
+                <template v-if="option.type === 'device'">
+                  <span
+                    class="w-2 h-2 rounded-full"
+                    :class="deviceStatusDotClass(option.status)"
+                  ></span>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span class="font-medium text-gray-900 truncate">{{ option.name }}</span>
+                      <span class="text-[11px] text-gray-500 uppercase">{{ option.status === 'online' ? '在线' : '离线' }}</span>
+                    </div>
+                    <div class="text-xs text-gray-500 truncate">ID: {{ option.id }}</div>
                   </div>
-                  <div class="text-xs text-gray-500 truncate">ID: {{ device.id }}</div>
-                </div>
-                <div v-if="device.models?.length" class="text-[11px] text-gray-500 truncate max-w-[120px] text-right">
-                  {{ device.models.slice(0, 2).join(', ') }}<span v-if="device.models.length > 2"> ...</span>
-                </div>
+                  <div v-if="option.device.models?.length" class="text-[11px] text-gray-500 truncate max-w-[120px] text-right">
+                    {{ option.device.models.slice(0, 2).join(', ') }}<span v-if="option.device.models.length > 2"> ...</span>
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center">
+                    <Box class="w-4 h-4" />
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <div class="font-medium text-gray-900">{{ option.name }}</div>
+                    <div class="text-xs text-gray-500 truncate">
+                      {{ option.description || '智能搜索重构包，返回详情、下载与提示词' }}
+                    </div>
+                  </div>
+                </template>
               </button>
             </template>
           </div>
           <div
-            v-if="targetDeviceName"
+            v-if="targetDeviceName || targetAgentName"
             class="flex items-center gap-2 mb-2 px-3 py-2 rounded-2xl bg-white border border-gray-200 text-sm text-gray-700"
           >
             <span class="text-gray-500">当前目标</span>
-            <span class="font-semibold text-gray-900">{{ targetDeviceName }}</span>
+            <span class="font-semibold text-gray-900 flex items-center gap-1">
+              <template v-if="targetAgentName">
+                <Box class="w-4 h-4 text-blue-600" />
+                {{ targetAgentName }}
+              </template>
+              <template v-else>
+                {{ targetDeviceName }}
+              </template>
+            </span>
             <button
               class="ml-auto p-1 rounded-full hover:bg-gray-100 text-gray-500"
               type="button"
-              @click="clearTargetDevice"
+              @click="targetAgentName ? clearTargetAgent() : clearTargetDevice()"
             >
               <X class="w-4 h-4" />
             </button>
@@ -694,7 +876,7 @@ const sendMessage = async () => {
           </div>
         </div>
         <div class="text-center text-xs text-gray-500 mt-2">
-          Raven AI 可能会犯错。请核对重要信息 · 输入 @ 选择要连接的设备。
+          Raven AI 可能会犯错。请核对重要信息 · 输入 @ 选择设备或重构包配置管理员。
         </div>
       </div>
     </div>
