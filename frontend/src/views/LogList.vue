@@ -188,11 +188,11 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="status" label="解压状态" min-width="160" resizable>
+        <el-table-column prop="status" label="状态" min-width="160" resizable>
           <template #default="{ row }">
             <div class="status-tags">
               <el-tag :type="getStatusColor(row.status)" size="small">
-                {{ getStatusText(row.status) }}
+                {{ getStatusDisplayText(row) }}
               </el-tag>
               <el-tag
                 v-if="isAIAnalysisCompleted(row)"
@@ -201,6 +201,14 @@
                 size="small"
               >
                 AI已分析
+              </el-tag>
+              <el-tag
+                v-if="hasManualAnalysis(row)"
+                type="info"
+                effect="plain"
+                size="small"
+              >
+                人工已分析
               </el-tag>
             </div>
           </template>
@@ -728,6 +736,16 @@ const isAIAnalysisCompleted = (log: LogRecord) => {
   if (status === 'completed' || status === 'succeeded') return true
   if (log.ai_analysis_result && status !== 'failed') return true
   return false
+}
+
+const getStatusDisplayText = (log: LogRecord) => {
+  const isDecompressedLog = (log.log_type === 'stack' || log.log_type === 'full') && log.status === 'completed'
+  if (isDecompressedLog) return '已解压'
+  return getStatusText(log.status)
+}
+
+const hasManualAnalysis = (log: LogRecord) => {
+  return Boolean(log.manual_analysis && log.manual_analysis.trim())
 }
 </script>
 
