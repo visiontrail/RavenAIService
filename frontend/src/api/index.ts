@@ -135,6 +135,11 @@ export const logApi = {
   getAIAnalysisStatus: (id: string): Promise<ApiResponse<any>> => {
     return api.get(`/api/v1/logs/${id}/analysis/status`)
   },
+
+  // 保存人工分析
+  saveManualAnalysis: (id: string, content: string): Promise<ApiResponse<any>> => {
+    return api.post(`/api/v1/logs/${id}/manual-analysis`, { content })
+  },
 }
 
 // 任务相关API

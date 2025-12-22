@@ -346,6 +346,49 @@ class LogService(BaseCRUDService[LogRecord]):
         metadata = LogMetadata(**metadata_dict) if metadata_dict else LogMetadata()
         return await self._db_to_pydantic(log_record, metadata)
 
+    async def save_manual_analysis(
+        self,
+        db: AsyncSession,
+        log_id: str,
+        content: str
+    ) -> LogFileInfo:
+        """
+        保存人工分析结果到日志元数据中
+        """
+        log_record = await self.get_by_id(db, log_id)
+
+        if not log_record or log_record.is_deleted:
+            raise FileNotFoundError(file_id=log_id)
+
+        metadata_dict: Dict[str, Any] = {}
+        try:
+            if log_record.metadata_json:
+                metadata_dict = json.loads(log_record.metadata_json) or {}
+        except Exception:
+            metadata_dict = {}
+
+        if not isinstance(metadata_dict, dict):
+            metadata_dict = {}
+
+        extra_fields = metadata_dict.get("extra_fields")
+        if not isinstance(extra_fields, dict):
+            extra_fields = {}
+
+        extra_fields["manual_analysis"] = {
+            "content": content,
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        metadata_dict["extra_fields"] = extra_fields
+        log_record.metadata_json = json.dumps(metadata_dict, ensure_ascii=False, default=str)
+        log_record.updated_at = datetime.utcnow()
+
+        db.add(log_record)
+        await db.commit()
+        await db.refresh(log_record)
+
+        metadata = LogMetadata(**metadata_dict) if metadata_dict else LogMetadata()
+        return await self._db_to_pydantic(log_record, metadata)
+
     async def update_ai_analysis_task(
         self,
         db: AsyncSession,
@@ -1011,12 +1054,25 @@ class LogService(BaseCRUDService[LogRecord]):
         """将数据库记录转换为Pydantic模型"""
         ai_analysis_result = None
         ai_analysis_task: Dict[str, Any] = {}
+        manual_analysis_content: Optional[str] = None
+        manual_analysis_updated_at: Optional[datetime] = None
         try:
             if metadata and metadata.extra_fields:
                 ai_analysis_result = metadata.extra_fields.get("ai_analysis_result")
                 raw_task = metadata.extra_fields.get("ai_analysis_task")
                 if isinstance(raw_task, dict):
                     ai_analysis_task = raw_task
+                manual_analysis = metadata.extra_fields.get("manual_analysis")
+                if isinstance(manual_analysis, dict):
+                    manual_analysis_content = manual_analysis.get("content") or manual_analysis.get("text")
+                    updated_at = manual_analysis.get("updated_at")
+                    if isinstance(updated_at, str):
+                        try:
+                            manual_analysis_updated_at = datetime.fromisoformat(updated_at)
+                        except Exception:
+                            manual_analysis_updated_at = None
+                elif isinstance(manual_analysis, str):
+                    manual_analysis_content = manual_analysis
         except Exception:
             ai_analysis_result = None
 
@@ -1025,7 +1081,7 @@ class LogService(BaseCRUDService[LogRecord]):
             if getattr(metadata_payload, "extra_fields", None) and isinstance(metadata_payload.extra_fields, dict):
                 metadata_payload.extra_fields = {
                     k: v for k, v in metadata_payload.extra_fields.items()
-                    if k != "ai_analysis_result"
+                    if k not in {"ai_analysis_result", "manual_analysis"}
                 }
         except Exception:
             pass
@@ -1057,6 +1113,8 @@ class LogService(BaseCRUDService[LogRecord]):
             ai_analysis_query=ai_analysis_task.get("query"),
             ai_analysis_started_at=ai_analysis_task.get("started_at"),
             ai_analysis_finished_at=ai_analysis_task.get("finished_at"),
+            manual_analysis=manual_analysis_content,
+            manual_analysis_updated_at=manual_analysis_updated_at,
         )
 
     async def _create_metadata_content(self, log_record: LogRecord) -> str:

@@ -254,6 +254,14 @@ class LogFileInfo(BaseModel):
         None,
         description="AI分析结束时间"
     )
+    manual_analysis: Optional[str] = Field(
+        None,
+        description="人工分析结果（Markdown文本）"
+    )
+    manual_analysis_updated_at: Optional[datetime] = Field(
+        None,
+        description="人工分析更新时间"
+    )
     
     @computed_field
     @property
@@ -282,6 +290,18 @@ class LogUploadRequest(BaseModel):
     metadata: Optional[LogMetadata] = Field(default_factory=LogMetadata, description="元数据")
     expires_in_days: Optional[int] = Field(None, ge=1, le=365, description="过期天数")
     issue_description: Optional[str] = Field(None, description="问题描述")
+
+
+class ManualAnalysisRequest(BaseModel):
+    """人工分析提交请求"""
+    content: str = Field(..., min_length=1, max_length=20000, description="人工分析内容（Markdown）")
+
+    @validator('content')
+    def validate_content(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("人工分析内容不能为空")
+        return cleaned
 
 
 class SortField(str, Enum):

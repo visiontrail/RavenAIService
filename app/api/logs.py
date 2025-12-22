@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path as FilePath
 from datetime import datetime
 from typing import List, Optional
-from fastapi import APIRouter, UploadFile, File, Form, Depends, Query, Path, Request
+from fastapi import APIRouter, UploadFile, File, Form, Depends, Query, Path, Request, Body
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +24,7 @@ from app.models.log import (
     LogUploadRequest, LogUploadResponse, LogListRequest, LogListResponse,
     LogDetailResponse, LogDeleteResponse, BatchDeleteRequest, BatchDeleteResponse,
     BatchDownloadRequest, BatchDownloadResponse, LogType, LogLevel, LogStatus,
-    LogMetadata, SortField, SortOrder
+    LogMetadata, SortField, SortOrder, ManualAnalysisRequest
 )
 from app.services.log_service import log_service
 from app.utils.validation import request_validator
@@ -1295,5 +1295,41 @@ async def get_ai_analysis_status(
         raise LogServiceException(
             message="查询AI分析状态失败",
             error_code="AI_ANALYSIS_STATUS_ERROR",
+            detail=str(e)
+        )
+
+
+@router.post("/{log_id}/manual-analysis")
+async def save_manual_analysis(
+    log_id: str = Path(..., description="日志文件ID"),
+    payload: ManualAnalysisRequest = Body(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    保存人工分析结果
+    """
+    try:
+        request_validator.validate_log_id(log_id)
+        result = await log_service.save_manual_analysis(db, log_id, payload.content)
+        return {
+            "success": True,
+            "message": "人工分析已保存",
+            "data": {
+                "log_id": log_id,
+                "manual_analysis": result.manual_analysis,
+                "manual_analysis_updated_at": result.manual_analysis_updated_at
+            }
+        }
+    except ValidationError as e:
+        logger.warning(f"Invalid log ID format for manual analysis: {log_id}")
+        raise e
+    except FileNotFoundError as e:
+        logger.warning(f"File not found for manual analysis: {log_id}")
+        raise e
+    except Exception as e:
+        logger.error(f"Failed to save manual analysis for {log_id}: {e}")
+        raise LogServiceException(
+            message="保存人工分析失败",
+            error_code="MANUAL_ANALYSIS_SAVE_ERROR",
             detail=str(e)
         )

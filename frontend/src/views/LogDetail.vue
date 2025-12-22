@@ -513,6 +513,32 @@
           />
         </div>
 
+        <!-- 人工分析结果展示 -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center space-x-2">
+              <el-icon class="text-amber-600" size="20">
+                <EditPen />
+              </el-icon>
+              <h2 class="text-lg font-semibold text-gray-900">人工分析</h2>
+            </div>
+            <div v-if="logStore.currentLog?.manual_analysis_updated_at" class="text-xs text-gray-500">
+              最近更新：{{ formatDateTime(logStore.currentLog.manual_analysis_updated_at) }}
+            </div>
+          </div>
+
+          <div 
+            v-if="logStore.currentLog?.manual_analysis" 
+            class="manual-analysis-body"
+            v-html="renderedManualAnalysis"
+          />
+          <el-empty v-else description="暂无人工分析内容">
+            <el-button type="primary" @click="openManualAnalysisDialog">
+              添加人工分析
+            </el-button>
+          </el-empty>
+        </div>
+
         <!-- 操作按钮组 -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
           <div class="flex items-center space-x-2 mb-6">
@@ -549,16 +575,16 @@
               删除文件
             </el-button>
 
-            <!-- 分享页面按钮 -->
+            <!-- 人工分析按钮 -->
             <el-button 
               type="success" 
-              @click="handleShare"
+              @click="openManualAnalysisDialog"
               class="w-full"
             >
               <el-icon class="mr-2">
-                <Share />
+                <EditPen />
               </el-icon>
-              分享页面
+              人工分析
             </el-button>
 
             <!-- 复制链接按钮 -->
@@ -590,6 +616,42 @@
         </el-result>
       </div>
     </main>
+
+    <!-- 人工分析录入弹窗 -->
+    <el-dialog
+      v-model="manualAnalysisDialogVisible"
+      title="录入人工分析"
+      width="720px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <el-form
+        ref="manualAnalysisFormRef"
+        :model="manualAnalysisForm"
+        :rules="manualAnalysisRules"
+        label-position="top"
+        class="space-y-3"
+      >
+        <el-form-item label="分析结果（支持Markdown）" prop="content">
+          <el-input
+            v-model="manualAnalysisForm.content"
+            type="textarea"
+            :autosize="{ minRows: 6, maxRows: 14 }"
+            maxlength="5000"
+            show-word-limit
+            placeholder="记录对日志的人工分析结论、影响范围与处理建议，支持Markdown格式。"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="manualAnalysisDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="manualAnalysisSaving" @click="handleSaveManualAnalysis">
+            保存
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -597,6 +659,7 @@
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
+import type { FormInstance } from 'element-plus'
 import { useLogStore } from '../stores/logs'
 import { 
   formatFileSize, 
@@ -606,6 +669,7 @@ import {
 import { logApi } from '../api'
 import AIAnalysisResult from '../components/AIAnalysisResult.vue'
 import { FormatAdapter } from '../utils/formatAdapter'
+import { renderMarkdown } from '../utils/markdownRenderer'
 import {
   ArrowLeft,
   Download,
@@ -614,7 +678,7 @@ import {
   List,
   InfoFilled,
   MagicStick,
-  Share,
+  EditPen,
   CopyDocument,
   Loading,
   Cpu,
@@ -640,6 +704,28 @@ const formatAdapter = FormatAdapter.getInstance()
 const downloadLoading = ref(false)
 const deleteLoading = ref(false)
 const activeVersionCollapse = ref(['version-details'])
+const manualAnalysisDialogVisible = ref(false)
+const manualAnalysisSaving = ref(false)
+const manualAnalysisFormRef = ref<FormInstance>()
+const manualAnalysisForm = ref({
+  content: ''
+})
+const manualAnalysisRules = {
+  content: [
+    { required: true, message: '请输入人工分析内容', trigger: 'blur' },
+    {
+      validator: (_rule: any, value: string, callback: (error?: Error) => void) => {
+        if (!value || !value.trim()) {
+          callback(new Error('请输入人工分析内容'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur'
+    },
+    { min: 5, message: '请至少输入5个字符', trigger: 'blur' }
+  ]
+}
 
 // AI分析相关状态
 const aiAnalysisQuery = ref('')
@@ -669,6 +755,12 @@ const pageTitle = computed(() => {
     return `${logStore.currentLog.filename} - 日志详情`
   }
   return '日志详情'
+})
+
+const renderedManualAnalysis = computed(() => {
+  const content = logStore.currentLog?.manual_analysis
+  if (!content) return ''
+  return renderMarkdown(content, { wrapperClass: 'markdown-content', cleanXml: true })
 })
 
 // 获取日志类型标签类型
@@ -915,28 +1007,43 @@ const handleDelete = async () => {
   }
 }
 
-// 分享页面
-const handleShare = async () => {
+// 打开人工分析弹窗
+const openManualAnalysisDialog = () => {
+  manualAnalysisForm.value.content = logStore.currentLog?.manual_analysis || ''
+  manualAnalysisDialogVisible.value = true
+}
+
+// 保存人工分析
+const handleSaveManualAnalysis = async () => {
   if (!logStore.currentLog) return
 
-  const shareData = {
-    title: `日志文件: ${logStore.currentLog.filename}`,
-    text: `查看日志文件详情 - ${logStore.currentLog.filename}\n文件大小: ${formatFileSize(logStore.currentLog.file_size)}\n状态: ${getStatusLabel(logStore.currentLog.status)}`,
-    url: window.location.href
+  const form = manualAnalysisFormRef.value
+  if (form) {
+    try {
+      await form.validate()
+    } catch {
+      return
+    }
   }
 
+  manualAnalysisSaving.value = true
   try {
-    if (navigator.share && navigator.canShare && navigator.canShare(shareData)) {
-      await navigator.share(shareData)
-      ElMessage.success('分享成功')
+    const content = manualAnalysisForm.value.content.trim()
+    const response = await logApi.saveManualAnalysis(logStore.currentLog.id, content)
+    if (response.success) {
+      logStore.currentLog.manual_analysis = content
+      logStore.currentLog.manual_analysis_updated_at =
+        response.data?.manual_analysis_updated_at || new Date().toISOString()
+      ElMessage.success('人工分析已保存')
+      manualAnalysisDialogVisible.value = false
     } else {
-      // 降级到复制链接
-      await handleCopyLink()
+      throw new Error(response.message || '保存失败')
     }
   } catch (error: any) {
-    if (error?.name !== 'AbortError') {
-      ElMessage.error('分享失败，请稍后重试')
-    }
+    console.error('保存人工分析失败:', error)
+    ElMessage.error(error.response?.data?.detail || error.message || '保存人工分析失败')
+  } finally {
+    manualAnalysisSaving.value = false
   }
 }
 
@@ -1344,6 +1451,9 @@ watch(
     aiAnalysisTaskId.value = logStore.currentLog?.ai_analysis_task_id || null
     aiAnalysisError.value = logStore.currentLog?.ai_analysis_error || null
     aiAnalysisLoading.value = false
+    manualAnalysisDialogVisible.value = false
+    manualAnalysisForm.value.content = logStore.currentLog?.manual_analysis || ''
+    manualAnalysisSaving.value = false
     stopAIAnalysisPolling()
     stopFakeProgress()
   }
