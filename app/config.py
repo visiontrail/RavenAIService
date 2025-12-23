@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     # 后台管理配置
     admin_auth_config_path: str = "app/admin_auth.yaml"
     admin_token_ttl_minutes: int = 120
+    user_token_ttl_minutes: int = 60 * 24 * 7
     
     # CORS配置
     cors_origins: List[str] = ["*"]

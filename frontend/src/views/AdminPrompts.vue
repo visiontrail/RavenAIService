@@ -16,6 +16,12 @@ const navItems = [
     path: '/admin/prompts',
     description: '编辑 prompts_config.yaml 并刷新缓存',
   },
+  {
+    key: 'users',
+    label: '用户管理',
+    path: '/admin/users',
+    description: '管理对话用户、重置密码',
+  },
 ]
 
 const emptySummary: PromptsSummary = {
@@ -109,7 +115,11 @@ const readableUpdatedAt = computed(() => {
 
 const summaryBadges = computed(() => configState.summary?.log_type_keys || [])
 
-const activeNavKey = computed(() => (route.path.startsWith('/admin') ? 'prompts' : ''))
+const activeNavKey = computed(() => {
+  if (route.path.startsWith('/admin/users')) return 'users'
+  if (route.path.startsWith('/admin')) return 'prompts'
+  return ''
+})
 
 const parseErrorMessage = (err: any) => {
   if (err?.response?.data?.detail) return err.response.data.detail

@@ -12,6 +12,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
 from app.models.database import Base, db_manager
+# 导入所有模型，确保在初始化时注册到元数据
+from app import models  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

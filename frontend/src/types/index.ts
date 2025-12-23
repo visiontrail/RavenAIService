@@ -198,3 +198,39 @@ export interface PromptsConfigData {
   checksum: string
   summary: PromptsSummary
 }
+
+// 用户与会话
+export interface UserProfile {
+  id: string
+  username: string
+  display_name?: string | null
+  email?: string | null
+  is_active: boolean
+  last_login_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface UserAuthPayload {
+  token: string
+  expires_at: number
+  user: UserProfile
+}
+
+export interface ChatSessionSummary {
+  id: string
+  title: string
+  last_message_at: string
+  message_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ChatMessageRecord {
+  id: string
+  session_id: string
+  role: 'user' | 'ai' | 'system'
+  content: string
+  created_at: string
+  updated_at: string
+}

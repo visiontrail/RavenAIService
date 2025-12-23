@@ -6,13 +6,17 @@ import json
 import uuid
 from typing import AsyncIterator, Dict, List, Optional
 
+from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from app.agents.chat_agent import ChatAgent
 from app.config import settings
 from app.models.chat import ChatMessage, ChatRequest, ChatResponse
 from app.models.device_link import DeviceInfo
+from app.models.user import User
 from app.services.base import BaseService
+from app.services.chat_history_service import chat_history_service
 from app.services.device_link_service import device_link_manager
 
 logger = logging.getLogger(__name__)
@@ -41,6 +45,66 @@ class AIChatService(BaseService):
         super().__init__()
         self.agent = ChatAgent()
         self.memory = _SessionMemory(max_turns=getattr(settings, "agent_short_term_window", 5))
+
+    async def _load_history_from_db(
+        self,
+        db: AsyncSession,
+        user: User,
+        session_id: Optional[str],
+    ) -> List[BaseMessage]:
+        """Load persisted messages for a user session."""
+        if not session_id:
+            return []
+        try:
+            records = await chat_history_service.fetch_messages(
+                db,
+                user_id=user.id,
+                session_id=session_id,
+            )
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                return []
+            raise
+        chat_messages = chat_history_service.to_chat_messages(records)
+        return self._to_langchain_messages(chat_messages)
+
+    async def _persist_exchange(
+        self,
+        db: AsyncSession,
+        user: User,
+        session_id: str,
+        user_content: str,
+        answer_text: str,
+    ) -> None:
+        """Persist user/AI messages to the database."""
+        await chat_history_service.save_exchange(
+            db,
+            user_id=user.id,
+            session_id=session_id,
+            user_content=user_content,
+            ai_content=answer_text,
+            title_hint=user_content,
+        )
+
+    async def _prepare_history_messages(
+        self,
+        payload: ChatRequest,
+        session_id: str,
+        db: Optional[AsyncSession],
+        user: Optional[User],
+    ) -> List[BaseMessage]:
+        """Build conversation history for this turn."""
+        if user and db:
+            stored_history = await self._load_history_from_db(db, user, session_id)
+            if stored_history:
+                return stored_history
+
+        if payload.history:
+            logger.info(f"chat: 使用前端传入的历史记录，条数: {len(payload.history)}")
+            return self._to_langchain_messages(payload.history)
+
+        logger.info("chat: 使用服务端记忆中的历史记录")
+        return self.memory.get_history(session_id)
 
     async def _build_device_capabilities_prompt(self, device_id: Optional[str]) -> Optional[str]:
         """Fetch device info and format its capabilities for system prompt injection."""
@@ -126,7 +190,12 @@ class AIChatService(BaseService):
 
         return "\n".join(lines)
 
-    async def chat(self, payload: ChatRequest) -> ChatResponse:
+    async def chat(
+        self,
+        payload: ChatRequest,
+        db: Optional[AsyncSession] = None,
+        user: Optional[User] = None,
+    ) -> ChatResponse:
         logger.info("==================== AIChatService.chat 开始 ====================")
         logger.info(f"chat: 用户消息: {payload.message[:100]}...")
         logger.info(f"chat: session_id: {payload.session_id}")
@@ -139,14 +208,13 @@ class AIChatService(BaseService):
         session_id = payload.session_id or str(uuid.uuid4())
         logger.info(f"chat: 使用的 session_id: {session_id}")
         
-        # 前端传入的历史优先，其次取服务端记忆
-        if payload.history:
-            logger.info(f"chat: 使用前端传入的历史记录，条数: {len(payload.history)}")
-            history_messages = self._to_langchain_messages(payload.history)
-        else:
-            logger.info("chat: 使用服务端记忆中的历史记录")
-            history_messages = self.memory.get_history(session_id)
-            logger.info(f"chat: 从记忆中获取到 {len(history_messages)} 条历史消息")
+        history_messages = await self._prepare_history_messages(
+            payload,
+            session_id,
+            db,
+            user,
+        )
+        logger.info(f"chat: 历史记录条数: {len(history_messages)}")
         
         history_messages.append(HumanMessage(content=payload.message))
         logger.info(f"chat: 添加用户消息后，总消息数: {len(history_messages)}")
@@ -186,6 +254,18 @@ class AIChatService(BaseService):
             answer_text = ""
             logger.warning("chat: 未找到 AI 回复消息")
 
+        if payload.remember and user and db:
+            try:
+                await self._persist_exchange(
+                    db,
+                    user,
+                    session_id,
+                    payload.message,
+                    answer_text,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("chat: 持久化会话失败: %s", exc)
+
         response = ChatResponse(
             session_id=session_id,
             answer=answer_text,
@@ -196,7 +276,12 @@ class AIChatService(BaseService):
         logger.info("==================== AIChatService.chat 完成 ====================")
         return response
 
-    async def chat_stream(self, payload: ChatRequest) -> AsyncIterator[str]:
+    async def chat_stream(
+        self,
+        payload: ChatRequest,
+        db: Optional[AsyncSession] = None,
+        user: Optional[User] = None,
+    ) -> AsyncIterator[str]:
         """流式返回模型回复，SSE 格式。"""
         logger.info("==================== AIChatService.chat_stream 开始 ====================")
         logger.info(f"chat_stream: 用户消息: {payload.message[:100]}...")
@@ -209,12 +294,13 @@ class AIChatService(BaseService):
         session_id = payload.session_id or str(uuid.uuid4())
         logger.info(f"chat_stream: 使用的 session_id: {session_id}")
 
-        if payload.history:
-            history_messages = self._to_langchain_messages(payload.history)
-            logger.info(f"chat_stream: 前端传入历史记录 {len(history_messages)} 条")
-        else:
-            history_messages = self.memory.get_history(session_id)
-            logger.info(f"chat_stream: 从记忆读取历史记录 {len(history_messages)} 条")
+        history_messages = await self._prepare_history_messages(
+            payload,
+            session_id,
+            db,
+            user,
+        )
+        logger.info(f"chat_stream: 历史记录 {len(history_messages)} 条")
 
         history_messages.append(HumanMessage(content=payload.message))
         logger.info(f"chat_stream: 添加用户消息后共 {len(history_messages)} 条")
@@ -252,6 +338,17 @@ class AIChatService(BaseService):
             if payload.remember:
                 logger.info("chat_stream: 保存会话记忆（工具分支）")
                 self.memory.save_history(session_id, messages)
+                if user and db:
+                    try:
+                        await self._persist_exchange(
+                            db,
+                            user,
+                            session_id,
+                            payload.message,
+                            answer_text,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("chat_stream: 持久化会话失败: %s", exc)
 
             if answer_text:
                 yield self._sse_event({"event": "chunk", "content": answer_text})
@@ -289,6 +386,17 @@ class AIChatService(BaseService):
         if payload.remember:
             logger.info("chat_stream: 写入会话记忆")
             self.memory.save_history(session_id, messages)
+            if user and db:
+                try:
+                    await self._persist_exchange(
+                        db,
+                        user,
+                        session_id,
+                        payload.message,
+                        answer_text,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("chat_stream: 持久化会话失败: %s", exc)
 
         yield self._sse_event(
             {

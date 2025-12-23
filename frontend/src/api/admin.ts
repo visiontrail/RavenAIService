@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { API_BASE_URL } from './index'
-import type { AdminAuthData, ApiResponse, PromptsConfigData } from '@/types'
+import type { AdminAuthData, ApiResponse, PromptsConfigData, UserProfile } from '@/types'
 
 const ADMIN_TOKEN_KEY = 'raven_admin_token'
 
@@ -66,6 +66,28 @@ export const adminApi = {
     expected_checksum?: string
     force?: boolean
   }): Promise<ApiResponse<PromptsConfigData>> => adminClient.put('/admin/prompts/config', payload),
+
+  listUsers: (): Promise<ApiResponse<UserProfile[]>> => adminClient.get('/api/v1/users'),
+
+  createUser: (payload: {
+    username: string
+    password: string
+    display_name?: string
+    email?: string
+  }): Promise<ApiResponse<UserProfile>> => adminClient.post('/api/v1/users', payload),
+
+  updateUser: (
+    userId: string,
+    payload: {
+      display_name?: string
+      email?: string
+      is_active?: boolean
+      password?: string
+    }
+  ): Promise<ApiResponse<UserProfile>> => adminClient.patch(`/api/v1/users/${userId}`, payload),
+
+  disableUser: (userId: string): Promise<ApiResponse<UserProfile>> =>
+    adminClient.delete(`/api/v1/users/${userId}`),
 }
 
 export default adminApi

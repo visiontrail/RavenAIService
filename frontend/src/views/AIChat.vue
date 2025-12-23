@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, nextTick, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, nextTick, reactive, ref, watch } from 'vue'
 import {
   Menu,
   Plus,
@@ -8,17 +8,22 @@ import {
   Send,
   Mic,
   Image as ImageIcon,
-  MoreVertical,
   List,
   Box,
   LogOut,
   ExternalLink,
-  X
+  X,
+  LogIn,
+  Trash2,
+  Loader2
 } from 'lucide-vue-next'
 import { deviceLinkApi } from '@/api/deviceLink'
 import { intelligentSearchPackages, ravenBaseUrl } from '@/api/raven'
-import type { DeviceInfo, RavenPackage, RavenSearchResult } from '@/types'
+import { userApi } from '@/api/user'
+import type { DeviceInfo, RavenPackage, RavenSearchResult, ChatMessageRecord, ChatSessionSummary } from '@/types'
 import { renderMarkdown } from '@/utils/markdownRenderer'
+import { useUserStore } from '@/stores/user'
+import { useAppStore } from '@/stores/app'
 
 type MentionOption =
   | { type: 'agent'; id: string; name: string; description?: string; agentType: 'package-manager' }
@@ -31,6 +36,9 @@ const packageAgentOption: MentionOption = {
   agentType: 'package-manager',
   description: '调用重构包智能搜索，返回详情、下载链接与重构提示词'
 }
+
+const userStore = useUserStore()
+const appStore = useAppStore()
 
 const sidebarOpen = ref(true)
 const inputMessage = ref('')
@@ -50,6 +58,16 @@ const mentionStart = ref<number | null>(null)
 const targetDeviceId = ref<string | null>(null)
 const targetDeviceName = ref<string | null>(null)
 const targetAgent = ref<{ id: string; name: string; agentType: 'package-manager' } | null>(null)
+const chatSessions = ref<ChatSessionSummary[]>([])
+const selectedSessionId = ref<string | null>(null)
+const loadingSessions = ref(false)
+const loadingMessages = ref(false)
+const showLoginModal = ref(false)
+const loginForm = reactive({
+  username: '',
+  password: '',
+})
+const isLoggingIn = ref(false)
 
 // Handle click outside to close menu
 const handleClickOutside = (event: MouseEvent) => {
@@ -77,20 +95,20 @@ const handleClickOutside = (event: MouseEvent) => {
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
   fetchDevices()
+  bootstrapUser()
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
 })
 
-const chatHistory = ref([
-  {
-    role: 'ai',
-    content: '你好！我是 Raven AI。有什么我可以帮你的吗？'
-  }
-])
+const chatHistory = ref<{ role: string; content: string }[]>([])
 const sessionId = ref<string | null>(null)
 const isSending = ref(false)
+const isLoggedIn = computed(() => userStore.isAuthenticated)
+const currentUserName = computed(() => userStore.profile?.display_name || userStore.profile?.username || '用户')
+const currentUserEmail = computed(() => userStore.profile?.email || '')
+const userInitial = computed(() => (currentUserName.value || 'U').slice(0, 1).toUpperCase())
 
 const toggleSidebar = () => {
   sidebarOpen.value = !sidebarOpen.value
@@ -112,6 +130,16 @@ watch(chatHistory, () => {
   scrollToBottom()
 }, { deep: true })
 
+watch(isLoggedIn, (loggedIn) => {
+  if (loggedIn) {
+    loadSessions()
+  } else {
+    chatSessions.value = []
+    selectedSessionId.value = null
+    sessionId.value = null
+  }
+})
+
 // Construct 8085 URLs dynamically based on current hostname
 const getServiceUrl = (path: string) => {
   const hostname = window.location.hostname
@@ -127,6 +155,138 @@ const fetchDevices = async () => {
     console.error('加载设备列表失败', error)
   } finally {
     isLoadingDevices.value = false
+  }
+}
+
+const loadSessions = async () => {
+  if (!isLoggedIn.value) return
+  loadingSessions.value = true
+  try {
+    const resp = await userApi.listSessions()
+    if (resp?.success && resp.data) {
+      chatSessions.value = resp.data
+    } else {
+      chatSessions.value = []
+    }
+  } catch (error) {
+    console.error('加载会话失败', error)
+    chatSessions.value = []
+    appStore.showNotification({
+      title: '同步会话失败',
+      type: 'error',
+    })
+  } finally {
+    loadingSessions.value = false
+  }
+}
+
+const loadMessages = async (id: string) => {
+  if (!isLoggedIn.value) return
+  loadingMessages.value = true
+  chatHistory.value = []
+  sessionId.value = id
+  selectedSessionId.value = id
+  try {
+    const resp = await userApi.fetchMessages(id)
+    if (resp?.success && Array.isArray(resp.data)) {
+      chatHistory.value = (resp.data as ChatMessageRecord[]).map((item) => ({
+        role: item.role === 'assistant' ? 'ai' : item.role,
+        content: item.content || '',
+      }))
+    }
+  } catch (error) {
+    console.error('加载会话消息失败', error)
+    appStore.showNotification({
+      title: '加载消息失败',
+      type: 'error',
+    })
+  } finally {
+    loadingMessages.value = false
+  }
+}
+
+const handleSelectSession = async (session: ChatSessionSummary) => {
+  await loadMessages(session.id)
+}
+
+const startNewChat = () => {
+  selectedSessionId.value = null
+  sessionId.value = null
+  chatHistory.value = []
+}
+
+const handleUserLogin = async () => {
+  if (!loginForm.username || !loginForm.password) {
+    appStore.showNotification({
+      title: '请输入用户名和密码',
+      type: 'warning',
+    })
+    return
+  }
+  isLoggingIn.value = true
+  try {
+    const resp = await userApi.login(loginForm.username.trim(), loginForm.password)
+    if (!resp?.success || !resp.data) {
+      throw new Error(resp?.message || '登录失败')
+    }
+    userStore.setToken(resp.data.token)
+    userStore.setProfile(resp.data.user)
+    appStore.showNotification({
+      title: '登录成功',
+      type: 'success',
+    })
+    showLoginModal.value = false
+    loginForm.username = ''
+    loginForm.password = ''
+    await loadSessions()
+  } catch (error: any) {
+    appStore.showNotification({
+      title: '登录失败',
+      message: error?.message || '请检查账号密码',
+      type: 'error',
+    })
+  } finally {
+    isLoggingIn.value = false
+  }
+}
+
+const handleUserLogout = () => {
+  userStore.clear()
+  chatSessions.value = []
+  selectedSessionId.value = null
+  sessionId.value = null
+  chatHistory.value = []
+  showUserMenu.value = false
+}
+
+const deleteSession = async (id: string) => {
+  const confirmed = window.confirm('确定要删除该对话吗？此操作不可恢复。')
+  if (!confirmed) return
+  try {
+    const resp = await userApi.deleteSession(id)
+    if (resp?.success && Array.isArray(resp.data)) {
+      chatSessions.value = resp.data
+      if (selectedSessionId.value === id) {
+        startNewChat()
+      }
+      appStore.showNotification({
+        title: '会话已删除',
+        type: 'success',
+      })
+    }
+  } catch (error) {
+    console.error('删除会话失败', error)
+    appStore.showNotification({
+      title: '删除失败',
+      type: 'error',
+    })
+  }
+}
+
+async function bootstrapUser() {
+  await userStore.bootstrap()
+  if (isLoggedIn.value) {
+    await loadSessions()
   }
 }
 
@@ -181,6 +341,20 @@ const renderAiMessage = (content: string) =>
   renderMarkdown(content || '', {
     wrapperClass: 'markdown-content text-gray-900'
   })
+
+const formatTime = (value?: string | null) => {
+  if (!value) return ''
+  try {
+    return new Date(value).toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  } catch {
+    return value
+  }
+}
 
 const packageTypeText = (type?: string) => {
   const map: Record<string, string> = {
@@ -310,6 +484,7 @@ const applyStreamEvent = (payload: any, messageIndex: number) => {
   const type = payload?.event || payload?.type
   if (payload?.session_id) {
     sessionId.value = payload.session_id
+    selectedSessionId.value = payload.session_id
   }
 
   const targetMessage = chatHistory.value[messageIndex]
@@ -448,10 +623,12 @@ const sendMessage = async () => {
 
   // 构造历史（不含当前用户消息，因为会通过message字段单独发送）
   // 只发送之前的对话历史
-  const historyPayload = chatHistory.value.slice(0, -1).map(msg => ({
-    role: msg.role,
-    content: msg.content
-  }))
+  const historyPayload = isLoggedIn.value
+    ? []
+    : chatHistory.value.slice(0, -1).map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }))
 
   // 占位回复
   chatHistory.value.push({
@@ -480,11 +657,17 @@ const sendMessage = async () => {
       target_device_name: targetDeviceName.value || undefined
     }
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    }
+    const authToken = userStore.token as unknown as string
+    if (isLoggedIn.value && authToken) {
+      headers.Authorization = `Bearer ${authToken}`
+    }
+
     const resp = await fetch(getServiceUrl('/api/v1/ai-chat/chat/stream'), {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers,
       body: JSON.stringify(payload)
     })
 
@@ -550,6 +733,14 @@ const sendMessage = async () => {
     if (chatHistory.value[aiMessageIndex].content === '正在思考...') {
       chatHistory.value[aiMessageIndex].content = '（无回复内容）'
     }
+
+    if (isLoggedIn.value) {
+      try {
+        await loadSessions()
+      } catch (error) {
+        console.warn('刷新会话列表失败', error)
+      }
+    }
   } catch (error: any) {
     console.error('===== 请求失败 =====')
     console.error('错误信息:', error)
@@ -580,29 +771,86 @@ const sendMessage = async () => {
         <button 
           class="flex items-center gap-3 w-full p-3 rounded-full bg-[#DDE3EA] hover:bg-gray-200 text-gray-700 hover:text-gray-900 transition-colors border border-transparent hover:border-gray-300"
           :class="{ 'justify-center': !sidebarOpen }"
+          @click="startNewChat"
         >
           <Plus class="w-4 h-4 text-gray-500" />
           <span v-if="sidebarOpen" class="text-sm font-medium">新对话</span>
         </button>
       </div>
 
-      <div class="flex-1 overflow-y-auto mt-4 px-3">
-        <div v-if="sidebarOpen" class="mb-2 px-3 text-xs font-medium text-gray-500">最近对话</div>
-        
-        <!-- Recent Chats Mockup -->
-        <div class="space-y-1">
-          <button 
-            v-for="i in 3" 
-            :key="i"
-            class="flex items-center gap-3 w-full p-2 rounded-full hover:bg-gray-200 text-gray-700 hover:text-gray-900 transition-colors group text-left"
-            :class="{ 'justify-center': !sidebarOpen }"
-          >
-            <MessageSquare class="w-4 h-4 text-gray-500" />
-            <span v-if="sidebarOpen" class="text-sm truncate">历史对话主题 {{ i }}</span>
-            <button v-if="sidebarOpen" class="ml-auto opacity-0 group-hover:opacity-100 p-1 hover:text-gray-900 text-gray-500">
-              <MoreVertical class="w-3 h-3" />
+      <div class="flex-1 overflow-y-auto mt-4 px-3 space-y-3">
+        <div
+          v-if="!isLoggedIn"
+          class="bg-white rounded-xl border border-gray-200 p-3 shadow-sm"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <div class="text-sm font-medium text-gray-900">登录可同步历史对话</div>
+            <button
+              class="text-xs text-blue-600 hover:text-blue-700 font-semibold"
+              @click="showLoginModal = true"
+            >
+              立即登录
             </button>
-          </button>
+          </div>
+          <p class="text-xs text-gray-500 mt-2">
+            登录后，最近对话会自动保存并可在任意设备查看
+          </p>
+        </div>
+
+        <div>
+          <div
+            v-if="sidebarOpen"
+            class="mb-2 px-3 text-xs font-medium text-gray-500 flex items-center justify-between"
+          >
+            <span>最近对话</span>
+            <button
+              v-if="isLoggedIn"
+              class="text-[11px] text-blue-600 hover:text-blue-700"
+              @click="loadSessions"
+              :disabled="loadingSessions"
+            >
+              {{ loadingSessions ? '刷新中…' : '刷新' }}
+            </button>
+          </div>
+
+          <div class="space-y-1">
+            <template v-if="isLoggedIn">
+              <div v-if="loadingSessions" class="text-xs text-gray-500 px-3 py-2">会话加载中...</div>
+              <div v-else-if="!chatSessions.length" class="text-xs text-gray-500 px-3 py-2">
+                暂无会话，开始新的对话吧
+              </div>
+              <button 
+                v-for="session in chatSessions" 
+                :key="session.id"
+                class="flex items-center gap-3 w-full p-2 rounded-full hover:bg-gray-200 text-gray-700 hover:text-gray-900 transition-colors group text-left"
+                :class="[
+                  { 'justify-center': !sidebarOpen },
+                  selectedSessionId === session.id ? 'bg-white shadow-sm border border-gray-200' : ''
+                ]"
+                @click="handleSelectSession(session)"
+              >
+                <MessageSquare class="w-4 h-4 text-gray-500" />
+                <div v-if="sidebarOpen" class="flex-1 min-w-0">
+                  <div class="text-sm truncate font-medium text-gray-900">{{ session.title || '未命名对话' }}</div>
+                  <div class="flex items-center justify-between text-[11px] text-gray-500">
+                    <span>消息 {{ session.message_count }}</span>
+                    <span>{{ formatTime(session.last_message_at) }}</span>
+                  </div>
+                </div>
+                <button
+                  v-if="sidebarOpen"
+                  class="ml-auto opacity-0 group-hover:opacity-100 p-1 hover:text-gray-900 text-gray-500"
+                  @click.stop="deleteSession(session.id)"
+                  title="删除对话"
+                >
+                  <Trash2 class="w-3 h-3" />
+                </button>
+              </button>
+            </template>
+            <template v-else>
+              <div class="text-xs text-gray-500 px-3 py-2">登录后查看和管理历史对话</div>
+            </template>
+          </div>
         </div>
       </div>
 
@@ -624,10 +872,13 @@ const sendMessage = async () => {
               <span>Raven 包管理</span>
             </a>
             <div class="h-px bg-gray-200 my-1"></div>
-             <div class="flex items-center gap-3 px-4 py-3 text-sm text-gray-500 hover:bg-gray-200 transition-colors cursor-pointer">
-              <LogOut class="w-4 h-4" />
-              <span>退出登录</span>
-            </div>
+             <button
+               class="flex items-center gap-3 px-4 py-3 text-sm text-gray-500 hover:bg-gray-200 transition-colors w-full text-left"
+               @click="isLoggedIn ? handleUserLogout() : (showLoginModal = true)"
+             >
+              <component :is="isLoggedIn ? LogOut : LogIn" class="w-4 h-4" />
+              <span>{{ isLoggedIn ? '退出登录' : '立即登录' }}</span>
+            </button>
           </div>
         </div>
 
@@ -639,11 +890,14 @@ const sendMessage = async () => {
           :class="{ 'justify-center': !sidebarOpen, 'bg-gray-200': showUserMenu }"
         >
            <div class="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-purple-600 flex items-center justify-center text-xs font-bold text-white">
-             U
+             {{ userInitial }}
            </div>
            <div v-if="sidebarOpen" class="text-xs text-gray-700">
-             <div>用户</div>
-             <div class="text-[10px] text-gray-500">user@example.com</div>
+             <div class="font-semibold text-gray-900">{{ currentUserName }}</div>
+             <div class="text-[10px] text-gray-500">
+               <span v-if="isLoggedIn">{{ currentUserEmail || '已登录' }}</span>
+               <span v-else class="text-blue-600">未登录 · 点击登录</span>
+             </div>
            </div>
         </div>
       </div>
@@ -708,7 +962,7 @@ const sendMessage = async () => {
       <div ref="chatContainerRef" class="flex-1 overflow-y-auto px-4 md:px-20 py-6 scrollbar-hide scroll-smooth">
         <div class="max-w-3xl mx-auto space-y-8">
           
-          <template v-if="chatHistory.length === 0">
+          <template v-if="chatHistory.length === 0 && !loadingMessages">
             <div class="mt-20">
               <h1 class="text-5xl font-medium bg-gradient-to-r from-blue-500 via-purple-500 to-red-500 bg-clip-text text-transparent w-fit mb-2">你好，用户</h1>
               <h2 class="text-5xl font-medium text-[#444746] mb-12">今天有什么我可以帮你的吗？</h2>
@@ -725,6 +979,10 @@ const sendMessage = async () => {
                 </div>
               </div>
             </div>
+          </template>
+
+          <template v-else-if="loadingMessages">
+            <div class="text-center text-gray-500 text-sm mt-12">正在加载历史对话...</div>
           </template>
 
           <template v-else>
@@ -877,6 +1135,68 @@ const sendMessage = async () => {
         </div>
         <div class="text-center text-xs text-gray-500 mt-2">
           Raven AI 可能会犯错。请核对重要信息 · 输入 @ 选择设备或重构包配置管理员。
+        </div>
+      </div>
+    </div>
+
+    <!-- Login Modal -->
+    <div
+      v-if="showLoginModal"
+      class="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 px-4"
+    >
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-5 border border-gray-100">
+        <div class="flex items-start justify-between">
+          <div>
+            <h3 class="text-lg font-semibold text-gray-900">登录账户</h3>
+            <p class="text-xs text-gray-500 mt-1">登录可同步历史对话</p>
+          </div>
+          <button
+            class="text-gray-500 hover:text-gray-700 rounded-full p-1"
+            @click="showLoginModal = false"
+            aria-label="关闭登录"
+          >
+            <X class="w-4 h-4" />
+          </button>
+        </div>
+
+        <div class="space-y-4">
+          <label class="block text-sm text-gray-700">
+            <span class="text-xs text-gray-600">用户名</span>
+            <input
+              v-model="loginForm.username"
+              type="text"
+              class="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none"
+              placeholder="输入用户名"
+              autocomplete="username"
+            />
+          </label>
+          <label class="block text-sm text-gray-700">
+            <span class="text-xs text-gray-600">密码</span>
+            <input
+              v-model="loginForm.password"
+              type="password"
+              class="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none"
+              placeholder="输入密码"
+              autocomplete="current-password"
+            />
+          </label>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <button
+            class="px-4 py-2 bg-black text-white rounded-lg text-sm font-semibold hover:bg-gray-800 transition disabled:opacity-60 flex items-center gap-2"
+            :disabled="isLoggingIn"
+            @click="handleUserLogin"
+          >
+            <Loader2 v-if="isLoggingIn" class="w-4 h-4 animate-spin" />
+            <span>{{ isLoggingIn ? '登录中…' : '立即登录' }}</span>
+          </button>
+          <button
+            class="px-4 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50"
+            @click="showLoginModal = false"
+          >
+            取消
+          </button>
         </div>
       </div>
     </div>
