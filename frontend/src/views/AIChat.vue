@@ -964,20 +964,8 @@ const sendMessage = async () => {
           
           <template v-if="chatHistory.length === 0 && !loadingMessages">
             <div class="mt-20">
-              <h1 class="text-5xl font-medium bg-gradient-to-r from-blue-500 via-purple-500 to-red-500 bg-clip-text text-transparent w-fit mb-2">你好，用户</h1>
+              <h1 class="text-5xl font-medium bg-gradient-to-r from-blue-500 via-purple-500 to-red-500 bg-clip-text text-transparent w-fit mb-2">你好，{{ currentUserName }}</h1>
               <h2 class="text-5xl font-medium text-[#444746] mb-12">今天有什么我可以帮你的吗？</h2>
-              
-              <!-- Suggestions -->
-              <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div v-for="item in ['制定旅行计划', '代码审查', '撰写邮件', '头脑风暴']" :key="item" 
-                  class="bg-[#F0F4F9] p-4 rounded-xl hover:bg-gray-200 cursor-pointer transition-colors h-40 flex flex-col justify-between"
-                >
-                  <span class="text-gray-700 text-sm">{{ item }}</span>
-                  <div class="w-8 h-8 rounded-full bg-white flex items-center justify-center self-end shadow-sm">
-                     <MessageSquare class="w-4 h-4 text-gray-500" />
-                  </div>
-                </div>
-              </div>
             </div>
           </template>
 
