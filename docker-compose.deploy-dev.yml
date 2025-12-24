@@ -22,6 +22,7 @@ services:
       - ./frontend/dist:/app/frontend/dist  # 挂载构建输出目录
       - ./.env:/app/.env:ro  # 挂载环境变量文件供应用读取
       - ./package-server/.env:/app/package-server/.env:ro  # 挂载包服环境变量供 Node 端读取
+      - ./package-server/src:/app/package-server/src:ro  # 挂载 package-server 源码以支持热重载
     depends_on:
       - redis
     env_file:

@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(:)",
+      "Bash(/tmp/convert_to_doxygen.sh)",
+      "Bash(: python3 /tmp/convert_to_doxygen.py \"/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceOAM/lx10-oam/Code_CPUPlatform/codeUniBTS/OAM/DTM/Manager/Source/P_OAM_Udp_RemoteMesa.c\")",
+      "Bash(/Library/Frameworks/Python.framework/Versions/3.9/bin/python3 /tmp/convert_to_doxygen_v2.py '/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceOAM/lx10-oam/Code_CPUPlatform/codeUniBTS/OAM/DTM/Manager/Source/P_OAM_Udp_RemoteMesa.c')",
+      "Bash(\"-n\")",
+      "Bash(\"P_OAM_RemoMeasCtrlEntry\")",
+      "Bash(\"/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceOAM/lx10-oam/Code_CPUPlatform/codeUniBTS/OAM/DTM/Manager/Source/P_OAM_Udp_RemoteMesa.c\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
+
