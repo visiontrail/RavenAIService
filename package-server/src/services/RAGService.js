@@ -64,34 +64,87 @@ class LocalEmbeddings extends Embeddings {
   }
 }
 
-// 通义千问 Embeddings 包装类（区分 document 和 query）
+// 通义千问 Embeddings 包装类（直接调用 API）
 class TongyiEmbeddingsWrapper extends Embeddings {
   constructor(modelName, apiKey) {
     super({})
-    const { AlibabaTongyiEmbeddings } = require('@langchain/community/embeddings/alibaba_tongyi')
-    
-    // 创建两个实例：一个用于文档，一个用于查询
-    this.docEmb = new AlibabaTongyiEmbeddings({
-      modelName: modelName,
-      alibabaApiKey: apiKey,
-      parameters: { text_type: 'document' }
+    this.modelName = modelName || 'text-embedding-v2'
+    this.apiKey = apiKey
+    this.apiUrl = 'https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding'
+  }
+
+  async callTongyiAPI(texts, textType = 'document') {
+    const https = require('https')
+    const http = require('http')
+
+    const url = new URL(this.apiUrl)
+    const protocol = url.protocol === 'https:' ? https : http
+
+    const postData = JSON.stringify({
+      model: this.modelName,
+      input: {
+        texts: Array.isArray(texts) ? texts : [texts]
+      },
+      parameters: {
+        text_type: textType
+      }
     })
-    
-    this.queryEmb = new AlibabaTongyiEmbeddings({
-      modelName: modelName,
-      alibabaApiKey: apiKey,
-      parameters: { text_type: 'query' }
+
+    return new Promise((resolve, reject) => {
+      const options = {
+        hostname: url.hostname,
+        port: url.port || (url.protocol === 'https:' ? 443 : 80),
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(postData)
+        }
+      }
+
+      const req = protocol.request(options, (res) => {
+        let data = ''
+
+        res.on('data', (chunk) => {
+          data += chunk
+        })
+
+        res.on('end', () => {
+          try {
+            const response = JSON.parse(data)
+
+            if (response.output && response.output.embeddings) {
+              const embeddings = response.output.embeddings.map(item => item.embedding)
+              resolve(embeddings)
+            } else if (response.code) {
+              reject(new Error(`通义千问 API 错误: ${response.code} - ${response.message}`))
+            } else {
+              reject(new Error(`通义千问 API 响应格式错误: ${data}`))
+            }
+          } catch (error) {
+            reject(new Error(`解析通义千问 API 响应失败: ${error.message}`))
+          }
+        })
+      })
+
+      req.on('error', (error) => {
+        reject(new Error(`调用通义千问 API 失败: ${error.message}`))
+      })
+
+      req.write(postData)
+      req.end()
     })
-    
-    this.modelName = modelName
   }
 
   async embedDocuments(texts) {
-    return await this.docEmb.embedDocuments(texts)
+    const embeddings = await this.callTongyiAPI(texts, 'document')
+    return embeddings
   }
 
   async embedQuery(text) {
-    return await this.queryEmb.embedQuery(text)
+    const embeddings = await this.callTongyiAPI([text], 'query')
+    return embeddings[0]
   }
 }
 
