@@ -7,6 +7,7 @@ import uuid
 from typing import AsyncIterator, Dict, List, Optional
 
 from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
@@ -455,7 +456,8 @@ class AIChatService(BaseService):
     @staticmethod
     def _sse_event(payload: Dict[str, object]) -> str:
         """格式化 SSE 数据行。"""
-        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        safe_payload = jsonable_encoder(payload)
+        return f"data: {json.dumps(safe_payload, ensure_ascii=False)}\n\n"
 
 
 ai_chat_service = AIChatService()
