@@ -45,10 +45,10 @@ class Settings(BaseSettings):
     agent_search_backend: str = "regex"  # 可选：regex | elasticsearch
     elasticsearch_url: Optional[str] = None
     
-    # 仅使用 DeepSeek，本地部署统一入口
-    llm_provider: str = "deepseek"
+    # 仅使用本地部署统一入口
+    llm_provider: str = "GalaxySpace"
     
-    # DeepSeek 配置
+    # 本地模型 配置
     deepseek_api_key: Optional[str] = "sk-rebTXHBiV7Nr1PRzaODQOZKztKqpv7bPoQE10dNItF9yIyBh"
     # 使用 OpenAI 兼容客户端的基础URL（不包含 /chat/completions 以避免重复）
     deepseek_base_url: str = "http://oneapi.yhroot.com/v1"

@@ -406,10 +406,10 @@ class TestDeepSeekIntegration(unittest.TestCase):
     def test_deepseek_configuration(self):
         """测试DeepSeek配置（统一单一模型）"""
         print("\n=== 测试DeepSeek配置 ===")
-        provider = getattr(settings, 'llm_provider', 'deepseek')
+        provider = getattr(settings, 'llm_provider', 'GalaxySpace')
 
-        # 统一为 deepseek
-        self.assertEqual(provider, "deepseek")
+        # 统一为 GalaxySpace
+        self.assertEqual(provider, "GalaxySpace")
 
         api_key = getattr(settings, 'deepseek_api_key', None)
         base_url = getattr(settings, 'deepseek_base_url', None)
