@@ -143,12 +143,32 @@ class TongyiEmbeddingsWrapper extends Embeddings {
 
   async embedDocuments(texts) {
     try {
-      return await this.callTongyiAPI(texts, 'document')
+      // 通义千问 API 限制批量大小不能超过 10
+      const BATCH_SIZE = 10
+      const results = []
+
+      // 分批处理文本
+      for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+        const batch = texts.slice(i, i + BATCH_SIZE)
+        console.log(`🔄 处理 embedding 批次 ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(texts.length / BATCH_SIZE)} (${batch.length} 个文本)`)
+        const batchEmbeddings = await this.callTongyiAPI(batch, 'document')
+        results.push(...batchEmbeddings)
+      }
+
+      return results
     } catch (error) {
       if (error.code === 'Model.AccessDenied' && this.modelName !== DEFAULT_TONGYI_MODEL) {
         console.warn(`⚠️ 模型 ${this.modelName} 无访问权限，回退到默认模型 ${DEFAULT_TONGYI_MODEL}`)
         this.modelName = DEFAULT_TONGYI_MODEL
-        return await this.callTongyiAPI(texts, 'document')
+        // 重试时也需要分批处理
+        const BATCH_SIZE = 10
+        const results = []
+        for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+          const batch = texts.slice(i, i + BATCH_SIZE)
+          const batchEmbeddings = await this.callTongyiAPI(batch, 'document')
+          results.push(...batchEmbeddings)
+        }
+        return results
       }
       throw error
     }
