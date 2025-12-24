@@ -43,6 +43,26 @@ check_dependencies() {
     fi
 }
 
+# 同步 .env 到 .env.example（Compose 使用 .env.example 作为容器环境来源）
+sync_env_file() {
+    log_info "同步环境变量文件 (.env → .env.example)..."
+    if [ -f ".env" ]; then
+        if [ -f ".env.example" ]; then
+            if cmp -s ".env" ".env.example"; then
+                log_info "检测到 .env 无变化，跳过同步"
+                return 0
+            fi
+            local backup_name=".env.example.bak_$(date +%Y%m%d%H%M%S)"
+            cp ".env.example" "$backup_name"
+            log_info "已备份 .env.example 为 $backup_name"
+        fi
+        cp ".env" ".env.example"
+        log_success "已更新 .env.example（容器将使用最新环境变量）"
+    else
+        log_warning "未找到 .env 文件，跳过环境变量同步"
+    fi
+}
+
 # 清理容器内的运行时数据
 cleanup_container_data() {
     log_info "开始清理容器内的运行时数据..."
@@ -94,6 +114,9 @@ cleanup_container_data() {
 # 正常部署
 deploy_services() {
     log_info "开始部署 LogStagingService..."
+    
+    # 同步环境变量文件，确保 .env 变更生效
+    sync_env_file
     
     # 确保旧容器已停止
     log_info "确保旧容器已停止..."

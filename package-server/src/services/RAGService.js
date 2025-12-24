@@ -12,6 +12,13 @@ const fs = require('fs-extra')
 const path = require('path')
 const { getVectorStorePath } = require('../config/paths')
 
+// 环境变量配置
+const EMBEDDING_PROVIDER = process.env.RAG_EMBEDDING_PROVIDER || 'local'
+const EMBEDDING_MODEL = process.env.RAG_EMBEDDING_MODEL || 'text-embedding-v3'
+const ALIBABA_API_KEY = process.env.ALIBABA_API_KEY
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY
+const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL
+
 // 动态加载 @xenova/transformers
 async function loadPipeline() {
   if (!pipelineModule) {
@@ -57,9 +64,40 @@ class LocalEmbeddings extends Embeddings {
   }
 }
 
+// 通义千问 Embeddings 包装类（区分 document 和 query）
+class TongyiEmbeddingsWrapper extends Embeddings {
+  constructor(modelName, apiKey) {
+    super({})
+    const { AlibabaTongyiEmbeddings } = require('@langchain/community/embeddings/alibaba_tongyi')
+    
+    // 创建两个实例：一个用于文档，一个用于查询
+    this.docEmb = new AlibabaTongyiEmbeddings({
+      modelName: modelName,
+      alibabaApiKey: apiKey,
+      parameters: { text_type: 'document' }
+    })
+    
+    this.queryEmb = new AlibabaTongyiEmbeddings({
+      modelName: modelName,
+      alibabaApiKey: apiKey,
+      parameters: { text_type: 'query' }
+    })
+    
+    this.modelName = modelName
+  }
+
+  async embedDocuments(texts) {
+    return await this.docEmb.embedDocuments(texts)
+  }
+
+  async embedQuery(text) {
+    return await this.queryEmb.embedQuery(text)
+  }
+}
+
 class RAGService {
   constructor() {
-    console.log('🤖 初始化 RAG 服务 (本地嵌入版本)...')
+    console.log(`🤖 初始化 RAG 服务 (Embedding Provider: ${EMBEDDING_PROVIDER})...`)
 
     // OpenAI 配置
     this.config = {
@@ -68,8 +106,10 @@ class RAGService {
       modelName: 'deepseek-v3.1'
     }
 
-    // 初始化本地 embeddings
-    this.embeddings = new LocalEmbeddings()
+    // 初始化 embeddings（根据环境变量选择）
+    this.embeddings = this.createEmbeddings()
+    this.embeddingProvider = EMBEDDING_PROVIDER
+    this.embeddingModel = EMBEDDING_MODEL
 
     // 初始化 LLM
     this.llm = new ChatOpenAI({
@@ -83,11 +123,105 @@ class RAGService {
 
     this.vectorStore = null
     this.vectorStorePath = getVectorStorePath()
+    this.vectorStoreMetaPath = `${this.vectorStorePath}.meta.json`
     this.isInitialized = false
     this.isRebuilding = false
     this.initializationPromise = null
 
-    console.log('✅ RAG 服务初始化完成')
+    console.log(`✅ RAG 服务初始化完成 (Provider: ${this.embeddingProvider}, Model: ${this.embeddingModel || 'N/A'})`)
+  }
+
+  /**
+   * 创建 Embeddings 实例（根据环境变量）
+   */
+  createEmbeddings() {
+    switch (EMBEDDING_PROVIDER) {
+      case 'tongyi':
+        if (!ALIBABA_API_KEY) {
+          console.warn('⚠️ ALIBABA_API_KEY 未设置，回退到本地嵌入模型')
+          return new LocalEmbeddings()
+        }
+        console.log(`📦 使用通义千问 Embeddings (Model: ${EMBEDDING_MODEL})`)
+        return new TongyiEmbeddingsWrapper(EMBEDDING_MODEL, ALIBABA_API_KEY)
+
+      case 'openai_compatible':
+        if (!OPENAI_API_KEY) {
+          console.warn('⚠️ OPENAI_API_KEY 未设置，回退到本地嵌入模型')
+          return new LocalEmbeddings()
+        }
+        const { OpenAIEmbeddings } = require('@langchain/openai')
+        console.log(`📦 使用 OpenAI-compatible Embeddings (Model: ${EMBEDDING_MODEL})`)
+        return new OpenAIEmbeddings({
+          openAIApiKey: OPENAI_API_KEY,
+          modelName: EMBEDDING_MODEL,
+          configuration: OPENAI_BASE_URL ? { baseURL: OPENAI_BASE_URL } : undefined
+        })
+
+      case 'local':
+      default:
+        console.log('📦 使用本地嵌入模型')
+        return new LocalEmbeddings()
+    }
+  }
+
+  /**
+   * 读取向量存储元信息
+   */
+  async readVectorStoreMeta() {
+    try {
+      if (await fs.pathExists(this.vectorStoreMetaPath)) {
+        const metaContent = await fs.readFile(this.vectorStoreMetaPath, 'utf-8')
+        return JSON.parse(metaContent)
+      }
+    } catch (error) {
+      console.warn('⚠️ 读取向量存储元信息失败:', error.message)
+    }
+    return null
+  }
+
+  /**
+   * 写入向量存储元信息
+   */
+  async writeVectorStoreMeta() {
+    try {
+      const meta = {
+        provider: this.embeddingProvider,
+        modelName: this.embeddingModel || 'N/A',
+        createdAt: new Date().toISOString()
+      }
+      await fs.writeFile(this.vectorStoreMetaPath, JSON.stringify(meta, null, 2), 'utf-8')
+      console.log(`📝 向量存储元信息已保存: ${JSON.stringify(meta)}`)
+    } catch (error) {
+      console.warn('⚠️ 写入向量存储元信息失败:', error.message)
+    }
+  }
+
+  /**
+   * 检查是否需要重建向量存储（provider/model 变更）
+   */
+  async shouldRebuildVectorStore() {
+    const existingMeta = await this.readVectorStoreMeta()
+    
+    if (!existingMeta) {
+      // 元信息不存在：可能是旧数据，允许尝试加载
+      // 但如果后续检索报错，会在错误处理中触发重建
+      console.log('ℹ️ 未找到向量存储元信息，将尝试加载现有向量库')
+      return false
+    }
+
+    const providerChanged = existingMeta.provider !== this.embeddingProvider
+    const modelChanged = existingMeta.modelName !== this.embeddingModel
+
+    if (providerChanged || modelChanged) {
+      console.log(`🔄 检测到 Embedding 配置变更:`)
+      console.log(`   旧配置: provider=${existingMeta.provider}, model=${existingMeta.modelName}`)
+      console.log(`   新配置: provider=${this.embeddingProvider}, model=${this.embeddingModel}`)
+      console.log(`   将删除旧向量库并重建...`)
+      return true
+    }
+
+    console.log(`✅ 向量存储元信息匹配 (provider=${this.embeddingProvider}, model=${this.embeddingModel})`)
+    return false
   }
 
   /**
@@ -123,18 +257,57 @@ SHA256: ${pkg.metadata?.sha256 || '无'}
     try {
       console.log('🔄 初始化向量存储...')
 
+      // 检查是否需要重建（provider/model 变更）
+      const needRebuild = await this.shouldRebuildVectorStore()
+      if (needRebuild) {
+        // 删除旧的向量存储和元信息
+        if (await fs.pathExists(this.vectorStorePath)) {
+          await fs.remove(this.vectorStorePath)
+          console.log('🗑️ 已删除旧向量存储目录')
+        }
+        if (await fs.pathExists(this.vectorStoreMetaPath)) {
+          await fs.remove(this.vectorStoreMetaPath)
+          console.log('🗑️ 已删除旧向量存储元信息')
+        }
+      }
+
       // 尝试加载已存在的向量存储
-      if (await fs.pathExists(this.vectorStorePath)) {
+      if (await fs.pathExists(this.vectorStorePath) && !needRebuild) {
         console.log('📂 发现已存在的向量存储，正在加载...')
         try {
           this.vectorStore = await FaissStore.load(this.vectorStorePath, this.embeddings)
           console.log(`✅ 向量存储加载成功（耗时 ${Date.now() - initStart} ms）`)
           this.isInitialized = true
+          
+          // 确保元信息存在（兼容旧数据）
+          const existingMeta = await this.readVectorStoreMeta()
+          if (!existingMeta) {
+            await this.writeVectorStoreMeta()
+          }
+          
           return true
         } catch (error) {
-          console.warn('⚠️ 加载向量存储失败，将重新创建:', error.message)
-          // 删除损坏的向量存储
-          await fs.remove(this.vectorStorePath)
+          // 如果是维度不匹配错误，触发重建
+          const isDimensionError = error.message && (
+            error.message.includes('dimension') ||
+            error.message.includes('维度') ||
+            error.message.includes('shape') ||
+            error.message.includes('size')
+          )
+          
+          if (isDimensionError) {
+            console.warn('⚠️ 向量维度不匹配，将删除旧向量库并重建:', error.message)
+          } else {
+            console.warn('⚠️ 加载向量存储失败，将重新创建:', error.message)
+          }
+          
+          // 删除损坏的向量存储和元信息
+          if (await fs.pathExists(this.vectorStorePath)) {
+            await fs.remove(this.vectorStorePath)
+          }
+          if (await fs.pathExists(this.vectorStoreMetaPath)) {
+            await fs.remove(this.vectorStoreMetaPath)
+          }
         }
       }
 
@@ -170,6 +343,9 @@ SHA256: ${pkg.metadata?.sha256 || '无'}
       // 保存向量存储
       await fs.ensureDir(path.dirname(this.vectorStorePath))
       await this.vectorStore.save(this.vectorStorePath)
+
+      // 保存元信息
+      await this.writeVectorStoreMeta()
 
       console.log(`✅ 向量存储创建并保存成功（耗时 ${Date.now() - initStart} ms）`)
       this.isInitialized = true
@@ -236,9 +412,12 @@ SHA256: ${pkg.metadata?.sha256 || '无'}
     try {
       console.log('🔄 重建向量存储...')
 
-      // 删除旧的向量存储
+      // 删除旧的向量存储和元信息
       if (await fs.pathExists(this.vectorStorePath)) {
         await fs.remove(this.vectorStorePath)
+      }
+      if (await fs.pathExists(this.vectorStoreMetaPath)) {
+        await fs.remove(this.vectorStoreMetaPath)
       }
 
       // 重新初始化
@@ -546,7 +725,8 @@ SHA256: ${pkg.metadata?.sha256 || '无'}
       initialized: this.isInitialized,
       vectorStoreExists: this.vectorStore !== null,
       rebuilding: this.isRebuilding,
-      embeddingType: 'local',
+      embeddingProvider: this.embeddingProvider,
+      embeddingModel: this.embeddingModel || 'N/A',
       config: {
         baseURL: this.config.baseURL,
         modelName: this.config.modelName
