@@ -13,8 +13,8 @@ const path = require('path')
 const { getVectorStorePath } = require('../config/paths')
 
 // 环境变量配置
-const EMBEDDING_PROVIDER = process.env.RAG_EMBEDDING_PROVIDER || 'local'
-const EMBEDDING_MODEL = process.env.RAG_EMBEDDING_MODEL || 'text-embedding-v4'
+const EMBEDDING_PROVIDER = process.env.RAG_EMBEDDING_PROVIDER
+const EMBEDDING_MODEL = process.env.RAG_EMBEDDING_MODEL
 const ALIBABA_API_KEY = process.env.ALIBABA_API_KEY
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL
