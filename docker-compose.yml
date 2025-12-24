@@ -12,6 +12,7 @@ services:
       - app_logs:/app/logs
       - app_temp:/app/temp
       - app_data:/app/data
+      - ./package-server/.env:/app/package-server/.env:ro
       - ./.env:/app/.env:ro
     depends_on:
       - redis
