@@ -1,3 +1,6 @@
+// 首先加载环境变量（必须在其他模块导入之前）
+require('dotenv').config()
+
 const express = require('express')
 const path = require('path')
 const cors = require('cors')
