@@ -19,6 +19,8 @@ const ALIBABA_API_KEY = process.env.ALIBABA_API_KEY
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL
 
+const DEFAULT_TONGYI_MODEL = 'text-embedding-v4'
+
 // 动态加载 @xenova/transformers
 async function loadPipeline() {
   if (!pipelineModule) {
@@ -68,7 +70,7 @@ class LocalEmbeddings extends Embeddings {
 class TongyiEmbeddingsWrapper extends Embeddings {
   constructor(modelName, apiKey) {
     super({})
-    this.modelName = modelName || 'text-embedding-v2'
+    this.modelName = modelName || DEFAULT_TONGYI_MODEL
     this.apiKey = apiKey
     this.apiUrl = 'https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding'
   }
@@ -118,7 +120,9 @@ class TongyiEmbeddingsWrapper extends Embeddings {
               const embeddings = response.output.embeddings.map(item => item.embedding)
               resolve(embeddings)
             } else if (response.code) {
-              reject(new Error(`通义千问 API 错误: ${response.code} - ${response.message}`))
+              const error = new Error(`通义千问 API 错误: ${response.code} - ${response.message}`)
+              error.code = response.code
+              reject(error)
             } else {
               reject(new Error(`通义千问 API 响应格式错误: ${data}`))
             }
@@ -138,19 +142,37 @@ class TongyiEmbeddingsWrapper extends Embeddings {
   }
 
   async embedDocuments(texts) {
-    const embeddings = await this.callTongyiAPI(texts, 'document')
-    return embeddings
+    try {
+      return await this.callTongyiAPI(texts, 'document')
+    } catch (error) {
+      if (error.code === 'Model.AccessDenied' && this.modelName !== DEFAULT_TONGYI_MODEL) {
+        console.warn(`⚠️ 模型 ${this.modelName} 无访问权限，回退到默认模型 ${DEFAULT_TONGYI_MODEL}`)
+        this.modelName = DEFAULT_TONGYI_MODEL
+        return await this.callTongyiAPI(texts, 'document')
+      }
+      throw error
+    }
   }
 
   async embedQuery(text) {
-    const embeddings = await this.callTongyiAPI([text], 'query')
-    return embeddings[0]
+    try {
+      const embeddings = await this.callTongyiAPI([text], 'query')
+      return embeddings[0]
+    } catch (error) {
+      if (error.code === 'Model.AccessDenied' && this.modelName !== DEFAULT_TONGYI_MODEL) {
+        console.warn(`⚠️ 模型 ${this.modelName} 无访问权限，回退到默认模型 ${DEFAULT_TONGYI_MODEL}`)
+        this.modelName = DEFAULT_TONGYI_MODEL
+        const embeddings = await this.callTongyiAPI([text], 'query')
+        return embeddings[0]
+      }
+      throw error
+    }
   }
 }
 
 class RAGService {
   constructor() {
-    console.log(`🤖 初始化 RAG 服务 (Embedding Provider: ${EMBEDDING_PROVIDER})...`)
+    console.log(`🤖 初始化 RAG 服务 (Embedding Provider: ${EMBEDDING_PROVIDER || 'local'})...`)
 
     // OpenAI 配置
     this.config = {
@@ -160,9 +182,10 @@ class RAGService {
     }
 
     // 初始化 embeddings（根据环境变量选择）
-    this.embeddings = this.createEmbeddings()
-    this.embeddingProvider = EMBEDDING_PROVIDER
-    this.embeddingModel = EMBEDDING_MODEL
+    const { embeddings, provider, modelName } = this.createEmbeddings()
+    this.embeddings = embeddings
+    this.embeddingProvider = provider
+    this.embeddingModel = modelName
 
     // 初始化 LLM
     this.llm = new ChatOpenAI({
@@ -181,7 +204,7 @@ class RAGService {
     this.isRebuilding = false
     this.initializationPromise = null
 
-    console.log(`✅ RAG 服务初始化完成 (Provider: ${this.embeddingProvider}, Model: ${this.embeddingModel || 'N/A'})`)
+    console.log(`✅ RAG 服务初始化完成 (Provider: ${this.embeddingProvider}, Model: ${this.getResolvedEmbeddingModel()})`)
   }
 
   /**
@@ -192,29 +215,55 @@ class RAGService {
       case 'tongyi':
         if (!ALIBABA_API_KEY) {
           console.warn('⚠️ ALIBABA_API_KEY 未设置，回退到本地嵌入模型')
-          return new LocalEmbeddings()
+          return {
+            embeddings: new LocalEmbeddings(),
+            provider: 'local',
+            modelName: 'local'
+          }
         }
-        console.log(`📦 使用通义千问 Embeddings (Model: ${EMBEDDING_MODEL})`)
-        return new TongyiEmbeddingsWrapper(EMBEDDING_MODEL, ALIBABA_API_KEY)
+        const tongyiModel = EMBEDDING_MODEL || DEFAULT_TONGYI_MODEL
+        console.log(`📦 使用通义千问 Embeddings (Model: ${tongyiModel})`)
+        return {
+          embeddings: new TongyiEmbeddingsWrapper(tongyiModel, ALIBABA_API_KEY),
+          provider: 'tongyi',
+          modelName: tongyiModel
+        }
 
       case 'openai_compatible':
         if (!OPENAI_API_KEY) {
           console.warn('⚠️ OPENAI_API_KEY 未设置，回退到本地嵌入模型')
-          return new LocalEmbeddings()
+          return {
+            embeddings: new LocalEmbeddings(),
+            provider: 'local',
+            modelName: 'local'
+          }
         }
         const { OpenAIEmbeddings } = require('@langchain/openai')
-        console.log(`📦 使用 OpenAI-compatible Embeddings (Model: ${EMBEDDING_MODEL})`)
-        return new OpenAIEmbeddings({
-          openAIApiKey: OPENAI_API_KEY,
-          modelName: EMBEDDING_MODEL,
-          configuration: OPENAI_BASE_URL ? { baseURL: OPENAI_BASE_URL } : undefined
-        })
+        const openAIModel = EMBEDDING_MODEL || 'text-embedding-v4'
+        console.log(`📦 使用 OpenAI-compatible Embeddings (Model: ${openAIModel})`)
+        return {
+          embeddings: new OpenAIEmbeddings({
+            openAIApiKey: OPENAI_API_KEY,
+            modelName: openAIModel,
+            configuration: OPENAI_BASE_URL ? { baseURL: OPENAI_BASE_URL } : undefined
+          }),
+          provider: 'openai_compatible',
+          modelName: openAIModel
+        }
 
       case 'local':
       default:
         console.log('📦 使用本地嵌入模型')
-        return new LocalEmbeddings()
+        return {
+          embeddings: new LocalEmbeddings(),
+          provider: 'local',
+          modelName: 'local'
+        }
     }
+  }
+
+  getResolvedEmbeddingModel() {
+    return this.embeddings?.modelName || this.embeddingModel || 'N/A'
   }
 
   /**
@@ -239,7 +288,7 @@ class RAGService {
     try {
       const meta = {
         provider: this.embeddingProvider,
-        modelName: this.embeddingModel || 'N/A',
+        modelName: this.getResolvedEmbeddingModel(),
         createdAt: new Date().toISOString()
       }
       await fs.writeFile(this.vectorStoreMetaPath, JSON.stringify(meta, null, 2), 'utf-8')
@@ -263,17 +312,18 @@ class RAGService {
     }
 
     const providerChanged = existingMeta.provider !== this.embeddingProvider
-    const modelChanged = existingMeta.modelName !== this.embeddingModel
+    const resolvedModel = this.getResolvedEmbeddingModel()
+    const modelChanged = existingMeta.modelName !== resolvedModel
 
     if (providerChanged || modelChanged) {
       console.log(`🔄 检测到 Embedding 配置变更:`)
       console.log(`   旧配置: provider=${existingMeta.provider}, model=${existingMeta.modelName}`)
-      console.log(`   新配置: provider=${this.embeddingProvider}, model=${this.embeddingModel}`)
+      console.log(`   新配置: provider=${this.embeddingProvider}, model=${resolvedModel}`)
       console.log(`   将删除旧向量库并重建...`)
       return true
     }
 
-    console.log(`✅ 向量存储元信息匹配 (provider=${this.embeddingProvider}, model=${this.embeddingModel})`)
+    console.log(`✅ 向量存储元信息匹配 (provider=${this.embeddingProvider}, model=${resolvedModel})`)
     return false
   }
 
@@ -404,6 +454,11 @@ SHA256: ${pkg.metadata?.sha256 || '无'}
       this.isInitialized = true
       return true
     } catch (error) {
+      if (error?.message?.includes('Model.AccessDenied')) {
+        console.error(
+          `❌ 初始化向量存储失败: 通义千问模型未授权或不可用 (model=${this.getResolvedEmbeddingModel()}). 请确认在阿里云控制台开通对应模型，或通过 RAG_EMBEDDING_MODEL 配置为可用的模型名称。`
+        )
+      }
       console.error('❌ 初始化向量存储失败:', error)
       this.isInitialized = false
       throw error
@@ -779,7 +834,7 @@ SHA256: ${pkg.metadata?.sha256 || '无'}
       vectorStoreExists: this.vectorStore !== null,
       rebuilding: this.isRebuilding,
       embeddingProvider: this.embeddingProvider,
-      embeddingModel: this.embeddingModel || 'N/A',
+      embeddingModel: this.getResolvedEmbeddingModel(),
       config: {
         baseURL: this.config.baseURL,
         modelName: this.config.modelName
