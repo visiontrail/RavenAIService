@@ -84,6 +84,7 @@ class ChatAgent:
         logger.info("ChatAgent: 正在初始化 LLM...")
         base_llm = _make_llm()
         self.tools = [device_prompt]
+        self._tool_names = {getattr(tool, "name", "") for tool in self.tools if getattr(tool, "name", "")}
         self.llm = base_llm.bind_tools(self.tools)
         self.base_llm = base_llm
         self.model_name = getattr(base_llm, "model_name", settings.llm_model_name)
@@ -207,6 +208,7 @@ class ChatAgent:
                 tool_name = getattr(tool_call, "name", "unknown") if hasattr(tool_call, "name") else tool_call.get("name", "unknown")
                 tool_args = getattr(tool_call, "args", {}) if hasattr(tool_call, "args") else tool_call.get("args", {})
                 logger.info(f"_call_tools: 工具 #{idx + 1}: {tool_name}, 参数: {tool_args}")
+            self._normalize_tool_calls(last_message)
 
         set_device_prompt_context(
             state.get("session_id"),
@@ -259,6 +261,51 @@ class ChatAgent:
 
         logger.info("_tool_router: 无工具调用，结束流程")
         return END
+
+    def _normalize_tool_call_name(self, raw_name: Optional[str]) -> Optional[str]:
+        """Normalize tool name from LLM to the known tool set (fixes duplicated names)."""
+        if not raw_name:
+            return None
+        name = str(raw_name).strip()
+        if name in self._tool_names:
+            return name
+
+        lower_map = {n.lower(): n for n in self._tool_names}
+        if name.lower() in lower_map:
+            return lower_map[name.lower()]
+
+        # Handle repeated concatenated names like "device_promptdevice_prompt"
+        for canonical in self._tool_names:
+            if name.replace(canonical, "") == "" or name.lower().replace(canonical.lower(), "") == "":
+                return canonical
+        return None
+
+    def _normalize_tool_calls(self, ai_message: AIMessage) -> None:
+        """Ensure tool calls use valid names before executing ToolNode."""
+        tool_calls = getattr(ai_message, "tool_calls", None)
+        if not tool_calls:
+            return
+
+        normalized_calls = []
+        changed = False
+        for tool_call in tool_calls:
+            raw_name = getattr(tool_call, "name", None) if hasattr(tool_call, "name") else tool_call.get("name")
+            normalized_name = self._normalize_tool_call_name(raw_name)
+            if normalized_name and normalized_name != raw_name:
+                logger.warning(
+                    "_call_tools: 检测到异常工具名 %s，已规范为 %s",
+                    raw_name,
+                    normalized_name,
+                )
+                if hasattr(tool_call, "name"):
+                    setattr(tool_call, "name", normalized_name)
+                elif isinstance(tool_call, dict):
+                    tool_call["name"] = normalized_name
+                changed = True
+            normalized_calls.append(tool_call)
+
+        if changed:
+            ai_message.tool_calls = normalized_calls
 
     def _build_system_prompt(
         self,

@@ -391,20 +391,20 @@ const formatPackageAgentAnswer = (result: RavenSearchResult, rawQuery: string) =
     `**重构包配置管理员** 已为你执行智能搜索：\`${query}\``
   ]
 
-  const pushPackageLines = (pkg: RavenPackage, index: number, isRecommended = false) => {
+  const pushPackageLines = (pkg: RavenPackage, isRecommended = false) => {
     const links = buildPackageLinks(pkg)
     const recommendedLabel = isRecommended ? ' ⭐ AI 推荐' : ''
     lines.push(
-      `${index}. **${pkg.name || pkg.id}**${recommendedLabel} （${packageTypeText(pkg.packageType)} · v${pkg.version || '未知'}）`
+      `## ${pkg.name || pkg.id}${recommendedLabel} （${packageTypeText(pkg.packageType)} · v${pkg.version || '未知'}）`
     )
     if (pkg.metadata?.description) {
-      lines.push(`   - 描述：${pkg.metadata.description}`)
+      lines.push(`- 描述：${pkg.metadata.description}`)
     }
     lines.push(
-      `   - 详情链接：[${links.detailLink}](${links.detailLink})`,
-      `   - 下载链接：[${links.downloadLink}](${links.downloadLink})`,
-      '   - 重构提示词：',
-      `     \`${links.prompt}\``
+      `- 详情链接：[${links.detailLink}](${links.detailLink})`,
+      `- 下载链接：[${links.downloadLink}](${links.downloadLink})`,
+      '- 重构提示词：',
+      `  \`${links.prompt}\``
     )
   }
 
@@ -419,13 +419,13 @@ const formatPackageAgentAnswer = (result: RavenSearchResult, rawQuery: string) =
         ? `其他匹配的重构包（${otherPackages.length} 个）：`
         : `匹配的重构包（${packages.length} 个）：`
       lines.push('', sectionTitle)
-      otherPackages.forEach((pkg, index) => pushPackageLines(pkg, index + 1))
+      otherPackages.forEach((pkg) => pushPackageLines(pkg))
     }
 
     // 最后显示 AI 推荐的包
     if (recommendedPackages.length > 0) {
-      lines.push('', `AI 推荐的重构包（${recommendedPackages.length} 个）：`)
-      recommendedPackages.forEach((pkg, index) => pushPackageLines(pkg, index + 1, true))
+      lines.push('', `# Raven AI 推荐的重构包（${recommendedPackages.length} 个）：`)
+      recommendedPackages.forEach((pkg) => pushPackageLines(pkg, true))
     }
   } else {
     lines.push('', '未找到匹配的重构包。')
