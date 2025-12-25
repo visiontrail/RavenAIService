@@ -1,0 +1,61 @@
+# 测试依赖文件
+# 用于安装运行 tests 文件夹内所有测试所需的 Python 依赖
+# 
+# 使用方法:
+#   pip install -r requirements.txt
+#   或者
+#   pip install -r tests/requirements.txt
+#
+# 注意: 由于测试文件导入了 app 模块，建议先安装主项目的依赖:
+#   pip install -r ../requirements.txt
+#   然后再安装测试依赖:
+#   pip install -r requirements.txt
+
+# 测试框架
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-mock>=3.11.0
+
+# LangChain 相关（用于 test_chat_agent_react.py）
+langchain-core>=0.2.0
+langchain-openai>=0.1.7
+langgraph>=0.1.18
+
+# Pydantic（用于数据验证）
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+
+# 数据库相关（app 模块需要）
+sqlalchemy>=2.0.0
+alembic>=1.13.0
+asyncpg>=0.29.0
+aiosqlite>=0.19.0
+
+# 配置和环境变量
+python-dotenv>=1.0.1
+
+# Web 框架（app 模块需要）
+fastapi>=0.108.0
+uvicorn[standard]>=0.25.0
+python-multipart>=0.0.6
+
+# LangChain 完整支持（app 模块需要）
+langchain>=0.2.15
+langchain-community>=0.2.15
+
+# LLM 客户端
+openai>=1.40.0
+tiktoken>=0.7.0
+
+# YAML 解析
+PyYAML>=6.0.1
+
+# HTTP 客户端（用于 test_batch_operations.py）
+aiohttp>=3.9.0
+
+# 系统监控（用于性能测试）
+psutil>=5.9.7
+
+# 其他测试工具
+coverage>=7.3.0  # 代码覆盖率（可选）
+

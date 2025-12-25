@@ -1,16 +1,28 @@
-"""
+""" 
 LangChain + LangGraph 对话智能体
 用于 Raven AI 前端 (AIChat.vue) 的后端处理框架。
+
+本版引入 ReAct/规划循环 + 设备 device_prompt 协议化调度，支持：
+- MCP 工具理解（利用 device_capabilities_prompt）
+- 多步 Plan -> Act -> Observe -> Next 循环
+- device_prompt 单操作护栏与提示词协议
 """
+from __future__ import annotations
+
+import asyncio
+import inspect
+import json
 import logging
 import os
-from typing import Any, AsyncIterator, Dict, List, Optional, TypedDict
+import uuid
+from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, TypedDict
 
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
+from pydantic import BaseModel, Field
 
 from app.agents.tools import (
     clear_device_prompt_context,
@@ -31,10 +43,80 @@ class ChatState(TypedDict, total=False):
     target_device_id: Optional[str]
     target_device_name: Optional[str]
     device_capabilities_prompt: Optional[str]
+    plan: List[Dict[str, Any]]
+    step_index: int
+    observations: List[Any]
+    last_device_topic_id: Optional[str]
+    last_device_answer: Optional[str]
+    needs_user_input: bool
+    replan: bool
     tool_call_count: int  # 追踪工具调用次数，防止无限递归
 
 
-def _make_llm() -> Any:
+class PlanStep(BaseModel):
+    id: str = Field(..., description="Step id, e.g., S1")
+    type: str = Field(..., description="device_action | ask_user | finalize")
+    goal: str = Field(..., description="一步目标")
+    mcp_tool_hint: Optional[Dict[str, Any]] = Field(None, description="可选，推荐工具与参数")
+    success_criteria: List[str] = Field(default_factory=list)
+    fallback: Optional[str] = Field(None, description="失败时的回退策略")
+
+
+class PlanOutput(BaseModel):
+    steps: List[PlanStep] = Field(default_factory=list)
+
+
+class DeviceActionDirective(BaseModel):
+    """结构化的设备动作指令"""
+
+    tool_name: str = Field("", description="唯一的 MCP 工具名称")
+    args: Dict[str, Any] = Field(default_factory=dict, description="调用参数（不含 session_id/target_device_id）")
+    task: str = Field("", description="单次操作描述")
+    success_criteria: List[str] = Field(default_factory=list, description="成功判定")
+    missing_information: Optional[str] = Field(None, description="缺失信息时需向用户提问的内容")
+
+
+PLAN_PROMPT_TEMPLATE = """
+你是任务规划助手，需要为设备联动制定可执行的分步计划。
+- 生成 2-5 个步骤，steps 使用 JSON（包含 id/type/goal/mcp_tool_hint/success_criteria/fallback）。
+- type 只能是 device_action | ask_user | finalize。
+- 每个 device_action 只允许一个 MCP 工具；如需多个操作，请拆分为多步。
+- 信息不足时加入 ask_user 步骤。
+- 计划最后必须有 finalize 步骤。
+
+用户需求:
+{user_goal}
+
+已知观察:
+{observations_text}
+
+设备能力 (MCP):
+{device_capabilities_prompt}
+"""
+
+ACTION_DIRECTIVE_PROMPT = """
+你是设备操作决策助手，需要为当前步骤选定单一 MCP 工具与参数。
+约束：
+- 只允许一个 MCP 工具，禁止多次/串联调用。
+- 如信息不足，填写 missing_information 为向用户提问的中文句子，tool_name 可留空。
+- args 只包含该工具需要的字段（不要包含 session_id/target_device_id）。
+- success_criteria 给出 1-3 条检查点。
+
+用户需求: {user_goal}
+当前步骤: {step_json}
+设备能力: {device_capabilities_prompt}
+已知观察: {observations_text}
+"""
+
+SUMMARY_PROMPT = """
+请以中文简洁总结本轮对话进展，说明已完成的设备动作与结果，如需用户补充信息请直接提问。
+用户需求: {user_goal}
+观察记录: {observations_text}
+计划: {plan_text}
+"""
+
+
+def _make_llm(streaming: bool = True) -> Any:
     """
     构建 OpenAI 兼容的聊天模型，统一使用 DeepSeek 配置。
     """
@@ -54,12 +136,12 @@ def _make_llm() -> Any:
             api_key=api_key,
             base_url=base_url,
             temperature=settings.llm_temperature,
-            streaming=True,
+            streaming=streaming,
         )
         # 记录模型名称，便于响应时回传
         if not hasattr(llm, "model_name"):
             llm.model_name = model
-        logger.info("ChatAgent: using DeepSeek model %s", llm.model_name)
+        logger.info("ChatAgent: using DeepSeek model %s (streaming=%s)", llm.model_name, streaming)
         return llm
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"无法初始化聊天模型: {exc}") from exc
@@ -67,9 +149,9 @@ def _make_llm() -> Any:
 
 class ChatAgent:
     """
-    极简 LangGraph 工作流：
-    - State: messages + system_prompt (+ device/session context)
-    - Node: call_llm -> tool_router -> call_tools -> call_llm
+    ReAct 风格的 LangGraph 工作流：
+    - Plan -> Act -> Observe -> Decide 循环
+    - device_prompt 调度增加单操作护栏与协议化 prompt
     """
 
     def __init__(self, max_tool_calls: int = 5):
@@ -79,18 +161,19 @@ class ChatAgent:
             "回答要简洁可执行，如需操作请给出具体指引。"
         )
         self.max_tool_calls = max_tool_calls  # 最大工具调用次数限制
-        logger.info(f"ChatAgent: 设置最大工具调用次数: {self.max_tool_calls}")
+        logger.info("ChatAgent: 设置最大工具调用次数: %s", self.max_tool_calls)
 
         logger.info("ChatAgent: 正在初始化 LLM...")
-        base_llm = _make_llm()
+        base_llm = _make_llm(streaming=True)
+        # 规划/动作决策使用非流式，避免结构化输出受限
+        self.planner_llm = _make_llm(streaming=False)
         self.tools = [device_prompt]
         self._tool_names = {getattr(tool, "name", "") for tool in self.tools if getattr(tool, "name", "")}
         self.llm = base_llm.bind_tools(self.tools)
         self.base_llm = base_llm
         self.model_name = getattr(base_llm, "model_name", settings.llm_model_name)
-        logger.info(f"ChatAgent: LLM 初始化完成，模型名称: {self.model_name}")
+        logger.info("ChatAgent: LLM 初始化完成，模型名称: %s", self.model_name)
 
-        logger.info("ChatAgent: 正在构建 Prompt 模板...")
         self.prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", "{system_prompt}"),
@@ -100,222 +183,45 @@ class ChatAgent:
         logger.info("ChatAgent: Prompt 模板构建完成")
 
         logger.info("ChatAgent: 正在构建 LangGraph 工作流...")
-        self.graph = self._build_graph()
         self.tool_node = ToolNode(self.tools)
+        self.graph = self._build_graph()
         logger.info("==================== ChatAgent 初始化完成 ====================")
 
     def _build_graph(self):
         logger.info("ChatAgent: 开始构建 StateGraph...")
         workflow = StateGraph(ChatState)
-        workflow.add_node("call_llm", self._call_model)
+        workflow.add_node("build_plan", self._build_plan_node)
+        workflow.add_node("act", self._act_node)
         workflow.add_node("call_tools", self._call_tools)
-        workflow.set_entry_point("call_llm")
+        workflow.add_node("post_observe", self._post_observe)
+        workflow.add_node("should_continue", self._should_continue_node)
+
+        workflow.set_entry_point("build_plan")
+        workflow.add_edge("build_plan", "act")
         workflow.add_conditional_edges(
-            "call_llm",
-            self._tool_router,
+            "act",
+            self._route_from_act,
             {
-                END: END,
                 "call_tools": "call_tools",
+                "continue": "should_continue",
             },
         )
-        workflow.add_edge("call_tools", "call_llm")
+        workflow.add_edge("call_tools", "post_observe")
+        workflow.add_edge("post_observe", "should_continue")
+        workflow.add_conditional_edges(
+            "should_continue",
+            self._continue_router,
+            {
+                "plan": "build_plan",
+                "act": "act",
+                END: END,
+            },
+        )
 
-        # 设置 recursion_limit，防止无限递归
-        # 每次循环包含：call_llm -> call_tools，所以实际工具调用次数 = recursion_limit / 2
-        # 我们设置为 max_tool_calls * 2 + 2（额外的缓冲）
-        recursion_limit = self.max_tool_calls * 2 + 2
+        recursion_limit = self.max_tool_calls * 4 + 6
         compiled = workflow.compile()
-        logger.info(f"ChatAgent: StateGraph 构建完成，recursion_limit={recursion_limit}")
+        logger.info("ChatAgent: StateGraph 构建完成，recursion_limit=%s", recursion_limit)
         return compiled
-
-    async def _call_model(self, state: ChatState) -> ChatState:
-        """单节点调用 LLM 并返回新的状态。"""
-        logger.info("========== _call_model 开始执行 ==========")
-        logger.info(f"_call_model: 使用模型: {self.model_name}")
-        logger.info(f"_call_model: 收到的消息数量: {len(state.get('messages', []))}")
-
-        base_prompt = state.get("system_prompt") or self.default_system_prompt
-        device_capabilities_prompt = state.get("device_capabilities_prompt")
-        system_prompt = self._build_system_prompt(
-            base_prompt,
-            target_device_id=state.get("target_device_id"),
-            target_device_name=state.get("target_device_name"),
-            session_id=state.get("session_id"),
-            device_capabilities_prompt=device_capabilities_prompt,
-        )
-        logger.info(f"_call_model: 系统提示词长度: {len(system_prompt)} 字符")
-        if device_capabilities_prompt:
-            capabilities_preview = device_capabilities_prompt[:500].replace("\n", "\\n")
-            logger.info(
-                "_call_model: 已注入设备 MCP 能力提示（%d 字符），预览: %s",
-                len(device_capabilities_prompt),
-                capabilities_preview,
-            )
-        elif state.get("target_device_id"):
-            logger.info("_call_model: 已指定目标设备，但未获取到设备能力提示")
-
-        logger.info("_call_model: 正在格式化 Prompt...")
-        prompt_messages = self.prompt.format_messages(
-            system_prompt=system_prompt,
-            messages=state.get("messages", []),
-        )
-        logger.info(f"_call_model: Prompt 格式化完成，消息数量: {len(prompt_messages)}")
-        
-        logger.info(f"_call_model: 正在调用 LLM (模型: {self.model_name})...")
-        try:
-            ai_message: AIMessage = await self.llm.ainvoke(prompt_messages)
-            content_len = len(ai_message.content) if ai_message.content else 0
-            logger.info(f"_call_model: LLM 调用成功 (模型: {self.model_name})，回复长度: {content_len} 字符")
-
-            # 记录工具调用信息
-            if hasattr(ai_message, "tool_calls") and ai_message.tool_calls:
-                logger.info(f"_call_model: 模型请求调用 {len(ai_message.tool_calls)} 个工具")
-                for idx, tool_call in enumerate(ai_message.tool_calls):
-                    tool_name = getattr(tool_call, "name", "unknown") if hasattr(tool_call, "name") else tool_call.get("name", "unknown")
-                    logger.info(f"_call_model: 工具请求 #{idx + 1}: {tool_name}")
-            else:
-                logger.info("_call_model: 模型未请求工具调用，将结束对话")
-
-            if ai_message.content:
-                content_preview = str(ai_message.content)[:100]
-                logger.info(f"_call_model: 回复内容预览: {content_preview}...")
-            else:
-                logger.warning("_call_model: 警告 - 模型返回了空内容")
-        except Exception as e:
-            logger.error(f"_call_model: LLM 调用失败 (模型: {self.model_name}): {str(e)}", exc_info=True)
-            raise
-        
-        updated_messages = list(state.get("messages", [])) + [ai_message]
-        logger.info(f"_call_model: 更新后的消息总数: {len(updated_messages)}")
-        logger.info("========== _call_model 执行完成 ==========")
-
-        # 返回状态，保持 tool_call_count 不变
-        return {
-            "messages": updated_messages,
-            "system_prompt": base_prompt,
-            "session_id": state.get("session_id"),
-            "target_device_id": state.get("target_device_id"),
-            "target_device_name": state.get("target_device_name"),
-            "device_capabilities_prompt": state.get("device_capabilities_prompt"),
-            "tool_call_count": state.get("tool_call_count", 0),
-        }
-
-    async def _call_tools(self, state: ChatState) -> ChatState:
-        """执行工具调用，将工具结果写回消息列表。"""
-        logger.info("========== _call_tools 开始执行 ==========")
-
-        # 增加工具调用计数
-        tool_call_count = state.get("tool_call_count", 0) + 1
-        logger.info(f"_call_tools: 当前工具调用次数: {tool_call_count}/{self.max_tool_calls}")
-
-        # 记录具体的工具调用信息
-        messages = state.get("messages", [])
-        last_message = messages[-1] if messages else None
-        if isinstance(last_message, AIMessage) and hasattr(last_message, "tool_calls"):
-            tool_calls = getattr(last_message, "tool_calls", [])
-            logger.info(f"_call_tools: 检测到 {len(tool_calls)} 个工具调用")
-            for idx, tool_call in enumerate(tool_calls):
-                tool_name = getattr(tool_call, "name", "unknown") if hasattr(tool_call, "name") else tool_call.get("name", "unknown")
-                tool_args = getattr(tool_call, "args", {}) if hasattr(tool_call, "args") else tool_call.get("args", {})
-                logger.info(f"_call_tools: 工具 #{idx + 1}: {tool_name}, 参数: {tool_args}")
-            self._normalize_tool_calls(last_message)
-
-        set_device_prompt_context(
-            state.get("session_id"),
-            state.get("target_device_id"),
-            state.get("system_prompt") or self.default_system_prompt,
-        )
-        try:
-            tool_updates = await self.tool_node.ainvoke(state)
-        finally:
-            clear_device_prompt_context()
-
-        updated_messages = list(state.get("messages", []))
-        if isinstance(tool_updates, Dict) and tool_updates.get("messages"):
-            new_messages = tool_updates["messages"]
-            updated_messages.extend(new_messages)
-            # 记录工具返回结果
-            for msg in new_messages:
-                if hasattr(msg, "content"):
-                    content_preview = str(msg.content)[:200] if msg.content else "(empty)"
-                    logger.info(f"_call_tools: 工具返回内容预览: {content_preview}")
-
-        logger.info(f"_call_tools: 工具执行完成，新增消息数: {len(updated_messages) - len(state.get('messages', []))}")
-        logger.info("========== _call_tools 执行完成 ==========")
-        return {
-            "messages": updated_messages,
-            "system_prompt": state.get("system_prompt") or self.default_system_prompt,
-            "session_id": state.get("session_id"),
-            "target_device_id": state.get("target_device_id"),
-            "target_device_name": state.get("target_device_name"),
-            "device_capabilities_prompt": state.get("device_capabilities_prompt"),
-            "tool_call_count": tool_call_count,  # 更新计数
-        }
-
-    def _tool_router(self, state: ChatState) -> str:
-        """根据最新 AIMessage 是否包含工具调用决定分支，同时检查递归限制。"""
-        # 首先检查是否超过最大工具调用次数
-        tool_call_count = state.get("tool_call_count", 0)
-        if tool_call_count >= self.max_tool_calls:
-            logger.warning(
-                f"_tool_router: 已达到最大工具调用次数 ({tool_call_count}/{self.max_tool_calls})，终止工具调用"
-            )
-            return END
-
-        # 检查是否有工具调用需求
-        messages = state.get("messages", [])
-        last_message = messages[-1] if messages else None
-        if isinstance(last_message, AIMessage) and getattr(last_message, "tool_calls", None):
-            logger.info(f"_tool_router: 检测到工具调用，当前计数: {tool_call_count}/{self.max_tool_calls}")
-            return "call_tools"
-
-        logger.info("_tool_router: 无工具调用，结束流程")
-        return END
-
-    def _normalize_tool_call_name(self, raw_name: Optional[str]) -> Optional[str]:
-        """Normalize tool name from LLM to the known tool set (fixes duplicated names)."""
-        if not raw_name:
-            return None
-        name = str(raw_name).strip()
-        if name in self._tool_names:
-            return name
-
-        lower_map = {n.lower(): n for n in self._tool_names}
-        if name.lower() in lower_map:
-            return lower_map[name.lower()]
-
-        # Handle repeated concatenated names like "device_promptdevice_prompt"
-        for canonical in self._tool_names:
-            if name.replace(canonical, "") == "" or name.lower().replace(canonical.lower(), "") == "":
-                return canonical
-        return None
-
-    def _normalize_tool_calls(self, ai_message: AIMessage) -> None:
-        """Ensure tool calls use valid names before executing ToolNode."""
-        tool_calls = getattr(ai_message, "tool_calls", None)
-        if not tool_calls:
-            return
-
-        normalized_calls = []
-        changed = False
-        for tool_call in tool_calls:
-            raw_name = getattr(tool_call, "name", None) if hasattr(tool_call, "name") else tool_call.get("name")
-            normalized_name = self._normalize_tool_call_name(raw_name)
-            if normalized_name and normalized_name != raw_name:
-                logger.warning(
-                    "_call_tools: 检测到异常工具名 %s，已规范为 %s",
-                    raw_name,
-                    normalized_name,
-                )
-                if hasattr(tool_call, "name"):
-                    setattr(tool_call, "name", normalized_name)
-                elif isinstance(tool_call, dict):
-                    tool_call["name"] = normalized_name
-                changed = True
-            normalized_calls.append(tool_call)
-
-        if changed:
-            ai_message.tool_calls = normalized_calls
 
     def _build_system_prompt(
         self,
@@ -335,13 +241,485 @@ class ChatAgent:
         prompt = (
             f"{prompt}\n\n[Device Link]\n"
             f"当前对话目标设备: {device_label} (ID: {target_device_id})。\n"
-            "如需让该设备回答，请调用工具 device_prompt，将用户问题写入 prompt，"
+            "如需让该设备回答，请调用工具 device_prompt，将设备指令写入 prompt，"
             f"并携带 session_id={session_hint} 与 target_device_id。"
-            "收到工具结果后，用中文向用户总结其中的 answer，并保留 topic_id 供追踪。"
+            "收到工具结果后，用中文向用户总结 answer，并保留 topic_id 供追踪。"
         )
         if device_capabilities_prompt:
             prompt = f"{prompt}\n\n[设备能力提示]\n{device_capabilities_prompt}"
         return prompt
+
+    def _extract_user_goal(self, messages: Sequence[BaseMessage]) -> str:
+        """取最近的人类消息作为用户需求。"""
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage):
+                return str(msg.content)
+        # 回退为最后一条消息内容
+        return str(messages[-1].content) if messages else ""
+
+    def _observations_text(self, observations: Sequence[Any]) -> str:
+        if not observations:
+            return "暂无"
+        parts: List[str] = []
+        for idx, obs in enumerate(observations, start=1):
+            if isinstance(obs, dict):
+                ans = obs.get("answer") or obs.get("raw") or obs
+                parts.append(f"[{idx}] {ans}")
+            else:
+                parts.append(f"[{idx}] {obs}")
+        return "\n".join(parts)
+
+    async def _generate_plan(self, state: ChatState) -> List[PlanStep]:
+        user_goal = self._extract_user_goal(state.get("messages", []))
+        observations_text = self._observations_text(state.get("observations", []))
+        device_capabilities_prompt = state.get("device_capabilities_prompt") or "无"
+        prompt_text = PLAN_PROMPT_TEMPLATE.format(
+            user_goal=user_goal,
+            observations_text=observations_text,
+            device_capabilities_prompt=device_capabilities_prompt,
+        )
+        logger.info(
+            "\n\n--- PLAN PROMPT ---\n%s\n--- END PLAN PROMPT ---\n",
+            prompt_text[:1200] + ("..." if len(prompt_text) > 1200 else ""),
+        )
+        structured_llm = self.planner_llm.with_structured_output(PlanOutput)
+        try:
+            plan_output: PlanOutput = await structured_llm.ainvoke(prompt_text)
+            steps = plan_output.steps or []
+            logger.info("计划生成完成，步数=%s", len(steps))
+            for step in steps:
+                logger.info("Plan step: %s | %s", step.id, step.goal)
+            return steps
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("生成计划失败，使用回退方案: %s", exc, exc_info=True)
+            fallback = PlanStep(id="S1", type="finalize", goal="向用户总结进展")
+            return [fallback]
+
+    async def _build_plan_node(self, state: ChatState) -> ChatState:
+        steps = await self._generate_plan(state)
+        plan_dicts = [step.model_dump() for step in steps]
+        return {
+            **state,
+            "plan": plan_dicts,
+            "step_index": 0,
+            "replan": False,
+            "needs_user_input": False,
+        }
+
+    def _route_from_act(self, state: ChatState) -> str:
+        """根据 act 输出决定是否进入工具调用。"""
+        tool_call_count = state.get("tool_call_count", 0)
+        if tool_call_count >= self.max_tool_calls:
+            logger.warning("已达到最大工具调用次数(%s)，停止调用工具", tool_call_count)
+            return "continue"
+
+        messages = state.get("messages", [])
+        last_message = messages[-1] if messages else None
+        if isinstance(last_message, AIMessage) and getattr(last_message, "tool_calls", None):
+            return "call_tools"
+        return "continue"
+
+    def _continue_router(self, state: ChatState) -> str:
+        if state.get("replan"):
+            return "plan"
+        if state.get("needs_user_input"):
+            return END
+        if state.get("tool_call_count", 0) >= self.max_tool_calls:
+            return END
+        plan = state.get("plan") or []
+        if state.get("step_index", 0) >= len(plan):
+            return END
+        return "act"
+
+    async def _act_node(self, state: ChatState) -> ChatState:
+        plan = state.get("plan") or []
+        idx = state.get("step_index", 0)
+        messages = list(state.get("messages", []))
+        observations = state.get("observations", [])
+        user_goal = self._extract_user_goal(messages)
+
+        if state.get("needs_user_input"):
+            logger.info("act: 正在等待用户补充信息，结束本轮")
+            return state
+
+        if idx >= len(plan):
+            summary = await self._summarize_for_user(state, user_goal)
+            messages.append(AIMessage(content=summary))
+            return {**state, "messages": messages, "step_index": idx}
+
+        step = plan[idx]
+        step_type = step.get("type")
+        logger.info("act: 当前步骤 #%s 类型=%s 目标=%s", idx + 1, step_type, step.get("goal"))
+
+        if step_type == "ask_user":
+            question = step.get("goal") or "请补充更多信息以继续。"
+            messages.append(AIMessage(content=question))
+            return {
+                **state,
+                "messages": messages,
+                "step_index": idx + 1,
+                "needs_user_input": True,
+            }
+
+        if step_type == "finalize":
+            summary = await self._summarize_for_user(state, user_goal)
+            messages.append(AIMessage(content=summary))
+            return {**state, "messages": messages, "step_index": idx + 1}
+
+        if step_type != "device_action":
+            # 未知类型，直接请求用户确认
+            fallback_msg = f"当前步骤无法解析（{step_type}），请确认要执行的动作。"
+            messages.append(AIMessage(content=fallback_msg))
+            return {
+                **state,
+                "messages": messages,
+                "step_index": idx + 1,
+                "needs_user_input": True,
+            }
+
+        directive = await self._decide_device_action(step, state, user_goal, observations)
+        if directive.missing_information:
+            messages.append(AIMessage(content=directive.missing_information))
+            return {
+                **state,
+                "messages": messages,
+                "step_index": idx + 1,
+                "needs_user_input": True,
+            }
+
+        dispatch_prompt = self._build_device_dispatch_prompt(
+            user_goal=user_goal,
+            step=step,
+            directive=directive,
+            state_context=state,
+            device_capabilities_prompt=state.get("device_capabilities_prompt"),
+        )
+        ensured_prompt = self._ensure_single_action_prompt(dispatch_prompt, state)
+        dispatch_prompt = await ensured_prompt if inspect.isawaitable(ensured_prompt) else ensured_prompt
+
+        tool_call = {
+            "id": f"call_{uuid.uuid4().hex[:8]}",
+            "name": "device_prompt",
+            "args": {
+                "prompt": dispatch_prompt,
+                "session_id": state.get("session_id"),
+                "target_device_id": state.get("target_device_id"),
+                "system_prompt": state.get("system_prompt") or self.default_system_prompt,
+            },
+        }
+        ai_message = AIMessage(
+            content="正在为设备生成单次操作指令。",
+            tool_calls=[tool_call],
+        )
+        messages.append(ai_message)
+        logger.info(
+            "act: 生成 device_prompt 调用，工具=%s，参数 keys=%s",
+            directive.tool_name,
+            list(directive.args.keys()),
+        )
+        logger.info(
+            "act: 下发到设备的 prompt 预览: %s",
+            dispatch_prompt[:800] + ("..." if len(dispatch_prompt) > 800 else ""),
+        )
+        return {**state, "messages": messages}
+
+    async def _call_tools(self, state: ChatState) -> ChatState:
+        """执行工具调用，将工具结果写回消息列表。"""
+        logger.info("========== _call_tools 开始执行 ==========")
+
+        tool_call_count = state.get("tool_call_count", 0) + 1
+        logger.info("_call_tools: 当前工具调用次数: %s/%s", tool_call_count, self.max_tool_calls)
+
+        messages = state.get("messages", [])
+        last_message = messages[-1] if messages else None
+        if isinstance(last_message, AIMessage) and hasattr(last_message, "tool_calls"):
+            tool_calls = getattr(last_message, "tool_calls", [])
+            logger.info("_call_tools: 检测到 %s 个工具调用", len(tool_calls))
+            for idx, tool_call in enumerate(tool_calls):
+                tool_name = getattr(tool_call, "name", "unknown") if hasattr(tool_call, "name") else tool_call.get("name", "unknown")
+                tool_args = getattr(tool_call, "args", {}) if hasattr(tool_call, "args") else tool_call.get("args", {})
+                logger.info("_call_tools: 工具 #%s: %s, 参数 keys: %s", idx + 1, tool_name, list(tool_args.keys()))
+            self._normalize_tool_calls(last_message, state)
+
+        set_device_prompt_context(
+            state.get("session_id"),
+            state.get("target_device_id"),
+            state.get("system_prompt") or self.default_system_prompt,
+        )
+        try:
+            tool_updates = await self.tool_node.ainvoke(state)
+        finally:
+            clear_device_prompt_context()
+
+        updated_messages = list(state.get("messages", []))
+        if isinstance(tool_updates, Dict) and tool_updates.get("messages"):
+            new_messages = tool_updates["messages"]
+            updated_messages.extend(new_messages)
+            for msg in new_messages:
+                if hasattr(msg, "content"):
+                    content_preview = str(msg.content)[:400] if msg.content else "(empty)"
+                    logger.info("_call_tools: 工具返回内容预览: %s", content_preview)
+
+        logger.info("_call_tools: 工具执行完成，新增消息数: %s", len(updated_messages) - len(state.get("messages", [])))
+        logger.info("========== _call_tools 执行完成 ==========")
+        return {
+            **state,
+            "messages": updated_messages,
+            "tool_call_count": tool_call_count,
+        }
+
+    async def _post_observe(self, state: ChatState) -> ChatState:
+        """解析工具返回，写入 observations，推进 step_index。"""
+        messages = state.get("messages", [])
+        observations = list(state.get("observations", []))
+        last_tool_msg = next((m for m in reversed(messages) if isinstance(m, ToolMessage)), None)
+        parsed = self._parse_tool_message(last_tool_msg) if last_tool_msg else None
+
+        replan = state.get("replan", False)
+        needs_user_input = state.get("needs_user_input", False)
+        last_device_answer = state.get("last_device_answer")
+        last_device_topic_id = state.get("last_device_topic_id")
+
+        if parsed:
+            observations.append(parsed)
+            last_device_answer = parsed.get("answer") or last_device_answer
+            last_device_topic_id = parsed.get("topic_id") or last_device_topic_id
+            logger.info("post_observe: 解析工具返回 answer=%s topic_id=%s", last_device_answer, last_device_topic_id)
+            if self._needs_more_info(parsed):
+                replan = True
+                needs_user_input = True
+
+        return {
+            **state,
+            "observations": observations,
+            "step_index": state.get("step_index", 0) + 1,
+            "replan": replan,
+            "needs_user_input": needs_user_input,
+            "last_device_answer": last_device_answer,
+            "last_device_topic_id": last_device_topic_id,
+        }
+
+    async def _should_continue_node(self, state: ChatState) -> ChatState:
+        """中转节点，用于在 router 中读取最新状态。"""
+        return state
+
+    def _normalize_tool_call_name(self, raw_name: Optional[str]) -> Optional[str]:
+        """Normalize tool name from LLM to the known tool set (fixes duplicated names)."""
+        if not raw_name:
+            return None
+        name = str(raw_name).strip()
+        if name in self._tool_names:
+            return name
+
+        lower_map = {n.lower(): n for n in self._tool_names}
+        if name.lower() in lower_map:
+            return lower_map[name.lower()]
+
+        # Handle repeated concatenated names like "device_promptdevice_prompt"
+        for canonical in self._tool_names:
+            if name.replace(canonical, "") == "" or name.lower().replace(canonical.lower(), "") == "":
+                return canonical
+        return None
+
+    def _normalize_tool_calls(self, ai_message: AIMessage, state: ChatState) -> None:
+        """Ensure tool calls use valid names and only one call before executing ToolNode."""
+        tool_calls = getattr(ai_message, "tool_calls", None)
+        if not tool_calls:
+            return
+
+        if len(tool_calls) > 1:
+            logger.warning("检测到 %s 个工具调用，已截断为第一个以满足单操作约束", len(tool_calls))
+            tool_calls = [tool_calls[0]]
+
+        normalized_calls = []
+        changed = False
+        for tool_call in tool_calls:
+            raw_name = getattr(tool_call, "name", None) if hasattr(tool_call, "name") else tool_call.get("name")
+            normalized_name = self._normalize_tool_call_name(raw_name)
+            if normalized_name and normalized_name != raw_name:
+                logger.warning("_call_tools: 检测到异常工具名 %s，已规范为 %s", raw_name, normalized_name)
+                if hasattr(tool_call, "name"):
+                    setattr(tool_call, "name", normalized_name)
+                elif isinstance(tool_call, dict):
+                    tool_call["name"] = normalized_name
+                changed = True
+
+            args = getattr(tool_call, "args", {}) if hasattr(tool_call, "args") else tool_call.get("args", {})
+            if isinstance(args, dict):
+                if not args.get("session_id"):
+                    args["session_id"] = state.get("session_id")
+                    changed = True
+                if not args.get("target_device_id"):
+                    args["target_device_id"] = state.get("target_device_id")
+                    changed = True
+            if hasattr(tool_call, "args"):
+                setattr(tool_call, "args", args)
+            elif isinstance(tool_call, dict):
+                tool_call["args"] = args
+            normalized_calls.append(tool_call)
+
+        if changed:
+            ai_message.tool_calls = normalized_calls
+
+    async def _decide_device_action(
+        self,
+        step: Dict[str, Any],
+        state: ChatState,
+        user_goal: str,
+        observations: Sequence[Any],
+    ) -> DeviceActionDirective:
+        device_capabilities_prompt = state.get("device_capabilities_prompt") or "无"
+        observations_text = self._observations_text(observations)
+        prompt_text = ACTION_DIRECTIVE_PROMPT.format(
+            user_goal=user_goal,
+            step_json=json.dumps(step, ensure_ascii=False),
+            device_capabilities_prompt=device_capabilities_prompt,
+            observations_text=observations_text,
+        )
+        logger.info(
+            "\n\n--- DEVICE ACTION PROMPT ---\n%s\n--- END DEVICE ACTION PROMPT ---\n",
+            prompt_text[:1200] + ("..." if len(prompt_text) > 1200 else ""),
+        )
+        structured_llm = self.planner_llm.with_structured_output(DeviceActionDirective)
+        try:
+            directive: DeviceActionDirective = await structured_llm.ainvoke(prompt_text)
+            if not directive.tool_name and not directive.missing_information:
+                directive.missing_information = "缺少可用的 MCP 工具或参数，请提供更多上下文。"
+            return directive
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("生成设备动作指令失败，使用回退: %s", exc, exc_info=True)
+            return DeviceActionDirective(
+                tool_name=step.get("mcp_tool_hint", {}).get("name", "") if isinstance(step.get("mcp_tool_hint"), dict) else "",
+                args=step.get("mcp_tool_hint", {}).get("args", {}) if isinstance(step.get("mcp_tool_hint"), dict) else {},
+                task=step.get("goal") or "执行单次设备操作",
+                success_criteria=step.get("success_criteria", []),
+                missing_information=None,
+            )
+
+    def _build_device_dispatch_prompt(
+        self,
+        user_goal: str,
+        step: Dict[str, Any],
+        directive: DeviceActionDirective,
+        state_context: ChatState,
+        device_capabilities_prompt: Optional[str],
+    ) -> str:
+        """为上位机端 AI 助手构建协议化 prompt。"""
+        shortlist = device_capabilities_prompt or "未提供设备能力，请保持保守的单次调用。"
+        success_criteria = directive.success_criteria or step.get("success_criteria") or ["返回执行结果或确认信息"]
+        args_json = json.dumps(directive.args or {}, ensure_ascii=False, indent=2)
+        checkpoint = "\n".join(f"- {c}" for c in success_criteria)
+        observations_text = self._observations_text(state_context.get("observations", []))
+
+        prompt_parts = [
+            "[ROLE] 你是上位机端设备 AI 助手，负责调用设备 MCP Server 工具（function calling）。",
+            "[TASK] 本次只执行一个操作：" + (directive.task or step.get("goal") or user_goal),
+            "[CONTEXT] 当前对话目标: "
+            f"{state_context.get('target_device_name') or state_context.get('target_device_id') or '未知设备'}; "
+            f"会话: {state_context.get('session_id') or '未知'}; 用户需求: {user_goal}; 最近观察: {observations_text}",
+            "[CONSTRAINTS]\n"
+            "- 只能调用 1 个 MCP 工具（禁止多次调用/链式执行）。\n"
+            "- 必须严格匹配参数，不确定就提问。\n"
+            "- 不要执行额外步骤，不要自行多次调用。",
+            "[AVAILABLE_TOOLS]\n" + shortlist,
+            "[TOOL_CALL]\n"
+            f"- 推荐工具: {directive.tool_name or step.get('mcp_tool_hint', {}).get('name') or '需选择'}\n"
+            f"- args: {args_json}",
+            "[CHECKPOINT]\n" + checkpoint,
+            "[RETURN_FORMAT]\n"
+            "- 返回 answer（给人看的摘要）和 topic_id（如有）。\n"
+            "- 如果信息不足，说明需要补充的字段，避免猜测。",
+        ]
+        return "\n\n".join(prompt_parts)
+
+    def _contains_multiple_actions(self, prompt: str) -> bool:
+        keywords = ["同时", "然后", "接着", "再调用", "分别调用", "两次", "多次", "多个工具", "先", "后再"]
+        lower_prompt = prompt.lower()
+        if any(k in prompt for k in keywords):
+            return True
+        if lower_prompt.count("tool") > 1 or prompt.count("调用") > 2:
+            return True
+        return False
+
+    async def _rewrite_device_prompt_single_action(self, prompt: str) -> str:
+        """调用 LLM 将多操作 prompt 重写为单操作；失败则回退首段。"""
+        rewrite_instruction = (
+            "将以下设备提示词改写为只执行一个 MCP 工具的单一操作，不要包含多个动作或多次调用。"
+            "如果发现多个操作，只保留最重要的第一个操作。保持中文。"
+        )
+        try:
+            res = await self.base_llm.ainvoke(f"{rewrite_instruction}\n\n{prompt}")
+            return res.content if hasattr(res, "content") else str(res)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("重写 device_prompt 失败，使用回退: %s", exc, exc_info=True)
+            return prompt.split("\n\n")[0]
+
+    async def _ensure_single_action_prompt(self, prompt: str, state: ChatState) -> str:
+        if not self._contains_multiple_actions(prompt):
+            return prompt
+        logger.warning("检测到 device_prompt 中疑似多步操作，尝试重写为单操作")
+        rewritten = await self._rewrite_device_prompt_single_action(prompt)
+        if self._contains_multiple_actions(rewritten):
+            logger.warning("重写后仍包含多操作，已截断为单个动作")
+            rewritten = rewritten.split("。")[0]
+        return rewritten
+
+    def _parse_tool_message(self, msg: ToolMessage) -> Dict[str, Any]:
+        """解析 device_prompt 返回的 json 结构，兼容异常格式。"""
+        content = getattr(msg, "content", None)
+        if isinstance(content, list):
+            content = "".join(str(part) for part in content)
+        parsed: Dict[str, Any] = {"raw": content}
+        try:
+            data = json.loads(content) if isinstance(content, str) else {}
+            if isinstance(data, dict):
+                parsed.update(data)
+        except Exception:
+            # 保留原始内容
+            parsed["error"] = "无法解析 device_prompt 返回内容"
+        return parsed
+
+    def _needs_more_info(self, parsed: Dict[str, Any]) -> bool:
+        answer = str(parsed.get("answer") or parsed.get("raw") or "").lower()
+        patterns = ["need", "缺少", "提供", "empty", "为空", "not found", "missing"]
+        return any(p in answer for p in patterns)
+
+    async def _summarize_for_user(self, state: ChatState, user_goal: str) -> str:
+        """最终向用户汇报或在无工具情况下回应。"""
+        observations_text = self._observations_text(state.get("observations", []))
+        plan_text = json.dumps(state.get("plan", []), ensure_ascii=False)
+        prompt_text = SUMMARY_PROMPT.format(
+            user_goal=user_goal,
+            observations_text=observations_text,
+            plan_text=plan_text,
+        )
+        try:
+            res = await self.base_llm.ainvoke(prompt_text)
+            return res.content if hasattr(res, "content") else str(res)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("总结生成失败，使用回退: %s", exc, exc_info=True)
+            if state.get("last_device_answer"):
+                return f"设备反馈: {state['last_device_answer']}"
+            return "本轮未执行设备操作，请告知下一步需求。"
+
+    async def _direct_llm(self, state: ChatState) -> ChatState:
+        """无设备场景的直接对话回退。"""
+        base_prompt = state.get("system_prompt") or self.default_system_prompt
+        prompt_messages = self.prompt.format_messages(
+            system_prompt=self._build_system_prompt(
+                base_prompt,
+                target_device_id=None,
+                target_device_name=None,
+                session_id=state.get("session_id"),
+            ),
+            messages=state.get("messages", []),
+        )
+        ai_message: AIMessage = await self.base_llm.ainvoke(prompt_messages)
+        updated_messages = list(state.get("messages", [])) + [ai_message]
+        return {
+            **state,
+            "messages": updated_messages,
+        }
 
     def invoke(
         self,
@@ -353,10 +731,6 @@ class ChatAgent:
         device_capabilities_prompt: Optional[str] = None,
     ) -> ChatState:
         """同步调用（主要用于调试或同步场景）"""
-        logger.info("==================== invoke 同步调用开始 ====================")
-        logger.info(f"invoke: 接收到 {len(messages)} 条消息")
-        logger.info(f"invoke: 系统提示词: {'自定义' if system_prompt else '默认'}")
-
         state: ChatState = {
             "messages": messages,
             "system_prompt": system_prompt or self.default_system_prompt,
@@ -364,19 +738,17 @@ class ChatAgent:
             "target_device_id": target_device_id,
             "target_device_name": target_device_name,
             "device_capabilities_prompt": device_capabilities_prompt,
-            "tool_call_count": 0,  # 初始化工具调用计数
+            "tool_call_count": 0,
+            "plan": [],
+            "step_index": 0,
+            "observations": [],
+            "needs_user_input": False,
+            "replan": False,
         }
-        logger.info("invoke: 正在调用 graph.invoke...")
-        try:
-            # 配置 recursion_limit
-            config = {"recursion_limit": self.max_tool_calls * 2 + 2}
-            result = self.graph.invoke(state, config=config)
-            logger.info(f"invoke: graph.invoke 调用成功，返回消息数: {len(result.get('messages', []))}")
-            logger.info("==================== invoke 同步调用完成 ====================")
-            return result
-        except Exception as e:
-            logger.error(f"invoke: graph.invoke 调用失败: {str(e)}", exc_info=True)
-            raise
+        if not target_device_id:
+            return asyncio.get_event_loop().run_until_complete(self._direct_llm(state))
+        config = {"recursion_limit": self.max_tool_calls * 4 + 6}
+        return self.graph.invoke(state, config=config)
 
     async def ainvoke(
         self,
@@ -389,8 +761,8 @@ class ChatAgent:
     ) -> ChatState:
         """异步调用，供 FastAPI 路由使用"""
         logger.info("==================== ainvoke 异步调用开始 ====================")
-        logger.info(f"ainvoke: 接收到 {len(messages)} 条消息")
-        logger.info(f"ainvoke: 系统提示词: {'自定义' if system_prompt else '默认'}")
+        logger.info("ainvoke: 接收到 %s 条消息", len(messages))
+        logger.info("ainvoke: 系统提示词: %s", "自定义" if system_prompt else "默认")
 
         state: ChatState = {
             "messages": messages,
@@ -399,23 +771,30 @@ class ChatAgent:
             "target_device_id": target_device_id,
             "target_device_name": target_device_name,
             "device_capabilities_prompt": device_capabilities_prompt,
-            "tool_call_count": 0,  # 初始化工具调用计数
+            "tool_call_count": 0,
+            "plan": [],
+            "step_index": 0,
+            "observations": [],
+            "needs_user_input": False,
+            "replan": False,
         }
-        logger.info("ainvoke: 正在调用 graph.ainvoke...")
+
+        if not target_device_id:
+            logger.info("ainvoke: 未指定设备，走直连对话回退")
+            return await self._direct_llm(state)
+
         set_device_prompt_context(
             session_id,
             target_device_id,
             system_prompt or self.default_system_prompt,
         )
         try:
-            # 配置 recursion_limit
-            config = {"recursion_limit": self.max_tool_calls * 2 + 2}
+            config = {"recursion_limit": self.max_tool_calls * 4 + 6}
             result = await self.graph.ainvoke(state, config=config)
-            logger.info(f"ainvoke: graph.ainvoke 调用成功，返回消息数: {len(result.get('messages', []))}")
-            logger.info("==================== ainvoke 异步调用完成 ====================")
+            logger.info("ainvoke: graph.ainvoke 调用成功，返回消息数: %s", len(result.get("messages", [])))
             return result
-        except Exception as e:
-            logger.error(f"ainvoke: graph.ainvoke 调用失败: {str(e)}", exc_info=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("ainvoke: graph.ainvoke 调用失败: %s", exc, exc_info=True)
             raise
         finally:
             clear_device_prompt_context()
@@ -449,7 +828,6 @@ class ChatAgent:
         logger.info("==================== astream 流式调用开始 ====================")
         system_prompt = system_prompt or self.default_system_prompt
 
-        # 当需要设备联动时，走完整 LangGraph（无逐字流式），保障工具调用。
         if target_device_id:
             logger.info("astream: 检测到 target_device_id，使用非流式工具分支")
             state = await self.ainvoke(
@@ -466,12 +844,11 @@ class ChatAgent:
             logger.info("==================== astream 流式调用完成（工具分支）====================")
             return
 
-        # 纯模型对话保持逐字流式。
         prompt_messages = self.prompt.format_messages(
             system_prompt=self._build_system_prompt(system_prompt, None, None, session_id),
             messages=messages,
         )
-        logger.info(f"astream: 准备流式输出，消息数: {len(prompt_messages)}")
+        logger.info("astream: 准备流式输出，消息数: %s", len(prompt_messages))
 
         async for chunk in self.base_llm.astream(prompt_messages):
             text = self._chunk_to_text(chunk)
