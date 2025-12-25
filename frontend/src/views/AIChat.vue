@@ -412,25 +412,21 @@ const formatPackageAgentAnswer = (result: RavenSearchResult, rawQuery: string) =
     lines.push('', result.answer)
   }
 
-  if (recommendedPackages.length) {
-    lines.push('', `AI 推荐的重构包（${recommendedPackages.length} 个）：`)
-    recommendedPackages.forEach((pkg, index) => pushPackageLines(pkg, index + 1, true))
-  }
-
   if (packages.length) {
-    const hasOtherPackages = recommendedPackages.length > 0 && otherPackages.length > 0
-    const sectionTitle = recommendedPackages.length
-      ? hasOtherPackages
+    // 先显示其他匹配的包（非推荐包）
+    if (otherPackages.length > 0) {
+      const sectionTitle = recommendedPackages.length > 0
         ? `其他匹配的重构包（${otherPackages.length} 个）：`
-        : ''
-      : `匹配的重构包（${packages.length} 个）：`
-
-    if (sectionTitle) {
+        : `匹配的重构包（${packages.length} 个）：`
       lines.push('', sectionTitle)
+      otherPackages.forEach((pkg, index) => pushPackageLines(pkg, index + 1))
     }
 
-    const list = recommendedPackages.length ? otherPackages : packages
-    list.forEach((pkg, index) => pushPackageLines(pkg, index + 1))
+    // 最后显示 AI 推荐的包
+    if (recommendedPackages.length > 0) {
+      lines.push('', `AI 推荐的重构包（${recommendedPackages.length} 个）：`)
+      recommendedPackages.forEach((pkg, index) => pushPackageLines(pkg, index + 1, true))
+    }
   } else {
     lines.push('', '未找到匹配的重构包。')
   }
