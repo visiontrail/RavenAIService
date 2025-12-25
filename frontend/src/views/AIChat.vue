@@ -384,31 +384,53 @@ const buildPackageLinks = (pkg: RavenPackage) => {
 const formatPackageAgentAnswer = (result: RavenSearchResult, rawQuery: string) => {
   const query = rawQuery.trim() || '（未提供查询）'
   const packages = result.relevantPackages || []
+  const recommendedIdSet = new Set(result.recommendedPackageIds || [])
+  const recommendedPackages = packages.filter((pkg) => recommendedIdSet.has(pkg.id))
+  const otherPackages = packages.filter((pkg) => !recommendedIdSet.has(pkg.id))
   const lines: string[] = [
     `**重构包配置管理员** 已为你执行智能搜索：\`${query}\``
   ]
+
+  const pushPackageLines = (pkg: RavenPackage, index: number, isRecommended = false) => {
+    const links = buildPackageLinks(pkg)
+    const recommendedLabel = isRecommended ? ' ⭐ AI 推荐' : ''
+    lines.push(
+      `${index}. **${pkg.name || pkg.id}**${recommendedLabel} （${packageTypeText(pkg.packageType)} · v${pkg.version || '未知'}）`
+    )
+    if (pkg.metadata?.description) {
+      lines.push(`   - 描述：${pkg.metadata.description}`)
+    }
+    lines.push(
+      `   - 详情链接：[${links.detailLink}](${links.detailLink})`,
+      `   - 下载链接：[${links.downloadLink}](${links.downloadLink})`,
+      '   - 重构提示词：',
+      `     \`${links.prompt}\``
+    )
+  }
 
   if (result.answer) {
     lines.push('', result.answer)
   }
 
+  if (recommendedPackages.length) {
+    lines.push('', `AI 推荐的重构包（${recommendedPackages.length} 个）：`)
+    recommendedPackages.forEach((pkg, index) => pushPackageLines(pkg, index + 1, true))
+  }
+
   if (packages.length) {
-    lines.push('', `匹配的重构包（${packages.length} 个）：`)
-    packages.forEach((pkg, index) => {
-      const links = buildPackageLinks(pkg)
-      lines.push(
-        `${index + 1}. **${pkg.name || pkg.id}** （${packageTypeText(pkg.packageType)} · v${pkg.version || '未知'}）`
-      )
-      if (pkg.metadata?.description) {
-        lines.push(`   - 描述：${pkg.metadata.description}`)
-      }
-      lines.push(
-        `   - 详情链接：[${links.detailLink}](${links.detailLink})`,
-        `   - 下载链接：[${links.downloadLink}](${links.downloadLink})`,
-        '   - 重构提示词：',
-        `     \`${links.prompt}\``
-      )
-    })
+    const hasOtherPackages = recommendedPackages.length > 0 && otherPackages.length > 0
+    const sectionTitle = recommendedPackages.length
+      ? hasOtherPackages
+        ? `其他匹配的重构包（${otherPackages.length} 个）：`
+        : ''
+      : `匹配的重构包（${packages.length} 个）：`
+
+    if (sectionTitle) {
+      lines.push('', sectionTitle)
+    }
+
+    const list = recommendedPackages.length ? otherPackages : packages
+    list.forEach((pkg, index) => pushPackageLines(pkg, index + 1))
   } else {
     lines.push('', '未找到匹配的重构包。')
   }

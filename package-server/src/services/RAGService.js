@@ -198,7 +198,7 @@ class RAGService {
     this.config = {
       apiKey: 'sk-rebTXHBiV7Nr1PRzaODQOZKztKqpv7bPoQE10dNItF9yIyBh',
       baseURL: 'http://oneapi.yhroot.com/v1',
-      modelName: 'deepseek-v3.1'
+      modelName: 'glm-4.6-chat'
     }
 
     // 初始化 embeddings（根据环境变量选择）
@@ -683,8 +683,6 @@ SHA256: ${pkg.metadata?.sha256 || '无'}
 1. 对用户问题的直接回答
 2. 推荐的包及其原因
 3. 如果有多个相关包，请说明它们之间的区别和选择建议
-
-回答：
 `)
 
       const formattedPrompt = await promptTemplate.format({
