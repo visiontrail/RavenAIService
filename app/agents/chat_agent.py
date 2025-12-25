@@ -31,6 +31,7 @@ class ChatState(TypedDict, total=False):
     target_device_id: Optional[str]
     target_device_name: Optional[str]
     device_capabilities_prompt: Optional[str]
+    tool_call_count: int  # 追踪工具调用次数，防止无限递归
 
 
 def _make_llm() -> Any:
@@ -71,12 +72,15 @@ class ChatAgent:
     - Node: call_llm -> tool_router -> call_tools -> call_llm
     """
 
-    def __init__(self):
+    def __init__(self, max_tool_calls: int = 5):
         logger.info("==================== ChatAgent 初始化开始 ====================")
         self.default_system_prompt = (
             "你是 Raven AI，对话助手，擅长日志分析、RAG 方案和平台使用指导。"
             "回答要简洁可执行，如需操作请给出具体指引。"
         )
+        self.max_tool_calls = max_tool_calls  # 最大工具调用次数限制
+        logger.info(f"ChatAgent: 设置最大工具调用次数: {self.max_tool_calls}")
+
         logger.info("ChatAgent: 正在初始化 LLM...")
         base_llm = _make_llm()
         self.tools = [device_prompt_tool]
@@ -84,7 +88,7 @@ class ChatAgent:
         self.base_llm = base_llm
         self.model_name = getattr(base_llm, "model_name", settings.llm_model_name)
         logger.info(f"ChatAgent: LLM 初始化完成，模型名称: {self.model_name}")
-        
+
         logger.info("ChatAgent: 正在构建 Prompt 模板...")
         self.prompt = ChatPromptTemplate.from_messages(
             [
@@ -93,7 +97,7 @@ class ChatAgent:
             ]
         )
         logger.info("ChatAgent: Prompt 模板构建完成")
-        
+
         logger.info("ChatAgent: 正在构建 LangGraph 工作流...")
         self.graph = self._build_graph()
         self.tool_node = ToolNode(self.tools)
@@ -114,8 +118,13 @@ class ChatAgent:
             },
         )
         workflow.add_edge("call_tools", "call_llm")
+
+        # 设置 recursion_limit，防止无限递归
+        # 每次循环包含：call_llm -> call_tools，所以实际工具调用次数 = recursion_limit / 2
+        # 我们设置为 max_tool_calls * 2 + 2（额外的缓冲）
+        recursion_limit = self.max_tool_calls * 2 + 2
         compiled = workflow.compile()
-        logger.info("ChatAgent: StateGraph 构建并编译完成")
+        logger.info(f"ChatAgent: StateGraph 构建完成，recursion_limit={recursion_limit}")
         return compiled
 
     async def _call_model(self, state: ChatState) -> ChatState:
@@ -144,8 +153,23 @@ class ChatAgent:
         logger.info(f"_call_model: 正在调用 LLM (模型: {self.model_name})...")
         try:
             ai_message: AIMessage = await self.llm.ainvoke(prompt_messages)
-            logger.info(f"_call_model: LLM 调用成功 (模型: {self.model_name})，回复长度: {len(ai_message.content)} 字符")
-            logger.info(f"_call_model: 回复内容预览: {ai_message.content[:100]}...")
+            content_len = len(ai_message.content) if ai_message.content else 0
+            logger.info(f"_call_model: LLM 调用成功 (模型: {self.model_name})，回复长度: {content_len} 字符")
+
+            # 记录工具调用信息
+            if hasattr(ai_message, "tool_calls") and ai_message.tool_calls:
+                logger.info(f"_call_model: 模型请求调用 {len(ai_message.tool_calls)} 个工具")
+                for idx, tool_call in enumerate(ai_message.tool_calls):
+                    tool_name = getattr(tool_call, "name", "unknown") if hasattr(tool_call, "name") else tool_call.get("name", "unknown")
+                    logger.info(f"_call_model: 工具请求 #{idx + 1}: {tool_name}")
+            else:
+                logger.info("_call_model: 模型未请求工具调用，将结束对话")
+
+            if ai_message.content:
+                content_preview = str(ai_message.content)[:100]
+                logger.info(f"_call_model: 回复内容预览: {content_preview}...")
+            else:
+                logger.warning("_call_model: 警告 - 模型返回了空内容")
         except Exception as e:
             logger.error(f"_call_model: LLM 调用失败 (模型: {self.model_name}): {str(e)}", exc_info=True)
             raise
@@ -153,6 +177,8 @@ class ChatAgent:
         updated_messages = list(state.get("messages", [])) + [ai_message]
         logger.info(f"_call_model: 更新后的消息总数: {len(updated_messages)}")
         logger.info("========== _call_model 执行完成 ==========")
+
+        # 返回状态，保持 tool_call_count 不变
         return {
             "messages": updated_messages,
             "system_prompt": base_prompt,
@@ -160,11 +186,28 @@ class ChatAgent:
             "target_device_id": state.get("target_device_id"),
             "target_device_name": state.get("target_device_name"),
             "device_capabilities_prompt": state.get("device_capabilities_prompt"),
+            "tool_call_count": state.get("tool_call_count", 0),
         }
 
     async def _call_tools(self, state: ChatState) -> ChatState:
         """执行工具调用，将工具结果写回消息列表。"""
         logger.info("========== _call_tools 开始执行 ==========")
+
+        # 增加工具调用计数
+        tool_call_count = state.get("tool_call_count", 0) + 1
+        logger.info(f"_call_tools: 当前工具调用次数: {tool_call_count}/{self.max_tool_calls}")
+
+        # 记录具体的工具调用信息
+        messages = state.get("messages", [])
+        last_message = messages[-1] if messages else None
+        if isinstance(last_message, AIMessage) and hasattr(last_message, "tool_calls"):
+            tool_calls = getattr(last_message, "tool_calls", [])
+            logger.info(f"_call_tools: 检测到 {len(tool_calls)} 个工具调用")
+            for idx, tool_call in enumerate(tool_calls):
+                tool_name = getattr(tool_call, "name", "unknown") if hasattr(tool_call, "name") else tool_call.get("name", "unknown")
+                tool_args = getattr(tool_call, "args", {}) if hasattr(tool_call, "args") else tool_call.get("args", {})
+                logger.info(f"_call_tools: 工具 #{idx + 1}: {tool_name}, 参数: {tool_args}")
+
         set_device_prompt_context(
             state.get("session_id"),
             state.get("target_device_id"),
@@ -177,7 +220,13 @@ class ChatAgent:
 
         updated_messages = list(state.get("messages", []))
         if isinstance(tool_updates, Dict) and tool_updates.get("messages"):
-            updated_messages.extend(tool_updates["messages"])
+            new_messages = tool_updates["messages"]
+            updated_messages.extend(new_messages)
+            # 记录工具返回结果
+            for msg in new_messages:
+                if hasattr(msg, "content"):
+                    content_preview = str(msg.content)[:200] if msg.content else "(empty)"
+                    logger.info(f"_call_tools: 工具返回内容预览: {content_preview}")
 
         logger.info(f"_call_tools: 工具执行完成，新增消息数: {len(updated_messages) - len(state.get('messages', []))}")
         logger.info("========== _call_tools 执行完成 ==========")
@@ -188,15 +237,27 @@ class ChatAgent:
             "target_device_id": state.get("target_device_id"),
             "target_device_name": state.get("target_device_name"),
             "device_capabilities_prompt": state.get("device_capabilities_prompt"),
+            "tool_call_count": tool_call_count,  # 更新计数
         }
 
-    @staticmethod
-    def _tool_router(state: ChatState) -> str:
-        """根据最新 AIMessage 是否包含工具调用决定分支。"""
+    def _tool_router(self, state: ChatState) -> str:
+        """根据最新 AIMessage 是否包含工具调用决定分支，同时检查递归限制。"""
+        # 首先检查是否超过最大工具调用次数
+        tool_call_count = state.get("tool_call_count", 0)
+        if tool_call_count >= self.max_tool_calls:
+            logger.warning(
+                f"_tool_router: 已达到最大工具调用次数 ({tool_call_count}/{self.max_tool_calls})，终止工具调用"
+            )
+            return END
+
+        # 检查是否有工具调用需求
         messages = state.get("messages", [])
         last_message = messages[-1] if messages else None
         if isinstance(last_message, AIMessage) and getattr(last_message, "tool_calls", None):
+            logger.info(f"_tool_router: 检测到工具调用，当前计数: {tool_call_count}/{self.max_tool_calls}")
             return "call_tools"
+
+        logger.info("_tool_router: 无工具调用，结束流程")
         return END
 
     def _build_system_prompt(
@@ -238,7 +299,7 @@ class ChatAgent:
         logger.info("==================== invoke 同步调用开始 ====================")
         logger.info(f"invoke: 接收到 {len(messages)} 条消息")
         logger.info(f"invoke: 系统提示词: {'自定义' if system_prompt else '默认'}")
-        
+
         state: ChatState = {
             "messages": messages,
             "system_prompt": system_prompt or self.default_system_prompt,
@@ -246,10 +307,13 @@ class ChatAgent:
             "target_device_id": target_device_id,
             "target_device_name": target_device_name,
             "device_capabilities_prompt": device_capabilities_prompt,
+            "tool_call_count": 0,  # 初始化工具调用计数
         }
         logger.info("invoke: 正在调用 graph.invoke...")
         try:
-            result = self.graph.invoke(state)
+            # 配置 recursion_limit
+            config = {"recursion_limit": self.max_tool_calls * 2 + 2}
+            result = self.graph.invoke(state, config=config)
             logger.info(f"invoke: graph.invoke 调用成功，返回消息数: {len(result.get('messages', []))}")
             logger.info("==================== invoke 同步调用完成 ====================")
             return result
@@ -270,7 +334,7 @@ class ChatAgent:
         logger.info("==================== ainvoke 异步调用开始 ====================")
         logger.info(f"ainvoke: 接收到 {len(messages)} 条消息")
         logger.info(f"ainvoke: 系统提示词: {'自定义' if system_prompt else '默认'}")
-        
+
         state: ChatState = {
             "messages": messages,
             "system_prompt": system_prompt or self.default_system_prompt,
@@ -278,6 +342,7 @@ class ChatAgent:
             "target_device_id": target_device_id,
             "target_device_name": target_device_name,
             "device_capabilities_prompt": device_capabilities_prompt,
+            "tool_call_count": 0,  # 初始化工具调用计数
         }
         logger.info("ainvoke: 正在调用 graph.ainvoke...")
         set_device_prompt_context(
@@ -286,7 +351,9 @@ class ChatAgent:
             system_prompt or self.default_system_prompt,
         )
         try:
-            result = await self.graph.ainvoke(state)
+            # 配置 recursion_limit
+            config = {"recursion_limit": self.max_tool_calls * 2 + 2}
+            result = await self.graph.ainvoke(state, config=config)
             logger.info(f"ainvoke: graph.ainvoke 调用成功，返回消息数: {len(result.get('messages', []))}")
             logger.info("==================== ainvoke 异步调用完成 ====================")
             return result
