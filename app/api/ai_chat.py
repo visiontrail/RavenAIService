@@ -46,7 +46,15 @@ async def chat_stream_endpoint(
     logger.info("接收到 AI 对话流式请求")
     logger.info(f"请求消息: {request.message[:100]}...")
     logger.info(f"session_id: {request.session_id}")
-    logger.info(f"历史记录条数: {len(request.history) if request.history else 0}")
+    logger.info(f"历史记录条数（前端传入）: {len(request.history) if request.history else 0}")
+    if request.history:
+        logger.info("历史记录概览（前端传入）:")
+        for i, msg in enumerate(request.history[:5]):  # 只显示前5条
+            role = msg.role if hasattr(msg, 'role') else 'unknown'
+            content_preview = (msg.content[:50] if hasattr(msg, 'content') else '')
+            logger.info(f"  [{i+1}] {role}: {content_preview}...")
+        if len(request.history) > 5:
+            logger.info(f"  ... (还有 {len(request.history) - 5} 条)")
     logger.info("=" * 80)
     try:
         generator = ai_chat_service.chat_stream(request, db=db, user=current_user)

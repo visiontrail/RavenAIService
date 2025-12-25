@@ -301,7 +301,15 @@ class AIChatService(BaseService):
             db,
             user,
         )
-        logger.info(f"chat_stream: 历史记录 {len(history_messages)} 条")
+        logger.info(f"chat_stream: 历史记录 {len(history_messages)} 条（数据库/内存加载）")
+        if history_messages:
+            logger.info("chat_stream: 历史记录概览（数据库/内存加载）:")
+            for i, msg in enumerate(history_messages[:5]):  # 只显示前5条
+                msg_type = type(msg).__name__
+                content_preview = str(msg.content)[:50] if hasattr(msg, 'content') else ''
+                logger.info(f"  [{i+1}] {msg_type}: {content_preview}...")
+            if len(history_messages) > 5:
+                logger.info(f"  ... (还有 {len(history_messages) - 5} 条)")
 
         history_messages.append(HumanMessage(content=payload.message))
         logger.info(f"chat_stream: 添加用户消息后共 {len(history_messages)} 条")

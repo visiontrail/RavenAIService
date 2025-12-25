@@ -14,7 +14,7 @@ from langgraph.prebuilt import ToolNode
 
 from app.agents.tools import (
     clear_device_prompt_context,
-    device_prompt_tool,
+    device_prompt,
     set_device_prompt_context,
 )
 from app.config import settings
@@ -83,7 +83,7 @@ class ChatAgent:
 
         logger.info("ChatAgent: 正在初始化 LLM...")
         base_llm = _make_llm()
-        self.tools = [device_prompt_tool]
+        self.tools = [device_prompt]
         self.llm = base_llm.bind_tools(self.tools)
         self.base_llm = base_llm
         self.model_name = getattr(base_llm, "model_name", settings.llm_model_name)

@@ -52,8 +52,8 @@ class DevicePromptInput(BaseModel):
     system_prompt: Optional[str] = Field(None, description="Optional system prompt passed to the device")
 
 
-@tool("device_prompt", args_schema=DevicePromptInput)
-async def device_prompt_tool(
+@tool(args_schema=DevicePromptInput)
+async def device_prompt(
     prompt: str,
     session_id: str,
     target_device_id: str,
@@ -65,9 +65,9 @@ async def device_prompt_tool(
     system_prompt = system_prompt if system_prompt is not None else _system_prompt_ctx.get()
 
     if not session_id:
-        raise ValueError("session_id is required to call device_prompt_tool")
+        raise ValueError("session_id is required to call device_prompt")
     if not target_device_id:
-        raise ValueError("target_device_id is required to call device_prompt_tool")
+        raise ValueError("target_device_id is required to call device_prompt")
 
     request_id = str(uuid.uuid4())
     envelope = PromptEnvelope(
@@ -79,19 +79,19 @@ async def device_prompt_tool(
     )
 
     logger.info(
-        "device_prompt_tool: dispatching prompt to device",
+        "device_prompt: dispatching prompt to device",
         extra={"target_device_id": target_device_id, "session_id": session_id, "request_id": request_id},
     )
     try:
         result = await device_link_manager.send_prompt(device_id=target_device_id, payload=envelope)
     except Exception as exc:  # noqa: BLE001
-        logger.error("device_prompt_tool: failed to send prompt: %s", exc, exc_info=True)
+        logger.error("device_prompt: failed to send prompt: %s", exc, exc_info=True)
         raise
 
     answer = result.get("answer") if isinstance(result, dict) else getattr(result, "answer", "")
     topic_id = result.get("topic_id") if isinstance(result, dict) else getattr(result, "topic_id", None)
     logger.info(
-        "device_prompt_tool: received device result",
+        "device_prompt: received device result",
         extra={"target_device_id": target_device_id, "request_id": request_id, "has_answer": bool(answer)},
     )
     payload = {"answer": answer or "", "topic_id": topic_id}
