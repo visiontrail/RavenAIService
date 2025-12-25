@@ -62,6 +62,13 @@ export const userApi = {
 
   deleteSession: (sessionId: string): Promise<ApiResponse<ChatSessionSummary[]>> =>
     userClient.delete(`/api/v1/users/chat-sessions/${sessionId}`),
+
+  saveMessages: (sessionId: string, userContent: string, aiContent: string, titleHint?: string): Promise<ApiResponse<{ session_id: string }>> =>
+    userClient.post(`/api/v1/users/chat-sessions/${sessionId}/messages`, {
+      user_content: userContent,
+      ai_content: aiContent,
+      title_hint: titleHint,
+    }),
 }
 
 export default userApi

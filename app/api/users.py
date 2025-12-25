@@ -246,3 +246,41 @@ async def delete_chat_session(
         message="会话已删除",
         data=[ChatSessionSummary.model_validate(s, from_attributes=True) for s in sessions],
     )
+
+
+class SaveMessagesRequest(BaseModel):
+    """保存消息请求"""
+
+    user_content: str
+    ai_content: str
+    title_hint: Optional[str] = None
+
+
+class SaveMessagesResponse(BaseModel):
+    """保存消息响应"""
+
+    message: str
+    session_id: str
+
+
+@router.post("/chat-sessions/{session_id}/messages", response_model=SaveMessagesResponse)
+async def save_messages(
+    session_id: str,
+    payload: SaveMessagesRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> SaveMessagesResponse:
+    """保存用户消息和AI回复到指定会话"""
+    session = await chat_history_service.save_exchange(
+        db,
+        user_id=current_user.id,
+        session_id=session_id,
+        user_content=payload.user_content,
+        ai_content=payload.ai_content,
+        title_hint=payload.title_hint,
+    )
+    await db.commit()
+    return SaveMessagesResponse(
+        message="消息已保存",
+        session_id=session.id,
+    )

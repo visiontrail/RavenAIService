@@ -588,7 +588,31 @@ const runPackageAgent = async (content: string, aiMessageIndex: number) => {
     if (!data?.success || !data.data) {
       throw new Error(data?.message || '智能搜索失败')
     }
-    chatHistory.value[aiMessageIndex].content = formatPackageAgentAnswer(data.data, query)
+    const aiContent = formatPackageAgentAnswer(data.data, query)
+    chatHistory.value[aiMessageIndex].content = aiContent
+
+    // 已登录用户：保存到数据库
+    if (isLoggedIn.value) {
+      // 如果没有 sessionId，创建一个新的
+      if (!sessionId.value) {
+        sessionId.value = crypto.randomUUID()
+        selectedSessionId.value = sessionId.value
+      }
+
+      try {
+        await userApi.saveMessages(
+          sessionId.value,
+          content,
+          aiContent,
+          content.slice(0, 60)
+        )
+        // 保存成功后刷新会话列表
+        await loadSessions()
+      } catch (error: any) {
+        console.warn('保存重构包配置管理员对话失败', error)
+        // 不影响用户体验，静默失败
+      }
+    }
   } catch (error: any) {
     console.error('重构包配置管理员调用失败', error)
     chatHistory.value[aiMessageIndex].content = `重构包配置管理员调用失败：${error?.message || String(error)}`
