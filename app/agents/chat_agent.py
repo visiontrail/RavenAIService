@@ -135,14 +135,24 @@ class ChatAgent:
         logger.info(f"_call_model: 收到的消息数量: {len(state.get('messages', []))}")
 
         base_prompt = state.get("system_prompt") or self.default_system_prompt
+        device_capabilities_prompt = state.get("device_capabilities_prompt")
         system_prompt = self._build_system_prompt(
             base_prompt,
             target_device_id=state.get("target_device_id"),
             target_device_name=state.get("target_device_name"),
             session_id=state.get("session_id"),
-            device_capabilities_prompt=state.get("device_capabilities_prompt"),
+            device_capabilities_prompt=device_capabilities_prompt,
         )
         logger.info(f"_call_model: 系统提示词长度: {len(system_prompt)} 字符")
+        if device_capabilities_prompt:
+            capabilities_preview = device_capabilities_prompt[:500].replace("\n", "\\n")
+            logger.info(
+                "_call_model: 已注入设备 MCP 能力提示（%d 字符），预览: %s",
+                len(device_capabilities_prompt),
+                capabilities_preview,
+            )
+        elif state.get("target_device_id"):
+            logger.info("_call_model: 已指定目标设备，但未获取到设备能力提示")
 
         logger.info("_call_model: 正在格式化 Prompt...")
         prompt_messages = self.prompt.format_messages(
