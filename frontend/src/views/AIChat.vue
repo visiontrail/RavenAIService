@@ -386,7 +386,6 @@ const formatPackageAgentAnswer = (result: RavenSearchResult, rawQuery: string) =
   const packages = result.relevantPackages || []
   const recommendedIdSet = new Set(result.recommendedPackageIds || [])
   const recommendedPackages = packages.filter((pkg) => recommendedIdSet.has(pkg.id))
-  const otherPackages = packages.filter((pkg) => !recommendedIdSet.has(pkg.id))
   const lines: string[] = [
     `**重构包配置管理员** 已为你执行智能搜索：\`${query}\``
   ]
@@ -412,23 +411,12 @@ const formatPackageAgentAnswer = (result: RavenSearchResult, rawQuery: string) =
     lines.push('', result.answer)
   }
 
-  if (packages.length) {
-    // 先显示其他匹配的包（非推荐包）
-    if (otherPackages.length > 0) {
-      const sectionTitle = recommendedPackages.length > 0
-        ? `其他匹配的重构包（${otherPackages.length} 个）：`
-        : `匹配的重构包（${packages.length} 个）：`
-      lines.push('', sectionTitle)
-      otherPackages.forEach((pkg) => pushPackageLines(pkg))
-    }
-
-    // 最后显示 AI 推荐的包
-    if (recommendedPackages.length > 0) {
-      lines.push('', `# Raven AI 推荐的重构包（${recommendedPackages.length} 个）：`)
-      recommendedPackages.forEach((pkg) => pushPackageLines(pkg, true))
-    }
+  if (recommendedPackages.length > 0) {
+    lines.push('', `# Raven AI 推荐的重构包（${recommendedPackages.length} 个）：`)
+    recommendedPackages.forEach((pkg) => pushPackageLines(pkg, true))
   } else {
-    lines.push('', '未找到匹配的重构包。')
+    const hasPackages = packages.length > 0
+    lines.push('', hasPackages ? '暂无 AI 推荐的重构包。' : '未找到匹配的重构包。')
   }
 
   return lines.join('\n')
