@@ -714,6 +714,13 @@ class ChatAgent:
             if self._needs_more_info(parsed):
                 replan = True
                 needs_user_input = True
+                ask_text = parsed.get("missing_information")
+                if not ask_text:
+                    answer_preview = str(parsed.get("answer") or parsed.get("raw") or "").strip()
+                    if len(answer_preview) > 300:
+                        answer_preview = answer_preview[:280] + "..."
+                    ask_text = f"设备返回信息不足，需要你补充参数后再继续。设备答复：{answer_preview}" if answer_preview else "设备返回信息不足，需要你补充参数后再继续。"
+                messages.append(AIMessage(content=ask_text))
             progress_events.append(
                 {
                     "type": "device_action",
@@ -735,6 +742,7 @@ class ChatAgent:
             "last_device_answer": last_device_answer,
             "last_device_topic_id": last_device_topic_id,
             "progress_events": progress_events,
+            "messages": messages,
         }
 
     async def _should_continue_node(self, state: ChatState) -> ChatState:
