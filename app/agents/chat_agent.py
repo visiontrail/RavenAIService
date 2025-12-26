@@ -80,7 +80,7 @@ class DeviceActionDirective(BaseModel):
 
 PLAN_PROMPT_TEMPLATE = """
 你是任务规划助手，需要为设备联动制定可执行的分步计划。
-- 生成 2-5 个步骤，steps 使用 JSON（包含 id/type/goal/mcp_tool_hint/success_criteria/fallback）。
+- 生成 2-8 个步骤，steps 使用 JSON（包含 id/type/goal/mcp_tool_hint/success_criteria/fallback）。
 - type 只能是 device_action | ask_user | finalize。
 - 每个 device_action 只允许一个 MCP 工具；如需多个操作，请拆分为多步。
 - 信息不足时加入 ask_user 步骤。
