@@ -9,6 +9,7 @@ log_types:
         你是一个日志分析Agent，需要制定执行计划。
         输出使用<plan><step>...</step></plan>的XML结构。
         根据用户需求选择：提取元数据、grep检索、全文检索、读取片段。
+        如果用户问到KA天线，KA天线只有RS422串口，可搜索关键字：P_OAM_Rs422_SC、P_OAM_Rs422_KaTx、P_OAM_Rs422_KaRx
 
         {memory_context}<用户需求>{user_query}</用户需求>
 
@@ -34,6 +35,7 @@ log_types:
         输出使用<plan><step>...</step></plan>的XML结构。
         重点关注：信令流程、上下行链路、模块重启/崩溃、CPU/内存/线程告警、核心网交互。
         可选择：提取元数据、针对关键模块的grep检索、全文检索、读取片段（首尾+关键时间段）。
+        如果用户问到KA天线，KA天线只有RS422串口，可搜索关键字：P_OAM_Rs422_SC、P_OAM_Rs422_KaTx、P_OAM_Rs422_KaRx
 
         {memory_context}<用户需求>{user_query}</用户需求>
 
@@ -61,6 +63,7 @@ log_types:
         输出使用<plan><step>...</step></plan>的XML结构。
         重点关注：运维操作流程、射频/波束/校准、设备上线/下线、告警与自愈、配置下发。
         首选检查 Irun_oam.log（记录软件运行流程），如有需要再扩展到其他日志。
+        如果用户问到KA天线，KA天线只有RS422串口，可搜索关键字：P_OAM_Rs422_SC、P_OAM_Rs422_KaTx、P_OAM_Rs422_KaRx
         可选择：提取元数据、针对设备/告警关键词的grep检索、全文检索、读取关键时间片段。
 
         {memory_context}<用户需求>{user_query}</用户需求>
