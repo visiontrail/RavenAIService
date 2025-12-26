@@ -340,10 +340,10 @@ class AIChatService(BaseService):
                 event_type = progress.get("type")
                 if not event_type:
                     continue
-                payload = {k: v for k, v in progress.items() if k != "type"}
-                payload["event"] = event_type
-                payload["session_id"] = session_id
-                yield self._sse_event(payload)
+                progress_payload = {k: v for k, v in progress.items() if k != "type"}
+                progress_payload["event"] = event_type
+                progress_payload["session_id"] = session_id
+                yield self._sse_event(progress_payload)
 
             messages = state.get("messages", history_messages)
             ai_message = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
