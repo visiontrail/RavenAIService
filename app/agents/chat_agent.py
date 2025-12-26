@@ -929,8 +929,26 @@ class ChatAgent:
         return parsed
 
     def _needs_more_info(self, parsed: Dict[str, Any]) -> bool:
-        answer = str(parsed.get("answer") or parsed.get("raw") or "").lower()
+        """Heuristic: detect true missing-info signals while ignoring prompt echoes."""
+
+        def strip_device_task_block(text: str) -> str:
+            """Remove DEVICE_TASK template to avoid false positives from echoed prompts."""
+            start = text.find("【DEVICE_TASK】")
+            end = text.find("【/DEVICE_TASK】")
+            if start != -1 and end != -1 and end > start:
+                before = text[:start]
+                after = text[end + len("【/DEVICE_TASK】") :]
+                return (before + " " + after).strip()
+            return text
+
+        original_answer = str(parsed.get("answer") or parsed.get("raw") or "")
+        answer = original_answer.lower()
         if not answer:
+            return False
+
+        # If only template content is returned, treat it as echo instead of missing-info.
+        stripped = strip_device_task_block(original_answer).strip().lower()
+        if "【device_task】" in answer and not stripped:
             return False
 
         # Positive confirmations take precedence to avoid false missing-info flags on successful runs.
@@ -952,12 +970,12 @@ class ChatAgent:
             "not provided",
             "need more",
         ]
-        if any(cue in answer for cue in direct_cues):
+        if any(cue in stripped or cue in answer for cue in direct_cues):
             return True
 
         # Softer requests such as "请提供/需提供/未提供"; avoid false hits like "根据您提供的"。
         provide_patterns = [r"(请|需|需要).{0,6}提供", r"未提供", r"提供以下.*(信息|参数)"]
-        return any(re.search(pattern, answer) for pattern in provide_patterns)
+        return any(re.search(pattern, stripped or answer) for pattern in provide_patterns)
 
     async def _summarize_for_user(self, state: ChatState, user_goal: str) -> str:
         """最终向用户汇报或在无工具情况下回应。"""
