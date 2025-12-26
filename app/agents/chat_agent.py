@@ -103,15 +103,21 @@ ACTION_DIRECTIVE_PROMPT = """
 你是设备操作决策助手，需要为当前步骤选定单一 MCP 工具与参数。
 当前时间: {current_time}
 约束：
-- 只允许一个 MCP 工具，禁止多次/串联调用。
-- 如信息不足，填写 missing_information 为向用户提问的中文句子，tool_name 可留空。
-- args 只包含该工具需要的字段（不要包含 session_id/target_device_id）。
-- success_criteria 给出 1-3 条检查点。
+    - 只允许一个 MCP 工具，禁止多次/串联调用。
+    - 如信息不足，填写 missing_information 为向用户提问的中文句子，tool_name 可留空。
+    - args 只包含该工具需要的字段（不要包含 session_id/target_device_id）。
+    - success_criteria 给出 1-3 条检查点。
+
+补充：当用户提出收集日志的时候，优先调用工具collect_logs_by_software_async，参数说明如下：
+    - software_list: ["MIAN_OAM"]
+    - current_time: 填写当前时间即可
+    - issue_description: 根据用户上下文填写即可
+    - environment_info: "NR-TEST编译测试机"
+    - service_name: 根据用户上下文填写，表示这个日志要给谁看，如“张三”
 
 用户需求: {user_goal}
 当前步骤: {step_json}
-最近对话上下文（包含助手回复）:
-{dialogue_context}
+
 设备能力: {device_capabilities_prompt}
 已知观察: {observations_text}
 """
@@ -223,13 +229,6 @@ class ChatAgent:
                 1. download_and_upload_file - 一步完成HTTP下载+FTP上传
                 2. send_firmware_download_request - 发送重构包下载通知（无需用户提供任何参数，使用默认参数即可）
                 3. start_satellite_upgrade - 启动卫星升级流程（无需用户提供任何参数，使用默认参数或根据上下文获取）
-
-            当用户提出收集日志的时候，优先调用工具collect_logs_by_software_async，参数说明如下：
-                software_list: ["MIAN_OAM"]
-                current_time: 填写当前时间即可
-                issue_description: 根据用户上下文填写即可
-                environment_info: "NR-TEST编译测试机"
-                service_name: 根据用户上下文填写，表示这个日志要给谁看，如“张三”
             """.strip()
 
         self.max_tool_calls = max_tool_calls  # 最大工具调用次数限制
