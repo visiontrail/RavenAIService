@@ -15,7 +15,7 @@ import logging
 import os
 import re
 import uuid
-from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, TypedDict
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Sequence, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -338,6 +338,27 @@ class ChatAgent:
         events.append(event)
         return events
 
+    async def _emit_progress_events(
+        self,
+        state: ChatState,
+        last_index: int,
+        progress_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+    ) -> int:
+        """将新增的过程事件发送给回调，返回最新的事件计数。"""
+        events = state.get("progress_events") or []
+        if not progress_callback:
+            return len(events)
+
+        new_events = events[last_index:]
+        for event in new_events:
+            try:
+                result = progress_callback(event)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("progress_callback 执行失败: %s", exc, exc_info=True)
+        return len(events)
+
     def _recent_dialogue_context(
         self,
         messages: Sequence[BaseMessage],
@@ -444,6 +465,57 @@ class ChatAgent:
         if state.get("step_index", 0) >= len(plan):
             return END
         return "act"
+
+    async def _run_graph_with_progress(
+        self,
+        state: ChatState,
+        progress_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+    ) -> ChatState:
+        """手动驱动 LangGraph 节点，便于实时发出进度事件。"""
+        recursion_limit = self.max_tool_calls * 4 + 6
+        last_progress_index = len(state.get("progress_events", []))
+        node = "build_plan"
+        steps = 0
+
+        while steps < recursion_limit:
+            steps += 1
+            if node == "build_plan":
+                state = await self._build_plan_node(state)
+                last_progress_index = await self._emit_progress_events(state, last_progress_index, progress_callback)
+                node = "act"
+                continue
+
+            if node == "act":
+                state = await self._act_node(state)
+                route = self._route_from_act(state)
+                node = "call_tools" if route == "call_tools" else "should_continue"
+                continue
+
+            if node == "call_tools":
+                state = await self._call_tools(state)
+                node = "post_observe"
+                continue
+
+            if node == "post_observe":
+                state = await self._post_observe(state)
+                last_progress_index = await self._emit_progress_events(state, last_progress_index, progress_callback)
+                node = "should_continue"
+                continue
+
+            if node == "should_continue":
+                state = await self._should_continue_node(state)
+                route = self._continue_router(state)
+                if route == END:
+                    break
+                node = "build_plan" if route == "plan" else "act"
+                continue
+
+            logger.warning("run_with_progress: 未知节点 %s，提前结束", node)
+            break
+
+        if steps >= recursion_limit:
+            logger.warning("run_with_progress: 达到 recursion_limit=%s，提前结束", recursion_limit)
+        return state
 
     async def _act_node(self, state: ChatState) -> ChatState:
         plan = state.get("plan") or []
@@ -962,6 +1034,59 @@ class ChatAgent:
             return result
         except Exception as exc:  # noqa: BLE001
             logger.error("ainvoke: graph.ainvoke 调用失败: %s", exc, exc_info=True)
+            raise
+        finally:
+            clear_device_prompt_context()
+
+    async def ainvoke_with_progress(
+        self,
+        messages: List[BaseMessage],
+        system_prompt: Optional[str] = None,
+        session_id: Optional[str] = None,
+        target_device_id: Optional[str] = None,
+        target_device_name: Optional[str] = None,
+        device_capabilities_prompt: Optional[str] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+    ) -> ChatState:
+        """异步调用，实时回调计划/动作进度事件。"""
+        logger.info("==================== ainvoke_with_progress 开始 ====================")
+        logger.info("ainvoke_with_progress: 接收到 %s 条消息", len(messages))
+
+        state: ChatState = {
+            "messages": messages,
+            "system_prompt": system_prompt or self.default_system_prompt,
+            "session_id": session_id,
+            "target_device_id": target_device_id,
+            "target_device_name": target_device_name,
+            "device_capabilities_prompt": device_capabilities_prompt,
+            "tool_call_count": 0,
+            "plan": [],
+            "step_index": 0,
+            "observations": [],
+            "needs_user_input": False,
+            "replan": False,
+            "progress_events": [],
+        }
+
+        if not target_device_id:
+            logger.info("ainvoke_with_progress: 未指定设备，走直连对话回退")
+            return await self._direct_llm(state)
+
+        set_device_prompt_context(
+            session_id,
+            target_device_id,
+            system_prompt or self.default_system_prompt,
+        )
+        try:
+            result = await self._run_graph_with_progress(state, progress_callback)
+            logger.info(
+                "ainvoke_with_progress: 执行完成，返回消息数: %s, progress_events=%s",
+                len(result.get("messages", [])),
+                len(result.get("progress_events") or []),
+            )
+            return result
+        except Exception as exc:  # noqa: BLE001
+            logger.error("ainvoke_with_progress: 调用失败: %s", exc, exc_info=True)
             raise
         finally:
             clear_device_prompt_context()

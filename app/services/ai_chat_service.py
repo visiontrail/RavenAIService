@@ -1,6 +1,7 @@
 """
 AI 对话服务：封装 LangGraph 智能体与简单会话记忆。
 """
+import asyncio
 import logging
 import json
 import uuid
@@ -321,29 +322,82 @@ class AIChatService(BaseService):
 
         # 需要设备联动时不做逐字流式，确保工具调用后再返回。
         if payload.target_device_id:
-            logger.info("chat_stream: 目标设备存在，使用非流式工具分支")
-            try:
-                state = await self.agent.ainvoke(
+            logger.info("chat_stream: 目标设备存在，使用非流式工具分支（实时进度）")
+            progress_queue: asyncio.Queue[Dict[str, object]] = asyncio.Queue()
+            state = None
+
+            async def progress_callback(event: Dict[str, object]) -> None:
+                await progress_queue.put(event)
+
+            agent_task = asyncio.create_task(
+                self.agent.ainvoke_with_progress(
                     messages=history_messages,
                     system_prompt=payload.system_prompt,
                     session_id=session_id,
                     target_device_id=payload.target_device_id,
                     target_device_name=payload.target_device_name,
                     device_capabilities_prompt=device_capabilities_prompt,
+                    progress_callback=progress_callback,
                 )
+            )
+
+            try:
+                while True:
+                    # 优先清空已堆积的进度事件
+                    while True:
+                        try:
+                            progress = progress_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+
+                        event_type = progress.get("type")
+                        if not event_type:
+                            continue
+                        progress_payload = {k: v for k, v in progress.items() if k != "type"}
+                        progress_payload["event"] = event_type
+                        progress_payload["session_id"] = session_id
+                        yield self._sse_event(progress_payload)
+
+                    if agent_task.done():
+                        state = await agent_task
+                        while True:
+                            try:
+                                progress = progress_queue.get_nowait()
+                            except asyncio.QueueEmpty:
+                                break
+
+                            event_type = progress.get("type")
+                            if not event_type:
+                                continue
+                            progress_payload = {k: v for k, v in progress.items() if k != "type"}
+                            progress_payload["event"] = event_type
+                            progress_payload["session_id"] = session_id
+                            yield self._sse_event(progress_payload)
+                        break
+
+                    try:
+                        progress = await asyncio.wait_for(progress_queue.get(), timeout=0.1)
+                    except asyncio.TimeoutError:
+                        continue
+
+                    event_type = progress.get("type")
+                    if not event_type:
+                        continue
+                    progress_payload = {k: v for k, v in progress.items() if k != "type"}
+                    progress_payload["event"] = event_type
+                    progress_payload["session_id"] = session_id
+                    yield self._sse_event(progress_payload)
             except Exception as exc:  # noqa: BLE001
                 logger.error("chat_stream: 工具分支执行失败: %s", exc, exc_info=True)
+                if not agent_task.done():
+                    agent_task.cancel()
                 yield self._sse_event({"event": "error", "message": str(exc)})
                 return
 
-            for progress in state.get("progress_events") or []:
-                event_type = progress.get("type")
-                if not event_type:
-                    continue
-                progress_payload = {k: v for k, v in progress.items() if k != "type"}
-                progress_payload["event"] = event_type
-                progress_payload["session_id"] = session_id
-                yield self._sse_event(progress_payload)
+            if state is None:
+                logger.error("chat_stream: agent 未返回 state")
+                yield self._sse_event({"event": "error", "message": "Agent 未返回结果"})
+                return
 
             messages = state.get("messages", history_messages)
             ai_message = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
