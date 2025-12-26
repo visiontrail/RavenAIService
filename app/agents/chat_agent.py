@@ -455,8 +455,6 @@ class ChatAgent:
         return "continue"
 
     def _continue_router(self, state: ChatState) -> str:
-        if state.get("replan"):
-            return "plan"
         if state.get("needs_user_input"):
             return END
         if state.get("tool_call_count", 0) >= self.max_tool_calls:
@@ -464,6 +462,8 @@ class ChatAgent:
         plan = state.get("plan") or []
         if state.get("step_index", 0) >= len(plan):
             return END
+        if state.get("replan"):
+            return "plan"
         return "act"
 
     async def _run_graph_with_progress(
