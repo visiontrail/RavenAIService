@@ -10,7 +10,6 @@ LangChain + LangGraph 对话智能体
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 import logging
 import os
@@ -495,8 +494,7 @@ class ChatAgent:
             device_capabilities_prompt=state.get("device_capabilities_prompt"),
             dialogue_context=dialogue_context,
         )
-        ensured_prompt = self._ensure_single_action_prompt(dispatch_prompt, state)
-        dispatch_prompt = await ensured_prompt if inspect.isawaitable(ensured_prompt) else ensured_prompt
+        dispatch_prompt = self._ensure_single_action_prompt(dispatch_prompt)
 
         tool_call = {
             "id": f"call_{uuid.uuid4().hex[:8]}",
@@ -691,9 +689,10 @@ class ChatAgent:
             return directive
         except Exception as exc:  # noqa: BLE001
             logger.warning("生成设备动作指令失败，使用回退: %s", exc, exc_info=True)
+            hint = step.get("mcp_tool_hint", {}) if isinstance(step.get("mcp_tool_hint"), dict) else {}
             return DeviceActionDirective(
-                tool_name=step.get("mcp_tool_hint", {}).get("name", "") if isinstance(step.get("mcp_tool_hint"), dict) else "",
-                args=step.get("mcp_tool_hint", {}).get("args", {}) if isinstance(step.get("mcp_tool_hint"), dict) else {},
+                tool_name=hint.get("tool") or hint.get("name", ""),
+                args=hint.get("arguments") or hint.get("args", {}) if isinstance(hint, dict) else {},
                 task=step.get("goal") or "执行单次设备操作",
                 success_criteria=step.get("success_criteria", []),
                 missing_information=None,
@@ -709,65 +708,67 @@ class ChatAgent:
         dialogue_context: Optional[str] = None,
     ) -> str:
         """为上位机端 AI 助手构建协议化 prompt。"""
-        shortlist = device_capabilities_prompt or "未提供设备能力，请保持保守的单次调用。"
+        tool_hint = step.get("mcp_tool_hint", {}) if isinstance(step.get("mcp_tool_hint"), dict) else {}
+        tool_name = directive.tool_name or tool_hint.get("tool") or tool_hint.get("name", "") or "需确认工具名称"
+        args_json = json.dumps(directive.args or tool_hint.get("arguments") or {}, ensure_ascii=False, indent=2)
         success_criteria = directive.success_criteria or step.get("success_criteria") or ["返回执行结果或确认信息"]
-        args_json = json.dumps(directive.args or {}, ensure_ascii=False, indent=2)
-        checkpoint = "\n".join(f"- {c}" for c in success_criteria)
-        observations_text = self._observations_text(state_context.get("observations", []))
-        dialogue_context = (dialogue_context or "无").strip()
+        success_block = "\n".join(f"- {c}" for c in success_criteria)
+        task = directive.task or step.get("goal") or user_goal
+        device_label = state_context.get("target_device_name") or state_context.get("target_device_id") or "未知设备"
+        session_label = state_context.get("session_id") or "未知会话"
+        context_notes = f"设备: {device_label}; 会话: {session_label}"
+        if dialogue_context:
+            context_notes = f"{context_notes}; 对话摘要: {dialogue_context.strip()}"
 
-        prompt_parts = [
-            "[ROLE] 你是上位机端设备 AI 助手，负责调用设备 MCP Server 工具（function calling）。",
-            "[TASK] 本次只执行一个操作：" + (directive.task or step.get("goal") or user_goal),
-            "[CONTEXT] 当前对话目标: "
-            f"{state_context.get('target_device_name') or state_context.get('target_device_id') or '未知设备'}; "
-            f"会话: {state_context.get('session_id') or '未知'}; 用户需求: {user_goal}; 最近观察: {observations_text}",
-            "[DIALOGUE_CONTEXT]\n" + dialogue_context,
-            "[CONSTRAINTS]\n"
-            "- 只能调用 1 个 MCP 工具（禁止多次调用/链式执行）。\n"
-            "- 必须严格匹配参数，不确定就提问。\n"
-            "- 不要执行额外步骤，不要自行多次调用。",
-            "[AVAILABLE_TOOLS]\n" + shortlist,
-            "[TOOL_CALL]\n"
-            f"- 推荐工具: {directive.tool_name or step.get('mcp_tool_hint', {}).get('name') or '需选择'}\n"
-            f"- args: {args_json}",
-            "[CHECKPOINT]\n" + checkpoint,
-            "[RETURN_FORMAT]\n"
-            "- 返回 answer（给人看的摘要）和 topic_id（如有）。\n"
-            "- 如果信息不足，说明需要补充的字段，避免猜测。",
+        device_task_block = [
+            "【DEVICE_TASK】",
+            f"目标: {task}",
+            f"工具选择: {tool_name}",
+            f"参数(JSON): {args_json}",
+            "约束:",
+            "- 仅执行一次上述工具调用，不要调用其他工具。",
+            "- 若缺少必要参数或无法确定值，请返回需要补充的字段清单，不要猜测。",
+            "期望返回:",
+            "- chosen_tool: <工具名>",
+            "- args: <最终使用的参数 JSON>",
+            "- result: <关键结果/回执/错误>",
+            "- evidence: <可选：关键日志/关键字段，尽量简短>",
+            "成功判定:",
+            success_block,
+            "【/DEVICE_TASK】",
+            context_notes,
         ]
-        return "\n\n".join(prompt_parts)
+
+        if device_capabilities_prompt:
+            device_task_block.append(f"设备能力提示: {device_capabilities_prompt.strip()}")
+
+        return "\n".join(device_task_block)
 
     def _contains_multiple_actions(self, prompt: str) -> bool:
-        keywords = ["同时", "然后", "接着", "再调用", "分别调用", "两次", "多次", "多个工具", "先", "后再"]
-        lower_prompt = prompt.lower()
-        if any(k in prompt for k in keywords):
+        explicit_multi = ["多个工具", "多次调用", "链式调用", "分别调用", "同时执行"]
+        if any(token in prompt for token in explicit_multi):
             return True
-        if lower_prompt.count("tool") > 1 or prompt.count("调用") > 2:
-            return True
-        return False
 
-    async def _rewrite_device_prompt_single_action(self, prompt: str) -> str:
-        """调用 LLM 将多操作 prompt 重写为单操作；失败则回退首段。"""
-        rewrite_instruction = (
-            "将以下设备提示词改写为只执行一个 MCP 工具的单一操作，不要包含多个动作或多次调用。"
-            "如果发现多个操作，只保留最重要的第一个操作。保持中文。"
-        )
-        try:
-            res = await self.base_llm.ainvoke(f"{rewrite_instruction}\n\n{prompt}")
-            return res.content if hasattr(res, "content") else str(res)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("重写 device_prompt 失败，使用回退: %s", exc, exc_info=True)
-            return prompt.split("\n\n")[0]
+        patterns = [
+            r"先.+(再|然后|接着|随后)",
+            r"之后.*再",
+            r"再.*然后",
+        ]
+        return any(re.search(pattern, prompt) for pattern in patterns)
 
-    async def _ensure_single_action_prompt(self, prompt: str, state: ChatState) -> str:
+    def _rewrite_device_prompt_single_action(self, prompt: str) -> str:
+        """去除多余内容，仅保留单个 DEVICE_TASK 块或首段提示。"""
+        start = prompt.find("【DEVICE_TASK】")
+        end = prompt.find("【/DEVICE_TASK】")
+        if start != -1 and end != -1:
+            return prompt[start : end + len("【/DEVICE_TASK】")]
+        return prompt.split("\n\n")[0]
+
+    def _ensure_single_action_prompt(self, prompt: str) -> str:
         if not self._contains_multiple_actions(prompt):
             return prompt
-        logger.warning("检测到 device_prompt 中疑似多步操作，尝试重写为单操作")
-        rewritten = await self._rewrite_device_prompt_single_action(prompt)
-        if self._contains_multiple_actions(rewritten):
-            logger.warning("重写后仍包含多操作，已截断为单个动作")
-            rewritten = rewritten.split("。")[0]
+        logger.warning("检测到 device_prompt 中疑似多步操作，保留首个单任务块")
+        rewritten = self._rewrite_device_prompt_single_action(prompt)
         return rewritten
 
     def _parse_tool_message(self, msg: ToolMessage) -> Dict[str, Any]:
