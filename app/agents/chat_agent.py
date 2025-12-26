@@ -633,8 +633,9 @@ class ChatAgent:
             state.get("target_device_id"),
             state.get("system_prompt") or self.default_system_prompt,
         )
+        tool_config = self._build_tool_node_config()
         try:
-            tool_updates = await self.tool_node.ainvoke(state)
+            tool_updates = await self.tool_node.ainvoke(state, config=tool_config)
         finally:
             clear_device_prompt_context()
 
@@ -654,6 +655,32 @@ class ChatAgent:
             "messages": updated_messages,
             "tool_call_count": tool_call_count,
         }
+
+    def _build_tool_node_config(self) -> Dict[str, Any]:
+        """
+        构造 ToolNode 调用所需的 config，兼容新版 LangGraph 需要 runtime 的情况。
+        - 优先复用当前 runnable 上下文（如果存在）
+        - 不在 LangGraph runtime 内时，提供一个默认的 Runtime，避免缺失 __pregel_runtime 报错
+        """
+        try:
+            from langgraph.config import get_config
+
+            cfg = get_config()
+            return cfg
+        except Exception:
+            pass
+
+        try:
+            from langgraph.runtime import DEFAULT_RUNTIME
+        except Exception:
+            return {}
+
+        try:
+            from langgraph._internal._constants import CONF, CONFIG_KEY_RUNTIME
+        except Exception:
+            CONF, CONFIG_KEY_RUNTIME = "configurable", "__pregel_runtime"
+
+        return {CONF: {CONFIG_KEY_RUNTIME: DEFAULT_RUNTIME}}
 
     async def _post_observe(self, state: ChatState) -> ChatState:
         """解析工具返回，写入 observations，推进 step_index。"""
