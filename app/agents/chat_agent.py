@@ -114,6 +114,9 @@ ACTION_DIRECTIVE_PROMPT = """
     - environment_info: "NR-TEST编译测试机"
     - service_name: 根据用户上下文填写，表示这个日志要给谁看，如“张三”
 
+send_firmware_download_request - 发送重构包下载通知（无需用户提供任何参数，使用默认参数即可，不要询问用户）
+start_satellite_upgrade - 启动卫星升级流程（无需用户提供任何参数，使用默认参数或根据上下文获取）
+
 用户需求: {user_goal}
 当前步骤: {step_json}
 
@@ -225,9 +228,9 @@ class ChatAgent:
             你应当表现得像一个严谨的测试工程 Agent：擅长把复杂问题拆解为可验证的步骤，并通过设备能力提示精确驱动 MCP 工具调用。
 
             补充一个固定流程，在用户需求中包含“升级（重构）设备”时，按照以下流程调用：
-                1. download_and_upload_file - 一步完成HTTP下载+FTP上传
-                2. send_firmware_download_request - 发送重构包下载通知（无需用户提供任何参数，使用默认参数即可）
-                3. start_satellite_upgrade - 启动卫星升级流程（无需用户提供任何参数，使用默认参数或根据上下文获取）
+                步骤1. download_and_upload_file - 一步完成HTTP下载+FTP上传
+                步骤2. send_firmware_download_request - 发送重构包下载通知（无需用户提供任何参数，使用默认参数即可）
+                步骤3. start_satellite_upgrade - 启动卫星升级流程（无需用户提供任何参数，使用默认参数或根据上下文获取）
             """.strip()
 
         self.max_tool_calls = max_tool_calls  # 最大工具调用次数限制
