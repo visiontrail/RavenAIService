@@ -40,6 +40,26 @@ const packageAgentOption: MentionOption = {
 const userStore = useUserStore()
 const appStore = useAppStore()
 
+type ChatRole = 'user' | 'ai' | 'system'
+type ChatEntry = {
+  id: string
+  role: ChatRole
+  content: string
+  kind?: 'plan' | 'device_action' | 'answer' | 'user'
+}
+
+// 生成兼容的 UUID
+const generateUUID = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
+
 const sidebarOpen = ref(true)
 const inputMessage = ref('')
 const showUserMenu = ref(false)
@@ -102,7 +122,7 @@ onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
 })
 
-const chatHistory = ref<{ role: string; content: string }[]>([])
+const chatHistory = ref<ChatEntry[]>([])
 const sessionId = ref<string | null>(null)
 const isSending = ref(false)
 const isLoggedIn = computed(() => userStore.isAuthenticated)
@@ -190,8 +210,10 @@ const loadMessages = async (id: string) => {
     const resp = await userApi.fetchMessages(id)
     if (resp?.success && Array.isArray(resp.data)) {
       chatHistory.value = (resp.data as ChatMessageRecord[]).map((item) => ({
-        role: item.role === 'assistant' ? 'ai' : item.role,
+        id: item.id || generateUUID(),
+        role: (item.role === 'assistant' ? 'ai' : item.role) as ChatRole,
         content: item.content || '',
+        kind: item.role === 'user' ? 'user' : 'answer',
       }))
     }
   } catch (error) {
@@ -486,32 +508,103 @@ const clearTargetAgent = () => {
   targetAgent.value = null
 }
 
-const applyStreamEvent = (payload: any, messageIndex: number) => {
+const findMessageIndex = (id: string) => chatHistory.value.findIndex((msg) => msg.id === id)
+
+const ensureAnswerMessage = (answerId: string): ChatEntry => {
+  const idx = findMessageIndex(answerId)
+  if (idx !== -1) {
+    return chatHistory.value[idx]
+  }
+  const fallback: ChatEntry = { id: answerId, role: 'ai', content: '正在思考...', kind: 'answer' }
+  chatHistory.value.push(fallback)
+  return fallback
+}
+
+const insertBeforeAnswer = (answerId: string, entry: ChatEntry) => {
+  const idx = findMessageIndex(answerId)
+  if (idx === -1) {
+    chatHistory.value.push(entry)
+  } else {
+    chatHistory.value.splice(idx, 0, entry)
+  }
+}
+
+const formatPlanMessage = (steps: any[]) => {
+  if (!Array.isArray(steps) || steps.length === 0) {
+    return '未生成计划。'
+  }
+  const lines: string[] = ['**计划步骤**']
+  steps.forEach((step, index) => {
+    const id = step?.id || `S${index + 1}`
+    const type = step?.type ? ` (${step.type})` : ''
+    const goal = step?.goal || '无描述'
+    lines.push(`- ${id}${type}: ${goal}`)
+    if (Array.isArray(step?.success_criteria) && step.success_criteria.length) {
+      lines.push(`  - 验证: ${step.success_criteria.join('; ')}`)
+    }
+  })
+  return lines.join('\n')
+}
+
+const formatDeviceActionMessage = (payload: any) => {
+  const order = typeof payload?.step_index === 'number' ? payload.step_index + 1 : null
+  const label = payload?.step_id || (order ? `步骤${order}` : '设备动作')
+  const goal = payload?.step_goal ? `：${payload.step_goal}` : ''
+  const lines: string[] = [`**设备动作 ${label}${goal}**`]
+  const answerText =
+    typeof payload?.answer === 'string'
+      ? payload.answer
+      : payload?.answer
+        ? String(payload.answer)
+        : ''
+  if (answerText) {
+    lines.push(answerText)
+  } else if (payload?.raw) {
+    lines.push(String(payload.raw))
+  } else {
+    lines.push('无返回内容')
+  }
+  if (payload?.topic_id) {
+    lines.push(`- 话题ID: ${payload.topic_id}`)
+  }
+  return lines.join('\n')
+}
+
+const applyStreamEvent = (payload: any, answerId: string) => {
   const type = payload?.event || payload?.type
   if (payload?.session_id) {
     sessionId.value = payload.session_id
     selectedSessionId.value = payload.session_id
   }
 
-  const targetMessage = chatHistory.value[messageIndex]
-  if (!targetMessage) return
+  if (type === 'plan') {
+    const content = formatPlanMessage(payload?.plan)
+    insertBeforeAnswer(answerId, { id: generateUUID(), role: 'ai', content, kind: 'plan' })
+    return
+  }
+
+  if (type === 'device_action') {
+    const content = formatDeviceActionMessage(payload)
+    insertBeforeAnswer(answerId, { id: generateUUID(), role: 'ai', content, kind: 'device_action' })
+    return
+  }
+
+  if (type === 'session') return
+
+  const targetMessage = ensureAnswerMessage(answerId)
 
   if (type === 'chunk' && typeof payload?.content === 'string') {
     const chunk = payload.content
-    // 如果还在"正在思考..."状态，等待有实际内容才清除
     if (targetMessage.content === '正在思考...') {
-      // 跳过开头的空白字符
       const trimmedChunk = chunk.trimStart()
       if (trimmedChunk) {
         targetMessage.content = trimmedChunk
       }
-      // 如果是纯空白，保持"正在思考..."状态
     } else {
       targetMessage.content += chunk
     }
   } else if (type === 'done') {
     if (typeof payload?.answer === 'string' && payload.answer) {
-      // 去除开头的空白字符
       targetMessage.content = payload.answer.trimStart()
     } else if (!targetMessage.content || targetMessage.content === '正在思考...') {
       targetMessage.content = '（无回复内容）'
@@ -521,7 +614,7 @@ const applyStreamEvent = (payload: any, messageIndex: number) => {
   }
 }
 
-const processSseBuffer = (buffer: string, messageIndex: number) => {
+const processSseBuffer = (buffer: string, answerId: string) => {
   let remaining = buffer.replace(/\r\n/g, '\n')
   while (true) {
     const idx = remaining.indexOf('\n\n')
@@ -534,7 +627,7 @@ const processSseBuffer = (buffer: string, messageIndex: number) => {
     if (!jsonStr) continue
     try {
       const payload = JSON.parse(jsonStr)
-      applyStreamEvent(payload, messageIndex)
+      applyStreamEvent(payload, answerId)
     } catch (err) {
       console.error('解析流式数据失败', err, jsonStr)
     }
@@ -582,23 +675,11 @@ const handleInput = (event: Event) => {
 const extractPackageQuery = (content: string) =>
   content.replace(/@重构包配置管理员/g, '').trim()
 
-// 生成兼容的 UUID
-const generateUUID = (): string => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  // 降级方案：生成符合 UUID v4 格式的字符串
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0
-    const v = c === 'x' ? r : (r & 0x3) | 0x8
-    return v.toString(16)
-  })
-}
-
-const runPackageAgent = async (content: string, aiMessageIndex: number) => {
+const runPackageAgent = async (content: string, answerId: string) => {
   const query = extractPackageQuery(content)
+  const targetMessage = ensureAnswerMessage(answerId)
   if (!query) {
-    chatHistory.value[aiMessageIndex].content = '请描述需要查找的重构包需求，例如型号、版本或用途。'
+    targetMessage.content = '请描述需要查找的重构包需求，例如型号、版本或用途。'
     return
   }
 
@@ -608,7 +689,7 @@ const runPackageAgent = async (content: string, aiMessageIndex: number) => {
       throw new Error(data?.message || '智能搜索失败')
     }
     const aiContent = formatPackageAgentAnswer(data.data, query)
-    chatHistory.value[aiMessageIndex].content = aiContent
+    targetMessage.content = aiContent
 
     // 已登录用户：保存到数据库
     if (isLoggedIn.value) {
@@ -634,7 +715,7 @@ const runPackageAgent = async (content: string, aiMessageIndex: number) => {
     }
   } catch (error: any) {
     console.error('重构包配置管理员调用失败', error)
-    chatHistory.value[aiMessageIndex].content = `重构包配置管理员调用失败：${error?.message || String(error)}`
+    targetMessage.content = `重构包配置管理员调用失败：${error?.message || String(error)}`
   }
 }
 
@@ -658,9 +739,11 @@ const sendMessage = async () => {
   }
 
   // 记录用户消息
-  const userMessage = {
+  const userMessage: ChatEntry = {
+    id: generateUUID(),
     role: 'user',
-    content
+    content,
+    kind: 'user',
   }
   chatHistory.value.push(userMessage)
 
@@ -674,12 +757,13 @@ const sendMessage = async () => {
       }))
 
   // 占位回复
+  const answerMessageId = generateUUID()
   chatHistory.value.push({
+    id: answerMessageId,
     role: 'ai',
-    content: '正在思考...'
+    content: '正在思考...',
+    kind: 'answer',
   })
-  // 记录 AI 消息在数组中的索引，用于后续更新
-  const aiMessageIndex = chatHistory.value.length - 1
 
   inputMessage.value = ''
   resetMentionState()
@@ -687,7 +771,7 @@ const sendMessage = async () => {
 
   try {
     if (shouldUsePackageAgent) {
-      await runPackageAgent(content, aiMessageIndex)
+      await runPackageAgent(content, answerMessageId)
       return
     }
 
@@ -746,7 +830,7 @@ const sendMessage = async () => {
         if (value) {
           console.log('[SSE] 收到数据:', value.substring(0, 200))
           buffer += value
-          buffer = processSseBuffer(buffer, aiMessageIndex)
+          buffer = processSseBuffer(buffer, answerMessageId)
         }
         if (done) break
       }
@@ -759,7 +843,7 @@ const sendMessage = async () => {
           const decoded = decoder.decode(value, { stream: !done })
           console.log('[SSE] 解码后数据:', decoded.substring(0, 200))
           buffer += decoded
-          buffer = processSseBuffer(buffer, aiMessageIndex)
+          buffer = processSseBuffer(buffer, answerMessageId)
         }
         if (done) break
       }
@@ -770,11 +854,12 @@ const sendMessage = async () => {
     console.log('[SSE] 循环结束，剩余 buffer:', buffer)
 
     if (buffer.trim()) {
-      processSseBuffer(buffer + '\n\n', aiMessageIndex)
+      processSseBuffer(buffer + '\n\n', answerMessageId)
     }
 
-    if (chatHistory.value[aiMessageIndex].content === '正在思考...') {
-      chatHistory.value[aiMessageIndex].content = '（无回复内容）'
+    const answerMessage = ensureAnswerMessage(answerMessageId)
+    if (answerMessage.content === '正在思考...') {
+      answerMessage.content = '（无回复内容）'
     }
 
     if (isLoggedIn.value) {
@@ -787,7 +872,7 @@ const sendMessage = async () => {
   } catch (error: any) {
     console.error('===== 请求失败 =====')
     console.error('错误信息:', error)
-    chatHistory.value[aiMessageIndex].content = `调用后端失败：${error?.message || String(error)}`
+    ensureAnswerMessage(answerMessageId).content = `调用后端失败：${error?.message || String(error)}`
   } finally {
     isSending.value = false
     console.log('===== 请求结束 =====')
@@ -1019,7 +1104,7 @@ const sendMessage = async () => {
           <template v-else>
              <div 
                v-for="(msg, idx) in chatHistory" 
-               :key="idx" 
+               :key="msg.id || idx" 
                class="flex gap-4 group w-full"
                :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
              >

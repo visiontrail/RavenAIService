@@ -336,6 +336,15 @@ class AIChatService(BaseService):
                 yield self._sse_event({"event": "error", "message": str(exc)})
                 return
 
+            for progress in state.get("progress_events") or []:
+                event_type = progress.get("type")
+                if not event_type:
+                    continue
+                payload = {k: v for k, v in progress.items() if k != "type"}
+                payload["event"] = event_type
+                payload["session_id"] = session_id
+                yield self._sse_event(payload)
+
             messages = state.get("messages", history_messages)
             ai_message = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
             answer_text = str(ai_message.content) if ai_message else ""

@@ -51,6 +51,7 @@ class ChatState(TypedDict, total=False):
     needs_user_input: bool
     replan: bool
     tool_call_count: int  # 追踪工具调用次数，防止无限递归
+    progress_events: List[Dict[str, Any]]  # 计划与设备动作的过程事件
 
 
 class PlanStep(BaseModel):
@@ -331,6 +332,12 @@ class ChatAgent:
                 parts.append(f"[{idx}] {obs}")
         return "\n".join(parts)
 
+    def _append_progress_event(self, state: ChatState, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """追加计划/设备动作的过程事件，保持有序列表。"""
+        events = list(state.get("progress_events", []))
+        events.append(event)
+        return events
+
     def _recent_dialogue_context(
         self,
         messages: Sequence[BaseMessage],
@@ -396,12 +403,21 @@ class ChatAgent:
     async def _build_plan_node(self, state: ChatState) -> ChatState:
         steps = await self._generate_plan(state)
         plan_dicts = [step.model_dump() for step in steps]
+        progress_events = self._append_progress_event(
+            state,
+            {
+                "type": "plan",
+                "plan": plan_dicts,
+                "plan_version": sum(1 for evt in state.get("progress_events", []) if evt.get("type") == "plan") + 1,
+            },
+        )
         return {
             **state,
             "plan": plan_dicts,
             "step_index": 0,
             "replan": False,
             "needs_user_input": False,
+            "progress_events": progress_events,
         }
 
     def _route_from_act(self, state: ChatState) -> str:
@@ -578,6 +594,10 @@ class ChatAgent:
         needs_user_input = state.get("needs_user_input", False)
         last_device_answer = state.get("last_device_answer")
         last_device_topic_id = state.get("last_device_topic_id")
+        progress_events = list(state.get("progress_events", []))
+        plan = state.get("plan") or []
+        current_step_index = state.get("step_index", 0)
+        current_step = plan[current_step_index] if current_step_index < len(plan) else None
 
         if parsed:
             observations.append(parsed)
@@ -587,6 +607,17 @@ class ChatAgent:
             if self._needs_more_info(parsed):
                 replan = True
                 needs_user_input = True
+            progress_events.append(
+                {
+                    "type": "device_action",
+                    "step_id": current_step.get("id") if isinstance(current_step, dict) else None,
+                    "step_goal": current_step.get("goal") if isinstance(current_step, dict) else None,
+                    "step_index": current_step_index,
+                    "answer": parsed.get("answer") or parsed.get("raw"),
+                    "topic_id": parsed.get("topic_id"),
+                    "raw": parsed.get("raw"),
+                }
+            )
 
         return {
             **state,
@@ -596,6 +627,7 @@ class ChatAgent:
             "needs_user_input": needs_user_input,
             "last_device_answer": last_device_answer,
             "last_device_topic_id": last_device_topic_id,
+            "progress_events": progress_events,
         }
 
     async def _should_continue_node(self, state: ChatState) -> ChatState:
@@ -877,6 +909,7 @@ class ChatAgent:
             "observations": [],
             "needs_user_input": False,
             "replan": False,
+            "progress_events": [],
         }
         if not target_device_id:
             return asyncio.get_event_loop().run_until_complete(self._direct_llm(state))
@@ -910,6 +943,7 @@ class ChatAgent:
             "observations": [],
             "needs_user_input": False,
             "replan": False,
+            "progress_events": [],
         }
 
         if not target_device_id:
