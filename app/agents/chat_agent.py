@@ -87,6 +87,9 @@ PLAN_PROMPT_TEMPLATE = """
 用户需求:
 {user_goal}
 
+最近对话上下文（包含助手回复）:
+{dialogue_context}
+
 已知观察:
 {observations_text}
 
@@ -104,6 +107,8 @@ ACTION_DIRECTIVE_PROMPT = """
 
 用户需求: {user_goal}
 当前步骤: {step_json}
+最近对话上下文（包含助手回复）:
+{dialogue_context}
 设备能力: {device_capabilities_prompt}
 已知观察: {observations_text}
 """
@@ -269,14 +274,47 @@ class ChatAgent:
                 parts.append(f"[{idx}] {obs}")
         return "\n".join(parts)
 
+    def _recent_dialogue_context(
+        self,
+        messages: Sequence[BaseMessage],
+        limit: int = 6,
+        max_chars: int = 1600,
+    ) -> str:
+        """取最近若干轮对话（含助手回复）作为上下文。"""
+        if not messages:
+            return "暂无"
+
+        relevant: List[BaseMessage] = []
+        for msg in messages:
+            if isinstance(msg, (HumanMessage, AIMessage)):
+                relevant.append(msg)
+
+        if not relevant:
+            return "暂无"
+
+        recent = relevant[-limit:]
+        lines: List[str] = []
+        for msg in recent:
+            role = "用户" if isinstance(msg, HumanMessage) else "助手"
+            content = str(msg.content).strip()
+            lines.append(f"{role}: {content}")
+
+        context = "\n".join(lines)
+        if len(context) > max_chars:
+            context = context[-max_chars:]
+            context = f"(已截断，保留最近 {max_chars} 字)\n{context}"
+        return context
+
     async def _generate_plan(self, state: ChatState) -> List[PlanStep]:
         user_goal = self._extract_user_goal(state.get("messages", []))
         observations_text = self._observations_text(state.get("observations", []))
         device_capabilities_prompt = state.get("device_capabilities_prompt") or "无"
+        dialogue_context = self._recent_dialogue_context(state.get("messages", []))
         prompt_text = PLAN_PROMPT_TEMPLATE.format(
             user_goal=user_goal,
             observations_text=observations_text,
             device_capabilities_prompt=device_capabilities_prompt,
+            dialogue_context=dialogue_context,
         )
         logger.info(
             "\n\n--- PLAN PROMPT ---\n%s\n--- END PLAN PROMPT ---\n",
@@ -387,12 +425,14 @@ class ChatAgent:
                 "needs_user_input": True,
             }
 
+        dialogue_context = self._recent_dialogue_context(messages)
         dispatch_prompt = self._build_device_dispatch_prompt(
             user_goal=user_goal,
             step=step,
             directive=directive,
             state_context=state,
             device_capabilities_prompt=state.get("device_capabilities_prompt"),
+            dialogue_context=dialogue_context,
         )
         ensured_prompt = self._ensure_single_action_prompt(dispatch_prompt, state)
         dispatch_prompt = await ensured_prompt if inspect.isawaitable(ensured_prompt) else ensured_prompt
@@ -570,11 +610,13 @@ class ChatAgent:
     ) -> DeviceActionDirective:
         device_capabilities_prompt = state.get("device_capabilities_prompt") or "无"
         observations_text = self._observations_text(observations)
+        dialogue_context = self._recent_dialogue_context(state.get("messages", []))
         prompt_text = ACTION_DIRECTIVE_PROMPT.format(
             user_goal=user_goal,
             step_json=json.dumps(step, ensure_ascii=False),
             device_capabilities_prompt=device_capabilities_prompt,
             observations_text=observations_text,
+            dialogue_context=dialogue_context,
         )
         logger.info(
             "\n\n--- DEVICE ACTION PROMPT ---\n%s\n--- END DEVICE ACTION PROMPT ---\n",
@@ -603,6 +645,7 @@ class ChatAgent:
         directive: DeviceActionDirective,
         state_context: ChatState,
         device_capabilities_prompt: Optional[str],
+        dialogue_context: Optional[str] = None,
     ) -> str:
         """为上位机端 AI 助手构建协议化 prompt。"""
         shortlist = device_capabilities_prompt or "未提供设备能力，请保持保守的单次调用。"
@@ -610,6 +653,7 @@ class ChatAgent:
         args_json = json.dumps(directive.args or {}, ensure_ascii=False, indent=2)
         checkpoint = "\n".join(f"- {c}" for c in success_criteria)
         observations_text = self._observations_text(state_context.get("observations", []))
+        dialogue_context = (dialogue_context or "无").strip()
 
         prompt_parts = [
             "[ROLE] 你是上位机端设备 AI 助手，负责调用设备 MCP Server 工具（function calling）。",
@@ -617,6 +661,7 @@ class ChatAgent:
             "[CONTEXT] 当前对话目标: "
             f"{state_context.get('target_device_name') or state_context.get('target_device_id') or '未知设备'}; "
             f"会话: {state_context.get('session_id') or '未知'}; 用户需求: {user_goal}; 最近观察: {observations_text}",
+            "[DIALOGUE_CONTEXT]\n" + dialogue_context,
             "[CONSTRAINTS]\n"
             "- 只能调用 1 个 MCP 工具（禁止多次调用/链式执行）。\n"
             "- 必须严格匹配参数，不确定就提问。\n"
