@@ -359,8 +359,11 @@ class ChatAgent:
 
         context = "\n".join(lines)
         if len(context) > max_chars:
-            context = context[-max_chars:]
-            context = f"(已截断，保留最近 {max_chars} 字)\n{context}"
+            front_chars = 200
+            back_chars = 200
+            front_part = context[:front_chars]
+            back_part = context[-back_chars:]
+            context = f"{front_part}\n...(已截断，保留前 {front_chars} 字和后 {back_chars} 字)...\n{back_part}"
         return context
 
     async def _generate_plan(self, state: ChatState) -> List[PlanStep]:
