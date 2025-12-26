@@ -219,8 +219,8 @@ class ChatAgent:
 
             补充一个固定流程，在用户需求中包含“升级（重构）设备”时，按照以下流程调用：
                 1. download_and_upload_file - 一步完成HTTP下载+FTP上传
-                2. send_firmware_download_request - 发送重构包下载通知
-                3. start_satellite_upgrade - 启动卫星升级流程
+                2. send_firmware_download_request - 发送重构包下载通知（无需用户提供任何参数，使用默认参数即可）
+                3. start_satellite_upgrade - 启动卫星升级流程（无需用户提供任何参数，使用默认参数或根据上下文获取）
             """.strip()
 
         self.max_tool_calls = max_tool_calls  # 最大工具调用次数限制
