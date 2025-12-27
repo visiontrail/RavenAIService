@@ -120,19 +120,13 @@ def test_normalize_tool_calls_single_and_patch_defaults(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_observation_triggers_replan_and_user_prompt(monkeypatch):
-    """当设备返回信息不足时，observations 促使下一步变为 ask_user。"""
-    call_count = {"n": 0}
+async def test_missing_info_prompts_user_without_ask_user_step(monkeypatch):
+    """缺失信息时仍提示用户，但计划不包含 ask_user 步骤。"""
 
     async def fake_plan(_state):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            return [
-                ca.PlanStep(id="S1", type="device_action", goal="list files"),
-                ca.PlanStep(id="S2", type="finalize", goal="wrap"),
-            ]
         return [
-            ca.PlanStep(id="S2", type="ask_user", goal="请提供要查看的路径"),
+            ca.PlanStep(id="S1", type="device_action", goal="list files"),
+            ca.PlanStep(id="S2", type="ask_user", goal="should be filtered"),
             ca.PlanStep(id="S3", type="finalize", goal="wrap"),
         ]
 
@@ -165,8 +159,6 @@ async def test_observation_triggers_replan_and_user_prompt(monkeypatch):
     monkeypatch.setattr(agent, "_generate_plan", fake_plan)
     monkeypatch.setattr(agent, "_decide_device_action", fake_directive)
     monkeypatch.setattr(agent, "_summarize_for_user", fake_summary)
-    # 避免重写逻辑影响断言
-    monkeypatch.setattr(agent, "_ensure_single_action_prompt", lambda prompt, state: prompt)
 
     result = await agent.ainvoke(
         messages=[HumanMessage(content="帮我看看设备日志目录")],
@@ -175,7 +167,7 @@ async def test_observation_triggers_replan_and_user_prompt(monkeypatch):
     )
 
     assert result["needs_user_input"] is True
-    assert result["plan"][0]["type"] == "ask_user"
+    assert all(step["type"] != "ask_user" for step in result["plan"])
 
 
 if __name__ == "__main__":
