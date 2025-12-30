@@ -81,7 +81,7 @@ class PackageService {
     for (const pkg of this.packages.values()) {
       if (await fs.pathExists(pkg.path)) {
         existingPackages.push(pkg)
-        console.log(`✅ 包文件存在: ${pkg.name} -> ${pkg.path}`)
+        // console.log(`✅ 包文件存在: ${pkg.name} -> ${pkg.path}`)
       } else {
         // Remove from memory if file doesn't exist
         this.packages.delete(pkg.id)
