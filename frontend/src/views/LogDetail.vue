@@ -202,10 +202,54 @@
             </div> -->
 
             <!-- 问题描述 -->
-            <div class="space-y-2 md:col-span-2 lg:col-span-3" v-if="logStore.currentLog.issue_description">
-              <label class="text-sm font-medium text-gray-500">问题描述</label>
-              <div class="text-sm text-gray-900 bg-blue-50 p-3 rounded border border-blue-200">
-                {{ logStore.currentLog.issue_description }}
+            <div class="space-y-2 md:col-span-2 lg:col-span-3">
+              <div class="flex items-center justify-between">
+                <label class="text-sm font-medium text-gray-500">问题描述</label>
+                <div class="flex items-center space-x-2">
+                  <el-button 
+                    v-if="issueDescriptionEditing" 
+                    size="small" 
+                    @click="cancelIssueDescriptionEdit"
+                  >
+                    取消
+                  </el-button>
+                  <el-button 
+                    type="primary" 
+                    size="small" 
+                    :loading="issueDescriptionSaving" 
+                    @click="issueDescriptionEditing ? handleSaveIssueDescription() : startEditIssueDescription()"
+                  >
+                    <el-icon class="mr-1" size="14">
+                      <EditPen />
+                    </el-icon>
+                    {{ issueDescriptionEditing ? '保存' : (logStore.currentLog?.issue_description ? '编辑' : '添加') }}
+                  </el-button>
+                </div>
+              </div>
+              <div v-if="issueDescriptionEditing" class="space-y-2">
+                <el-input
+                  v-model="issueDescriptionDraft"
+                  type="textarea"
+                  :autosize="{ minRows: 3, maxRows: 6 }"
+                  maxlength="5000"
+                  show-word-limit
+                  placeholder="描述日志涉及的问题，便于AI分析和人工排查"
+                />
+                <div class="text-xs text-gray-400">留空后保存可清除问题描述</div>
+              </div>
+              <div v-else>
+                <div 
+                  v-if="logStore.currentLog.issue_description"
+                  class="text-sm text-gray-900 bg-blue-50 p-3 rounded border border-blue-200"
+                >
+                  {{ logStore.currentLog.issue_description }}
+                </div>
+                <div 
+                  v-else
+                  class="text-sm text-gray-400 bg-gray-50 p-3 rounded border border-dashed border-gray-200"
+                >
+                  暂无问题描述
+                </div>
               </div>
             </div>
 
@@ -515,15 +559,28 @@
 
         <!-- 人工分析结果展示 -->
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
             <div class="flex items-center space-x-2">
               <el-icon class="text-amber-600" size="20">
                 <EditPen />
               </el-icon>
               <h2 class="text-lg font-semibold text-gray-900">人工分析</h2>
             </div>
-            <div v-if="logStore.currentLog?.manual_analysis_updated_at" class="text-xs text-gray-500">
-              最近更新：{{ formatDateTime(logStore.currentLog.manual_analysis_updated_at) }}
+            <div class="flex items-center space-x-3 text-xs text-gray-500">
+              <span v-if="logStore.currentLog?.manual_analysis_updated_at">
+                最近更新：{{ formatDateTime(logStore.currentLog.manual_analysis_updated_at) }}
+              </span>
+              <el-button 
+                type="primary" 
+                plain 
+                size="small" 
+                @click="openManualAnalysisDialog"
+              >
+                <el-icon class="mr-1" size="14">
+                  <EditPen />
+                </el-icon>
+                {{ logStore.currentLog?.manual_analysis ? '编辑' : '添加' }}人工分析
+              </el-button>
             </div>
           </div>
 
@@ -704,6 +761,9 @@ const formatAdapter = FormatAdapter.getInstance()
 const downloadLoading = ref(false)
 const deleteLoading = ref(false)
 const activeVersionCollapse = ref(['version-details'])
+const issueDescriptionEditing = ref(false)
+const issueDescriptionSaving = ref(false)
+const issueDescriptionDraft = ref('')
 const manualAnalysisDialogVisible = ref(false)
 const manualAnalysisSaving = ref(false)
 const manualAnalysisFormRef = ref<FormInstance>()
@@ -1004,6 +1064,46 @@ const handleDelete = async () => {
     }
   } finally {
     deleteLoading.value = false
+  }
+}
+
+// 问题描述编辑
+const startEditIssueDescription = () => {
+  issueDescriptionDraft.value = logStore.currentLog?.issue_description || ''
+  issueDescriptionEditing.value = true
+}
+
+const cancelIssueDescriptionEdit = () => {
+  issueDescriptionDraft.value = logStore.currentLog?.issue_description || ''
+  issueDescriptionEditing.value = false
+}
+
+const handleSaveIssueDescription = async () => {
+  if (!logStore.currentLog) return
+
+  const value = issueDescriptionDraft.value.trim()
+  const payload = value || null
+
+  issueDescriptionSaving.value = true
+  try {
+    const response = await logApi.updateIssueDescription(logStore.currentLog.id, payload)
+    if (response.success) {
+      const updatedDescription = response.data?.issue_description || ''
+      logStore.currentLog.issue_description = updatedDescription
+      if (response.data?.updated_at) {
+        logStore.currentLog.updated_at = response.data.updated_at
+      }
+      issueDescriptionDraft.value = updatedDescription
+      issueDescriptionEditing.value = false
+      ElMessage.success(updatedDescription ? '问题描述已更新' : '问题描述已清除')
+    } else {
+      throw new Error(response.message || '问题描述更新失败')
+    }
+  } catch (error: any) {
+    console.error('更新问题描述失败:', error)
+    ElMessage.error(error.response?.data?.detail || error.message || '问题描述更新失败')
+  } finally {
+    issueDescriptionSaving.value = false
   }
 }
 
@@ -1383,6 +1483,9 @@ const updatePageMeta = () => {
 watch(
   () => logStore.currentLog?.issue_description,
   (newIssueDescription) => {
+    if (!issueDescriptionEditing.value) {
+      issueDescriptionDraft.value = newIssueDescription || ''
+    }
     // 只有当输入框为空且存在问题描述时才自动填入
     if (newIssueDescription && !aiAnalysisQuery.value) {
       aiAnalysisQuery.value = newIssueDescription
@@ -1451,6 +1554,9 @@ watch(
     aiAnalysisTaskId.value = logStore.currentLog?.ai_analysis_task_id || null
     aiAnalysisError.value = logStore.currentLog?.ai_analysis_error || null
     aiAnalysisLoading.value = false
+    issueDescriptionEditing.value = false
+    issueDescriptionSaving.value = false
+    issueDescriptionDraft.value = logStore.currentLog?.issue_description || ''
     manualAnalysisDialogVisible.value = false
     manualAnalysisForm.value.content = logStore.currentLog?.manual_analysis || ''
     manualAnalysisSaving.value = false

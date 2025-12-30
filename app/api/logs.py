@@ -24,7 +24,7 @@ from app.models.log import (
     LogUploadRequest, LogUploadResponse, LogListRequest, LogListResponse,
     LogDetailResponse, LogDeleteResponse, BatchDeleteRequest, BatchDeleteResponse,
     BatchDownloadRequest, BatchDownloadResponse, LogType, LogLevel, LogStatus,
-    LogMetadata, SortField, SortOrder, ManualAnalysisRequest
+    LogMetadata, SortField, SortOrder, ManualAnalysisRequest, IssueDescriptionUpdateRequest
 )
 from app.services.log_service import log_service
 from app.utils.validation import request_validator
@@ -1295,6 +1295,42 @@ async def get_ai_analysis_status(
         raise LogServiceException(
             message="查询AI分析状态失败",
             error_code="AI_ANALYSIS_STATUS_ERROR",
+            detail=str(e)
+        )
+
+
+@router.put("/{log_id}/issue-description")
+async def update_issue_description(
+    log_id: str = Path(..., description="日志文件ID"),
+    payload: IssueDescriptionUpdateRequest = Body(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    更新日志问题描述
+    """
+    try:
+        request_validator.validate_log_id(log_id)
+        result = await log_service.update_issue_description(db, log_id, payload.issue_description)
+        return {
+            "success": True,
+            "message": "问题描述已更新",
+            "data": {
+                "log_id": log_id,
+                "issue_description": result.issue_description,
+                "updated_at": result.updated_at
+            }
+        }
+    except ValidationError as e:
+        logger.warning(f"Invalid log ID format for issue description: {log_id}")
+        raise e
+    except FileNotFoundError as e:
+        logger.warning(f"File not found for issue description update: {log_id}")
+        raise e
+    except Exception as e:
+        logger.error(f"Failed to update issue description for {log_id}: {e}")
+        raise LogServiceException(
+            message="问题描述更新失败",
+            error_code="ISSUE_DESCRIPTION_UPDATE_ERROR",
             detail=str(e)
         )
 

@@ -140,6 +140,11 @@ export const logApi = {
   saveManualAnalysis: (id: string, content: string): Promise<ApiResponse<any>> => {
     return api.post(`/api/v1/logs/${id}/manual-analysis`, { content })
   },
+
+  // 更新问题描述
+  updateIssueDescription: (id: string, issue_description: string | null): Promise<ApiResponse<any>> => {
+    return api.put(`/api/v1/logs/${id}/issue-description`, { issue_description })
+  },
 }
 
 // 任务相关API

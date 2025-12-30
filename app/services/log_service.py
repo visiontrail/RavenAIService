@@ -389,6 +389,37 @@ class LogService(BaseCRUDService[LogRecord]):
         metadata = LogMetadata(**metadata_dict) if metadata_dict else LogMetadata()
         return await self._db_to_pydantic(log_record, metadata)
 
+    async def update_issue_description(
+        self,
+        db: AsyncSession,
+        log_id: str,
+        issue_description: Optional[str]
+    ) -> LogFileInfo:
+        """
+        更新问题描述
+        """
+        log_record = await self.get_by_id(db, log_id)
+
+        if not log_record or log_record.is_deleted:
+            raise FileNotFoundError(file_id=log_id)
+
+        log_record.issue_description = issue_description
+        log_record.updated_at = datetime.utcnow()
+
+        metadata = None
+        try:
+            if log_record.metadata_json:
+                metadata_dict = json.loads(log_record.metadata_json)
+                metadata = LogMetadata(**metadata_dict)
+        except Exception:
+            metadata = LogMetadata()
+
+        db.add(log_record)
+        await db.commit()
+        await db.refresh(log_record)
+
+        return await self._db_to_pydantic(log_record, metadata)
+
     async def update_ai_analysis_task(
         self,
         db: AsyncSession,

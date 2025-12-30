@@ -304,6 +304,24 @@ class ManualAnalysisRequest(BaseModel):
         return cleaned
 
 
+class IssueDescriptionUpdateRequest(BaseModel):
+    """问题描述更新请求"""
+    issue_description: Optional[str] = Field(
+        None,
+        max_length=5000,
+        description="问题描述（可为空以清除）"
+    )
+
+    @validator('issue_description', pre=True)
+    def validate_issue_description(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError("问题描述必须为字符串")
+        cleaned = v.strip()
+        return cleaned or None
+
+
 class SortField(str, Enum):
     """排序字段枚举"""
     CREATED_AT = "created_at"
