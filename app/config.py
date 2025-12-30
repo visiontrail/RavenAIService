@@ -106,6 +106,9 @@ class Settings(BaseSettings):
     max_retry_attempts: int = 3
     task_timeout: int = 3600  # 1小时超时
     thread_num_for_decompress: int = 4  # 默认线程数
+    repackage_use_pigz: bool = True  # 优先使用pigz并行压缩
+    repackage_pigz_threads: int = 0  # 0表示自动按CPU核心数选择
+    repackage_compress_level: int = 6  # pigz缺失时tarfile的压缩等级(1-9)
     
     # SQLite配置（开发环境）
     # 默认放在 data 目录，避免与代码目录冲突，方便卷持久化

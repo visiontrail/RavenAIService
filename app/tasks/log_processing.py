@@ -973,24 +973,92 @@ def _repackage_processed_files(processed_dir: str, original_filename: str, temp_
     
     try:
         start_time = time.time()
+        # 预先统计文件数和总体积，便于性能日志
+        file_count = 0
+        total_size = 0
+        for root, _, files in os.walk(processed_dir):
+            for file_name in files:
+                file_count += 1
+                total_size += os.path.getsize(os.path.join(root, file_name))
+
+        pigz_path = shutil.which("pigz") if settings.repackage_use_pigz else None
+        tar_path = shutil.which("tar")
+        compresslevel = max(1, min(9, getattr(settings, "repackage_compress_level", 6)))
+        pigz_threads = settings.repackage_pigz_threads or (os.cpu_count() or 1)
+        pigz_threads = max(1, pigz_threads)
+        compression_method = "python-tarfile"
+
+        # 优先尝试使用pigz并行压缩
+        if pigz_path and tar_path:
+            logger.info(f"RepackageTask - 使用pigz并行压缩: tar={tar_path}, pigz={pigz_path}, 线程数={pigz_threads}")
+            try:
+                with open(output_file, "wb") as out_f:
+                    tar_cmd = [tar_path, "-C", processed_dir, "-cf", "-", "."]
+                    pigz_cmd = [pigz_path, f"-p{pigz_threads}", "-c"]
+                    
+                    tar_proc = subprocess.Popen(
+                        tar_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                    )
+                    pigz_proc = subprocess.Popen(
+                        pigz_cmd,
+                        stdin=tar_proc.stdout,
+                        stdout=out_f,
+                        stderr=subprocess.PIPE,
+                    )
+                    
+                    # 让tar在pigz终止时收到SIGPIPE
+                    tar_proc.stdout.close()
+                    
+                    pigz_stdout, pigz_stderr = pigz_proc.communicate()
+                    tar_stdout, tar_stderr = tar_proc.communicate()
+                
+                if tar_proc.returncode != 0:
+                    raise RuntimeError(f"tar failed with code {tar_proc.returncode}, stderr={tar_stderr.decode('utf-8', 'ignore') if tar_stderr else ''}")
+                if pigz_proc.returncode != 0:
+                    raise RuntimeError(f"pigz failed with code {pigz_proc.returncode}, stderr={pigz_stderr.decode('utf-8', 'ignore') if pigz_stderr else ''}")
+                
+                compression_method = f"tar|pigz"
+            except Exception as pigz_error:
+                logger.warning(f"RepackageTask - pigz压缩失败，回退到Python tarfile: {pigz_error}")
+                # 清理可能生成的残留文件
+                try:
+                    if os.path.exists(output_file):
+                        os.remove(output_file)
+                except OSError:
+                    pass
         
-        with tarfile.open(output_file, 'w:gz') as tar:
-            file_count = 0
-            total_size = 0
-            for root, dirs, files in os.walk(processed_dir):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    arcname = os.path.relpath(file_path, processed_dir)
-                    tar.add(file_path, arcname=arcname)
-                    file_count += 1
-                    total_size += os.path.getsize(file_path)
+        # 回退或未找到pigz时使用内置tarfile
+        if compression_method == "python-tarfile":
+            if settings.repackage_use_pigz:
+                if not pigz_path:
+                    logger.info("RepackageTask - 未找到pigz，使用Python tarfile压缩")
+                elif not tar_path:
+                    logger.info("RepackageTask - 未找到tar命令，使用Python tarfile压缩")
+            with tarfile.open(output_file, 'w:gz', compresslevel=compresslevel) as tar:
+                for root, dirs, files in os.walk(processed_dir):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, processed_dir)
+                        tar.add(file_path, arcname=arcname)
         
         # 记录性能统计
+        perf_info = {
+            "文件数": file_count,
+            "输出文件": os.path.basename(output_file),
+            "压缩方式": compression_method
+        }
+        if compression_method == "tar|pigz":
+            perf_info["线程数"] = pigz_threads
+        else:
+            perf_info["压缩等级"] = compresslevel
+
         _log_performance_stats(
             "文件重新打包", 
             start_time, 
             total_size, 
-            {"文件数": file_count, "输出文件": os.path.basename(output_file)}
+            perf_info
         )
         
     except Exception as e:
