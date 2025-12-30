@@ -982,7 +982,14 @@ class LogService(BaseCRUDService[LogRecord]):
         expired_logs = result.scalars().all()
         
         cleaned_count = 0
+        skipped_manual = 0
         for log_record in expired_logs:
+            if self._has_manual_analysis(log_record):
+                skipped_manual += 1
+                logger.info(
+                    f"跳过清理已人工分析的日志: 日志ID={log_record.id}, 原始文件名={log_record.original_filename}"
+                )
+                continue
             try:
                 # 删除文件
                 file_path = Path(log_record.file_path)
@@ -1001,6 +1008,9 @@ class LogService(BaseCRUDService[LogRecord]):
         except Exception as e:
             await db.rollback()
             raise StorageError(f"清理过期日志失败: {str(e)}")
+
+        if skipped_manual > 0:
+            logger.info(f"清理过期日志时跳过 {skipped_manual} 条已人工分析的日志记录")
         
         return cleaned_count
     
@@ -1240,6 +1250,30 @@ class LogService(BaseCRUDService[LogRecord]):
         except Exception as e:
             # 记录错误但不影响文件上传流程
             logger.error(f"LogService - 触发协议栈处理失败: 日志ID={log_record.id}, 错误: {str(e)}")
+
+    def _has_manual_analysis(self, log_record: LogRecord) -> bool:
+        """
+        判断日志是否包含人工分析结果，如果有则视为需要长期保留
+        """
+        try:
+            if not log_record.metadata_json:
+                return False
+
+            metadata = json.loads(log_record.metadata_json) or {}
+            extra_fields = metadata.get("extra_fields")
+            if not isinstance(extra_fields, dict):
+                return False
+
+            manual_analysis = extra_fields.get("manual_analysis")
+            content = None
+            if isinstance(manual_analysis, dict):
+                content = manual_analysis.get("content") or manual_analysis.get("text")
+            elif isinstance(manual_analysis, str):
+                content = manual_analysis
+
+            return bool(content and str(content).strip())
+        except Exception:
+            return False
 
 
 # 创建全局服务实例
