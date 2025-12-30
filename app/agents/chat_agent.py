@@ -58,7 +58,7 @@ class ChatState(TypedDict, total=False):
 
 class PlanStep(BaseModel):
     id: str = Field(..., description="Step id, e.g., S1")
-    type: str = Field(..., description="device_action | finalize（暂不支持 ask_user）")
+    type: str = Field(..., description="device_action | ask_user | finalize")
     goal: str = Field(..., description="一步目标")
     mcp_tool_hint: Optional[Dict[str, Any]] = Field(None, description="可选，推荐工具与参数")
     success_criteria: List[str] = Field(default_factory=list)
@@ -81,9 +81,9 @@ class DeviceActionDirective(BaseModel):
 PLAN_PROMPT_TEMPLATE = """
 你是任务规划助手，需要为设备联动制定可执行的分步计划。
 - 生成 2-6 个步骤，steps 使用 JSON（包含 id/type/goal/mcp_tool_hint/success_criteria/fallback）。
-- type 只能是 device_action | finalize（不要生成 ask_user）。
+- type 只能是 device_action | ask_user | finalize。
 - 每个 device_action 只允许一个 MCP 工具；如需多个操作，请拆分为多步。
-- 信息不足时加入 ask_user 步骤
+- 信息不足时加入 ask_user 步骤向用户提问。
 - 计划最后必须有 finalize 步骤。
 
 用户需求:
@@ -427,13 +427,10 @@ class ChatAgent:
 
     async def _build_plan_node(self, state: ChatState) -> ChatState:
         steps = await self._generate_plan(state)
-        filtered_steps = [step for step in steps if str(getattr(step, "type", "")).lower() != "ask_user"]
-        if len(filtered_steps) != len(steps):
-            logger.info("计划中过滤掉 ask_user 步骤: %s -> %s", len(steps), len(filtered_steps))
-        if not filtered_steps:
-            filtered_steps = [PlanStep(id="S1", type="finalize", goal="向用户总结进展")]
+        if not steps:
+            steps = [PlanStep(id="S1", type="finalize", goal="向用户总结进展")]
 
-        plan_dicts = [step.model_dump() for step in filtered_steps]
+        plan_dicts = [step.model_dump() for step in steps]
         progress_events = self._append_progress_event(
             state,
             {
@@ -548,8 +545,25 @@ class ChatAgent:
         logger.info("act: 当前步骤 #%s 类型=%s 目标=%s", idx + 1, step_type, step.get("goal"))
 
         if step_type == "ask_user":
-            logger.info("act: ask_user 步骤已禁用，跳过执行")
-            return {**state, "step_index": idx + 1}
+            ask_text = step.get("goal") or "需要你补充信息后继续。"
+            messages.append(AIMessage(content=ask_text))
+            progress_events = self._append_progress_event(
+                state,
+                {
+                    "type": "ask_user",
+                    "step_id": step.get("id"),
+                    "step_goal": step.get("goal"),
+                    "step_index": idx,
+                    "ask": ask_text,
+                },
+            )
+            return {
+                **state,
+                "messages": messages,
+                "step_index": idx + 1,
+                "needs_user_input": True,
+                "progress_events": progress_events,
+            }
 
         if step_type == "finalize":
             summary = await self._summarize_for_user(state, user_goal)

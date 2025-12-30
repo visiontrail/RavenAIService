@@ -120,8 +120,8 @@ def test_normalize_tool_calls_single_and_patch_defaults(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_missing_info_prompts_user_without_ask_user_step(monkeypatch):
-    """缺失信息时仍提示用户，但计划不包含 ask_user 步骤。"""
+async def test_missing_info_prompts_user_and_keeps_ask_user_step(monkeypatch):
+    """缺失信息时仍提示用户，并保留 ask_user 步骤以便后续追问。"""
 
     async def fake_plan(_state):
         return [
@@ -167,7 +167,31 @@ async def test_missing_info_prompts_user_without_ask_user_step(monkeypatch):
     )
 
     assert result["needs_user_input"] is True
-    assert all(step["type"] != "ask_user" for step in result["plan"])
+    assert any(step["type"] == "ask_user" for step in result["plan"])
+
+
+@pytest.mark.asyncio
+async def test_ask_user_step_prompts_and_stops(monkeypatch):
+    """ask_user 步骤会直接向用户追问并暂停执行。"""
+
+    async def fake_plan(_state):
+        return [
+            ca.PlanStep(id="S1", type="ask_user", goal="需要你提供设备日志路径"),
+            ca.PlanStep(id="S2", type="finalize", goal="wrap"),
+        ]
+
+    agent = ca.ChatAgent(max_tool_calls=2)
+    monkeypatch.setattr(agent, "_generate_plan", fake_plan)
+
+    result = await agent.ainvoke(
+        messages=[HumanMessage(content="帮我检查一下日志")],
+        session_id="S",
+        target_device_id="D",
+    )
+
+    assert result["needs_user_input"] is True
+    assert any(isinstance(msg, AIMessage) and "需要你提供设备日志路径" in str(msg.content) for msg in result["messages"])
+    assert any(event.get("type") == "ask_user" for event in result.get("progress_events", []))
 
 
 if __name__ == "__main__":
