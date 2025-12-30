@@ -16,6 +16,7 @@ import os
 import re
 import uuid
 from datetime import datetime
+import time
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Sequence, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -77,12 +78,12 @@ class DeviceActionDirective(BaseModel):
     success_criteria: List[str] = Field(default_factory=list, description="成功判定")
     missing_information: Optional[str] = Field(None, description="缺失信息时需向用户提问的内容")
 
-# - 信息不足时加入 ask_user 步骤（已暂时禁用，避免不稳定行为）
 PLAN_PROMPT_TEMPLATE = """
 你是任务规划助手，需要为设备联动制定可执行的分步计划。
 - 生成 2-6 个步骤，steps 使用 JSON（包含 id/type/goal/mcp_tool_hint/success_criteria/fallback）。
 - type 只能是 device_action | finalize（不要生成 ask_user）。
 - 每个 device_action 只允许一个 MCP 工具；如需多个操作，请拆分为多步。
+- 信息不足时加入 ask_user 步骤
 - 计划最后必须有 finalize 步骤。
 
 用户需求:
@@ -107,13 +108,6 @@ ACTION_DIRECTIVE_PROMPT = """
     - args 只包含该工具需要的字段（不要包含 session_id/target_device_id）。
     - success_criteria 给出 1-3 条检查点。
 
-补充：当用户提出收集日志的时候，优先调用工具collect_logs_by_software_async，参数说明如下：
-    - software_list: ["MIAN_OAM"]
-    - current_time: 填写当前时间即可
-    - issue_description: 根据用户上下文填写即可
-    - environment_info: "NR-TEST编译测试机"
-    - service_name: 根据用户上下文填写，表示这个日志要给谁看，如“张三”
-
 send_firmware_download_request - 发送重构包下载通知（无需用户提供任何参数，使用默认参数即可，不要询问用户）
 start_satellite_upgrade - 启动卫星升级流程（无需用户提供任何参数，使用默认参数或根据上下文获取）
 
@@ -134,7 +128,7 @@ SUMMARY_PROMPT = """
 
 def _make_llm(streaming: bool = True) -> Any:
     """
-    构建 OpenAI 兼容的聊天模型，统一使用 DeepSeek 配置。
+    构建 OpenAI 兼容的聊天模型。
     """
     api_key = getattr(settings, "deepseek_api_key", None)
     base_url = getattr(settings, "deepseek_base_url", None)
@@ -416,7 +410,7 @@ class ChatAgent:
         )
         logger.info(
             "\n\n--- PLAN PROMPT ---\n%s\n--- END PLAN PROMPT ---\n",
-            prompt_text[:1200] + ("..." if len(prompt_text) > 1200 else ""),
+            prompt_text,
         )
         structured_llm = self.planner_llm.with_structured_output(PlanOutput)
         try:
@@ -819,7 +813,7 @@ class ChatAgent:
         device_capabilities_prompt = state.get("device_capabilities_prompt") or "无"
         observations_text = self._observations_text(observations)
         dialogue_context = self._recent_dialogue_context(state.get("messages", []))
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        current_time = datetime.fromtimestamp(time.time()).strftime("%Y-%m-%d %H:%M:%S")
         prompt_text = ACTION_DIRECTIVE_PROMPT.format(
             user_goal=user_goal,
             step_json=json.dumps(step, ensure_ascii=False),
@@ -830,7 +824,7 @@ class ChatAgent:
         )
         logger.info(
             "\n\n--- DEVICE ACTION PROMPT ---\n%s\n--- END DEVICE ACTION PROMPT ---\n",
-            prompt_text[:1200] + ("..." if len(prompt_text) > 1200 else ""),
+            prompt_text,
         )
         structured_llm = self.planner_llm.with_structured_output(DeviceActionDirective)
         try:
