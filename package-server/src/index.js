@@ -213,11 +213,12 @@ app.use('*', (req, res) => {
 })
 
 // 错误处理中间件
-app.use((error, req, res) => {
+app.use((error, req, res, next) => {
   console.error('Server error:', error)
-  res.status(500).json({
+  const status = error?.status || 500
+  res.status(status).json({
     success: false,
-    message: '服务器内部错误'
+    message: error?.message || '服务器内部错误'
   })
 })
 

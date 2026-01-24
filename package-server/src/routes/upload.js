@@ -23,10 +23,11 @@ const storage = multer.diskStorage({
   }
 })
 
+const MAX_FILE_SIZE_MB = parseInt(process.env.UPLOAD_MAX_SIZE_MB || '500', 10)
 const upload = multer({
   storage,
   limits: {
-    fileSize: 500 * 1024 * 1024 // 500MB limit
+    fileSize: MAX_FILE_SIZE_MB * 1024 * 1024 // configurable (default 500MB)
   },
   fileFilter: (req, file, cb) => {
     // Only allow .tgz and .tar.gz files
@@ -41,8 +42,67 @@ const upload = multer({
   }
 })
 
+/**
+ * Wrap multer middleware so we can catch and normalize errors
+ */
+const withMulter = (multerMiddleware) => (req, res, next) => {
+  let aborted = false
+
+  req.on('aborted', () => {
+    aborted = true
+    console.warn('⚠️ 上传请求在传输过程中被客户端中断')
+  })
+
+  multerMiddleware(req, res, async (err) => {
+    if (!err) return next()
+
+    console.error('❌ 上传中间件错误:', err)
+
+    // 清理已写入的临时文件
+    const cleanupTargets = []
+    if (req.file?.path) cleanupTargets.push(req.file.path)
+    if (Array.isArray(req.files)) {
+      req.files.forEach((f) => f?.path && cleanupTargets.push(f.path))
+    }
+    await Promise.all(
+      cleanupTargets.map((p) =>
+        fs
+          .remove(p)
+          .catch((cleanupErr) => console.warn('⚠️ 清理临时文件失败:', p, cleanupErr.message || cleanupErr))
+      )
+    )
+
+    // 常见错误类型友好提示
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({
+        success: false,
+        error: `文件过大，超过 ${MAX_FILE_SIZE_MB}MB 限制`
+      })
+    }
+
+    if (err.code === 'LIMIT_UNEXPECTED_FILE' || err.message === 'Unexpected end of form') {
+      return res.status(400).json({
+        success: false,
+        error: '上传请求体不完整或被中断，请重试（可检查网络/反向代理的 body 大小限制）'
+      })
+    }
+
+    if (aborted) {
+      return res.status(499).json({
+        success: false,
+        error: '上传已被客户端中断'
+      })
+    }
+
+    return res.status(400).json({
+      success: false,
+      error: err.message || '上传失败'
+    })
+  })
+}
+
 // Upload single package
-router.post('/', upload.single('file'), async (req, res) => {
+router.post('/', withMulter(upload.single('file')), async (req, res) => {
   console.log('POST /api/upload - 收到上传请求')
 
   try {
@@ -151,7 +211,7 @@ router.post('/', upload.single('file'), async (req, res) => {
 })
 
 // Upload multiple packages
-router.post('/batch', upload.array('files', 10), async (req, res) => {
+router.post('/batch', withMulter(upload.array('files', 10)), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: '没有上传文件' })
