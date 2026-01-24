@@ -163,34 +163,38 @@ router.post('/', withMulter(upload.single('file')), async (req, res) => {
     const result = await packageService.addPackage(finalPackageInfo)
     console.log('添加包结果:', result)
 
-    let vectorIndexRebuild = 'skipped'
-    if (result) {
-      console.log('🔄 上传完成，开始重建向量索引...')
-      try {
-        const packages = await packageService.getAllPackages()
-        await ragService.rebuildVectorStore(packages)
-        vectorIndexRebuild = 'success'
-        console.log('✅ 向量索引重建完成（上传触发）')
-      } catch (err) {
-        vectorIndexRebuild = `failed: ${err.message || err}`
-        console.error('⚠️ 向量索引重建失败（已忽略，上传继续）:', err)
-      }
-    } else {
+    let vectorIndexRebuild = 'queued'
+    if (!result) {
+      vectorIndexRebuild = 'skipped'
       console.warn('⚠️ 包添加失败，跳过索引重建')
     }
 
     const response = {
       success: true,
       message: '包上传成功',
-      package: finalPackageInfo
+      package: finalPackageInfo,
+      vectorIndexRebuild
     }
 
-    if (vectorIndexRebuild !== 'success') {
-      response.vectorIndexRebuild = vectorIndexRebuild
-      response.warning = '包已上传，但向量索引未完成，请稍后重试重建索引'
+    if (vectorIndexRebuild === 'queued') {
+      response.warning = '包已上传，向量索引将在后台重建'
     }
 
     res.json(response)
+
+    // 异步触发向量索引重建，避免阻塞上传响应
+    if (result) {
+      setImmediate(async () => {
+        console.log('🔄 异步重建向量索引开始（不阻塞上传响应）...')
+        try {
+          const packages = await packageService.getAllPackages()
+          await ragService.rebuildVectorStore(packages)
+          console.log('✅ 向量索引重建完成（后台任务）')
+        } catch (err) {
+          console.error('⚠️ 向量索引重建失败（后台任务，已忽略）:', err)
+        }
+      })
+    }
   } catch (error) {
     console.error('Upload error:', error)
 
@@ -257,16 +261,17 @@ router.post('/batch', withMulter(upload.array('files', 10)), async (req, res) =>
 
     let vectorIndexRebuild = 'skipped'
     if (results.length > 0) {
-      console.log('🔄 批量上传完成，开始重建向量索引...')
-      try {
-        const packages = await packageService.getAllPackages()
-        await ragService.rebuildVectorStore(packages)
-        vectorIndexRebuild = 'success'
-        console.log('✅ 批量上传触发的向量索引重建完成')
-      } catch (err) {
-        vectorIndexRebuild = `failed: ${err.message || err}`
-        console.error('⚠️ 批量上传后向量索引重建失败（已忽略）:', err)
-      }
+      vectorIndexRebuild = 'queued'
+      console.log('🔄 批量上传完成，向量索引重建已排队（异步执行）')
+      setImmediate(async () => {
+        try {
+          const packages = await packageService.getAllPackages()
+          await ragService.rebuildVectorStore(packages)
+          console.log('✅ 批量上传触发的向量索引重建完成（后台任务）')
+        } catch (err) {
+          console.error('⚠️ 批量上传后向量索引重建失败（后台任务，已忽略）:', err)
+        }
+      })
     }
 
     res.json({
@@ -274,9 +279,14 @@ router.post('/batch', withMulter(upload.array('files', 10)), async (req, res) =>
       message: `成功上传 ${results.length} 个包`,
       packages: results,
       errors: errors.length > 0 ? errors : undefined,
-      ...(vectorIndexRebuild !== 'success' && {
+      ...(vectorIndexRebuild && {
         vectorIndexRebuild,
-        warning: '部分包已上传，但向量索引未完成，请稍后重试重建索引'
+        warning:
+          vectorIndexRebuild === 'queued'
+            ? '部分包已上传，向量索引将在后台重建'
+            : vectorIndexRebuild !== 'skipped'
+              ? '部分包已上传，但向量索引未完成，请稍后重试重建索引'
+              : undefined
       })
     })
   } catch (error) {
