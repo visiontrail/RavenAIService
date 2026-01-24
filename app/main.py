@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config import settings
-from app.api import health, logs, tasks, admin, users
+from app.api import health, logs, tasks, admin, users, packages
 from app.api import ai_chat, device_link
 from app.middleware import RequestLoggingMiddleware, FileSizeLimitMiddleware
 from app.exceptions import register_exception_handlers
@@ -184,6 +184,7 @@ def create_app() -> FastAPI:
     app.include_router(users.router, tags=["用户管理"])
     app.include_router(device_link.router, tags=["设备链接"])
     app.include_router(admin.router, tags=["Admin"])
+    app.include_router(packages.router, prefix="/api", tags=["软件包管理"])
     
     # 挂载前端静态站点（若已构建）
     try:
