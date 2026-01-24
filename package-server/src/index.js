@@ -222,7 +222,7 @@ app.use((error, req, res) => {
 })
 
 // 启动服务器
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`\n🚀 Galaxy Package Server 启动成功!`)
   console.log(`📦 服务地址: http://localhost:${PORT}${BASE_PATH}`)
   console.log(`📁 上传目录: ${UPLOAD_DIR}`)
@@ -230,3 +230,7 @@ app.listen(PORT, () => {
   console.log(`⚡ 环境: ${process.env.NODE_ENV || 'development'}`)
   console.log(`\n访问 http://localhost:${PORT}${BASE_PATH} 开始使用包管理系统\n`)
 })
+
+// 移除默认超时时间，避免大文件上传被意外中断
+server.headersTimeout = 0
+server.requestTimeout = 0
