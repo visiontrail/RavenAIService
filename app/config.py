@@ -4,6 +4,7 @@
 """
 
 import os
+from pathlib import Path
 from typing import List, Optional
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
@@ -17,6 +18,7 @@ class Settings(BaseSettings):
     
     # 环境配置
     environment: str = "development"
+    base_dir: str = str(Path(__file__).resolve().parent.parent)
     
     # 服务配置
     host: str = "0.0.0.0"
