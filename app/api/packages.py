@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.config import settings
+from app.utils.storage_utils import get_free_bytes
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -93,6 +94,15 @@ async def upload_package(
                 chunk = await file.read(chunk_size)
                 if not chunk:
                     break
+                # 检查磁盘空间，预留安全余量
+                free_bytes = get_free_bytes(PACKAGES_DIR)
+                if free_bytes - settings.disk_reserve_bytes < len(chunk):
+                    os.remove(save_path)
+                    logger.error("磁盘空间不足，终止软件包写入")
+                    raise HTTPException(
+                        status_code=507,
+                        detail="磁盘空间不足，无法完成上传"
+                    )
                 f.write(chunk)
                 sha256_hash.update(chunk)
                 total_bytes += len(chunk)

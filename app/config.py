@@ -33,11 +33,15 @@ class Settings(BaseSettings):
     log_file_path: str = "logs/app.log"
     debug_log_file_path: str = "logs/debug.log"
     console_log_level: str = "INFO"
+    log_file_max_bytes: int = 50 * 1024 * 1024  # 50MB 默认单个日志文件上限
+    log_file_backup_count: int = 5  # 保留的滚动日志文件数量
+    enable_debug_file_log: bool = False  # 默认关闭单独的debug文件
     
     # 文件配置
     max_file_size: int = 1073741824  # 1GB
     temp_dir: str = "temp"
     logs_dir: str = "logs"
+    disk_reserve_bytes: int = 512 * 1024 * 1024  # 默认预留512MB空间，防止磁盘写满
     
     # Agent配置（日志分析智能体）
     agent_enabled: bool = True

@@ -30,6 +30,7 @@ from app.exceptions import (
     FileProcessingError, BatchOperationError
 )
 from app.utils.validation import file_validator
+from app.utils.storage_utils import ensure_free_space
 import glob
 
 logger = logging.getLogger(__name__)
@@ -816,6 +817,18 @@ class LogService(BaseCRUDService[LogRecord]):
             download_id = str(uuid.uuid4())
             zip_filename = f"logs_batch_{download_id}.zip"
             zip_path = self.downloads_storage_path / zip_filename
+
+            # 预估压缩前所需空间：原始文件总大小 + 10% 冗余
+            try:
+                estimated_total = sum(Path(record.file_path).stat().st_size for record in log_records if Path(record.file_path).exists())
+            except Exception:
+                estimated_total = 0
+            estimated_zip_size = int(estimated_total * 0.5)  # 粗略估计压缩后占比
+            ensure_free_space(
+                self.downloads_storage_path,
+                required_bytes=estimated_zip_size,
+                reserve_bytes=settings.disk_reserve_bytes,
+            )
             
             # 使用流式压缩避免内存溢出
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
@@ -1083,10 +1096,18 @@ class LogService(BaseCRUDService[LogRecord]):
     async def _save_file(self, file: UploadFile, file_path: Path):
         """保存上传的文件"""
         try:
+            await file.seek(0)
+            content = await file.read()
+            file_size = len(content)
+
+            # 磁盘空间校验，避免写满容器文件系统
+            ensure_free_space(
+                file_path.parent,
+                required_bytes=file_size,
+                reserve_bytes=settings.disk_reserve_bytes,
+            )
+
             with open(file_path, "wb") as buffer:
-                # 重置文件指针
-                await file.seek(0)
-                content = await file.read()
                 buffer.write(content)
         except Exception as e:
             raise StorageError(f"保存文件失败: {str(e)}")

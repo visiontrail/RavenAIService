@@ -31,6 +31,30 @@ def setup_logging():
     console_level_value = getattr(logging, settings.console_log_level.upper(), logging.INFO)
     console_level = max(app_file_level, console_level_value)
 
+    # 动态构建文件处理器，防止日志无限增长占满磁盘
+    file_handlers = {
+        "app_file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "level": app_file_level,
+            "formatter": "standard",
+            "filename": settings.log_file_path,
+            "encoding": "utf-8",
+            "maxBytes": settings.log_file_max_bytes,
+            "backupCount": settings.log_file_backup_count,
+        }
+    }
+
+    if settings.enable_debug_file_log:
+        file_handlers["debug_file"] = {
+            "class": "logging.handlers.RotatingFileHandler",
+            "level": "DEBUG",
+            "formatter": "standard",
+            "filename": settings.debug_log_file_path,
+            "encoding": "utf-8",
+            "maxBytes": settings.log_file_max_bytes,
+            "backupCount": settings.log_file_backup_count,
+        }
+
     logging_config = {
         "version": 1,
         "disable_existing_loggers": False,
@@ -43,29 +67,16 @@ def setup_logging():
                 "level": console_level,
                 "formatter": "standard",
             },
-            "app_file": {
-                "class": "logging.FileHandler",
-                "level": app_file_level,
-                "formatter": "standard",
-                "filename": settings.log_file_path,
-                "encoding": "utf-8",
-            },
-            "debug_file": {
-                "class": "logging.FileHandler",
-                "level": "DEBUG",
-                "formatter": "standard",
-                "filename": settings.debug_log_file_path,
-                "encoding": "utf-8",
-            },
+            **file_handlers,
         },
         "loggers": {
             "uvicorn": {
-                "handlers": ["console", "app_file", "debug_file"],
+                "handlers": ["console", "app_file"],
                 "level": log_level,
                 "propagate": False,
             },
             "uvicorn.error": {
-                "handlers": ["console", "app_file", "debug_file"],
+                "handlers": ["console", "app_file"],
                 "level": log_level,
                 "propagate": False,
             },
@@ -74,13 +85,13 @@ def setup_logging():
                 "propagate": True,
             },
             "uvicorn.access": {
-                "handlers": ["debug_file"],
+                "handlers": ["app_file"],
                 "level": logging.INFO,
                 "propagate": False,
             },
         },
         "root": {
-            "handlers": ["console", "app_file", "debug_file"],
+            "handlers": ["console", "app_file"],
             "level": logging.DEBUG,
         },
     }
