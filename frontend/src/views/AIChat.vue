@@ -74,6 +74,7 @@ const isLoadingDevices = ref(false)
 const mentionVisible = ref(false)
 const mentionKeyword = ref('')
 const mentionSelectedIndex = ref(0)
+const mentionOptionRefs = ref<(HTMLElement | null)[]>([])
 const mentionStart = ref<number | null>(null)
 const targetDeviceId = ref<string | null>(null)
 const targetDeviceName = ref<string | null>(null)
@@ -344,6 +345,14 @@ watch(filteredMentionOptions, (list) => {
   if (mentionSelectedIndex.value >= list.length) {
     mentionSelectedIndex.value = 0
   }
+  mentionOptionRefs.value = []
+})
+
+watch(mentionSelectedIndex, (idx) => {
+  const el = mentionOptionRefs.value[idx]
+  if (el?.scrollIntoView) {
+    el.scrollIntoView({ block: 'nearest' })
+  }
 })
 
 const deviceStatusDotClass = (status: DeviceInfo['status']) =>
@@ -462,6 +471,10 @@ const updateMentionState = (event?: Event) => {
   mentionKeyword.value = afterAt
   mentionSelectedIndex.value = 0
   mentionStart.value = lastAt
+}
+
+const setMentionOptionRef = (el: Element | null, idx: number) => {
+  mentionOptionRefs.value[idx] = el as HTMLElement | null
 }
 
 const applyMentionSelection = (option: MentionOption) => {
@@ -1150,7 +1163,7 @@ const sendMessage = async () => {
           <div
             v-if="mentionVisible"
             ref="mentionDropdownRef"
-            class="absolute left-0 right-0 bottom-full mb-3 bg-white border border-gray-200 rounded-2xl shadow-xl overflow-hidden max-h-64 z-30"
+            class="absolute left-0 right-0 bottom-full mb-3 bg-white border border-gray-200 rounded-2xl shadow-xl overflow-y-auto max-h-64 z-30"
           >
             <div class="px-4 py-3 text-sm text-gray-600 border-b border-gray-100 flex items-center justify-between">
               <span>选择目标（设备或重构包配置管理员）</span>
@@ -1165,6 +1178,7 @@ const sendMessage = async () => {
                 type="button"
                 class="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors"
                 :class="{ 'bg-gray-100': idx === mentionSelectedIndex }"
+                :ref="(el) => setMentionOptionRef(el, idx)"
                 @mousedown.prevent="applyMentionSelection(option)"
                 @mouseenter="mentionSelectedIndex = idx"
               >

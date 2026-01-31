@@ -13,7 +13,10 @@
       "Bash(node -c:*)",
       "Bash(ls:*)",
       "Bash(docker-compose restart:*)",
-      "Bash(docker compose:*)"
+      "Bash(docker compose:*)",
+      "Bash(git push:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []
