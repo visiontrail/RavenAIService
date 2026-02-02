@@ -64,10 +64,11 @@ export const intelligentSearchPackages = (query: string, limit = 5) =>
 export const fetchRavenSuggestions = (query: string) =>
   ravenApi.post<ApiResponse<string[]>>('/search/suggestions', { query })
 
-export const downloadRavenPackage = (id: string) =>
-  ravenApi.get<Blob>(`/download/${encodeURIComponent(id)}`, {
-    responseType: 'blob',
-  })
+/**
+ * 返回直接可下载的链接，避免先在前端拉取完整 Blob 造成等待
+ */
+export const getRavenPackageDownloadUrl = (id: string) =>
+  `${ravenApiBase}/download/${encodeURIComponent(id)}`
 
 export const uploadRavenPackages = async (
   files: File[],

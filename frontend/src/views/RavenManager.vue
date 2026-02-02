@@ -9,11 +9,11 @@ import {
   getRavenSearchStatus,
   intelligentSearchPackages,
   uploadRavenPackages,
-  downloadRavenPackage,
   fetchRavenSuggestions,
   getRavenPackageDetail,
+  getRavenPackageDownloadUrl,
 } from '@/api/raven'
-import { downloadFile, formatDateTime, formatFileSize } from '@/utils'
+import { downloadFileByUrl, formatDateTime, formatFileSize } from '@/utils'
 import { renderMarkdown } from '@/utils/markdownRenderer'
 import type {
   RavenComponent,
@@ -212,19 +212,12 @@ const openPackageDetail = (payload: string | RavenPackage) => {
   router.push({ name: 'RavenPackageDetail', params: { id } })
 }
 
-const downloadPackage = async (pkg: RavenPackage) => {
-  try {
-    const response = await downloadRavenPackage(pkg.id)
-    const contentDisposition = (response.headers['content-disposition'] || '') as string
-    const filenameMatch = contentDisposition.match(/filename="(.+)"/)
-    const fallbackName = pkg.name ? `${pkg.name}.tgz` : 'package.tgz'
-    const filename = filenameMatch ? filenameMatch[1] : fallbackName
-    downloadFile(response.data, filename)
-    ElMessage.success('下载开始')
-  } catch (error: any) {
-    console.error(error)
-    ElMessage.error(error.message || '下载失败')
-  }
+const downloadPackage = (pkg: RavenPackage) => {
+  const url = getRavenPackageDownloadUrl(pkg.id)
+  const filename =
+    pkg.name && pkg.name.includes('.') ? pkg.name : pkg.name ? `${pkg.name}.tgz` : 'package.tgz'
+  downloadFileByUrl(url, filename)
+  ElMessage.success('下载开始')
 }
 
 const deletePackage = async (pkg: RavenPackage) => {

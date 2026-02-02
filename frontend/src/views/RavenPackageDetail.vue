@@ -4,10 +4,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   getRavenPackageDetail,
-  downloadRavenPackage,
   ravenBaseUrl,
+  getRavenPackageDownloadUrl,
 } from '@/api/raven'
-import { copyToClipboard, downloadFile, formatDateTime, formatFileSize } from '@/utils'
+import { copyToClipboard, downloadFileByUrl, formatDateTime, formatFileSize } from '@/utils'
 import { renderMarkdown } from '@/utils/markdownRenderer'
 import type { RavenComponent, RavenPackage } from '@/types'
 
@@ -24,7 +24,7 @@ const shareLink = computed(() =>
   pkg.value ? `${ravenBaseUrl}/package/${encodeURIComponent(pkg.value.id)}` : ''
 )
 const downloadLink = computed(() =>
-  pkg.value ? `${ravenBaseUrl}/api/download/${encodeURIComponent(pkg.value.id)}` : ''
+  pkg.value ? getRavenPackageDownloadUrl(pkg.value.id) : ''
 )
 
 const normalizeTags = (value?: unknown) => {
@@ -165,19 +165,12 @@ const copyRebuildPrompt = async () => {
   }
 }
 
-const downloadPackage = async (value: RavenPackage) => {
-  try {
-    const response = await downloadRavenPackage(value.id)
-    const contentDisposition = (response.headers['content-disposition'] || '') as string
-    const filenameMatch = contentDisposition.match(/filename=\"(.+)\"/)
-    const fallbackName = value.name ? `${value.name}.tgz` : 'package.tgz'
-    const filename = filenameMatch ? filenameMatch[1] : fallbackName
-    downloadFile(response.data, filename)
-    ElMessage.success('下载开始')
-  } catch (error: any) {
-    console.error(error)
-    ElMessage.error(error.message || '下载失败')
-  }
+const downloadPackage = (value: RavenPackage) => {
+  const url = getRavenPackageDownloadUrl(value.id)
+  const filename =
+    value.name && value.name.includes('.') ? value.name : value.name ? `${value.name}.tgz` : 'package.tgz'
+  downloadFileByUrl(url, filename)
+  ElMessage.success('下载开始')
 }
 
 onMounted(fetchDetail)
