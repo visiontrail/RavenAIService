@@ -18,6 +18,8 @@ LOG_DIR="$PROJECT_ROOT/logs"
 TMP_DIR="$PROJECT_ROOT/temp"
 CELERY_PIDFILE="/tmp/celery_worker.pid"
 CELERY_LOGFILE="$LOG_DIR/celery_worker.log"
+CELERY_BEAT_PIDFILE="/tmp/celery_beat.pid"
+CELERY_BEAT_LOGFILE="$LOG_DIR/celery_beat.log"
 START_LOGFILE="$LOG_DIR/start_all.log"
 REQUIREMENTS_FLAG="$PROJECT_ROOT/requirements_installed.flag"
 API_HOST="0.0.0.0"
@@ -62,6 +64,23 @@ PY
 
 cleanup() {
   # 仅在我们创建了 PID 文件且进程还在时尝试清理
+  if [[ -f "$CELERY_BEAT_PIDFILE" ]]; then
+    local beat_pid
+    beat_pid=$(cat "$CELERY_BEAT_PIDFILE" 2>/dev/null || true)
+    if [[ -n "${beat_pid:-}" ]] && ps -p "$beat_pid" >/dev/null 2>&1; then
+      log_info "Stopping Celery beat (PID: $beat_pid) ..."
+      kill "$beat_pid" >/dev/null 2>&1 || true
+      for i in {1..5}; do
+        if ps -p "$beat_pid" >/dev/null 2>&1; then sleep 1; else break; fi
+      done
+      if ps -p "$beat_pid" >/dev/null 2>&1; then
+        log_warn "Celery beat did not stop gracefully, forcing..."
+        kill -9 "$beat_pid" >/dev/null 2>&1 || true
+      fi
+    fi
+    rm -f "$CELERY_BEAT_PIDFILE" >/dev/null 2>&1 || true
+  fi
+
   if [[ -f "$CELERY_PIDFILE" ]]; then
     local pid
     pid=$(cat "$CELERY_PIDFILE" 2>/dev/null || true)
@@ -264,7 +283,7 @@ start_celery() {
   "$PYTHON_BIN" -m celery -A app.celery_app worker \
     --loglevel=info \
     --concurrency=2 \
-    --queues=log_processing,ai_analysis,default \
+    --queues=log_processing,ai_analysis,maintenance,default \
     --hostname=worker@%h \
     --pidfile="$CELERY_PIDFILE" \
     --logfile="$CELERY_LOGFILE" \
@@ -298,6 +317,52 @@ start_celery() {
   exit 1
 }
 
+start_celery_beat() {
+  log_info "Starting Celery beat (detached) ..."
+  if [[ -f "$CELERY_BEAT_PIDFILE" ]]; then
+    local oldpid
+    oldpid=$(cat "$CELERY_BEAT_PIDFILE" 2>/dev/null || true)
+    if [[ -n "${oldpid:-}" ]] && ps -p "$oldpid" >/dev/null 2>&1; then
+      log_warn "Existing Celery beat detected (PID: $oldpid). Reusing it."
+      return
+    else
+      rm -f "$CELERY_BEAT_PIDFILE" || true
+    fi
+  fi
+
+  export PYTHONPATH="$PYTHONPATH_EXPORT"
+  "$PYTHON_BIN" -m celery -A app.celery_app beat \
+    --loglevel=info \
+    --pidfile="$CELERY_BEAT_PIDFILE" \
+    --logfile="$CELERY_BEAT_LOGFILE" \
+    --detach
+
+  for i in {1..15}; do
+    if [[ -f "$CELERY_BEAT_PIDFILE" ]]; then
+      local pid
+      pid=$(cat "$CELERY_BEAT_PIDFILE" 2>/dev/null || true)
+      if [[ -n "${pid:-}" ]] && ps -p "$pid" >/dev/null 2>&1; then
+        log_info "Celery beat started successfully (PID: $pid)"
+        return
+      fi
+    fi
+    local ps_pid
+    ps_pid=$(ps aux | grep -E 'celery.*beat' | grep -E 'app\.celery_app' | grep -v grep | awk '{print $2}' | head -n1 || true)
+    if [[ -n "${ps_pid:-}" ]] && ps -p "$ps_pid" >/dev/null 2>&1; then
+      echo "$ps_pid" > "$CELERY_BEAT_PIDFILE"
+      log_info "Celery beat started (detected via ps, PID: $ps_pid)"
+      return
+    fi
+    sleep 1
+  done
+
+  log_error "Celery beat failed to start (PID not detected)"
+  if [[ -f "$CELERY_BEAT_LOGFILE" ]]; then
+    log_error "Last 50 lines of Celery beat log:"; tail -n 50 "$CELERY_BEAT_LOGFILE" || true
+  fi
+  exit 1
+}
+
 start_api() {
   log_info "Starting FastAPI application ..."
   export PYTHONPATH="$PYTHONPATH_EXPORT"
@@ -320,11 +385,13 @@ install_requirements
 start_redis
 run_db_migrations
 start_celery
+start_celery_beat
 build_frontend
 
 log_info "=== Service Status ==="
 log_info "✓ Redis: start script executed (check redis-cli PING if available)"
 log_info "✓ Celery Worker: running (see $CELERY_LOGFILE)"
+log_info "✓ Celery Beat: running (see $CELERY_BEAT_LOGFILE)"
 log_info "✓ FastAPI: starting on port $API_PORT"
 log_info "=========================================="
 

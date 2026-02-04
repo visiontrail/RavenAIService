@@ -43,7 +43,7 @@ services:
 
   worker:
     build: .
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=2 --queues=log_processing,ai_analysis,default --hostname=worker@%h
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2 --queues=log_processing,ai_analysis,maintenance,default --hostname=worker@%h
     volumes:
       - app_logs:/app/logs
       - app_temp:/app/temp
@@ -58,6 +58,24 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  beat:
+    build: .
+    command: celery -A app.celery_app beat --loglevel=info --pidfile=/tmp/celery_beat.pid --schedule=/tmp/celerybeat-schedule
+    volumes:
+      - app_logs:/app/logs
+      - app_temp:/app/temp
+      - app_data:/app/data
+      - ./.env:/app/.env:ro
+    depends_on:
+      - redis
+    env_file:
+      - .env.example
     logging:
       driver: "json-file"
       options:

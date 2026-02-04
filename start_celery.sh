@@ -11,7 +11,7 @@ export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 celery -A app.celery_app worker \
     --loglevel=info \
     --concurrency=4 \
-    --queues=log_processing,ai_analysis,default \
+    --queues=log_processing,ai_analysis,maintenance,default \
     --hostname=worker@%h \
     --pidfile=/tmp/celery_worker.pid \
     --logfile=logs/celery_worker.log
