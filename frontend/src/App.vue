@@ -61,8 +61,8 @@ onMounted(() => {
     <AppNavbar v-if="shouldShowNavbar" />
     
     <!-- 主要内容区域 -->
-    <main 
-      :class="isChatRoute ? 'w-full h-screen' : 'container mx-auto px-4 py-6'"
+    <main
+      :class="isChatRoute ? 'w-full h-[100dvh]' : 'container mx-auto px-4 py-6'"
     >
       <router-view />
     </main>

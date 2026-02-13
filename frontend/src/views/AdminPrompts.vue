@@ -428,7 +428,7 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <section v-else class="grid gap-6 grid-cols-[240px,1fr] items-start">
+    <section v-else class="grid gap-6 grid-cols-1 lg:grid-cols-[240px,1fr] items-start">
       <aside class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 space-y-4">
         <div>
           <p class="text-xs uppercase tracking-[0.25em] text-slate-400">管理导航</p>
@@ -507,7 +507,7 @@ onBeforeUnmount(() => {
           <div class="rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
             <textarea
               v-model="configState.content"
-              class="w-full h-[520px] resize-none bg-white font-mono text-xs text-slate-800 p-4 focus:outline-none"
+              class="w-full h-[420px] md:h-[520px] resize-none bg-white font-mono text-xs text-slate-800 p-4 focus:outline-none"
               spellcheck="false"
               :disabled="loadingConfig"
             ></textarea>

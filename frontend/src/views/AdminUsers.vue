@@ -358,7 +358,7 @@ onMounted(() => {
       </div>
     </section>
 
-    <section v-else class="grid gap-6 grid-cols-[240px,1fr] items-start">
+    <section v-else class="grid gap-6 grid-cols-1 lg:grid-cols-[240px,1fr] items-start">
       <aside class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 space-y-4">
         <div>
           <p class="text-xs uppercase tracking-[0.25em] text-slate-400">管理导航</p>

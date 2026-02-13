@@ -894,9 +894,10 @@ const sendMessage = async () => {
 </script>
 
 <template>
-  <div class="flex h-full bg-white text-gray-900 font-sans overflow-hidden">
+  <div class="flex h-full bg-white text-gray-900 font-sans overflow-hidden ai-chat-page">
     <!-- Sidebar -->
-    <div 
+    <div
+      class="ai-sidebar"
       :class="[
         'flex flex-col bg-[#F0F4F9] transition-all duration-300 ease-in-out',
         sidebarOpen ? 'w-64' : 'w-16'
@@ -1045,9 +1046,9 @@ const sendMessage = async () => {
     </div>
 
     <!-- Main Content -->
-    <div class="flex-1 flex flex-col h-full relative">
+    <div class="flex-1 flex flex-col h-full relative ai-main">
       <!-- Top Bar -->
-      <div class="h-16 flex items-center justify-between px-6">
+      <div class="h-16 flex items-center justify-between px-6 ai-topbar">
         <div class="flex items-center gap-3 flex-wrap">
           <div class="flex items-center gap-2">
             <span class="text-xl font-medium bg-gradient-to-r from-blue-400 via-purple-400 to-red-400 bg-clip-text text-transparent">Raven AI</span>
@@ -1104,9 +1105,9 @@ const sendMessage = async () => {
         <div class="max-w-3xl mx-auto space-y-8">
           
           <template v-if="chatHistory.length === 0 && !loadingMessages">
-            <div class="mt-20">
-              <h1 class="text-5xl font-medium bg-gradient-to-r from-blue-500 via-purple-500 to-red-500 bg-clip-text text-transparent w-fit mb-2">你好，{{ currentUserName }}</h1>
-              <h2 class="text-5xl font-medium text-[#444746] mb-12">今天有什么我可以帮你的吗？</h2>
+            <div class="mt-8 sm:mt-20">
+              <h1 class="text-3xl sm:text-5xl font-medium bg-gradient-to-r from-blue-500 via-purple-500 to-red-500 bg-clip-text text-transparent w-fit mb-2">你好，{{ currentUserName }}</h1>
+              <h2 class="text-3xl sm:text-5xl font-medium text-[#444746] mb-8 sm:mb-12">今天有什么我可以帮你的吗？</h2>
             </div>
           </template>
 
@@ -1369,6 +1370,43 @@ const sendMessage = async () => {
   }
   100% {
     background-position: -200% 0;
+  }
+}
+
+@media (max-width: 768px) {
+  .ai-chat-page {
+    position: relative;
+  }
+
+  .ai-sidebar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 40;
+    border-right: 1px solid #e5e7eb;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  }
+
+  .ai-sidebar.w-16 {
+    width: 3.5rem !important;
+  }
+
+  .ai-sidebar.w-64 {
+    width: min(82vw, 320px) !important;
+  }
+
+  .ai-main {
+    width: 100%;
+  }
+
+  .ai-topbar {
+    height: auto;
+    min-height: 3.5rem;
+    padding: 0.75rem;
+    gap: 0.5rem;
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>

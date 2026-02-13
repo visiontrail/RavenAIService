@@ -585,8 +585,8 @@ function showAlert(message, type = 'info') {
       top: 20px;
       right: 20px;
       z-index: 9999;
-      min-width: 300px;
-      max-width: 400px;
+      width: min(400px, calc(100vw - 40px));
+      max-width: calc(100vw - 40px);
       background: white;
       border-radius: 12px;
       box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
@@ -658,6 +658,17 @@ function showAlert(message, type = 'info') {
       
       .toast-alert.removing {
         animation: slideOutRight 0.3s ease-in forwards;
+      }
+
+      @media (max-width: 768px) {
+        .toast-alert {
+          top: 12px !important;
+          left: 12px !important;
+          right: 12px !important;
+          width: calc(100vw - 24px) !important;
+          max-width: calc(100vw - 24px) !important;
+          padding: 12px 14px !important;
+        }
       }
     `
     document.head.appendChild(style)

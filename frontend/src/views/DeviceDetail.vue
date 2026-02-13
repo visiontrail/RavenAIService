@@ -282,4 +282,21 @@ onMounted(fetchDevice)
   display: block;
   line-height: 1.5;
 }
+
+@media (max-width: 768px) {
+  .info-item {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .value {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .chip {
+    flex-basis: 100%;
+  }
+}
 </style>

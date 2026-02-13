@@ -144,16 +144,17 @@
         </div>
       </div>
 
-      <el-table
-        v-loading="logStore.loading"
-        :data="logStore.logs"
-        @selection-change="handleSelectionChange"
-        class="w-full"
-        :default-sort="{ prop: 'created_at', order: sortOrder === 'desc' ? 'descending' : 'ascending' }"
-        @sort-change="onTableSortChange"
-        border
-        resizable
-      >
+      <div class="table-scroll-wrapper">
+        <el-table
+          v-loading="logStore.loading"
+          :data="logStore.logs"
+          @selection-change="handleSelectionChange"
+          class="w-full"
+          :default-sort="{ prop: 'created_at', order: sortOrder === 'desc' ? 'descending' : 'ascending' }"
+          @sort-change="onTableSortChange"
+          border
+          resizable
+        >
         <el-table-column type="selection" width="55" resizable />
 
         <el-table-column prop="filename" label="文件名" min-width="300" :show-overflow-tooltip="true" resizable>
@@ -263,7 +264,8 @@
             </div>
           </template>
         </el-table-column>
-      </el-table>
+        </el-table>
+      </div>
 
       <!-- 分页 -->
       <div class="pagination-wrapper mt-6">
@@ -779,6 +781,10 @@ const hasManualAnalysis = (log: LogRecord) => {
   flex-wrap: wrap;
 }
 
+.table-scroll-wrapper {
+  width: 100%;
+}
+
 /* 响应式控件容器 */
 .controls-container {
   display: flex;
@@ -918,6 +924,15 @@ const hasManualAnalysis = (log: LogRecord) => {
 
 /* 确保表格在小屏幕上可以横向滚动 */
 @media (max-width: 768px) {
+  .table-scroll-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table-scroll-wrapper :deep(.el-table) {
+    min-width: 1100px;
+  }
+
   :deep(.el-table) {
     font-size: 0.875rem;
   }
@@ -958,6 +973,12 @@ const hasManualAnalysis = (log: LogRecord) => {
 @media (max-width: 640px) {
   .filename-link {
     max-width: 100px;
+  }
+
+  .pagination-wrapper :deep(.el-pagination) {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 0.5rem;
   }
 }
 </style>

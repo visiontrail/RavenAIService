@@ -53,13 +53,14 @@
         </div>
       </div>
 
-      <el-table
-        v-loading="loading"
-        :data="devices"
-        border
-        class="w-full"
-        :empty-text="loading ? '加载中...' : '暂无设备连接'"
-      >
+      <div class="table-scroll-wrapper">
+        <el-table
+          v-loading="loading"
+          :data="devices"
+          border
+          class="w-full"
+          :empty-text="loading ? '加载中...' : '暂无设备连接'"
+        >
         <el-table-column prop="name" label="设备" min-width="220">
           <template #default="{ row }">
             <router-link :to="`/devices/${row.id}`" class="flex flex-col name-link">
@@ -149,7 +150,8 @@
             </div>
           </template>
         </el-table-column>
-      </el-table>
+        </el-table>
+      </div>
     </el-card>
   </div>
 </template>
@@ -320,6 +322,18 @@ onBeforeUnmount(() => {
 
 .name-link {
   text-decoration: none;
+}
+
+@media (max-width: 768px) {
+  .table-scroll-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table-scroll-wrapper :deep(.el-table) {
+    min-width: 980px;
+  }
 }
 
 @media (min-width: 640px) {

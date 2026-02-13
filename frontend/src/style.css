@@ -15,3 +15,17 @@ body {
 #app {
   min-height: 100vh;
 }
+
+@media (max-width: 768px) {
+  .el-pagination {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    justify-content: center;
+  }
+
+  .el-dialog {
+    width: calc(100vw - 20px) !important;
+    max-width: calc(100vw - 20px) !important;
+    margin: 10px auto !important;
+  }
+}

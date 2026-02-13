@@ -401,4 +401,22 @@ onMounted(() => {
 .recent-item {
   @apply transition-colors hover:bg-gray-100;
 }
+
+@media (max-width: 768px) {
+  .upload-content {
+    @apply py-8;
+  }
+
+  .upload-icon {
+    @apply mb-3;
+  }
+
+  .upload-text p:first-child {
+    font-size: 1rem;
+  }
+
+  .recent-item {
+    @apply flex-col items-start gap-3;
+  }
+}
 </style>

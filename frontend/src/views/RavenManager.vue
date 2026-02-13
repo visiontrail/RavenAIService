@@ -572,14 +572,15 @@ onMounted(() => {
             </div>
           </div>
 
-          <el-table
-            :data="packages"
-            v-loading="loadingList"
-            border
-            class="w-full"
-            :row-class-name="() => 'cursor-pointer'"
-            @row-click="openPackageDetail"
-          >
+          <div class="table-scroll-wrapper">
+            <el-table
+              :data="packages"
+              v-loading="loadingList"
+              border
+              class="w-full"
+              :row-class-name="() => 'cursor-pointer'"
+              @row-click="openPackageDetail"
+            >
             <el-table-column prop="name" label="名称 / 版本" min-width="340">
               <template #default="{ row }">
                 <div class="flex items-start gap-2">
@@ -654,7 +655,8 @@ onMounted(() => {
                 </div>
               </template>
             </el-table-column>
-          </el-table>
+            </el-table>
+          </div>
 
           <div class="flex justify-between items-center text-sm text-gray-500 mt-2">
             <span>共 {{ pagination.totalItems }} 个包</span>
@@ -1098,5 +1100,35 @@ onMounted(() => {
 
 .raven-detail-dialog :deep(.el-dialog__body) {
   padding-top: 8px;
+}
+
+@media (max-width: 768px) {
+  .raven-page {
+    gap: 1rem;
+  }
+
+  .table-scroll-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table-scroll-wrapper :deep(.el-table) {
+    min-width: 1080px;
+  }
+
+  .raven-tabs :deep(.el-tabs__nav-wrap) {
+    overflow-x: auto;
+  }
+
+  .raven-tabs :deep(.el-tabs__nav-wrap::-webkit-scrollbar) {
+    display: none;
+  }
+
+  .raven-detail-dialog :deep(.el-dialog) {
+    width: calc(100vw - 20px) !important;
+    max-width: calc(100vw - 20px) !important;
+    margin: 10px auto !important;
+  }
 }
 </style>

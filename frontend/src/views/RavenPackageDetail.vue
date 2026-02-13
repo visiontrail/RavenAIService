@@ -351,4 +351,10 @@ watch(
 .markdown-content :deep(img) {
   max-width: 100%;
 }
+
+@media (max-width: 768px) {
+  .raven-detail-page :deep(.el-button) {
+    white-space: nowrap;
+  }
+}
 </style>
