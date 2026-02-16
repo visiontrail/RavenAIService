@@ -120,6 +120,16 @@ const handleViewportForSidebar = () => {
   }
 }
 
+const shouldDismissMobileKeyboard = () => {
+  const isTouchDevice = window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0
+  return isTouchDevice && window.innerWidth <= 1024
+}
+
+const dismissMobileKeyboard = () => {
+  if (!shouldDismissMobileKeyboard()) return
+  textareaRef.value?.blur()
+}
+
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
   handleViewportForSidebar()
@@ -687,7 +697,9 @@ const handleKeydown = (event: KeyboardEvent) => {
 
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
+    const willSend = !isSending.value && inputMessage.value.trim().length > 0
     sendMessage()
+    if (willSend) dismissMobileKeyboard()
   }
 }
 
@@ -1152,7 +1164,7 @@ const sendMessage = async () => {
       </div>
 
       <!-- Chat Area -->
-      <div ref="chatContainerRef" class="flex-1 overflow-y-auto px-4 md:px-20 py-6 scrollbar-hide scroll-smooth">
+      <div ref="chatContainerRef" class="flex-1 overflow-y-auto px-4 md:px-20 py-6 scrollbar-hide scroll-smooth ai-chat-scroll">
         <div class="max-w-3xl mx-auto space-y-8">
           
           <template v-if="chatHistory.length === 0 && !loadingMessages">
@@ -1170,13 +1182,13 @@ const sendMessage = async () => {
              <div 
                v-for="(msg, idx) in chatHistory" 
                :key="msg.id || idx" 
-               class="flex gap-4 group w-full"
-               :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
+               class="flex group w-full"
+               :class="msg.role === 'user' ? 'justify-end gap-4' : 'justify-start gap-0 md:justify-start md:gap-1'"
              >
                <!-- AI Avatar (Left side only) -->
                <div 
                  v-if="msg.role === 'ai'"
-                 class="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center mt-1"
+                 class="hidden md:flex w-8 h-8 rounded-full flex-shrink-0 items-center justify-center mt-1"
                >
                  <div class="w-6 h-6 rounded-full bg-gradient-to-tr from-blue-500 via-purple-500 to-red-500 animate-pulse-slow"></div>
                </div>
@@ -1422,6 +1434,16 @@ const sendMessage = async () => {
   100% {
     background-position: -200% 0;
   }
+}
+
+.ai-chat-page,
+.ai-main {
+  overscroll-behavior: none;
+}
+
+.ai-chat-scroll {
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 @media (max-width: 768px) {
