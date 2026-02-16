@@ -311,7 +311,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="space-y-6">
+  <div class="space-y-6 admin-prompts-page">
     <section
       class="rounded-2xl bg-gradient-to-r from-slate-900 via-slate-800 to-cyan-800 text-white shadow-xl"
     >
@@ -391,7 +391,7 @@ onBeforeUnmount(() => {
                 autocomplete="current-password"
               />
             </label>
-            <div class="flex items-center gap-3">
+            <div class="login-actions flex items-center gap-3">
               <button
                 class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-50"
                 :disabled="isLoggingIn"
@@ -428,7 +428,7 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <section v-else class="grid gap-6 grid-cols-1 lg:grid-cols-[240px,1fr] items-start">
+    <section v-else class="admin-layout grid gap-6 grid-cols-1 lg:grid-cols-[240px,1fr] items-start">
       <aside class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 space-y-4">
         <div>
           <p class="text-xs uppercase tracking-[0.25em] text-slate-400">管理导航</p>
@@ -479,7 +479,7 @@ onBeforeUnmount(() => {
                 输入框内即为磁盘内容，保存后立即刷新 Agent 缓存；Ctrl/Cmd + S 可快速保存
               </p>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="editor-toolbar-actions flex items-center gap-2">
               <button
                 class="px-3 py-2 text-sm rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50"
                 :disabled="loadingConfig"
@@ -512,8 +512,8 @@ onBeforeUnmount(() => {
               :disabled="loadingConfig"
             ></textarea>
           </div>
-          <div class="flex items-center justify-between text-xs text-slate-500 mt-2">
-            <div class="flex items-center gap-3">
+          <div class="editor-meta-row flex items-center justify-between text-xs text-slate-500 mt-2">
+            <div class="editor-meta-left flex items-center gap-3">
               <span>长度：{{ configState.content.length }} 字符</span>
               <span
                 :class="hasUnsavedChanges ? 'text-amber-600' : 'text-emerald-600'"
@@ -522,7 +522,7 @@ onBeforeUnmount(() => {
                 {{ conflictMessage || '文件在其他位置被更新' }}
               </span>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="editor-meta-right flex items-center gap-2">
               <span class="px-2 py-1 rounded bg-slate-100 border border-slate-200">
                 {{ readableUpdatedAt }}
               </span>
@@ -542,26 +542,26 @@ onBeforeUnmount(() => {
               </button>
             </div>
             <div class="space-y-2 text-sm text-slate-700">
-              <div class="flex justify-between">
+              <div class="info-row flex justify-between">
                 <span class="text-slate-500">路径</span>
                 <span class="font-mono text-xs text-slate-800">{{ configState.path }}</span>
               </div>
-              <div class="flex justify-between">
+              <div class="info-row flex justify-between">
                 <span class="text-slate-500">大小</span>
                 <span>{{ formatBytes(configState.size) }}</span>
               </div>
-              <div class="flex justify-between">
+              <div class="info-row flex justify-between">
                 <span class="text-slate-500">最近更新</span>
                 <span>{{ readableUpdatedAt }}</span>
               </div>
-              <div class="flex justify-between">
+              <div class="info-row flex justify-between">
                 <span class="text-slate-500">校验和</span>
                 <span class="font-mono text-[11px] text-slate-600 break-all">
                   {{ configState.checksum }}
                 </span>
               </div>
             </div>
-            <div class="flex gap-2">
+            <div class="info-actions flex gap-2">
               <button
                 class="flex-1 px-3 py-2 rounded-lg text-sm border border-slate-200 hover:bg-slate-50"
                 @click="handleReload"
@@ -592,3 +592,54 @@ onBeforeUnmount(() => {
     </section>
   </div>
 </template>
+
+<style scoped>
+@media (max-width: 768px) {
+  .admin-layout {
+    gap: 1rem;
+  }
+
+  .login-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .editor-toolbar-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+  }
+
+  .editor-toolbar-actions button {
+    width: 100%;
+  }
+
+  .editor-meta-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .editor-meta-left,
+  .editor-meta-right {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .info-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.2rem;
+  }
+
+  .info-actions {
+    flex-direction: column;
+  }
+
+  .info-actions button {
+    width: 100%;
+  }
+}
+</style>

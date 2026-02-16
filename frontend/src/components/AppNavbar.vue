@@ -1,5 +1,5 @@
 <template>
-  <nav class="bg-white shadow-sm border-b border-gray-200 app-navbar">
+  <nav class="bg-white shadow-sm border-b border-gray-200 app-navbar mobile-sticky-header">
     <div class="container mx-auto px-4">
       <div class="flex justify-between items-center h-16 navbar-inner">
         <!-- Logo和标题 -->
@@ -75,6 +75,7 @@ const isDeviceRoute = computed(() => ['DeviceList', 'DeviceDetail'].includes((ro
 .nav-link {
   display: flex;
   align-items: center;
+  justify-content: center;
   padding: 0.75rem 1rem;
   font-size: 0.875rem;
   font-weight: 500;
@@ -134,6 +135,10 @@ const isDeviceRoute = computed(() => ['DeviceList', 'DeviceDetail'].includes((ro
 }
 
 @media (max-width: 768px) {
+  .app-navbar {
+    background: rgba(255, 255, 255, 0.94);
+  }
+
   .navbar-inner {
     height: auto;
     min-height: 4rem;
@@ -150,6 +155,7 @@ const isDeviceRoute = computed(() => ['DeviceList', 'DeviceDetail'].includes((ro
     width: 100%;
     overflow-x: auto;
     white-space: nowrap;
+    scroll-snap-type: x mandatory;
     padding-bottom: 0.25rem;
   }
 
@@ -159,7 +165,9 @@ const isDeviceRoute = computed(() => ['DeviceList', 'DeviceDetail'].includes((ro
 
   .nav-link {
     flex-shrink: 0;
-    padding: 0.55rem 0.75rem;
+    min-height: 2.5rem;
+    padding: 0.55rem 0.9rem;
+    scroll-snap-align: start;
   }
 
   .navbar-title {

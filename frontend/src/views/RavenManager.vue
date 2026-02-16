@@ -502,13 +502,12 @@ onMounted(() => {
     <el-tabs v-model="activeTab" class="raven-tabs">
       <el-tab-pane label="包列表" name="list">
         <section class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-4">
-          <div class="flex flex-wrap md:flex-nowrap items-center gap-3 w-full" style="gap: 0.75rem;">
+          <div class="raven-filter-row flex flex-wrap md:flex-nowrap items-center gap-3 w-full">
             <el-input
               v-model="filters.search"
               placeholder="按名称、版本或描述搜索"
               clearable
-              class="flex-1 min-w-[260px]"
-              style="width: 280px"
+              class="raven-filter-control raven-filter-search"
               @change="fetchPackages"
               @clear="fetchPackages"
             >
@@ -520,8 +519,7 @@ onMounted(() => {
               v-model="filters.type"
               placeholder="包类型"
               clearable
-              class="w-40"
-              style="width: 170px"
+              class="raven-filter-control raven-filter-type"
               @change="fetchPackages"
             >
               <el-option label="LingXi-10" value="lingxi-10" />
@@ -535,8 +533,7 @@ onMounted(() => {
               v-model="filters.version"
               placeholder="版本号"
               clearable
-              class="w-32"
-              style="width: 140px"
+              class="raven-filter-control raven-filter-version"
               @change="fetchPackages"
               @clear="fetchPackages"
             />
@@ -544,8 +541,7 @@ onMounted(() => {
               v-model="filters.tags"
               placeholder="标签包含"
               clearable
-              class="w-40"
-              style="width: 170px"
+              class="raven-filter-control raven-filter-tags"
               @change="fetchPackages"
               @clear="fetchPackages"
             />
@@ -553,14 +549,13 @@ onMounted(() => {
               v-model="filters.isPatch"
               placeholder="补丁/正式"
               clearable
-              class="w-32"
-              style="width: 140px"
+              class="raven-filter-control raven-filter-patch"
               @change="fetchPackages"
             >
               <el-option label="正式包" value="false" />
               <el-option label="补丁包" value="true" />
             </el-select>
-            <div class="flex gap-2 flex-shrink-0">
+            <div class="raven-filter-actions flex gap-2 flex-shrink-0">
               <el-button type="primary" @click="fetchPackages">
                 <el-icon class="mr-1"><Search /></el-icon>
                 搜索
@@ -658,7 +653,7 @@ onMounted(() => {
             </el-table>
           </div>
 
-          <div class="flex justify-between items-center text-sm text-gray-500 mt-2">
+          <div class="raven-pagination-row flex justify-between items-center text-sm text-gray-500 mt-2">
             <span>共 {{ pagination.totalItems }} 个包</span>
             <el-pagination
               background
@@ -759,7 +754,7 @@ onMounted(() => {
                       v-model="tagDraft"
                       size="small"
                       placeholder="输入后回车添加"
-                      style="width: 160px"
+                      class="tag-draft-input"
                       @keyup.enter="addTag"
                       @blur="addTag"
                     />
@@ -1063,6 +1058,38 @@ onMounted(() => {
   transition: all 0.25s ease;
 }
 
+.raven-filter-row {
+  gap: 0.75rem;
+}
+
+.raven-filter-control {
+  flex-shrink: 0;
+}
+
+.raven-filter-search {
+  width: 280px;
+  min-width: 260px;
+  flex: 1 1 auto;
+}
+
+.raven-filter-type,
+.raven-filter-tags {
+  width: 170px;
+}
+
+.raven-filter-version,
+.raven-filter-patch {
+  width: 140px;
+}
+
+.tag-draft-input {
+  width: 160px;
+}
+
+.raven-pagination-row {
+  gap: 0.75rem;
+}
+
 .package-name {
   display: inline-block;
   max-width: 100%;
@@ -1105,6 +1132,41 @@ onMounted(() => {
 @media (max-width: 768px) {
   .raven-page {
     gap: 1rem;
+  }
+
+  .raven-filter-row {
+    align-items: stretch;
+  }
+
+  .raven-filter-control,
+  .raven-filter-search,
+  .raven-filter-type,
+  .raven-filter-version,
+  .raven-filter-tags,
+  .raven-filter-patch {
+    width: 100%;
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+
+  .raven-filter-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .raven-filter-actions :deep(.el-button) {
+    width: 100%;
+    margin: 0;
+  }
+
+  .tag-draft-input {
+    width: 100%;
+  }
+
+  .raven-pagination-row {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .table-scroll-wrapper {

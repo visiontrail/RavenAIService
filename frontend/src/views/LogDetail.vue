@@ -23,7 +23,7 @@
                 alt="Raven Logo"
                 class="h-9 w-9 rounded-xl shadow-sm ring-1 ring-gray-200 object-contain"
               />
-              <span class="text-lg font-semibold text-gray-900">Raven智能测试平台</span>
+              <span class="hidden sm:inline text-lg font-semibold text-gray-900">Raven智能测试平台</span>
             </div>
           </div>
         </div>

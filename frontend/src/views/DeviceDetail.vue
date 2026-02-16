@@ -22,7 +22,7 @@
             </span>
           </p>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="device-detail-actions flex items-center gap-2">
           <el-button @click="fetchDevice" :loading="loading" type="primary">
             <el-icon class="mr-1"><Refresh /></el-icon>
             刷新
@@ -284,6 +284,14 @@ onMounted(fetchDevice)
 }
 
 @media (max-width: 768px) {
+  .device-detail-actions {
+    width: 100%;
+  }
+
+  .device-detail-actions :deep(.el-button) {
+    width: 100%;
+  }
+
   .info-item {
     align-items: flex-start;
     flex-direction: column;

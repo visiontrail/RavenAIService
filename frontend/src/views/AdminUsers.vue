@@ -262,7 +262,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="space-y-6">
+  <div class="space-y-6 admin-users-page">
     <section
       class="rounded-2xl bg-gradient-to-r from-slate-900 via-slate-800 to-cyan-800 text-white shadow-xl"
     >
@@ -327,7 +327,7 @@ onMounted(() => {
                 autocomplete="current-password"
               />
             </label>
-            <div class="flex items-center gap-3">
+            <div class="login-actions flex items-center gap-3">
               <button
                 class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-50"
                 :disabled="isLoggingIn"
@@ -358,7 +358,7 @@ onMounted(() => {
       </div>
     </section>
 
-    <section v-else class="grid gap-6 grid-cols-1 lg:grid-cols-[240px,1fr] items-start">
+    <section v-else class="admin-layout grid gap-6 grid-cols-1 lg:grid-cols-[240px,1fr] items-start">
       <aside class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 space-y-4">
         <div>
           <p class="text-xs uppercase tracking-[0.25em] text-slate-400">管理导航</p>
@@ -446,7 +446,7 @@ onMounted(() => {
               />
             </label>
           </div>
-          <div class="mt-3 flex items-center justify-end gap-2">
+          <div class="user-create-actions mt-3 flex items-center justify-end gap-2">
             <button
               class="px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-700 hover:bg-slate-50"
               @click="fetchUsers"
@@ -465,7 +465,7 @@ onMounted(() => {
         </div>
 
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
-          <div class="flex items-center justify-between mb-4">
+          <div class="user-list-header flex items-center justify-between mb-4">
             <div>
               <h2 class="text-lg font-semibold text-slate-900">用户列表</h2>
               <p class="text-sm text-slate-500">启用/禁用用户，或重置密码</p>
@@ -481,8 +481,8 @@ onMounted(() => {
 
           <div v-if="loadingUsers" class="text-sm text-slate-500">正在加载用户...</div>
           <div v-else-if="!users.length" class="text-sm text-slate-500">暂无用户</div>
-          <div v-else class="overflow-x-auto">
-            <table class="min-w-full text-left text-sm text-slate-700">
+          <div v-else class="users-table-wrapper overflow-x-auto touch-scroll">
+            <table class="min-w-full text-left text-sm text-slate-700 users-table">
               <thead>
                 <tr class="border-b border-slate-200">
                   <th class="py-2 pr-4 font-semibold">用户名</th>
@@ -530,3 +530,35 @@ onMounted(() => {
     </section>
   </div>
 </template>
+
+<style scoped>
+@media (max-width: 768px) {
+  .admin-layout {
+    gap: 1rem;
+  }
+
+  .login-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .user-create-actions {
+    justify-content: stretch;
+    flex-direction: column;
+  }
+
+  .user-create-actions button {
+    width: 100%;
+  }
+
+  .user-list-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .users-table {
+    min-width: 720px;
+  }
+}
+</style>

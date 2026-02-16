@@ -10,14 +10,13 @@
     <!-- 搜索和筛选 -->
     <div class="filter-section">
       <el-card class="mb-6">
-        <div class="flex flex-wrap items-center gap-3 w-full" style="gap: 0.75rem;">
+        <div class="log-filter-row flex flex-wrap items-center gap-3 w-full">
           <el-input
             v-model="searchQuery"
             placeholder="搜索文件名或任务名称..."
             clearable
             @input="handleSearch"
-            class="w-64"
-            style="width: 280px"
+            class="log-filter-control log-filter-search"
           >
             <template #prefix>
               <el-icon><Search /></el-icon>
@@ -28,8 +27,7 @@
             placeholder="日志类型"
             clearable
             @change="handleLogTypeFilter"
-            class="w-36"
-            style="width: 150px"
+            class="log-filter-control log-filter-type"
           >
             <el-option label="协议栈日志" value="stack" />
             <el-option label="OAM与天线日志" value="oam_antenna" />
@@ -40,8 +38,7 @@
             placeholder="状态筛选"
             clearable
             @change="handleStatusFilter"
-            class="w-32"
-            style="width: 130px"
+            class="log-filter-control log-filter-status"
           >
             <el-option label="待处理" value="pending" />
             <el-option label="处理中" value="processing" />
@@ -56,12 +53,11 @@
             end-placeholder="结束时间"
             :shortcuts="dateShortcuts"
             value-format="YYYY-MM-DDTHH:mm:ss[Z]"
-            class="w-80 flex-grow"
-            style="width: 360px"
+            class="log-filter-control log-filter-date flex-grow"
             @change="handleDateRangeChange"
             clearable
           />
-          <div class="flex items-center gap-2">
+          <div class="filter-actions flex items-center gap-2">
             <el-button type="primary" @click="applyFilters">
               <el-icon class="mr-1"><Search /></el-icon>
               搜索
@@ -785,6 +781,35 @@ const hasManualAnalysis = (log: LogRecord) => {
   width: 100%;
 }
 
+.log-filter-row {
+  gap: 0.75rem;
+}
+
+.log-filter-control {
+  flex-shrink: 0;
+}
+
+.log-filter-search {
+  width: 280px;
+}
+
+.log-filter-type {
+  width: 150px;
+}
+
+.log-filter-status {
+  width: 130px;
+}
+
+.log-filter-date {
+  width: 360px;
+  min-width: 240px;
+}
+
+.filter-actions {
+  flex-shrink: 0;
+}
+
 /* 响应式控件容器 */
 .controls-container {
   display: flex;
@@ -861,6 +886,26 @@ const hasManualAnalysis = (log: LogRecord) => {
 
 /* 小屏幕适配 */
 @media (max-width: 640px) {
+  .log-filter-control,
+  .log-filter-search,
+  .log-filter-type,
+  .log-filter-status,
+  .log-filter-date {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .filter-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .filter-actions :deep(.el-button) {
+    width: 100%;
+    margin: 0;
+  }
+
   .controls-row {
     flex-direction: column;
     align-items: stretch;

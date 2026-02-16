@@ -184,14 +184,14 @@ watch(
 <template>
   <div class="space-y-6 raven-detail-page">
     <div class="flex items-center justify-between flex-wrap gap-3">
-      <div class="flex items-center gap-3">
+      <div class="detail-head-main flex items-center gap-3">
         <el-button text @click="goBack" class="text-gray-600 hover:text-gray-900">
           <el-icon class="mr-1" size="18">
             <ArrowLeft />
           </el-icon>
           返回列表
         </el-button>
-        <div class="h-6 w-px bg-gray-200" />
+        <div class="detail-divider h-6 w-px bg-gray-200" />
         <div>
           <p class="text-sm text-gray-500">Raven 包详情</p>
           <div class="flex items-center gap-2">
@@ -211,7 +211,7 @@ watch(
           </p>
         </div>
       </div>
-      <div class="flex flex-wrap items-center gap-2">
+      <div class="detail-actions flex flex-wrap items-center gap-2">
         <el-button v-if="pkg" size="small" @click="copyShareLink(shareLink)">
           <el-icon class="mr-1"><Link /></el-icon>
           复制详情链接
@@ -353,6 +353,26 @@ watch(
 }
 
 @media (max-width: 768px) {
+  .detail-head-main {
+    width: 100%;
+    align-items: flex-start;
+  }
+
+  .detail-divider {
+    display: none;
+  }
+
+  .detail-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .detail-actions :deep(.el-button) {
+    width: 100%;
+    margin: 0;
+  }
+
   .raven-detail-page :deep(.el-button) {
     white-space: nowrap;
   }

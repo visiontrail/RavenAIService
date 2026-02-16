@@ -14,6 +14,7 @@ import {
   ExternalLink,
   X,
   LogIn,
+  RefreshCw,
   Trash2,
   Loader2
 } from 'lucide-vue-next'
@@ -113,14 +114,23 @@ const handleClickOutside = (event: MouseEvent) => {
   }
 }
 
+const handleViewportForSidebar = () => {
+  if (window.innerWidth <= 768) {
+    sidebarOpen.value = false
+  }
+}
+
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
+  handleViewportForSidebar()
+  window.addEventListener('resize', handleViewportForSidebar, { passive: true })
   fetchDevices()
   bootstrapUser()
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
+  window.removeEventListener('resize', handleViewportForSidebar)
 })
 
 const chatHistory = ref<ChatEntry[]>([])
@@ -900,7 +910,7 @@ const sendMessage = async () => {
       class="ai-sidebar"
       :class="[
         'flex flex-col bg-[#F0F4F9] transition-all duration-300 ease-in-out',
-        sidebarOpen ? 'w-64' : 'w-16'
+        sidebarOpen ? 'w-64 is-mobile-open' : 'w-16 is-mobile-closed'
       ]"
     >
       <div class="p-4 flex items-center justify-between">
@@ -914,6 +924,8 @@ const sendMessage = async () => {
           class="flex items-center gap-3 w-full p-3 rounded-full bg-[#DDE3EA] hover:bg-gray-200 text-gray-700 hover:text-gray-900 transition-colors border border-transparent hover:border-gray-300"
           :class="{ 'justify-center': !sidebarOpen }"
           @click="startNewChat"
+          :title="sidebarOpen ? '' : '新对话'"
+          :aria-label="sidebarOpen ? undefined : '新对话'"
         >
           <Plus class="w-4 h-4 text-gray-500" />
           <span v-if="sidebarOpen" class="text-sm font-medium">新对话</span>
@@ -922,7 +934,7 @@ const sendMessage = async () => {
 
       <div class="flex-1 overflow-y-auto mt-4 px-3 space-y-3">
         <div
-          v-if="!isLoggedIn"
+          v-if="!isLoggedIn && sidebarOpen"
           class="bg-white rounded-xl border border-gray-200 p-3 shadow-sm"
         >
           <div class="flex items-center justify-between gap-2">
@@ -954,11 +966,22 @@ const sendMessage = async () => {
               {{ loadingSessions ? '刷新中…' : '刷新' }}
             </button>
           </div>
+          <div v-else-if="isLoggedIn" class="mb-2 px-1 flex justify-center">
+            <button
+              class="p-2 rounded-full hover:bg-gray-200 text-gray-500 hover:text-gray-900 transition-colors"
+              @click="loadSessions"
+              :disabled="loadingSessions"
+              :title="loadingSessions ? '刷新中…' : '刷新会话'"
+              :aria-label="loadingSessions ? '刷新中' : '刷新会话'"
+            >
+              <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loadingSessions }" />
+            </button>
+          </div>
 
           <div class="space-y-1">
             <template v-if="isLoggedIn">
-              <div v-if="loadingSessions" class="text-xs text-gray-500 px-3 py-2">会话加载中...</div>
-              <div v-else-if="!chatSessions.length" class="text-xs text-gray-500 px-3 py-2">
+              <div v-if="loadingSessions && sidebarOpen" class="text-xs text-gray-500 px-3 py-2">会话加载中...</div>
+              <div v-else-if="!chatSessions.length && sidebarOpen" class="text-xs text-gray-500 px-3 py-2">
                 暂无会话，开始新的对话吧
               </div>
               <button 
@@ -970,6 +993,8 @@ const sendMessage = async () => {
                   selectedSessionId === session.id ? 'bg-white shadow-sm border border-gray-200' : ''
                 ]"
                 @click="handleSelectSession(session)"
+                :title="sidebarOpen ? '' : (session.title || '未命名对话')"
+                :aria-label="sidebarOpen ? undefined : (session.title || '未命名对话')"
               >
                 <MessageSquare class="w-4 h-4 text-gray-500" />
                 <div v-if="sidebarOpen" class="flex-1 min-w-0">
@@ -990,7 +1015,16 @@ const sendMessage = async () => {
               </button>
             </template>
             <template v-else>
-              <div class="text-xs text-gray-500 px-3 py-2">登录后查看和管理历史对话</div>
+              <div v-if="sidebarOpen" class="text-xs text-gray-500 px-3 py-2">登录后查看和管理历史对话</div>
+              <button
+                v-else
+                class="w-full flex items-center justify-center p-2 rounded-full hover:bg-gray-200 text-gray-500 hover:text-gray-900 transition-colors"
+                @click="showLoginModal = true"
+                title="登录后查看历史对话"
+                aria-label="登录后查看历史对话"
+              >
+                <LogIn class="w-4 h-4" />
+              </button>
             </template>
           </div>
         </div>
@@ -1030,6 +1064,8 @@ const sendMessage = async () => {
           @click="toggleUserMenu"
           class="mt-2 flex items-center gap-3 p-2 rounded-full hover:bg-gray-200 cursor-pointer relative" 
           :class="{ 'justify-center': !sidebarOpen, 'bg-gray-200': showUserMenu }"
+          :title="sidebarOpen ? '' : `${currentUserName}${isLoggedIn ? '' : '（未登录）'}`"
+          :aria-label="sidebarOpen ? undefined : `${currentUserName}${isLoggedIn ? '' : '（未登录）'}`"
         >
            <div class="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-purple-600 flex items-center justify-center text-xs font-bold text-white">
              {{ userInitial }}
@@ -1045,15 +1081,30 @@ const sendMessage = async () => {
       </div>
     </div>
 
+    <div
+      v-if="sidebarOpen"
+      class="ai-sidebar-backdrop md:hidden"
+      @click="sidebarOpen = false"
+    ></div>
+
     <!-- Main Content -->
     <div class="flex-1 flex flex-col h-full relative ai-main">
       <!-- Top Bar -->
       <div class="h-16 flex items-center justify-between px-6 ai-topbar">
-        <div class="flex items-center gap-3 flex-wrap">
+        <button
+          v-if="!sidebarOpen"
+          class="md:hidden inline-flex items-center justify-center p-2 rounded-full bg-[#F0F4F9] text-gray-600 hover:text-gray-900"
+          @click="sidebarOpen = true"
+          aria-label="打开侧边栏"
+          type="button"
+        >
+          <Menu class="w-5 h-5" />
+        </button>
+        <div class="flex items-center gap-3 ai-topbar-main-group">
           <div class="flex items-center gap-2">
             <span class="text-xl font-medium bg-gradient-to-r from-blue-400 via-purple-400 to-red-400 bg-clip-text text-transparent">Raven AI</span>
           </div>
-          <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#F0F4F9] text-xs text-gray-700">
+          <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#F0F4F9] text-xs text-gray-700 ai-topbar-target">
             <span class="font-medium text-gray-800">当前目标</span>
             <template v-if="targetAgentName">
               <span
@@ -1089,10 +1140,10 @@ const sendMessage = async () => {
             <span v-else class="text-gray-500">未选择</span>
           </div>
         </div>
-        <div class="flex items-center gap-4">
+        <div class="flex items-center gap-4 ai-topbar-platform-link-wrap">
             <a 
               :href="getServiceUrl('/')" 
-              class="flex items-center gap-2 px-4 py-2 rounded-full bg-black text-white text-sm font-medium hover:bg-gray-800 transition-colors shadow-sm"
+              class="flex items-center gap-2 px-4 py-2 rounded-full bg-black text-white text-sm font-medium hover:bg-gray-800 transition-colors shadow-sm ai-topbar-platform-link"
             >
                 <span>返回平台</span>
                 <ExternalLink class="w-3.5 h-3.5" />
@@ -1378,6 +1429,13 @@ const sendMessage = async () => {
     position: relative;
   }
 
+  .ai-sidebar-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.35);
+    z-index: 30;
+  }
+
   .ai-sidebar {
     position: absolute;
     left: 0;
@@ -1386,6 +1444,17 @@ const sendMessage = async () => {
     z-index: 40;
     border-right: 1px solid #e5e7eb;
     box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+    transition: transform 0.3s ease, width 0.3s ease;
+  }
+
+  .ai-sidebar.is-mobile-open {
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+
+  .ai-sidebar.is-mobile-closed {
+    transform: translateX(-100%);
+    pointer-events: none;
   }
 
   .ai-sidebar.w-16 {
@@ -1401,12 +1470,34 @@ const sendMessage = async () => {
   }
 
   .ai-topbar {
-    height: auto;
     min-height: 3.5rem;
     padding: 0.75rem;
     gap: 0.5rem;
-    align-items: flex-start;
-    flex-direction: column;
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: nowrap;
+  }
+
+  .ai-topbar-main-group {
+    min-width: 0;
+    flex: 1 1 auto;
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+
+  .ai-topbar-target {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .ai-topbar-platform-link-wrap {
+    flex: 0 0 auto;
+  }
+
+  .ai-topbar-platform-link {
+    white-space: nowrap;
+    padding: 0.45rem 0.7rem;
+    font-size: 0.75rem;
   }
 }
 </style>
