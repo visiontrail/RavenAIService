@@ -38,7 +38,7 @@
       </div>
     </div>
 
-    <el-card>
+    <el-card class="desktop-only">
       <div class="table-header">
         <div class="flex items-center gap-3 flex-wrap">
           <el-tag type="success" effect="light">
@@ -152,6 +152,42 @@
         </el-table-column>
         </el-table>
       </div>
+    </el-card>
+
+    <el-card class="mobile-only" v-loading="loading">
+      <div class="table-header">
+        <div class="flex items-center gap-3 flex-wrap">
+          <el-tag type="success" effect="light">
+            在线 {{ onlineCount }}
+          </el-tag>
+          <el-tag type="info" effect="plain">
+            总计 {{ devices.length }}
+          </el-tag>
+        </div>
+        <div class="text-xs text-gray-500">
+          自动刷新间隔：{{ refreshIntervalMs / 1000 }} 秒
+        </div>
+      </div>
+
+      <div v-if="devices.length" class="mobile-device-list">
+        <router-link v-for="row in devices" :key="row.id" :to="`/devices/${row.id}`" class="mobile-device-card">
+          <div class="mobile-device-head">
+            <div class="mobile-device-name">{{ row.name || row.id }}</div>
+            <el-tag :type="statusTagType(row.status)" effect="light" size="small">
+              {{ statusText(row.status) }}
+            </el-tag>
+          </div>
+          <div class="mobile-device-id">ID: {{ row.id }}</div>
+          <div class="mobile-device-meta">主机：{{ row.host || '-' }}</div>
+          <div class="mobile-device-meta">
+            最近心跳：
+            {{ row.last_seen ? `${formatRelativeTime(row.last_seen)} · ${formatDateTime(row.last_seen)}` : '未上报' }}
+          </div>
+          <div class="mobile-device-meta">可用模型：{{ row.models?.length || 0 }} 个</div>
+          <div class="mobile-device-link">查看详情</div>
+        </router-link>
+      </div>
+      <el-empty v-else :description="loading ? '加载中...' : '暂无设备连接'" />
     </el-card>
   </div>
 </template>
@@ -284,6 +320,14 @@ onBeforeUnmount(() => {
   margin-top: 1.5rem;
 }
 
+.desktop-only {
+  display: block;
+}
+
+.mobile-only {
+  display: none;
+}
+
 .page-header {
   margin-bottom: 1rem;
 }
@@ -324,7 +368,62 @@ onBeforeUnmount(() => {
   text-decoration: none;
 }
 
+.mobile-device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mobile-device-card {
+  display: block;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  text-decoration: none;
+  color: inherit;
+  background: #fff;
+}
+
+.mobile-device-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.mobile-device-name {
+  font-weight: 600;
+  color: #111827;
+}
+
+.mobile-device-id {
+  margin-top: 0.375rem;
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+.mobile-device-meta {
+  margin-top: 0.375rem;
+  font-size: 0.8125rem;
+  color: #4b5563;
+}
+
+.mobile-device-link {
+  margin-top: 0.625rem;
+  font-size: 0.8125rem;
+  color: #2563eb;
+  font-weight: 500;
+}
+
 @media (max-width: 768px) {
+  .desktop-only {
+    display: none;
+  }
+
+  .mobile-only {
+    display: block;
+  }
+
   .table-scroll-wrapper {
     width: 100%;
     overflow-x: auto;
