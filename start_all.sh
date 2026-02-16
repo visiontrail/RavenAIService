@@ -220,14 +220,33 @@ install_requirements() {
 # ------------------------------
 build_frontend() {
   local fe_dir="$PROJECT_ROOT/frontend"
+  local node_major=0
   if [[ -d "$fe_dir" ]]; then
     if command_exists npm; then
       if [[ ! -d "$fe_dir/node_modules" ]]; then
         log_info "Installing frontend dependencies (npm install) ..."
         (cd "$fe_dir" && npm install)
       fi
+      if command_exists node; then
+        node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+      fi
       log_info "Building frontend (npm run build) ..."
-      (cd "$fe_dir" && npm run build)
+      if [[ "$node_major" -gt 0 && "$node_major" -lt 20 ]]; then
+        local polyfill_path="$fe_dir/scripts/node18-crypto-hash-polyfill.cjs"
+        if [[ -f "$polyfill_path" ]]; then
+          local merged_node_options="--require $polyfill_path"
+          if [[ -n "${NODE_OPTIONS:-}" ]]; then
+            merged_node_options="$merged_node_options ${NODE_OPTIONS}"
+          fi
+          log_warn "Detected Node.js < 20. Applying temporary crypto.hash polyfill for Vite compatibility."
+          (cd "$fe_dir" && NODE_OPTIONS="$merged_node_options" npm run build)
+        else
+          log_warn "Node.js < 20 detected but polyfill file is missing: $polyfill_path"
+          (cd "$fe_dir" && npm run build)
+        fi
+      else
+        (cd "$fe_dir" && npm run build)
+      fi
       log_info "Frontend build completed."
     else
       log_warn "npm not found, skipping frontend build. The root page may not be available."
