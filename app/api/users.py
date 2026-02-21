@@ -133,6 +133,7 @@ async def list_users(
     _admin: str = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> UserListResponse:
+    await user_service.ensure_admin_users(db, admin_auth_manager.list_config_users())
     users = await user_service.list_users(db)
     return UserListResponse(
         message="ok",

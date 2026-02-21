@@ -4,6 +4,7 @@ User management service.
 
 from __future__ import annotations
 
+import secrets
 from datetime import datetime
 from typing import List, Optional
 
@@ -13,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
+from app.security.admin_auth import AdminUser
 from app.security.user_auth import hash_password, verify_password
 from app.services.base import BaseService
 
@@ -87,6 +89,32 @@ class UserService(BaseService):
             .limit(limit),
         )
         return result.scalars().all()
+
+    async def ensure_admin_users(self, db: AsyncSession, admin_users: List[AdminUser]) -> None:
+        """Sync admin auth users into users table so they can be managed in UI."""
+        if not admin_users:
+            return
+        for admin_user in admin_users:
+            if not admin_user.username:
+                continue
+            user = await self.get_by_username(db, admin_user.username)
+            expected_is_active = not admin_user.disabled
+            if user:
+                continue
+            password_hash = (
+                admin_user.password_hash
+                or (hash_password(admin_user.password) if admin_user.password else None)
+                or hash_password(secrets.token_urlsafe(24))
+            )
+            user = User(
+                username=admin_user.username,
+                display_name=admin_user.username,
+                email=None,
+                password_hash=password_hash,
+                is_active=expected_is_active,
+            )
+            db.add(user)
+        await db.flush()
 
     async def update_user(
         self,

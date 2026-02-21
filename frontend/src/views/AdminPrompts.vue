@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
-import type { PromptsConfigData, PromptsSummary } from '@/types'
+import type { PromptsConfigData } from '@/types'
 
 const appStore = useAppStore()
 const router = useRouter()
@@ -24,19 +24,17 @@ const navItems = [
   },
 ]
 
-const emptySummary: PromptsSummary = {
-  log_type_keys: [],
-  has_default_plan: false,
-  has_default_summary: false,
-}
-
 const configState = reactive<PromptsConfigData>({
   path: 'app/prompts/prompts_config.yaml',
   content: '',
   updated_at: '',
   size: 0,
   checksum: '',
-  summary: { ...emptySummary },
+  summary: {
+    log_type_keys: [],
+    has_default_plan: false,
+    has_default_summary: false,
+  },
 })
 
 const lastChecksum = ref('')
@@ -102,18 +100,18 @@ const statusLabel = computed(() => {
 })
 
 const statusTone = computed(() => {
-  if (!isAuthenticated.value) return 'bg-slate-600/70 text-slate-100 ring-1 ring-white/10'
-  if (conflict.value) return 'bg-amber-100 text-amber-800 ring-1 ring-amber-200'
-  if (hasUnsavedChanges.value) return 'bg-cyan-100 text-cyan-900 ring-1 ring-cyan-200'
-  return 'bg-emerald-100 text-emerald-900 ring-1 ring-emerald-200'
+  if (!isAuthenticated.value) return 'bg-slate-700 text-slate-100'
+  if (conflict.value) return 'bg-amber-100 text-amber-800'
+  if (hasUnsavedChanges.value) return 'bg-cyan-100 text-cyan-900'
+  return 'bg-emerald-100 text-emerald-900'
 })
+
+const navVisible = computed(() => appStore.adminSidebarVisible)
 
 const readableUpdatedAt = computed(() => {
   if (!configState.updated_at) return '尚未加载'
   return `${formatTimestamp(configState.updated_at)} (${formatRelative(configState.updated_at)})`
 })
-
-const summaryBadges = computed(() => configState.summary?.log_type_keys || [])
 
 const activeNavKey = computed(() => {
   if (route.path.startsWith('/admin/users')) return 'users'
@@ -223,7 +221,7 @@ const handleSave = async (force = false) => {
     lastSavedContent.value = resp.data.content
     appStore.showNotification({
       title: '保存成功',
-      message: `文件已更新，包含 ${resp.data.summary?.log_type_keys?.length || 0} 个日志类型模板`,
+      message: '文件已更新',
       type: 'success',
     })
   } catch (err: any) {
@@ -275,6 +273,10 @@ const handleNavClick = (item: (typeof navItems)[number]) => {
   }
 }
 
+const toggleNavVisibility = () => {
+  appStore.toggleAdminSidebar()
+}
+
 const bootstrap = async () => {
   const token = adminToken.get()
   if (!token) return
@@ -311,166 +313,134 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="space-y-6 admin-prompts-page">
-    <section
-      class="rounded-2xl bg-gradient-to-r from-slate-900 via-slate-800 to-cyan-800 text-white shadow-xl"
-    >
-      <div class="p-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div class="space-y-2">
-          <p class="text-xs uppercase tracking-[0.25em] text-slate-300">Raven Admin</p>
-          <h1 class="text-2xl font-semibold">管理后台</h1>
-        </div>
-        <div class="flex items-center gap-3">
-          <span
-            class="px-3 py-1 text-xs font-semibold rounded-full inline-flex items-center gap-2 ring-1"
-            :class="statusTone"
+  <div class="admin-console admin-prompts-page">
+    <header class="admin-topbar">
+      <div class="admin-topbar-inner">
+        <div class="admin-topbar-left">
+          <button
+            class="admin-icon-btn"
+            :disabled="!isAuthenticated"
+            @click="toggleNavVisibility"
+            :title="navVisible ? '隐藏侧边栏' : '显示侧边栏'"
+            aria-label="切换侧边栏"
           >
-            <span class="h-2 w-2 rounded-full bg-current/60"></span>
+            {{ navVisible ? '☰' : '▤' }}
+          </button>
+          <div>
+            <h1 class="admin-title">后台管理</h1>
+            <p class="admin-subtitle">Prompt 配置中心</p>
+          </div>
+        </div>
+        <div class="admin-topbar-right">
+          <span class="px-3 py-1 text-xs font-semibold rounded-full" :class="statusTone">
             {{ statusLabel }}
           </span>
-        </div>
-      </div>
-      <div
-        v-if="isAuthenticated"
-        class="px-6 pb-6 grid gap-3 md:grid-cols-3 text-sm text-slate-200"
-      >
-        <div class="flex items-center gap-2">
-          <span class="text-slate-400">当前文件</span>
-          <span class="font-mono text-xs bg-white/10 px-2 py-1 rounded">
-            {{ configState.path }}
-          </span>
-        </div>
-        <div class="flex items-center gap-2">
-          <span class="text-slate-400">最近更新</span>
-          <span>{{ readableUpdatedAt }}</span>
-        </div>
-        <div class="flex items-center gap-2 flex-wrap">
-          <span class="text-slate-400">日志类型</span>
-          <div class="flex gap-1 flex-wrap">
-            <span
-              v-for="key in summaryBadges"
-              :key="key"
-              class="text-xs px-2 py-1 rounded-full bg-white/10 border border-white/10"
-            >
-              {{ key }}
-            </span>
-            <span v-if="!summaryBadges.length" class="text-xs text-slate-300">尚未加载</span>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section v-if="!isAuthenticated" class="max-w-3xl mx-auto">
-      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-        <div class="flex items-center justify-between mb-4">
-          <div>
-            <h2 class="text-lg font-semibold text-slate-900">登录后台</h2>
-            <p class="text-sm text-slate-500">请输入管理员凭证继续</p>
-          </div>
-          <span class="text-xs text-slate-500">内部安全访问</span>
-        </div>
-        <div class="grid gap-4 md:grid-cols-2">
-          <div class="space-y-4">
-            <label class="block">
-              <span class="text-sm text-slate-700">用户名</span>
-              <input
-                v-model="authForm.username"
-                type="text"
-                class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-                placeholder="admin"
-                autocomplete="username"
-              />
-            </label>
-            <label class="block">
-              <span class="text-sm text-slate-700">密码</span>
-              <input
-                v-model="authForm.password"
-                type="password"
-                class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-                placeholder="••••••••"
-                autocomplete="current-password"
-              />
-            </label>
-            <div class="login-actions flex items-center gap-3">
-              <button
-                class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-50"
-                :disabled="isLoggingIn"
-                @click="handleLogin"
-              >
-                {{ isLoggingIn ? '登录中…' : '登录' }}
-              </button>
-              <p class="text-xs text-slate-500">
-                凭证在 admin_auth.yaml 配置，建议登录后立即更改
-              </p>
-            </div>
-          </div>
-          <div class="bg-slate-50 rounded-lg p-4 space-y-3 text-sm text-slate-700">
-            <div class="flex items-center gap-2">
-              <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
-              <span>仅限内部管理访问，凭证按需分发</span>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="h-2 w-2 rounded-full bg-cyan-400"></span>
-              <span>登录后可进行配置维护，未登录状态不会读取数据</span>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="h-2 w-2 rounded-full bg-amber-400"></span>
-              <span>会话基于 Bearer Token，关闭标签后自动清除</span>
-            </div>
-            <div
-              class="rounded-lg border border-dashed border-slate-200 p-3 text-xs text-slate-500 leading-5"
-            >
-              提示：token 默认保存在 sessionStorage，退出或关闭标签页后会被清理。可在
-              admin_auth.yaml 中禁用或调整账号。
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section v-else class="admin-layout grid gap-6 grid-cols-1 lg:grid-cols-[240px,1fr] items-start">
-      <aside class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 space-y-4">
-        <div>
-          <p class="text-xs uppercase tracking-[0.25em] text-slate-400">管理导航</p>
-          <h2 class="text-lg font-semibold text-slate-900">后台</h2>
-        </div>
-        <nav class="space-y-2">
           <button
-            v-for="item in navItems"
-            :key="item.key"
-            class="w-full text-left px-3 py-2 rounded-lg border transition"
-            :class="
-              activeNavKey === item.key
-                ? 'border-cyan-200 bg-cyan-50 text-cyan-800 shadow-[0_6px_30px_-16px_rgba(14,165,233,0.5)]'
-                : 'border-slate-200 hover:bg-slate-50 text-slate-700'
-            "
-            @click="handleNavClick(item)"
+            v-if="isAuthenticated"
+            class="admin-logout-btn"
+            @click="handleLogout"
           >
-            <div class="flex items-center justify-between">
-              <span class="text-sm font-semibold">{{ item.label }}</span>
-              <span
-                v-if="activeNavKey === item.key"
-                class="text-[11px] font-medium text-cyan-700"
-              >
-                当前
-              </span>
-            </div>
-            <p v-if="item.description" class="text-xs text-slate-500 mt-1">
-              {{ item.description }}
-            </p>
+            退出
           </button>
-        </nav>
-        <div class="pt-3 border-t border-slate-100">
-          <div class="flex items-center justify-between">
-            <span class="text-xs text-slate-500">{{ statusLabel }}</span>
-            <button class="text-xs text-slate-600 hover:text-slate-900" @click="handleLogout">
-              退出
-            </button>
+        </div>
+      </div>
+    </header>
+
+    <button
+      v-if="isAuthenticated && navVisible"
+      class="admin-sidebar-backdrop"
+      @click="toggleNavVisibility"
+      aria-label="关闭侧边栏"
+    ></button>
+
+    <aside
+      v-if="isAuthenticated"
+      class="admin-sidebar"
+      :class="{ 'is-hidden': !navVisible }"
+    >
+      <div class="space-y-2">
+        <button
+          v-for="item in navItems"
+          :key="item.key"
+          class="admin-side-nav-item"
+          :class="{ 'is-active': activeNavKey === item.key }"
+          @click="handleNavClick(item)"
+        >
+          <div class="text-sm font-semibold">{{ item.label }}</div>
+          <p v-if="item.description" class="text-xs mt-1 text-slate-400">
+            {{ item.description }}
+          </p>
+        </button>
+      </div>
+    </aside>
+
+    <main
+      class="admin-main"
+      :class="{ 'is-sidebar-hidden': !isAuthenticated || !navVisible }"
+    >
+      <section v-if="!isAuthenticated" class="admin-login-wrap">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h2 class="text-lg font-semibold text-slate-900">登录后台</h2>
+              <p class="text-sm text-slate-500">请输入管理员凭证继续</p>
+            </div>
+            <span class="text-xs text-slate-500">内部安全访问</span>
+          </div>
+          <div class="grid gap-4 md:grid-cols-2">
+            <form class="space-y-4" @submit.prevent="handleLogin">
+              <label class="block">
+                <span class="text-sm text-slate-700">用户名</span>
+                <input
+                  v-model="authForm.username"
+                  type="text"
+                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
+                  placeholder="admin"
+                  autocomplete="username"
+                />
+              </label>
+              <label class="block">
+                <span class="text-sm text-slate-700">密码</span>
+                <input
+                  v-model="authForm.password"
+                  type="password"
+                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
+                  placeholder="••••••••"
+                  autocomplete="current-password"
+                />
+              </label>
+              <div class="login-actions flex items-center gap-3">
+                <button
+                  type="submit"
+                  class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-50"
+                  :disabled="isLoggingIn"
+                >
+                  {{ isLoggingIn ? '登录中…' : '登录' }}
+                </button>
+                <p class="text-xs text-slate-500">
+                  凭证在 admin_auth.yaml 配置，建议登录后立即更改
+                </p>
+              </div>
+            </form>
+            <div class="bg-slate-50 rounded-lg p-4 space-y-3 text-sm text-slate-700">
+              <div class="flex items-center gap-2">
+                <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
+                <span>仅限内部管理访问，凭证按需分发</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="h-2 w-2 rounded-full bg-cyan-400"></span>
+                <span>登录后可进行配置维护，未登录状态不会读取数据</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="h-2 w-2 rounded-full bg-amber-400"></span>
+                <span>会话基于 Bearer Token，关闭标签后自动清除</span>
+              </div>
+            </div>
           </div>
         </div>
-      </aside>
+      </section>
 
-      <div class="space-y-6">
+      <section v-else class="space-y-4">
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
           <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-3">
             <div>
@@ -504,10 +474,22 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
+          <div class="editor-file-summary mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+            <div class="grid gap-2 text-xs text-slate-600 md:grid-cols-2">
+              <div class="flex items-center gap-2">
+                <span class="text-slate-500">路径</span>
+                <span class="font-mono text-[11px] text-slate-800 break-all">{{ configState.path }}</span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-slate-500">大小</span>
+                <span>{{ formatBytes(configState.size) }}</span>
+              </div>
+            </div>
+          </div>
           <div class="rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
             <textarea
               v-model="configState.content"
-              class="w-full h-[420px] md:h-[520px] resize-none bg-white font-mono text-xs text-slate-800 p-4 focus:outline-none"
+              class="w-full h-[420px] md:h-[560px] resize-none bg-white font-mono text-xs text-slate-800 p-4 focus:outline-none"
               spellcheck="false"
               :disabled="loadingConfig"
             ></textarea>
@@ -532,71 +514,184 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
-
-        <div class="space-y-4">
-          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 space-y-3">
-            <div class="flex items-center justify-between">
-              <h3 class="text-base font-semibold text-slate-900">文件信息</h3>
-              <button class="text-xs text-slate-500 hover:text-slate-700" @click="handleLogout">
-                退出
-              </button>
-            </div>
-            <div class="space-y-2 text-sm text-slate-700">
-              <div class="info-row flex justify-between">
-                <span class="text-slate-500">路径</span>
-                <span class="font-mono text-xs text-slate-800">{{ configState.path }}</span>
-              </div>
-              <div class="info-row flex justify-between">
-                <span class="text-slate-500">大小</span>
-                <span>{{ formatBytes(configState.size) }}</span>
-              </div>
-              <div class="info-row flex justify-between">
-                <span class="text-slate-500">最近更新</span>
-                <span>{{ readableUpdatedAt }}</span>
-              </div>
-              <div class="info-row flex justify-between">
-                <span class="text-slate-500">校验和</span>
-                <span class="font-mono text-[11px] text-slate-600 break-all">
-                  {{ configState.checksum }}
-                </span>
-              </div>
-            </div>
-            <div class="info-actions flex gap-2">
-              <button
-                class="flex-1 px-3 py-2 rounded-lg text-sm border border-slate-200 hover:bg-slate-50"
-                @click="handleReload"
-              >
-                从磁盘刷新
-              </button>
-              <button
-                class="flex-1 px-3 py-2 rounded-lg text-sm border border-slate-200 text-amber-700 bg-amber-50 hover:bg-amber-100"
-                :disabled="saving"
-                @click="handleSave(true)"
-              >
-                覆盖保存
-              </button>
-            </div>
-          </div>
-
-          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 space-y-3">
-            <h3 class="text-base font-semibold text-slate-900">使用提示</h3>
-            <ul class="list-disc pl-5 space-y-2 text-sm text-slate-700">
-              <li>建议先复制一份内容备份再修改</li>
-              <li>保持 YAML 缩进，避免混用 Tab</li>
-              <li>新增日志类型时，务必提供描述与变量列表</li>
-              <li>完成后可在日志分析 Agent 直接验证新模板</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    </section>
+      </section>
+    </main>
   </div>
 </template>
 
 <style scoped>
+.admin-console {
+  --admin-topbar-height: 72px;
+  --admin-sidebar-width: 280px;
+  min-height: 100vh;
+  background: linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%);
+}
+
+.admin-topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: var(--admin-topbar-height);
+  z-index: 70;
+  background: rgba(15, 23, 42, 0.96);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.3);
+  backdrop-filter: blur(10px);
+}
+
+.admin-topbar-inner {
+  height: 100%;
+  padding: 0 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.admin-topbar-left {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.admin-icon-btn {
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 0.625rem;
+  color: #f8fafc;
+  background: rgba(51, 65, 85, 0.6);
+}
+
+.admin-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.admin-title {
+  color: #f8fafc;
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.admin-subtitle {
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+.admin-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.admin-logout-btn {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 0.55rem;
+  color: #e2e8f0;
+  background: rgba(51, 65, 85, 0.45);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.45rem 0.7rem;
+}
+
+.admin-sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: var(--admin-sidebar-width);
+  height: 100vh;
+  z-index: 60;
+  background: #0f172a;
+  border-right: 1px solid rgba(148, 163, 184, 0.25);
+  padding: calc(var(--admin-topbar-height) + 1rem) 1rem 1rem;
+  transition: transform 0.25s ease;
+  overflow-y: auto;
+}
+
+.admin-sidebar.is-hidden {
+  transform: translateX(calc(-1 * var(--admin-sidebar-width)));
+}
+
+.admin-side-nav-item {
+  width: 100%;
+  text-align: left;
+  padding: 0.8rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(100, 116, 139, 0.45);
+  color: #cbd5e1;
+  background: rgba(30, 41, 59, 0.45);
+}
+
+.admin-side-nav-item.is-active {
+  color: #0f172a;
+  background: #22d3ee;
+  border-color: #22d3ee;
+}
+
+.admin-main {
+  min-height: 100vh;
+  padding: calc(var(--admin-topbar-height) + 1rem) 1rem 1rem calc(var(--admin-sidebar-width) + 1rem);
+  transition: padding-left 0.25s ease;
+}
+
+.admin-main.is-sidebar-hidden {
+  padding-left: 1rem;
+}
+
+.admin-login-wrap {
+  max-width: 960px;
+  margin: 1.25rem auto 0;
+}
+
+.admin-sidebar-backdrop {
+  display: none;
+}
+
+@media (max-width: 1024px) {
+  .admin-topbar-inner {
+    padding: 0 0.75rem;
+  }
+
+  .admin-topbar-right span {
+    display: none;
+  }
+}
+
 @media (max-width: 768px) {
-  .admin-layout {
-    gap: 1rem;
+  .admin-console {
+    --admin-sidebar-width: min(84vw, 320px);
+  }
+
+  .admin-main {
+    padding: calc(var(--admin-topbar-height) + 0.85rem) 0.75rem 0.75rem;
+  }
+
+  .admin-main.is-sidebar-hidden {
+    padding-left: 0.75rem;
+  }
+
+  .admin-sidebar {
+    box-shadow: 20px 0 45px rgba(15, 23, 42, 0.35);
+  }
+
+  .admin-sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: var(--admin-topbar-height) 0 0 0;
+    z-index: 55;
+    background: rgba(2, 6, 23, 0.4);
+  }
+
+  .admin-topbar-right {
+    display: none;
+  }
+
+  .admin-subtitle {
+    display: none;
   }
 
   .login-actions {
@@ -621,25 +716,9 @@ onBeforeUnmount(() => {
     gap: 0.5rem;
   }
 
-  .editor-meta-left,
-  .editor-meta-right {
-    width: 100%;
+  .editor-meta-right,
+  .editor-meta-left {
     flex-wrap: wrap;
-    gap: 0.4rem;
-  }
-
-  .info-row {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.2rem;
-  }
-
-  .info-actions {
-    flex-direction: column;
-  }
-
-  .info-actions button {
-    width: 100%;
   }
 }
 </style>

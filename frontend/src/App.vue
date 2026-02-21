@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAppStore } from './stores/app'
 import AppNavbar from './components/AppNavbar.vue'
+import AppFooter from './components/AppFooter.vue'
 import AppNotifications from './components/AppNotifications.vue'
 import AppLoading from './components/AppLoading.vue'
 import AIOrb from './components/AIOrb.vue'
@@ -13,11 +14,12 @@ const route = useRoute()
 // 判断是否是 AI Chat 路由
 const isChatRoute = computed(() => route.name === 'AIChat' || route.path === '/ai-chat')
 
+const isAdminRoute = computed(() => route.path.startsWith('/admin'))
+
 // 判断是否应该显示 AI Orb
 const showAIOrb = computed(() => {
-  // 不在 AI Chat 页面时，都显示 Orb
-  // 当切换到 AI Chat 时，该值变为 false，触发淡出效果
-  return !isChatRoute.value
+  // 在 AI Chat 和后台管理页面都不显示 Orb
+  return !isChatRoute.value && !isAdminRoute.value
 })
 
 // 判断是否应该显示导航栏
@@ -48,6 +50,14 @@ const shouldShowNavbar = computed(() => {
   }
   
   return true
+})
+
+const shouldShowFooter = computed(() => !isChatRoute.value && !isAdminRoute.value)
+
+const mainClass = computed(() => {
+  if (isChatRoute.value) return 'w-full'
+  if (isAdminRoute.value) return 'w-full mobile-safe-bottom'
+  return 'container mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6 mobile-safe-bottom'
 })
 
 onMounted(() => {
@@ -147,11 +157,13 @@ onUnmounted(() => {
     
     <!-- 主要内容区域 -->
     <main
-      :class="isChatRoute ? 'w-full' : 'container mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6 mobile-safe-bottom'"
+      :class="mainClass"
       :style="chatMainStyle"
     >
       <router-view />
     </main>
+
+    <AppFooter v-if="shouldShowFooter" />
     
     <!-- 全局通知 -->
     <AppNotifications />

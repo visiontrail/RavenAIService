@@ -2,10 +2,13 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { NotificationOptions } from '../types'
 
+const getInitialAdminSidebarVisible = () => true
+
 export const useAppStore = defineStore('app', () => {
   // 状态
   const loading = ref(false)
   const notifications = ref<(NotificationOptions & { id: string })[]>([])
+  const adminSidebarVisible = ref(getInitialAdminSidebarVisible())
 
   // 操作
   const setLoading = (value: boolean) => {
@@ -37,14 +40,25 @@ export const useAppStore = defineStore('app', () => {
     notifications.value = []
   }
 
+  const setAdminSidebarVisible = (visible: boolean) => {
+    adminSidebarVisible.value = visible
+  }
+
+  const toggleAdminSidebar = () => {
+    setAdminSidebarVisible(!adminSidebarVisible.value)
+  }
+
   return {
     // 状态
     loading,
     notifications,
+    adminSidebarVisible,
     // 操作
     setLoading,
     showNotification,
     removeNotification,
     clearNotifications,
+    setAdminSidebarVisible,
+    toggleAdminSidebar,
   }
 })

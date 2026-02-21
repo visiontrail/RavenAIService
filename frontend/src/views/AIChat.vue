@@ -1353,7 +1353,7 @@ const sendMessage = async () => {
           </button>
         </div>
 
-        <div class="space-y-4">
+        <form class="space-y-4" @submit.prevent="handleUserLogin">
           <label class="block text-sm text-gray-700">
             <span class="text-xs text-gray-600">用户名</span>
             <input
@@ -1374,24 +1374,24 @@ const sendMessage = async () => {
               autocomplete="current-password"
             />
           </label>
-        </div>
-
-        <div class="flex items-center gap-3">
-          <button
-            class="px-4 py-2 bg-black text-white rounded-lg text-sm font-semibold hover:bg-gray-800 transition disabled:opacity-60 flex items-center gap-2"
-            :disabled="isLoggingIn"
-            @click="handleUserLogin"
-          >
-            <Loader2 v-if="isLoggingIn" class="w-4 h-4 animate-spin" />
-            <span>{{ isLoggingIn ? '登录中…' : '立即登录' }}</span>
-          </button>
-          <button
-            class="px-4 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50"
-            @click="showLoginModal = false"
-          >
-            取消
-          </button>
-        </div>
+          <div class="flex items-center gap-3">
+            <button
+              type="submit"
+              class="px-4 py-2 bg-black text-white rounded-lg text-sm font-semibold hover:bg-gray-800 transition disabled:opacity-60 flex items-center gap-2"
+              :disabled="isLoggingIn"
+            >
+              <Loader2 v-if="isLoggingIn" class="w-4 h-4 animate-spin" />
+              <span>{{ isLoggingIn ? '登录中…' : '立即登录' }}</span>
+            </button>
+            <button
+              type="button"
+              class="px-4 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50"
+              @click="showLoginModal = false"
+            >
+              取消
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   </div>
