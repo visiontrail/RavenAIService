@@ -84,3 +84,23 @@ log_types:
 # 兼容旧代码读取，默认回退为通用模板
 plan_prompt: *default_plan_prompt
 summary_prompt: *default_summary_prompt
+
+chat:
+  session_title_prompt:
+    description: "AI 聊天会话标题生成模板，仅在新建会话首轮时使用。"
+    variables:
+      - user_content
+      - ai_content
+      - max_length
+    template: |
+      你是对话标题生成助手。请基于以下信息生成一个中文会话标题：
+      - 标题需要概括用户核心诉求或问题。
+      - 长度不超过 {max_length} 个字。
+      - 不要使用引号、冒号、序号、emoji、换行。
+      - 只输出标题文本，不要输出解释。
+
+      用户消息：
+      {user_content}
+
+      助手回复：
+      {ai_content}

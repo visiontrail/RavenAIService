@@ -4,6 +4,7 @@ User authentication, management, and chat history APIs.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -24,6 +25,7 @@ from app.models.user import (
 )
 from app.security.admin_auth import auth_manager as admin_auth_manager
 from app.security.user_auth import user_auth_manager
+from app.services.ai_chat_service import ai_chat_service
 from app.services.chat_history_service import chat_history_service
 from app.services.user_service import user_service
 
@@ -278,8 +280,25 @@ async def save_messages(
         session_id=session_id,
         user_content=payload.user_content,
         ai_content=payload.ai_content,
-        title_hint=payload.title_hint,
+        title_hint=None,
     )
+    if (session.message_count or 0) <= 2:
+        try:
+            session_title = await asyncio.wait_for(
+                ai_chat_service.generate_session_title(payload.user_content, payload.ai_content),
+                timeout=8,
+            )
+            if session_title:
+                await chat_history_service.update_session_title(
+                    db,
+                    user_id=current_user.id,
+                    session_id=session_id,
+                    title=session_title,
+                )
+        except asyncio.TimeoutError:
+            pass
+        except Exception:
+            pass
     await db.commit()
     return SaveMessagesResponse(
         message="消息已保存",

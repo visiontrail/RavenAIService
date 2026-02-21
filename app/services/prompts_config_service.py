@@ -16,6 +16,20 @@ from fastapi import HTTPException, status
 
 from app.config import settings
 
+DEFAULT_CHAT_TITLE_PROMPT_TEMPLATE = """
+你是对话标题生成助手。请基于以下信息生成一个中文会话标题：
+- 标题需要概括用户核心诉求或问题。
+- 长度不超过 {max_length} 个字。
+- 不要使用引号、冒号、序号、emoji、换行。
+- 只输出标题文本，不要输出解释。
+
+用户消息：
+{user_content}
+
+助手回复：
+{ai_content}
+""".strip()
+
 
 def _resolve_prompts_path() -> Path:
     raw = getattr(settings, "prompts_config_path", "app/prompts/prompts_config.yaml")
@@ -141,3 +155,35 @@ def update_prompts_config(
         "summary": _summarize_prompts(parsed),
     }
 
+
+def get_chat_title_prompt_template() -> str:
+    """Load chat title prompt template from prompts_config.yaml."""
+    path = _resolve_prompts_path()
+    try:
+        content = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return DEFAULT_CHAT_TITLE_PROMPT_TEMPLATE
+
+    try:
+        parsed = yaml.safe_load(content)
+    except Exception:
+        return DEFAULT_CHAT_TITLE_PROMPT_TEMPLATE
+
+    if not isinstance(parsed, dict):
+        return DEFAULT_CHAT_TITLE_PROMPT_TEMPLATE
+
+    chat_cfg = parsed.get("chat")
+    if not isinstance(chat_cfg, dict):
+        return DEFAULT_CHAT_TITLE_PROMPT_TEMPLATE
+
+    raw_prompt = chat_cfg.get("session_title_prompt")
+    if isinstance(raw_prompt, dict):
+        template = raw_prompt.get("template")
+    elif isinstance(raw_prompt, str):
+        template = raw_prompt
+    else:
+        template = None
+
+    if isinstance(template, str) and template.strip():
+        return template.strip()
+    return DEFAULT_CHAT_TITLE_PROMPT_TEMPLATE
