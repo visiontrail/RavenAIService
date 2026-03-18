@@ -15,6 +15,8 @@ NC='\033[0m' # No Color
 COMPOSE_FILE="docker-compose.yml"
 LEGACY_PORT_COMPOSE_FILE="docker-compose.legacy-port.yml"
 LEGACY_PORT="8083"
+REQUIRED_PORTS=(8085 8083 6379)
+KNOWN_LEGACY_PREFIXES=("log-staging-service" "logstagingservice")
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 LEGACY_PORT_ENABLED=false
 
@@ -75,6 +77,58 @@ is_host_port_in_use() {
     fi
 
     return 1
+}
+
+list_port_containers() {
+    local port="$1"
+
+    if ! command -v docker >/dev/null 2>&1; then
+        return 0
+    fi
+
+    docker ps --format '{{.Names}}\t{{.Ports}}' | awk -F '\t' -v port=":${port}->" '$2 ~ port {print $1}'
+}
+
+cleanup_known_legacy_conflicts() {
+    if ! command -v docker >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local port prefix container
+    local -a containers_to_remove=()
+    declare -A seen=()
+
+    for port in "${REQUIRED_PORTS[@]}"; do
+        while IFS= read -r container; do
+            [ -z "$container" ] && continue
+            for prefix in "${KNOWN_LEGACY_PREFIXES[@]}"; do
+                if [[ "$container" == "${prefix}-"* ]] && [ -z "${seen[$container]+x}" ]; then
+                    containers_to_remove+=("$container")
+                    seen["$container"]=1
+                    break
+                fi
+            done
+        done < <(list_port_containers "$port")
+    done
+
+    if [ "${#containers_to_remove[@]}" -eq 0 ]; then
+        return 0
+    fi
+
+    log_info "检测到旧项目残留容器占用关键端口，准备清理:"
+    printf '  - %s\n' "${containers_to_remove[@]}"
+
+    if ! docker rm -f "${containers_to_remove[@]}"; then
+        log_error "清理旧项目残留容器失败，请手动执行:"
+        printf '  docker rm -f %s\n' "${containers_to_remove[@]}"
+        exit 1
+    fi
+
+    for prefix in "${KNOWN_LEGACY_PREFIXES[@]}"; do
+        docker network rm "${prefix}_default" >/dev/null 2>&1 || true
+    done
+
+    log_success "已清理旧项目残留容器，释放主端口供 Raven 使用"
 }
 
 configure_compose_args() {
@@ -156,6 +210,7 @@ verify_release_routes() {
 # 清理容器内的运行时数据
 cleanup_container_data() {
     log_info "开始清理容器内的运行时数据..."
+    cleanup_known_legacy_conflicts
     configure_compose_args
     
     # 检查容器是否运行
@@ -212,6 +267,7 @@ deploy_services() {
     # 确保旧容器已停止
     log_info "确保旧容器已停止..."
     docker-compose -f "$COMPOSE_FILE" down 2>/dev/null || true
+    cleanup_known_legacy_conflicts
     
     # 删除旧镜像以确保使用最新代码
     log_info "删除旧镜像以确保重新构建..."
