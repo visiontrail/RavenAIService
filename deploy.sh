@@ -63,6 +63,29 @@ sync_env_file() {
     fi
 }
 
+verify_release_routes() {
+    log_info "校验发布上传路由是否已生效..."
+    local base_url="${1:-http://localhost:8085}"
+    local endpoints=("/admin/releases" "/admin/releases/upload")
+    local failed=0
+
+    for endpoint in "${endpoints[@]}"; do
+        local status_code
+        status_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${base_url}${endpoint}" || echo "000")
+        case "$status_code" in
+            401|400|422)
+                log_success "路由可用: POST ${endpoint} -> ${status_code}"
+                ;;
+            *)
+                log_error "路由异常: POST ${endpoint} -> ${status_code} (期望 401/400/422，不能是 404/405)"
+                failed=1
+                ;;
+        esac
+    done
+
+    return $failed
+}
+
 # 清理容器内的运行时数据
 cleanup_container_data() {
     log_info "开始清理容器内的运行时数据..."
@@ -151,6 +174,13 @@ deploy_services() {
         # 检查服务状态
         log_info "检查服务状态:"
         docker-compose ps
+
+        if verify_release_routes "http://localhost:8085"; then
+            log_success "发布上传路由烟测通过"
+        else
+            log_error "发布上传路由烟测失败，请检查生产容器是否加载了最新后端代码"
+            exit 1
+        fi
         
         log_info "服务访问地址: http://localhost:8085"
         log_info "健康检查: http://localhost:8085/health"

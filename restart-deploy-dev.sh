@@ -111,6 +111,31 @@ update_docker_build_cache() {
     done
 }
 
+verify_release_routes() {
+    local base_url="${1:-http://localhost:8085}"
+    local endpoints=("/admin/releases" "/admin/releases/upload")
+    local failed=0
+
+    echo "🧪 校验发布上传路由..."
+
+    for endpoint in "${endpoints[@]}"; do
+        local status_code
+        status_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${base_url}${endpoint}" || echo "000")
+
+        case "$status_code" in
+            401|400|422)
+                echo "✅ POST ${endpoint} -> ${status_code}"
+                ;;
+            *)
+                echo "❌ POST ${endpoint} -> ${status_code}，期望 401/400/422，不能是 404/405"
+                failed=1
+                ;;
+        esac
+    done
+
+    return $failed
+}
+
 # 等待服务健康
 wait_for_health() {
     local service="$1"
@@ -356,6 +381,11 @@ wait_for_health "app" || true
 
 echo "📊 检查服务状态..."
 docker-compose -f $COMPOSE_FILE ps
+
+if ! verify_release_routes "http://localhost:8085"; then
+    echo "❌ 发布上传路由烟测失败，请检查容器是否加载了最新后端代码"
+    exit 1
+fi
 
 echo "🎉 重启完成！代码更改已生效。"
 echo "💡 提示：此脚本已优化，会智能跳过不必要的构建步骤以加快重启速度。"

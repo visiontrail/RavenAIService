@@ -197,13 +197,17 @@ async def log_service_exception_handler(request: Request, exc: LogServiceExcepti
 
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     """HTTP异常处理器"""
+    extra = {
+        "status_code": exc.status_code,
+        "url": str(request.url),
+        "method": request.method
+    }
+    if exc.headers:
+        extra["headers"] = exc.headers
+
     logger.warning(
         f"HTTPException: {exc.detail}",
-        extra={
-            "status_code": exc.status_code,
-            "url": str(request.url),
-            "method": request.method
-        }
+        extra=extra
     )
     
     return create_error_response(

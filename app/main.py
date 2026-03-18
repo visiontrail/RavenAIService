@@ -20,6 +20,24 @@ from app.database import init_database, close_database
 from app.models.database import db_manager
 
 
+def log_critical_routes(app: FastAPI) -> None:
+    """在启动日志中打印关键路由，便于线上排查路由是否已生效。"""
+    logger = logging.getLogger(__name__)
+    tracked_prefixes = ("/admin/releases", "/api/v1/releases")
+    route_lines = []
+
+    for route in app.routes:
+        path = getattr(route, "path", "")
+        methods = sorted(getattr(route, "methods", []) or [])
+        if path.startswith(tracked_prefixes):
+            route_lines.append(f"{','.join(methods)} {path}")
+
+    if route_lines:
+        logger.info("关键路由已注册:\n%s", "\n".join(route_lines))
+    else:
+        logger.warning("未发现关键发布路由，请检查 releases 路由是否成功注册")
+
+
 def setup_logging():
     """配置日志：普通日志、调试日志分别落盘，stdout 仅输出普通日志"""
     os.makedirs(settings.logs_dir, exist_ok=True)
@@ -114,6 +132,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"应用启动 - 环境: {settings.environment}")
     logger.info(f"日志级别: {settings.log_level}")
     logger.info(f"最大文件大小: {settings.max_file_size / 1024 / 1024 / 1024:.1f}GB")
+    log_critical_routes(app)
     
     # 初始化数据库
     try:
