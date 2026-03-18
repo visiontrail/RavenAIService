@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { releasesPublicApi } from '@/api/releases'
+import PlatformBrandIcon from '@/components/icons/PlatformBrandIcon.vue'
 import type { ReleaseItem } from '@/types'
 
 const loading = ref(true)
@@ -10,7 +11,6 @@ const error = ref('')
 const PLATFORM_CONFIG = {
   linux: {
     label: 'Linux',
-    icon: `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M24 4C13 4 4 13 4 24s9 20 20 20 20-9 20-20S35 4 24 4z" fill="#FCC419"/><path d="M24 8c-3 0-5.5 1-7.5 2.5-1 2-1.5 4.5-1.5 7 0 3 .5 5.5 1.5 7.5 1 2 2.5 3 4 3h1c.5 0 1 .5 1 1v2c0 4 1 7 3 9 2-2 3-5 3-9v-2c0-.5.5-1 1-1h1c1.5 0 3-1 4-3 1-2 1.5-4.5 1.5-7.5 0-2.5-.5-5-1.5-7C29.5 9 27 8 24 8z" fill="#2D2D2D"/><circle cx="19" cy="19" r="2" fill="white"/><circle cx="29" cy="19" r="2" fill="white"/><path d="M20 24c1.5 1.5 4 2 7 0" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg>`,
     gradient: 'from-orange-50 to-amber-50',
     border: 'border-orange-200',
     accent: 'text-orange-600',
@@ -22,7 +22,6 @@ const PLATFORM_CONFIG = {
   },
   macos: {
     label: 'macOS',
-    icon: `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M24 4C13 4 4 13 4 24s9 20 20 20 20-9 20-20S35 4 24 4z" fill="#4A90D9"/><path d="M28 10c0 2-1.5 4-4 4.5 0-2 1.5-4.5 4-4.5z" fill="white"/><path d="M32 17c-2-1-4-1-5.5.5C25 19 24 21 24 22c2 0 4 .5 5.5 2 1.5 1.5 2 3.5 2 5.5 0 3-1 5.5-3 7s-4.5 2-7 1c-2-1-3-2.5-4-4-1-1.5-1.5-3.5-1.5-5.5 0-3 1-5.5 2.5-7.5s3.5-3 5.5-3c1.5 0 3 .5 4 1.5 1-1 2-1.5 3-1.5 1.5 0 3 .5 4 1.5v2z" fill="white"/></svg>`,
     gradient: 'from-blue-50 to-sky-50',
     border: 'border-blue-200',
     accent: 'text-blue-600',
@@ -34,7 +33,6 @@ const PLATFORM_CONFIG = {
   },
   windows: {
     label: 'Windows',
-    icon: `<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M24 4C13 4 4 13 4 24s9 20 20 20 20-9 20-20S35 4 24 4z" fill="#00A4EF"/><rect x="10" y="10" width="13" height="13" rx="1" fill="white"/><rect x="25" y="10" width="13" height="13" rx="1" fill="white"/><rect x="10" y="25" width="13" height="13" rx="1" fill="white"/><rect x="25" y="25" width="13" height="13" rx="1" fill="white"/></svg>`,
     gradient: 'from-sky-50 to-cyan-50',
     border: 'border-sky-200',
     accent: 'text-sky-600',
@@ -173,7 +171,9 @@ onMounted(() => fetchReleases())
           <!-- Platform Icon & Label -->
           <div class="flex items-start justify-between mb-5">
             <div class="flex items-center gap-3">
-              <div class="platform-icon" v-html="PLATFORM_CONFIG[platform].icon"></div>
+              <div class="platform-icon">
+                <PlatformBrandIcon :platform="platform" />
+              </div>
               <div>
                 <h2 class="text-lg font-bold text-slate-900">{{ PLATFORM_CONFIG[platform].label }}</h2>
                 <p class="text-xs text-slate-500 mt-0.5">{{ PLATFORM_CONFIG[platform].fileHint }}</p>
@@ -317,11 +317,15 @@ onMounted(() => fetchReleases())
   width: 2.75rem;
   height: 2.75rem;
   flex-shrink: 0;
-}
-
-.platform-icon :deep(svg) {
-  width: 100%;
-  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.95rem;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.65),
+    0 8px 18px rgba(15, 23, 42, 0.06);
 }
 
 .history-list {

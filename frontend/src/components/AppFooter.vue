@@ -38,13 +38,16 @@
           <h4 class="footer-col-title">下载客户端</h4>
           <nav class="space-y-2">
             <router-link to="/download" class="footer-link footer-link-platform">
-              <span class="platform-emoji">🐧</span> Linux
+              <PlatformBrandIcon platform="linux" class="footer-platform-icon" />
+              <span>Linux</span>
             </router-link>
             <router-link to="/download" class="footer-link footer-link-platform">
-              <span class="platform-emoji">🍎</span> macOS
+              <PlatformBrandIcon platform="macos" class="footer-platform-icon" />
+              <span>macOS</span>
             </router-link>
             <router-link to="/download" class="footer-link footer-link-platform">
-              <span class="platform-emoji">🪟</span> Windows
+              <PlatformBrandIcon platform="windows" class="footer-platform-icon" />
+              <span>Windows</span>
             </router-link>
             <router-link to="/download" class="footer-link text-blue-600 font-medium mt-1">全部版本 →</router-link>
           </nav>
@@ -81,6 +84,8 @@
 </template>
 
 <script setup lang="ts">
+import PlatformBrandIcon from '@/components/icons/PlatformBrandIcon.vue'
+
 const currentYear = new Date().getFullYear()
 </script>
 
@@ -135,9 +140,10 @@ const currentYear = new Date().getFullYear()
   gap: 0.5rem;
 }
 
-.platform-emoji {
-  font-size: 0.85rem;
-  line-height: 1;
+.footer-platform-icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex-shrink: 0;
 }
 
 .footer-link-admin {
