@@ -22,7 +22,9 @@ BASE_DIR = Path(settings.base_dir)
 RELEASES_DIR = BASE_DIR / "data" / "releases"
 RELEASES_META_FILE = BASE_DIR / "data" / "releases.json"
 
-RELEASES_DIR.mkdir(parents=True, exist_ok=True)
+
+def _ensure_releases_dir() -> None:
+    RELEASES_DIR.mkdir(parents=True, exist_ok=True)
 
 VALID_PLATFORMS = ("linux", "macos", "windows")
 
@@ -100,6 +102,8 @@ async def upload_release(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="version 不能为空",
         )
+
+    _ensure_releases_dir()
 
     release_id = str(uuid.uuid4())
     safe_filename = file.filename or f"release-{release_id}"
