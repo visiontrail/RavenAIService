@@ -13,6 +13,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
+from starlette.responses import Response
 from pydantic import BaseModel
 
 from app.api.admin import require_admin
@@ -84,6 +85,8 @@ def _to_item(r: dict) -> ReleaseItem:
     )
 
 
+# 兼容旧前端(/upload)与新语义化路径(POST /admin/releases)两种上传地址
+@admin_router.post("", response_model=ReleaseResponse)
 @admin_router.post("/upload", response_model=ReleaseResponse)
 async def upload_release(
     platform: str = Form(...),
@@ -137,6 +140,13 @@ async def upload_release(
     _save_releases(releases)
 
     return ReleaseResponse(data=_to_item(release), message="上传成功")
+
+
+@admin_router.options("")
+@admin_router.options("/upload")
+async def upload_release_options() -> Response:
+    # 某些代理场景下 OPTIONS 可能绕过 CORS 处理中间件，这里显式兜底避免 405
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @admin_router.get("", response_model=ReleaseListResponse)

@@ -44,7 +44,7 @@ export const releasesPublicApi = {
 export const releasesAdminApi = {
   list: (): Promise<ReleaseListResponse> => adminClient.get('/admin/releases'),
 
-  upload: (payload: {
+  upload: async (payload: {
     platform: string
     version: string
     description?: string
@@ -55,9 +55,22 @@ export const releasesAdminApi = {
     formData.append('version', payload.version)
     formData.append('description', payload.description || '')
     formData.append('file', payload.file)
-    return adminClient.post('/admin/releases/upload', formData, {
+    const requestConfig = {
       headers: { 'Content-Type': 'multipart/form-data' },
-    })
+    }
+
+    const uploadRequest = (url: string): Promise<ApiResponse<ReleaseItem>> =>
+      adminClient.post(url, formData, requestConfig) as Promise<ApiResponse<ReleaseItem>>
+
+    try {
+      return await uploadRequest('/admin/releases/upload')
+    } catch (error: any) {
+      // 兼容后端仅暴露 POST /admin/releases 的场景
+      if (error?.response?.status === 405) {
+        return uploadRequest('/admin/releases')
+      }
+      throw error
+    }
   },
 
   remove: (releaseId: string): Promise<ApiResponse> =>
