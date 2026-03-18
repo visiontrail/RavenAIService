@@ -22,6 +22,12 @@ const navItems = [
     path: '/admin/users',
     description: '管理对话用户、重置密码',
   },
+  {
+    key: 'releases',
+    label: 'App Release',
+    path: '/admin/releases',
+    description: '上传 Linux / macOS / Windows 发布包',
+  },
 ]
 
 const configState = reactive<PromptsConfigData>({
@@ -115,6 +121,7 @@ const readableUpdatedAt = computed(() => {
 
 const activeNavKey = computed(() => {
   if (route.path.startsWith('/admin/users')) return 'users'
+  if (route.path.startsWith('/admin/releases')) return 'releases'
   if (route.path.startsWith('/admin')) return 'prompts'
   return ''
 })

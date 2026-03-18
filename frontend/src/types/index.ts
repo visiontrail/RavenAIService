@@ -226,6 +226,17 @@ export interface ChatSessionSummary {
   updated_at: string
 }
 
+export interface ReleaseItem {
+  id: string
+  platform: 'linux' | 'macos' | 'windows'
+  version: string
+  filename: string
+  file_size: number
+  description?: string | null
+  download_count: number
+  created_at: string
+}
+
 export interface ChatMessageRecord {
   id: string
   session_id: string

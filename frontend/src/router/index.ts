@@ -80,6 +80,46 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/download',
+    name: 'Download',
+    component: () => import('../views/Download.vue'),
+    meta: {
+      title: '下载客户端',
+    },
+  },
+  {
+    path: '/about',
+    name: 'About',
+    component: () => import('../views/NotFound.vue'),
+    meta: {
+      title: '关于 Raven',
+    },
+  },
+  {
+    path: '/changelog',
+    name: 'Changelog',
+    component: () => import('../views/NotFound.vue'),
+    meta: {
+      title: '更新日志',
+    },
+  },
+  {
+    path: '/privacy',
+    name: 'Privacy',
+    component: () => import('../views/NotFound.vue'),
+    meta: {
+      title: '隐私政策',
+    },
+  },
+  {
+    path: '/terms',
+    name: 'Terms',
+    component: () => import('../views/NotFound.vue'),
+    meta: {
+      title: '服务条款',
+    },
+  },
+  {
     path: '/admin',
     name: 'AdminHome',
     component: () => import('../views/AdminPrompts.vue'),
@@ -101,6 +141,14 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/AdminUsers.vue'),
     meta: {
       title: '用户管理',
+    },
+  },
+  {
+    path: '/admin/releases',
+    name: 'AdminReleases',
+    component: () => import('../views/AdminRelease.vue'),
+    meta: {
+      title: 'App Release 管理',
     },
   },
   {
