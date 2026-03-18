@@ -5,7 +5,15 @@ set -Eeuo pipefail
 # 默认配置
 RUN_MIGRATION=false
 COMPOSE_FILE="docker-compose.deploy-dev.yml"
+LEGACY_PORT_COMPOSE_FILE="docker-compose.legacy-port.yml"
+LEGACY_PORT="8083"
 LOCK_FILE=".build_cache_lock"
+COMPOSE_ARGS=()
+LEGACY_PORT_ENABLED=false
+
+compose() {
+    docker-compose "${COMPOSE_ARGS[@]}" "$@"
+}
 
 report_port_usage() {
     local port="$1"
@@ -22,6 +30,47 @@ report_port_usage() {
     if command -v docker >/dev/null 2>&1; then
         docker ps --format 'table {{.Names}}\t{{.Ports}}' | grep "${port}->" || true
     fi
+}
+
+is_host_port_in_use() {
+    local port="$1"
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltn "( sport = :${port} )" 2>/dev/null | awk 'NR > 1 { exit 0 } END { exit 1 }'
+        return $?
+    fi
+
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -Pi :"${port}" -sTCP:LISTEN -t >/dev/null 2>&1
+        return $?
+    fi
+
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -ltn 2>/dev/null | awk -v port=":${port}" '$4 ~ port"$" { found=1; exit } END { exit(found ? 0 : 1) }'
+        return $?
+    fi
+
+    return 1
+}
+
+configure_compose_args() {
+    COMPOSE_ARGS=(-f "$COMPOSE_FILE")
+    LEGACY_PORT_ENABLED=false
+
+    if [ ! -f "$LEGACY_PORT_COMPOSE_FILE" ]; then
+        return 0
+    fi
+
+    if is_host_port_in_use "$LEGACY_PORT"; then
+        echo "⚠️ 宿主机端口 ${LEGACY_PORT} 已被其他服务占用，跳过旧版兼容端口映射"
+        echo "💡 当前仍可通过 http://localhost:8085/raven 访问包管理入口"
+        return 0
+    fi
+
+    COMPOSE_ARGS+=(-f "$LEGACY_PORT_COMPOSE_FILE")
+    LEGACY_PORT_ENABLED=true
+    export RAVEN_LEGACY_HOST_PORT="${RAVEN_LEGACY_HOST_PORT:-$LEGACY_PORT}"
+    echo "✅ 已启用旧版兼容端口映射: http://localhost:${RAVEN_LEGACY_HOST_PORT}"
 }
 
 # 计算文件 MD5
@@ -164,7 +213,7 @@ wait_for_health() {
     echo "⏳ 等待 $service 服务就绪..."
     
     while [ $waited -lt $max_wait ]; do
-        if docker-compose -f $COMPOSE_FILE ps | grep -q "$service.*Up.*healthy"; then
+        if compose ps | grep -q "$service.*Up.*healthy"; then
             echo "✅ $service 服务已就绪"
             return 0
         fi
@@ -365,13 +414,13 @@ ensure_sqlite_persistence
 sync_env_file
 
 echo "📋 停止服务..."
-docker-compose -f $COMPOSE_FILE down
+docker-compose -f "$COMPOSE_FILE" down
 
 # 根据参数决定是否执行数据库迁移
 if [ "$RUN_MIGRATION" = true ]; then
     echo "🗄️ 运行数据库迁移..."
     # 运行数据库迁移，确保数据库结构是最新的
-    docker-compose -f $COMPOSE_FILE run --rm app python -m alembic upgrade head
+    docker-compose -f "$COMPOSE_FILE" run --rm app python -m alembic upgrade head
     if [ $? -ne 0 ]; then
         echo "❌ 数据库迁移失败！"
         exit 1
@@ -383,10 +432,11 @@ fi
 
 # 智能判断是否需要重建镜像
 NEED_BUILD=$(need_docker_build)
+configure_compose_args
 
 if [ "$NEED_BUILD" = "true" ]; then
     echo "🔧 检测到 Dockerfile 或依赖变化，重新构建镜像..."
-    if ! docker-compose -f $COMPOSE_FILE up -d --build; then
+    if ! compose up -d --build; then
         echo "❌ docker-compose 启动失败"
         report_port_usage 8085
         report_port_usage 8083
@@ -397,7 +447,7 @@ if [ "$NEED_BUILD" = "true" ]; then
     echo "✅ 镜像构建完成"
 else
     echo "⚡ Dockerfile 和依赖未变化，跳过镜像重建（代码通过卷挂载已更新）"
-    if ! docker-compose -f $COMPOSE_FILE up -d; then
+    if ! compose up -d; then
         echo "❌ docker-compose 启动失败"
         report_port_usage 8085
         report_port_usage 8083
@@ -411,7 +461,7 @@ echo "⏳ 等待服务健康检查..."
 wait_for_health "app" || true
 
 echo "📊 检查服务状态..."
-docker-compose -f $COMPOSE_FILE ps
+compose ps
 
 if ! verify_release_routes "http://localhost:8085"; then
     echo "❌ 发布上传路由烟测失败，请检查容器是否加载了最新后端代码"
@@ -419,6 +469,11 @@ if ! verify_release_routes "http://localhost:8085"; then
 fi
 
 echo "🎉 重启完成！代码更改已生效。"
+if [ "$LEGACY_PORT_ENABLED" = true ]; then
+    echo "🔁 旧版兼容端口已保留: http://localhost:${RAVEN_LEGACY_HOST_PORT}"
+else
+    echo "ℹ️ 旧版兼容端口 8083 本次未绑定（宿主机端口已被占用）"
+fi
 echo "💡 提示：此脚本已优化，会智能跳过不必要的构建步骤以加快重启速度。"
 echo "📖 使用 $0 --help 查看更多选项，包括数据库迁移控制参数。"
 echo ""
