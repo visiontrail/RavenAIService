@@ -3,7 +3,7 @@
     <div class="footer-main container mx-auto px-4 py-10">
       <div class="footer-grid">
         <!-- Brand column -->
-        <div class="footer-brand">
+        <div class="footer-brand footer-panel">
           <div class="flex items-center gap-2.5 mb-3">
             <div class="brand-dot"></div>
             <span class="text-sm font-bold tracking-wide text-gray-900">Raven 智能测试平台</span>
@@ -22,7 +22,7 @@
         </div>
 
         <!-- Product column -->
-        <div class="footer-col">
+        <div class="footer-col footer-panel">
           <h4 class="footer-col-title">产品功能</h4>
           <nav class="space-y-2">
             <router-link to="/" class="footer-link">日志列表</router-link>
@@ -34,7 +34,7 @@
         </div>
 
         <!-- Download column -->
-        <div class="footer-col">
+        <div class="footer-col footer-panel">
           <h4 class="footer-col-title">下载客户端</h4>
           <nav class="space-y-2">
             <router-link to="/download" class="footer-link footer-link-platform">
@@ -51,7 +51,7 @@
         </div>
 
         <!-- Support column -->
-        <div class="footer-col">
+        <div class="footer-col footer-panel">
           <h4 class="footer-col-title">更多</h4>
           <nav class="space-y-2">
             <router-link to="/about" class="footer-link">关于 Raven</router-link>
@@ -66,11 +66,11 @@
 
     <!-- Bottom bar -->
     <div class="footer-bottom">
-      <div class="container mx-auto px-4 py-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-        <p class="text-xs text-gray-400">
+      <div class="footer-bottom-inner container mx-auto px-4 py-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+        <p class="footer-copyright text-xs text-gray-400">
           © {{ currentYear }} RavenAIService · GalaxySpace. All rights reserved.
         </p>
-        <div class="flex items-center gap-4">
+        <div class="footer-bottom-links flex items-center gap-4">
           <router-link to="/privacy" class="text-xs text-gray-400 hover:text-gray-600 transition">隐私政策</router-link>
           <router-link to="/terms" class="text-xs text-gray-400 hover:text-gray-600 transition">服务条款</router-link>
           <router-link to="/download" class="text-xs text-blue-500 hover:text-blue-600 transition font-medium">下载客户端</router-link>
@@ -96,6 +96,15 @@ const currentYear = new Date().getFullYear()
   grid-template-columns: 1.4fr 1fr 1fr 1fr;
   gap: 2rem;
   align-items: start;
+}
+
+.footer-panel {
+  min-width: 0;
+}
+
+.footer-col {
+  display: flex;
+  flex-direction: column;
 }
 
 .footer-col-title {
@@ -173,6 +182,11 @@ const currentYear = new Date().getFullYear()
   background: #fafafa;
 }
 
+.footer-bottom-links {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
 @media (max-width: 900px) {
   .footer-grid {
     grid-template-columns: 1fr 1fr;
@@ -186,17 +200,72 @@ const currentYear = new Date().getFullYear()
 
 @media (max-width: 540px) {
   .footer-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.85rem;
+  }
+
+  .footer-brand {
+    grid-column: 1 / -1;
+  }
+
+  .footer-main {
+    padding-top: 1.25rem;
+    padding-bottom: 1.25rem;
+  }
+
+  .footer-panel {
+    padding: 1rem;
+    border: 1px solid #eef2f7;
+    border-radius: 1rem;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.96));
+    box-shadow: 0 10px 24px -20px rgba(15, 23, 42, 0.35);
+  }
+
+  .footer-brand p {
+    max-width: none;
+  }
+
+  .footer-col-title {
+    margin-bottom: 0.7rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+  }
+
+  .footer-link {
+    min-height: 1.75rem;
+    font-size: 0.78rem;
+    line-height: 1.45;
+  }
+
+  .download-badge {
+    min-height: 2.25rem;
+  }
+
+  .footer-bottom-inner {
+    gap: 0.75rem;
+    padding-top: 0.9rem;
+    padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+  }
+
+  .footer-copyright {
+    text-align: center;
+    line-height: 1.6;
+  }
+
+  .footer-bottom-links {
+    width: 100%;
+    gap: 0.75rem 1rem;
+  }
+}
+
+@media (max-width: 380px) {
+  .footer-grid {
     grid-template-columns: 1fr;
-    gap: 1.25rem;
   }
 
   .footer-brand {
     grid-column: auto;
-  }
-
-  .footer-main {
-    padding-top: 1.75rem;
-    padding-bottom: 1.75rem;
   }
 }
 </style>

@@ -30,6 +30,23 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+report_port_usage() {
+    local port="$1"
+    log_info "端口 ${port} 占用情况:"
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnp "( sport = :${port} )" 2>/dev/null || true
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -ltnp 2>/dev/null | grep ":${port} " || true
+    else
+        log_warning "未找到 ss/netstat，无法打印端口占用详情"
+    fi
+
+    if command -v docker >/dev/null 2>&1; then
+        docker ps --format 'table {{.Names}}\t{{.Ports}}' | grep "${port}->" || true
+    fi
+}
+
 # 检查 Docker 和 docker-compose 是否可用
 check_dependencies() {
     if ! command -v docker &> /dev/null; then
@@ -186,6 +203,9 @@ deploy_services() {
         log_info "健康检查: http://localhost:8085/health"
     else
         log_error "服务部署失败"
+        report_port_usage 8085
+        report_port_usage 8083
+        report_port_usage 6379
         exit 1
     fi
 }

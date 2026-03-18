@@ -1,9 +1,28 @@
 #!/bin/bash
 
+set -Eeuo pipefail
+
 # 默认配置
 RUN_MIGRATION=false
 COMPOSE_FILE="docker-compose.deploy-dev.yml"
 LOCK_FILE=".build_cache_lock"
+
+report_port_usage() {
+    local port="$1"
+    echo "🔎 端口 ${port} 占用情况:"
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnp "( sport = :${port} )" 2>/dev/null || true
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -ltnp 2>/dev/null | grep ":${port} " || true
+    else
+        echo "ℹ️ 未找到 ss/netstat，无法打印端口占用详情"
+    fi
+
+    if command -v docker >/dev/null 2>&1; then
+        docker ps --format 'table {{.Names}}\t{{.Ports}}' | grep "${port}->" || true
+    fi
+}
 
 # 计算文件 MD5
 get_file_md5() {
@@ -367,12 +386,24 @@ NEED_BUILD=$(need_docker_build)
 
 if [ "$NEED_BUILD" = "true" ]; then
     echo "🔧 检测到 Dockerfile 或依赖变化，重新构建镜像..."
-    docker-compose -f $COMPOSE_FILE up -d --build
+    if ! docker-compose -f $COMPOSE_FILE up -d --build; then
+        echo "❌ docker-compose 启动失败"
+        report_port_usage 8085
+        report_port_usage 8083
+        report_port_usage 6379
+        exit 1
+    fi
     update_docker_build_cache
     echo "✅ 镜像构建完成"
 else
     echo "⚡ Dockerfile 和依赖未变化，跳过镜像重建（代码通过卷挂载已更新）"
-    docker-compose -f $COMPOSE_FILE up -d
+    if ! docker-compose -f $COMPOSE_FILE up -d; then
+        echo "❌ docker-compose 启动失败"
+        report_port_usage 8085
+        report_port_usage 8083
+        report_port_usage 6379
+        exit 1
+    fi
 fi
 
 # 使用健康检查替代固定等待
