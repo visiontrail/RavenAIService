@@ -8,7 +8,7 @@ COMPOSE_FILE="docker-compose.deploy-dev.yml"
 LEGACY_PORT_COMPOSE_FILE="docker-compose.legacy-port.yml"
 LEGACY_PORT="8083"
 LOCK_FILE=".build_cache_lock"
-COMPOSE_ARGS=()
+COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 LEGACY_PORT_ENABLED=false
 
 compose() {
@@ -36,7 +36,7 @@ is_host_port_in_use() {
     local port="$1"
 
     if command -v ss >/dev/null 2>&1; then
-        ss -ltn "( sport = :${port} )" 2>/dev/null | awk 'NR > 1 { exit 0 } END { exit 1 }'
+        ss -ltn "( sport = :${port} )" 2>/dev/null | awk 'NR > 1 { found=1 } END { exit(found ? 0 : 1) }'
         return $?
     fi
 
@@ -46,7 +46,7 @@ is_host_port_in_use() {
     fi
 
     if command -v netstat >/dev/null 2>&1; then
-        netstat -ltn 2>/dev/null | awk -v port=":${port}" '$4 ~ port"$" { found=1; exit } END { exit(found ? 0 : 1) }'
+        netstat -ltn 2>/dev/null | awk -v port=":${port}" '$4 ~ port"$" { found=1 } END { exit(found ? 0 : 1) }'
         return $?
     fi
 

@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 COMPOSE_FILE="docker-compose.yml"
 LEGACY_PORT_COMPOSE_FILE="docker-compose.legacy-port.yml"
 LEGACY_PORT="8083"
-COMPOSE_ARGS=()
+COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 LEGACY_PORT_ENABLED=false
 
 compose() {
@@ -156,6 +156,7 @@ verify_release_routes() {
 # 清理容器内的运行时数据
 cleanup_container_data() {
     log_info "开始清理容器内的运行时数据..."
+    configure_compose_args
     
     # 检查容器是否运行
     if ! compose ps | grep -q "Up"; then
@@ -208,8 +209,6 @@ deploy_services() {
     # 同步环境变量文件，确保 .env 变更生效
     sync_env_file
 
-    configure_compose_args
-    
     # 确保旧容器已停止
     log_info "确保旧容器已停止..."
     docker-compose -f "$COMPOSE_FILE" down 2>/dev/null || true
@@ -221,6 +220,8 @@ deploy_services() {
     # 清理构建缓存（可选，但能确保完全重新构建）
     log_info "清理 Docker 构建缓存..."
     docker builder prune -f 2>/dev/null || true
+
+    configure_compose_args
     
     # 强制重新构建并启动服务（使用 --no-cache 确保不使用缓存）
     log_info "重新构建镜像（不使用缓存）..."
