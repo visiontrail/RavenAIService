@@ -189,4 +189,14 @@ const getNotificationClass = (type: string) => {
     transform: translateX(0);
   }
 }
+
+@media (max-width: 768px) {
+  .notifications-container {
+    top: 0.75rem;
+    right: 0.5rem;
+    left: 0.5rem;
+    width: auto;
+    z-index: 70;
+  }
+}
 </style>

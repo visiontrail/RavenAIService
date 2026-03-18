@@ -46,7 +46,6 @@ class ChatHistoryService(BaseService):
         user_id: str,
         *,
         session_id: Optional[str] = None,
-        title_hint: Optional[str] = None,
     ) -> ChatSession:
         session = None
         if session_id:
@@ -55,7 +54,7 @@ class ChatHistoryService(BaseService):
             session = ChatSession(
                 id=session_id or str(uuid.uuid4()),
                 user_id=user_id,
-                title=self._title_from_hint(title_hint),
+                title="新对话",
                 last_message_at=datetime.utcnow(),
                 message_count=0,
                 is_deleted=False,
@@ -68,8 +67,6 @@ class ChatHistoryService(BaseService):
         # revive soft-deleted sessions on new activity
         if session.is_deleted:
             session.is_deleted = False
-        if title_hint:
-            session.title = self._title_from_hint(title_hint, fallback=session.title)
         return session
 
     async def save_exchange(
@@ -81,8 +78,13 @@ class ChatHistoryService(BaseService):
         user_content: str,
         ai_content: str,
         title_hint: Optional[str] = None,
+        session_title: Optional[str] = None,
     ) -> ChatSession:
-        session = await self.ensure_session(db, user_id, session_id=session_id, title_hint=title_hint)
+        session = await self.ensure_session(db, user_id, session_id=session_id)
+        if (session.message_count or 0) == 0:
+            preferred_title = session_title or title_hint
+            if preferred_title:
+                session.title = self._title_from_hint(preferred_title, fallback=session.title)
 
         records: list[ChatMessage] = [
             ChatMessage(session_id=session.id, role="user", content=user_content),
@@ -129,6 +131,21 @@ class ChatHistoryService(BaseService):
         if not session:
             return False
         session.is_deleted = True
+        await db.flush()
+        return True
+
+    async def update_session_title(
+        self,
+        db: AsyncSession,
+        *,
+        user_id: str,
+        session_id: str,
+        title: str,
+    ) -> bool:
+        session = await self._get_session(db, user_id, session_id, include_deleted=False)
+        if not session:
+            return False
+        session.title = self._title_from_hint(title, fallback=session.title)
         await db.flush()
         return True
 

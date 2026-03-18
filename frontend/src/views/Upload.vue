@@ -173,7 +173,7 @@
               :key="log.id"
               class="recent-item flex items-center justify-between p-3 bg-gray-50 rounded-lg"
             >
-              <div class="flex items-center space-x-3">
+              <div class="recent-item-main flex items-center space-x-3">
                 <el-icon class="text-blue-600">
                   <Document />
                 </el-icon>
@@ -186,7 +186,7 @@
                   </p>
                 </div>
               </div>
-              <div class="flex items-center space-x-2">
+              <div class="recent-item-actions flex items-center space-x-2">
                 <el-tag :type="getStatusColor(log.status)" size="small">
                   {{ getStatusText(log.status) }}
                 </el-tag>
@@ -400,5 +400,32 @@ onMounted(() => {
 
 .recent-item {
   @apply transition-colors hover:bg-gray-100;
+}
+
+@media (max-width: 768px) {
+  .upload-content {
+    @apply py-8;
+  }
+
+  .upload-icon {
+    @apply mb-3;
+  }
+
+  .upload-text p:first-child {
+    font-size: 1rem;
+  }
+
+  .recent-item {
+    @apply flex-col items-start gap-3;
+  }
+
+  .recent-item-main,
+  .recent-item-actions {
+    width: 100%;
+  }
+
+  .recent-item-actions {
+    justify-content: space-between;
+  }
 }
 </style>

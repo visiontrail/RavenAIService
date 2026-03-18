@@ -1,23 +1,32 @@
 <template>
   <div class="log-list-page">
-    <!-- 页面标题和操作栏 -->
-    <div class="page-header">
+    <div class="page-header desktop-only">
       <div class="flex justify-between items-center">
         <h1 class="text-2xl font-bold text-gray-900">日志列表</h1>
       </div>
     </div>
 
-    <!-- 搜索和筛选 -->
-    <div class="filter-section">
+    <div class="page-header mobile-only">
+      <div class="mobile-title-row">
+        <div>
+          <h1 class="text-xl font-bold text-gray-900">日志列表</h1>
+          <p class="text-sm text-gray-500">共 {{ logStore.pagination.total }} 条记录</p>
+        </div>
+        <el-button @click="refreshData" :loading="logStore.loading">
+          <el-icon><Refresh /></el-icon>
+        </el-button>
+      </div>
+    </div>
+
+    <div class="filter-section desktop-only">
       <el-card class="mb-6">
-        <div class="flex flex-wrap items-center gap-3 w-full" style="gap: 0.75rem;">
+        <div class="log-filter-row flex flex-wrap items-center gap-3 w-full">
           <el-input
             v-model="searchQuery"
             placeholder="搜索文件名或任务名称..."
             clearable
             @input="handleSearch"
-            class="w-64"
-            style="width: 280px"
+            class="log-filter-control log-filter-search"
           >
             <template #prefix>
               <el-icon><Search /></el-icon>
@@ -28,8 +37,7 @@
             placeholder="日志类型"
             clearable
             @change="handleLogTypeFilter"
-            class="w-36"
-            style="width: 150px"
+            class="log-filter-control log-filter-type"
           >
             <el-option label="协议栈日志" value="stack" />
             <el-option label="OAM与天线日志" value="oam_antenna" />
@@ -40,8 +48,7 @@
             placeholder="状态筛选"
             clearable
             @change="handleStatusFilter"
-            class="w-32"
-            style="width: 130px"
+            class="log-filter-control log-filter-status"
           >
             <el-option label="待处理" value="pending" />
             <el-option label="处理中" value="processing" />
@@ -56,12 +63,11 @@
             end-placeholder="结束时间"
             :shortcuts="dateShortcuts"
             value-format="YYYY-MM-DDTHH:mm:ss[Z]"
-            class="w-80 flex-grow"
-            style="width: 360px"
+            class="log-filter-control log-filter-date flex-grow"
             @change="handleDateRangeChange"
             clearable
           />
-          <div class="flex items-center gap-2">
+          <div class="filter-actions flex items-center gap-2">
             <el-button type="primary" @click="applyFilters">
               <el-icon class="mr-1"><Search /></el-icon>
               搜索
@@ -74,21 +80,31 @@
       </el-card>
     </div>
 
-    <!-- 日志列表 -->
-    <el-card>
+    <el-card class="mobile-only">
+      <div class="mobile-search-row">
+        <el-input
+          v-model="searchQuery"
+          placeholder="搜索文件名或任务名称..."
+          clearable
+          @input="handleSearch"
+        >
+          <template #prefix>
+            <el-icon><Search /></el-icon>
+          </template>
+        </el-input>
+        <el-button @click="mobileFilterDrawerVisible = true">筛选</el-button>
+      </div>
+    </el-card>
+
+    <el-card class="desktop-only">
       <div class="table-header mb-4">
-        <!-- 记录统计信息与操作控件区域 - 同一行布局 -->
         <div class="header-row flex justify-between items-center mb-3">
-          <!-- 记录统计信息 -->
           <div class="stats-info">
             <span class="text-sm text-gray-600">
               共 {{ logStore.pagination.total }} 条记录
             </span>
           </div>
-          
-          <!-- 操作控件区域 - 响应式布局 -->
           <div class="controls-container">
-            <!-- 排序和基础操作 -->
             <div class="controls-row">
               <div class="sort-controls">
                 <el-select v-model="sortBy" size="small" class="sort-select" @change="handleSortChange">
@@ -113,8 +129,6 @@
             </div>
           </div>
         </div>
-        
-        <!-- 批量操作按钮 - 当有选中项时显示 -->
         <div v-if="selectedLogs.length > 0" class="batch-actions">
           <div class="batch-info">
             <span class="text-sm text-gray-600">已选择 {{ selectedLogs.length }} 项</span>
@@ -144,16 +158,17 @@
         </div>
       </div>
 
-      <el-table
-        v-loading="logStore.loading"
-        :data="logStore.logs"
-        @selection-change="handleSelectionChange"
-        class="w-full"
-        :default-sort="{ prop: 'created_at', order: sortOrder === 'desc' ? 'descending' : 'ascending' }"
-        @sort-change="onTableSortChange"
-        border
-        resizable
-      >
+      <div class="table-scroll-wrapper">
+        <el-table
+          v-loading="logStore.loading"
+          :data="logStore.logs"
+          @selection-change="handleSelectionChange"
+          class="w-full"
+          :default-sort="{ prop: 'created_at', order: sortOrder === 'desc' ? 'descending' : 'ascending' }"
+          @sort-change="onTableSortChange"
+          border
+          resizable
+        >
         <el-table-column type="selection" width="55" resizable />
 
         <el-table-column prop="filename" label="文件名" min-width="300" :show-overflow-tooltip="true" resizable>
@@ -263,7 +278,8 @@
             </div>
           </template>
         </el-table-column>
-      </el-table>
+        </el-table>
+      </div>
 
       <!-- 分页 -->
       <div class="pagination-wrapper mt-6">
@@ -278,6 +294,111 @@
         />
       </div>
     </el-card>
+
+    <div class="mobile-only">
+      <el-card v-loading="logStore.loading">
+        <div v-if="logStore.logs.length" class="mobile-log-list">
+          <article v-for="row in logStore.logs" :key="row.id" class="mobile-log-card">
+            <div class="mobile-log-card-head">
+              <router-link :to="`/log/${row.id}`" class="mobile-log-name" :title="getDisplayFilename(row)">
+                {{ getDisplayFilename(row) }}
+              </router-link>
+            </div>
+
+            <div class="mobile-log-tags">
+              <el-tag :type="getStatusColor(row.status)" size="small">
+                {{ getStatusDisplayText(row) }}
+              </el-tag>
+              <el-tag :type="row.log_type === 'stack' ? 'success' : 'warning'" size="small" effect="plain">
+                {{ logTypeText(row.log_type) }}
+              </el-tag>
+              <el-tag v-if="isAIAnalysisCompleted(row)" type="success" effect="plain" size="small">AI已分析</el-tag>
+              <el-tag v-if="hasManualAnalysis(row)" type="info" effect="plain" size="small">人工已分析</el-tag>
+            </div>
+
+            <div class="mobile-log-meta">
+              <span>{{ formatFileSize(row.file_size) }}</span>
+              <span>{{ formatDateTime(row.created_at) }}</span>
+            </div>
+
+            <div class="mobile-log-actions">
+              <el-button type="primary" plain @click="$router.push(`/log/${row.id}`)">详情</el-button>
+              <el-button type="success" plain :disabled="row.status === 'processing'" @click="handleDownload(row)">
+                下载
+              </el-button>
+            </div>
+          </article>
+        </div>
+        <el-empty v-else description="暂无日志记录" />
+
+        <div class="pagination-wrapper mt-4">
+          <el-pagination
+            v-model:current-page="logStore.pagination.page"
+            v-model:page-size="logStore.pagination.per_page"
+            :total="logStore.pagination.total"
+            :page-sizes="[10, 20, 50, 100]"
+            layout="prev, pager, next"
+            @size-change="handleSizeChange"
+            @current-change="handleCurrentChange"
+          />
+        </div>
+      </el-card>
+    </div>
+
+    <el-drawer v-model="mobileFilterDrawerVisible" title="筛选日志" direction="btt" size="70%">
+      <div class="mobile-filter-drawer">
+        <el-select
+          v-model="logTypeFilter"
+          placeholder="日志类型"
+          clearable
+          @change="handleLogTypeFilter"
+        >
+          <el-option label="协议栈日志" value="stack" />
+          <el-option label="OAM与天线日志" value="oam_antenna" />
+          <el-option label="全量日志" value="full" />
+        </el-select>
+        <el-select
+          v-model="statusFilter"
+          placeholder="状态筛选"
+          clearable
+          @change="handleStatusFilter"
+        >
+          <el-option label="待处理" value="pending" />
+          <el-option label="处理中" value="processing" />
+          <el-option label="已完成" value="completed" />
+          <el-option label="失败" value="failed" />
+        </el-select>
+        <el-date-picker
+          v-model="dateRange"
+          type="datetimerange"
+          range-separator="至"
+          start-placeholder="开始时间"
+          end-placeholder="结束时间"
+          :shortcuts="dateShortcuts"
+          value-format="YYYY-MM-DDTHH:mm:ss[Z]"
+          @change="handleDateRangeChange"
+          clearable
+        />
+        <el-select v-model="sortBy" placeholder="排序字段" @change="handleSortChange">
+          <el-option label="按创建时间" value="created_at" />
+          <el-option label="按文件大小" value="file_size" />
+          <el-option label="按更新时间" value="updated_at" />
+          <el-option label="按文件名" value="filename" />
+        </el-select>
+        <el-segmented
+          v-model="sortOrder"
+          :options="[
+            { label: '降序', value: 'desc' },
+            { label: '升序', value: 'asc' },
+          ]"
+          @change="applyFilters"
+        />
+        <div class="mobile-filter-actions">
+          <el-button @click="resetFilters">重置</el-button>
+          <el-button type="primary" @click="applyFilters; mobileFilterDrawerVisible = false">应用</el-button>
+        </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -290,7 +411,6 @@ import { formatFileSize, formatDateTime, getStatusColor, getStatusText, download
 import { logApi } from '../api'
 import type { LogRecord } from '../types'
 import {
-  Upload,
   Search,
   Refresh,
   Document,
@@ -306,6 +426,7 @@ const statusFilter = ref('')
 const logTypeFilter = ref('')
 const dateRange = ref<string[] | null>(null)
 const selectedLogs = ref<LogRecord[]>([])
+const mobileFilterDrawerVisible = ref(false)
 
 const sortBy = ref<'created_at' | 'file_size' | 'updated_at' | 'filename'>(logStore.filters.sort_by)
 const sortOrder = ref<'asc' | 'desc'>(logStore.filters.sort_order)
@@ -754,6 +875,89 @@ const hasManualAnalysis = (log: LogRecord) => {
   margin-top: 1.5rem;
 }
 
+.desktop-only {
+  display: block;
+}
+
+.mobile-only {
+  display: none;
+}
+
+.mobile-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.mobile-search-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+}
+
+.mobile-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mobile-log-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  background: #ffffff;
+}
+
+.mobile-log-card-head {
+  min-width: 0;
+}
+
+.mobile-log-name {
+  display: block;
+  font-weight: 600;
+  color: #111827;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-log-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+}
+
+.mobile-log-meta {
+  margin-top: 0.5rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.8125rem;
+  color: #6b7280;
+}
+
+.mobile-log-actions {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.mobile-filter-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mobile-filter-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
 .page-header {
   margin-bottom: 1.5rem;
 }
@@ -777,6 +981,39 @@ const hasManualAnalysis = (log: LogRecord) => {
   align-items: center;
   gap: 0.375rem;
   flex-wrap: wrap;
+}
+
+.table-scroll-wrapper {
+  width: 100%;
+}
+
+.log-filter-row {
+  gap: 0.75rem;
+}
+
+.log-filter-control {
+  flex-shrink: 0;
+}
+
+.log-filter-search {
+  width: 280px;
+}
+
+.log-filter-type {
+  width: 150px;
+}
+
+.log-filter-status {
+  width: 130px;
+}
+
+.log-filter-date {
+  width: 360px;
+  min-width: 240px;
+}
+
+.filter-actions {
+  flex-shrink: 0;
 }
 
 /* 响应式控件容器 */
@@ -855,6 +1092,26 @@ const hasManualAnalysis = (log: LogRecord) => {
 
 /* 小屏幕适配 */
 @media (max-width: 640px) {
+  .log-filter-control,
+  .log-filter-search,
+  .log-filter-type,
+  .log-filter-status,
+  .log-filter-date {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .filter-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .filter-actions :deep(.el-button) {
+    width: 100%;
+    margin: 0;
+  }
+
   .controls-row {
     flex-direction: column;
     align-items: stretch;
@@ -886,6 +1143,14 @@ const hasManualAnalysis = (log: LogRecord) => {
 
 /* 中等屏幕适配 */
 @media (max-width: 768px) {
+  .desktop-only {
+    display: none;
+  }
+
+  .mobile-only {
+    display: block;
+  }
+
   .controls-row {
     gap: 0.75rem;
   }
@@ -918,6 +1183,15 @@ const hasManualAnalysis = (log: LogRecord) => {
 
 /* 确保表格在小屏幕上可以横向滚动 */
 @media (max-width: 768px) {
+  .table-scroll-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table-scroll-wrapper :deep(.el-table) {
+    min-width: 1100px;
+  }
+
   :deep(.el-table) {
     font-size: 0.875rem;
   }
@@ -958,6 +1232,12 @@ const hasManualAnalysis = (log: LogRecord) => {
 @media (max-width: 640px) {
   .filename-link {
     max-width: 100px;
+  }
+
+  .pagination-wrapper :deep(.el-pagination) {
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 0.5rem;
   }
 }
 </style>

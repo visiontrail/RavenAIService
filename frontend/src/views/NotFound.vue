@@ -6,7 +6,7 @@
       sub-title="抱歉，您访问的页面不存在"
     >
       <template #extra>
-        <div class="flex space-x-4 justify-center">
+        <div class="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center">
           <el-button @click="$router.back()">
             返回上页
           </el-button>

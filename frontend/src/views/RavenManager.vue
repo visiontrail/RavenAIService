@@ -36,6 +36,7 @@ const filters = reactive({
   page: 1,
   limit: 10,
 })
+const mobileListFilterVisible = ref(false)
 
 const packages = ref<RavenPackage[]>([])
 const pagination = reactive({
@@ -486,7 +487,7 @@ onMounted(() => {
 
 <template>
   <div class="space-y-6 raven-page">
-    <div class="flex flex-wrap justify-between items-start gap-4">
+    <div class="flex flex-wrap justify-between items-start gap-4 desktop-only">
       <div>
         <p class="text-sm text-gray-500">重构包列表</p>
         <h1 class="text-2xl font-bold text-gray-900">升级包与分发中心</h1>
@@ -499,16 +500,81 @@ onMounted(() => {
       </div>
     </div>
 
-    <el-tabs v-model="activeTab" class="raven-tabs">
+    <div class="mobile-only mobile-list-shell">
+      <el-card class="mobile-list-head">
+        <div class="mobile-list-title-row">
+          <div>
+            <p class="text-sm text-gray-500">重构包列表</p>
+            <h1 class="text-xl font-bold text-gray-900">升级包</h1>
+          </div>
+          <el-button @click="fetchPackages" :loading="loadingList">
+            <el-icon><Refresh /></el-icon>
+          </el-button>
+        </div>
+        <div class="mobile-list-search-row">
+          <el-input
+            v-model="filters.search"
+            placeholder="按名称、版本或描述搜索"
+            clearable
+            @change="fetchPackages"
+            @clear="fetchPackages"
+          >
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+          <el-button @click="mobileListFilterVisible = true">筛选</el-button>
+        </div>
+      </el-card>
+
+      <el-card v-loading="loadingList">
+        <div class="mobile-list-summary">共 {{ pagination.totalItems }} 个包</div>
+        <div v-if="packages.length" class="mobile-package-list">
+          <article v-for="pkg in packages" :key="pkg.id" class="mobile-package-card">
+            <h2 class="mobile-package-name" :title="pkg.name">{{ pkg.name }}</h2>
+            <div class="mobile-package-tags">
+              <el-tag size="small" effect="plain" :type="packageTypeTag(pkg.packageType)">
+                {{ packageTypeText(pkg.packageType) }}
+              </el-tag>
+              <el-tag size="small" effect="plain" type="info">v{{ pkg.version || '未知' }}</el-tag>
+              <el-tag size="small" effect="plain" :type="isPatchPackage(pkg) ? 'warning' : 'success'">
+                {{ humanizePatch(pkg) }}
+              </el-tag>
+            </div>
+            <p class="mobile-package-desc">{{ pkg.metadata?.description || '暂无描述' }}</p>
+            <div class="mobile-package-meta">
+              <span>{{ formatFileSize(pkg.size) }}</span>
+              <span>{{ formatDateTime(pkg.createdAt) }}</span>
+            </div>
+            <div class="mobile-package-actions">
+              <el-button type="primary" plain @click="openPackageDetail(pkg.id)">详情</el-button>
+              <el-button type="success" plain @click="downloadPackage(pkg)">下载</el-button>
+            </div>
+          </article>
+        </div>
+        <el-empty v-else description="暂无重构包" />
+        <div class="pagination-wrapper mt-4">
+          <el-pagination
+            background
+            layout="prev, pager, next"
+            :current-page="pagination.currentPage"
+            :total="pagination.totalItems"
+            :page-size="pagination.itemsPerPage"
+            @current-change="handlePageChange"
+          />
+        </div>
+      </el-card>
+    </div>
+
+    <el-tabs v-model="activeTab" class="raven-tabs desktop-only">
       <el-tab-pane label="包列表" name="list">
         <section class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-4">
-          <div class="flex flex-wrap md:flex-nowrap items-center gap-3 w-full" style="gap: 0.75rem;">
+          <div class="raven-filter-row flex flex-wrap md:flex-nowrap items-center gap-3 w-full">
             <el-input
               v-model="filters.search"
               placeholder="按名称、版本或描述搜索"
               clearable
-              class="flex-1 min-w-[260px]"
-              style="width: 280px"
+              class="raven-filter-control raven-filter-search"
               @change="fetchPackages"
               @clear="fetchPackages"
             >
@@ -520,8 +586,7 @@ onMounted(() => {
               v-model="filters.type"
               placeholder="包类型"
               clearable
-              class="w-40"
-              style="width: 170px"
+              class="raven-filter-control raven-filter-type"
               @change="fetchPackages"
             >
               <el-option label="LingXi-10" value="lingxi-10" />
@@ -535,8 +600,7 @@ onMounted(() => {
               v-model="filters.version"
               placeholder="版本号"
               clearable
-              class="w-32"
-              style="width: 140px"
+              class="raven-filter-control raven-filter-version"
               @change="fetchPackages"
               @clear="fetchPackages"
             />
@@ -544,8 +608,7 @@ onMounted(() => {
               v-model="filters.tags"
               placeholder="标签包含"
               clearable
-              class="w-40"
-              style="width: 170px"
+              class="raven-filter-control raven-filter-tags"
               @change="fetchPackages"
               @clear="fetchPackages"
             />
@@ -553,14 +616,13 @@ onMounted(() => {
               v-model="filters.isPatch"
               placeholder="补丁/正式"
               clearable
-              class="w-32"
-              style="width: 140px"
+              class="raven-filter-control raven-filter-patch"
               @change="fetchPackages"
             >
               <el-option label="正式包" value="false" />
               <el-option label="补丁包" value="true" />
             </el-select>
-            <div class="flex gap-2 flex-shrink-0">
+            <div class="raven-filter-actions flex gap-2 flex-shrink-0">
               <el-button type="primary" @click="fetchPackages">
                 <el-icon class="mr-1"><Search /></el-icon>
                 搜索
@@ -572,14 +634,15 @@ onMounted(() => {
             </div>
           </div>
 
-          <el-table
-            :data="packages"
-            v-loading="loadingList"
-            border
-            class="w-full"
-            :row-class-name="() => 'cursor-pointer'"
-            @row-click="openPackageDetail"
-          >
+          <div class="table-scroll-wrapper">
+            <el-table
+              :data="packages"
+              v-loading="loadingList"
+              border
+              class="w-full"
+              :row-class-name="() => 'cursor-pointer'"
+              @row-click="openPackageDetail"
+            >
             <el-table-column prop="name" label="名称 / 版本" min-width="340">
               <template #default="{ row }">
                 <div class="flex items-start gap-2">
@@ -654,9 +717,10 @@ onMounted(() => {
                 </div>
               </template>
             </el-table-column>
-          </el-table>
+            </el-table>
+          </div>
 
-          <div class="flex justify-between items-center text-sm text-gray-500 mt-2">
+          <div class="raven-pagination-row flex justify-between items-center text-sm text-gray-500 mt-2">
             <span>共 {{ pagination.totalItems }} 个包</span>
             <el-pagination
               background
@@ -757,7 +821,7 @@ onMounted(() => {
                       v-model="tagDraft"
                       size="small"
                       placeholder="输入后回车添加"
-                      style="width: 160px"
+                      class="tag-draft-input"
                       @keyup.enter="addTag"
                       @blur="addTag"
                     />
@@ -953,6 +1017,28 @@ onMounted(() => {
       </el-tab-pane>
     </el-tabs>
 
+    <el-drawer v-model="mobileListFilterVisible" title="筛选重构包" direction="btt" size="65%">
+      <div class="mobile-filter-drawer">
+        <el-select v-model="filters.type" placeholder="包类型" clearable>
+          <el-option label="LingXi-10" value="lingxi-10" />
+          <el-option label="LingXi-07A" value="lingxi-07a" />
+          <el-option label="KaTx" value="ka-tx" />
+          <el-option label="KaRx" value="ka-rx" />
+          <el-option label="配置包" value="config" />
+          <el-option label="LingXi-06-TRD" value="lingxi-06-thrid" />
+        </el-select>
+        <el-input v-model="filters.version" placeholder="版本号" clearable />
+        <el-select v-model="filters.isPatch" placeholder="补丁/正式" clearable>
+          <el-option label="正式包" value="false" />
+          <el-option label="补丁包" value="true" />
+        </el-select>
+        <div class="mobile-filter-actions">
+          <el-button @click="resetFilters">重置</el-button>
+          <el-button type="primary" @click="fetchPackages(); mobileListFilterVisible = false">应用</el-button>
+        </div>
+      </div>
+    </el-drawer>
+
     <el-dialog
       v-model="searchDetailVisible"
       width="780px"
@@ -1057,8 +1143,48 @@ onMounted(() => {
   border: 1px solid #f1f5f9;
 }
 
+.desktop-only {
+  display: block;
+}
+
+.mobile-only {
+  display: none;
+}
+
 .upload-zone {
   transition: all 0.25s ease;
+}
+
+.raven-filter-row {
+  gap: 0.75rem;
+}
+
+.raven-filter-control {
+  flex-shrink: 0;
+}
+
+.raven-filter-search {
+  width: 280px;
+  min-width: 260px;
+  flex: 1 1 auto;
+}
+
+.raven-filter-type,
+.raven-filter-tags {
+  width: 170px;
+}
+
+.raven-filter-version,
+.raven-filter-patch {
+  width: 140px;
+}
+
+.tag-draft-input {
+  width: 160px;
+}
+
+.raven-pagination-row {
+  gap: 0.75rem;
 }
 
 .package-name {
@@ -1098,5 +1224,178 @@ onMounted(() => {
 
 .raven-detail-dialog :deep(.el-dialog__body) {
   padding-top: 8px;
+}
+
+.mobile-list-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mobile-list-head :deep(.el-card__body) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mobile-list-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.mobile-list-search-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+}
+
+.mobile-list-summary {
+  font-size: 0.875rem;
+  color: #6b7280;
+  margin-bottom: 0.75rem;
+}
+
+.mobile-package-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mobile-package-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  background: #fff;
+}
+
+.mobile-package-name {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-package-tags {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.mobile-package-desc {
+  margin-top: 0.5rem;
+  margin-bottom: 0;
+  color: #4b5563;
+  font-size: 0.8125rem;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.mobile-package-meta {
+  margin-top: 0.5rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: #6b7280;
+  font-size: 0.8125rem;
+}
+
+.mobile-package-actions {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.mobile-filter-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mobile-filter-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+@media (max-width: 768px) {
+  .desktop-only {
+    display: none;
+  }
+
+  .mobile-only {
+    display: block;
+  }
+
+  .raven-page {
+    gap: 1rem;
+  }
+
+  .raven-filter-row {
+    align-items: stretch;
+  }
+
+  .raven-filter-control,
+  .raven-filter-search,
+  .raven-filter-type,
+  .raven-filter-version,
+  .raven-filter-tags,
+  .raven-filter-patch {
+    width: 100%;
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+
+  .raven-filter-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .raven-filter-actions :deep(.el-button) {
+    width: 100%;
+    margin: 0;
+  }
+
+  .tag-draft-input {
+    width: 100%;
+  }
+
+  .raven-pagination-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .table-scroll-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table-scroll-wrapper :deep(.el-table) {
+    min-width: 1080px;
+  }
+
+  .raven-tabs :deep(.el-tabs__nav-wrap) {
+    overflow-x: auto;
+  }
+
+  .raven-tabs :deep(.el-tabs__nav-wrap::-webkit-scrollbar) {
+    display: none;
+  }
+
+  .raven-detail-dialog :deep(.el-dialog) {
+    width: calc(100vw - 20px) !important;
+    max-width: calc(100vw - 20px) !important;
+    margin: 10px auto !important;
+  }
 }
 </style>

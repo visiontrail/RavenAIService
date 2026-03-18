@@ -226,10 +226,23 @@ class AdminAuthManager:
     def token_ttl_minutes(self) -> int:
         return self._token_ttl_minutes
 
+    def list_config_users(self) -> List[AdminUser]:
+        """Return admin users from YAML config."""
+        self._ensure_loaded()
+        return [
+            AdminUser(
+                username=u.username,
+                password=u.password,
+                password_hash=u.password_hash,
+                disabled=u.disabled,
+                roles=list(u.roles or []),
+            )
+            for u in self._users
+        ]
+
 
 auth_manager = AdminAuthManager(
     config_path=settings.admin_auth_config_path,
     secret_key=settings.secret_key,
     default_ttl_minutes=settings.admin_token_ttl_minutes,
 )
-

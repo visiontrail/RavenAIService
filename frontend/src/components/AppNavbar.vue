@@ -1,21 +1,21 @@
 <template>
-  <nav class="bg-white shadow-sm border-b border-gray-200">
+  <nav class="bg-white shadow-sm border-b border-gray-200 app-navbar mobile-sticky-header">
     <div class="container mx-auto px-4">
-      <div class="flex justify-between items-center h-16">
+      <div class="flex justify-between items-center h-16 navbar-inner">
         <!-- Logo和标题 -->
-        <div class="flex items-center space-x-4">
-          <router-link to="/" class="flex items-center space-x-2">
+        <div class="flex items-center space-x-4 navbar-brand-wrap">
+          <router-link to="/" class="flex items-center space-x-2 navbar-brand-link">
             <img
               :src="ravenLogo"
               alt="Raven Logo"
               class="h-9 w-9 rounded-xl shadow-sm ring-1 ring-gray-200 object-contain"
             />
-            <span class="text-xl font-semibold text-gray-900">Raven智能测试平台</span>
+            <span class="text-xl font-semibold text-gray-900 navbar-title">Raven智能测试平台</span>
           </router-link>
         </div>
 
         <!-- 导航菜单 -->
-        <div class="flex items-center space-x-1">
+        <div class="flex items-center space-x-1 navbar-menu">
           <router-link
             to="/"
             class="nav-link"
@@ -75,6 +75,7 @@ const isDeviceRoute = computed(() => ['DeviceList', 'DeviceDetail'].includes((ro
 .nav-link {
   display: flex;
   align-items: center;
+  justify-content: center;
   padding: 0.75rem 1rem;
   font-size: 0.875rem;
   font-weight: 500;
@@ -125,5 +126,58 @@ const isDeviceRoute = computed(() => ['DeviceList', 'DeviceDetail'].includes((ro
   height: 3px;
   background: linear-gradient(90deg, #3b82f6, #2563eb);
   border-radius: 2px;
+}
+
+@media (max-width: 900px) {
+  .navbar-title {
+    font-size: 1rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .app-navbar {
+    background: rgba(255, 255, 255, 0.94);
+  }
+
+  .navbar-inner {
+    height: auto;
+    min-height: 4rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 0.5rem 0;
+  }
+
+  .navbar-brand-wrap {
+    width: 100%;
+  }
+
+  .navbar-menu {
+    width: 100%;
+    overflow-x: auto;
+    white-space: nowrap;
+    scroll-snap-type: x mandatory;
+    padding-bottom: 0.25rem;
+  }
+
+  .navbar-menu::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-link {
+    flex-shrink: 0;
+    min-height: 2.5rem;
+    padding: 0.55rem 0.9rem;
+    scroll-snap-align: start;
+  }
+
+  .navbar-title {
+    font-size: 0.95rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .navbar-title {
+    display: none;
+  }
 }
 </style>

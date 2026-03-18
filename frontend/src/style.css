@@ -4,14 +4,91 @@
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
   background-color: #f8fafc;
+  overflow-x: hidden;
 }
 
 #app {
   min-height: 100vh;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+@supports (padding: max(0px)) {
+  .mobile-safe-bottom {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+}
+
+/* 统一增强移动端触控体验，桌面布局保持不变 */
+@media (max-width: 768px) {
+  body {
+    font-size: 15px;
+  }
+
+  :focus-visible {
+    outline-offset: 2px;
+  }
+
+  .touch-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .touch-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-sticky-header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    backdrop-filter: saturate(180%) blur(8px);
+  }
+
+  .el-button,
+  .el-input__wrapper,
+  .el-select__wrapper,
+  .el-textarea__inner {
+    min-height: 2.5rem;
+  }
+
+  .el-popper {
+    max-width: calc(100vw - 16px);
+  }
+
+  .el-card__body {
+    padding: 0.9rem;
+  }
+
+  .el-message {
+    min-width: min(92vw, 420px) !important;
+  }
+
+  .el-pagination {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    justify-content: center;
+  }
+
+  .el-dialog {
+    width: calc(100vw - 20px) !important;
+    max-width: calc(100vw - 20px) !important;
+    margin: 10px auto !important;
+  }
+
+  .el-drawer {
+    width: min(90vw, 420px) !important;
+  }
 }

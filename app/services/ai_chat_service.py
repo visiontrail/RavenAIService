@@ -20,6 +20,7 @@ from app.models.user import User
 from app.services.base import BaseService
 from app.services.chat_history_service import chat_history_service
 from app.services.device_link_service import device_link_manager
+from app.services.prompts_config_service import get_chat_title_prompt_template
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,8 @@ class AIChatService(BaseService):
         session_id: str,
         user_content: str,
         answer_text: str,
+        session_title: Optional[str] = None,
+        title_hint: Optional[str] = None,
     ) -> None:
         """Persist user/AI messages to the database."""
         await chat_history_service.save_exchange(
@@ -85,8 +88,86 @@ class AIChatService(BaseService):
             session_id=session_id,
             user_content=user_content,
             ai_content=answer_text,
-            title_hint=user_content,
+            session_title=session_title,
+            title_hint=title_hint,
         )
+
+    async def _generate_session_title(self, user_content: str, ai_content: str) -> Optional[str]:
+        """Generate a concise title for a new session."""
+        prompt_template = get_chat_title_prompt_template()
+        try:
+            prompt = prompt_template.format(
+                user_content=user_content.strip(),
+                ai_content=ai_content.strip(),
+                max_length=24,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("chat: 标题提示词渲染失败: %s", exc)
+            return None
+
+        try:
+            result = await self.agent.planner_llm.ainvoke(prompt)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("chat: 生成会话标题失败: %s", exc)
+            return None
+
+        raw = getattr(result, "content", result)
+        if isinstance(raw, list):
+            text_parts = []
+            for item in raw:
+                if isinstance(item, dict):
+                    text_parts.append(str(item.get("text", "")))
+                else:
+                    text_parts.append(str(item))
+            raw_text = "".join(text_parts)
+        else:
+            raw_text = str(raw)
+
+        normalized = " ".join(raw_text.strip().split())
+        normalized = normalized.split("\n", 1)[0].strip().strip("“”\"'`")
+        if not normalized:
+            return None
+        return normalized[:60]
+
+    async def generate_session_title(self, user_content: str, ai_content: str) -> Optional[str]:
+        """Public wrapper for chat title generation."""
+        return await self._generate_session_title(user_content, ai_content)
+
+    async def _try_generate_and_update_session_title(
+        self,
+        db: AsyncSession,
+        user: User,
+        session_id: str,
+        user_content: str,
+        answer_text: str,
+    ) -> None:
+        """Best-effort title generation that never blocks message persistence."""
+        if not answer_text:
+            return
+        try:
+            session_title = await asyncio.wait_for(
+                self._generate_session_title(user_content, answer_text),
+                timeout=8,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("chat: 生成会话标题超时，跳过更新")
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("chat: 生成会话标题失败，跳过更新: %s", exc)
+            return
+
+        if not session_title:
+            return
+
+        try:
+            await chat_history_service.update_session_title(
+                db,
+                user_id=user.id,
+                session_id=session_id,
+                title=session_title,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("chat: 更新会话标题失败: %s", exc)
 
     async def _prepare_history_messages(
         self,
@@ -216,6 +297,7 @@ class AIChatService(BaseService):
             db,
             user,
         )
+        is_new_session = len(history_messages) == 0
         logger.info(f"chat: 历史记录条数: {len(history_messages)}")
         
         history_messages.append(HumanMessage(content=payload.message))
@@ -264,7 +346,16 @@ class AIChatService(BaseService):
                     session_id,
                     payload.message,
                     answer_text,
+                    title_hint=None,
                 )
+                if is_new_session:
+                    await self._try_generate_and_update_session_title(
+                        db,
+                        user,
+                        session_id,
+                        payload.message,
+                        answer_text,
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("chat: 持久化会话失败: %s", exc)
 
@@ -302,6 +393,7 @@ class AIChatService(BaseService):
             db,
             user,
         )
+        is_new_session = len(history_messages) == 0
         logger.info(f"chat_stream: 历史记录 {len(history_messages)} 条（数据库/内存加载）")
         if history_messages:
             logger.info("chat_stream: 历史记录概览（数据库/内存加载）:")
@@ -418,7 +510,16 @@ class AIChatService(BaseService):
                             session_id,
                             payload.message,
                             answer_text,
+                            title_hint=None,
                         )
+                        if is_new_session:
+                            await self._try_generate_and_update_session_title(
+                                db,
+                                user,
+                                session_id,
+                                payload.message,
+                                answer_text,
+                            )
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("chat_stream: 持久化会话失败: %s", exc)
 
@@ -466,7 +567,16 @@ class AIChatService(BaseService):
                         session_id,
                         payload.message,
                         answer_text,
+                        title_hint=None,
                     )
+                    if is_new_session:
+                        await self._try_generate_and_update_session_title(
+                            db,
+                            user,
+                            session_id,
+                            payload.message,
+                            answer_text,
+                        )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("chat_stream: 持久化会话失败: %s", exc)
 

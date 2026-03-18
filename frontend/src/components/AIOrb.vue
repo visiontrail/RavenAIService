@@ -32,7 +32,7 @@ const handleClick = async () => {
 </script>
 
 <template>
-  <div class="fixed z-[9999] bottom-8 right-8 flex items-center justify-center pointer-events-none">
+  <div class="fixed z-[9999] bottom-5 right-4 sm:bottom-8 sm:right-8 flex items-center justify-center pointer-events-none ai-orb-wrap">
     
     <!-- 1. Transition Overlay -->
     <!-- Removed duration-1000 from parent and handling fade here for better control -->
@@ -69,7 +69,7 @@ const handleClick = async () => {
             @click="handleClick"
             @mouseenter="isHovered = true"
             @mouseleave="isHovered = false"
-            class="relative w-14 h-14 rounded-full cursor-pointer transition-transform duration-300 hover:scale-105 active:scale-95 glass-orb overflow-hidden"
+            class="relative w-12 h-12 sm:w-14 sm:h-14 rounded-full cursor-pointer transition-transform duration-300 hover:scale-105 active:scale-95 glass-orb overflow-hidden"
             role="button"
             aria-label="Open AI Chat"
         >
@@ -133,5 +133,11 @@ const handleClick = async () => {
   33% { transform: translate(5px, -8px) scale(1.05) rotate(120deg); }
   66% { transform: translate(-3px, 5px) scale(0.95) rotate(240deg); }
   100% { transform: translate(0px, 0px) scale(1) rotate(360deg); }
+}
+
+@media (max-width: 768px) {
+  .ai-orb-wrap {
+    bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
 }
 </style>
