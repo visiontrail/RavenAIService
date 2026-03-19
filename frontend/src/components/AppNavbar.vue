@@ -145,14 +145,16 @@ const isDeviceRoute = computed(() => ['DeviceList', 'DeviceDetail'].includes((ro
     flex-wrap: wrap;
     gap: 0.5rem;
     padding: 0.5rem 0;
+    justify-content: center;
   }
 
   .navbar-brand-wrap {
-    width: 100%;
+    display: none;
   }
 
   .navbar-menu {
     width: 100%;
+    justify-content: center;
     overflow-x: auto;
     white-space: nowrap;
     scroll-snap-type: x mandatory;
