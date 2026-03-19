@@ -1143,12 +1143,8 @@ onMounted(() => {
   border: 1px solid #f1f5f9;
 }
 
-.desktop-only {
-  display: block;
-}
-
 .mobile-only {
-  display: none;
+  display: none !important;
 }
 
 .upload-zone {
@@ -1328,11 +1324,15 @@ onMounted(() => {
 
 @media (max-width: 768px) {
   .desktop-only {
-    display: none;
+    display: none !important;
   }
 
   .mobile-only {
-    display: block;
+    display: block !important;
+  }
+
+  .mobile-only.mobile-list-shell {
+    display: flex !important;
   }
 
   .raven-page {
