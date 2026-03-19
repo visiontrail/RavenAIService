@@ -5,7 +5,11 @@
         <!-- Brand column -->
         <div class="footer-brand footer-panel">
           <div class="flex items-center gap-2.5 mb-3">
-            <div class="brand-dot"></div>
+            <img
+              :src="ravenLogo"
+              alt="Raven Logo"
+              class="footer-brand-logo"
+            />
             <span class="text-sm font-bold tracking-wide text-gray-900">Raven 智能测试平台</span>
           </div>
           <p class="text-xs text-gray-500 leading-relaxed max-w-[220px]">
@@ -85,6 +89,7 @@
 
 <script setup lang="ts">
 import PlatformBrandIcon from '@/components/icons/PlatformBrandIcon.vue'
+import ravenLogo from '@/assets/raven-logo.png'
 
 const currentYear = new Date().getFullYear()
 </script>
@@ -155,12 +160,15 @@ const currentYear = new Date().getFullYear()
   color: #1e40af;
 }
 
-.brand-dot {
+.footer-brand-logo {
   width: 1.75rem;
   height: 1.75rem;
-  border-radius: 0.5rem;
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
   flex-shrink: 0;
+  object-fit: contain;
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
 }
 
 .download-badge {
