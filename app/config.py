@@ -50,6 +50,14 @@ class Settings(BaseSettings):
     agent_max_matches: int = 50  # grep最大匹配数
     agent_search_backend: str = "regex"  # 可选：regex | elasticsearch
     elasticsearch_url: Optional[str] = None
+
+    # 代码仓库配置（用于代码分析智能体克隆源码）
+    # 环境变量: CODE_REPO_OAM_URL / CODE_REPO_STACK_URL
+    code_repo_oam_url: Optional[str] = None        # OAM天线模块代码库 Git URL
+    code_repo_stack_url: Optional[str] = None      # 协议栈模块代码库 Git URL
+    code_repo_clone_base_dir: str = "temp/code_repos"  # 克隆代码存放的基础目录（相对于项目根目录）
+    code_repo_git_token: Optional[str] = None      # Git 认证 Token（用于访问私有仓库）
+    code_repo_clone_depth: int = 1                 # 浅克隆深度，1 表示仅克隆最新快照
     
     # 仅使用本地部署统一入口
     llm_provider: str = "GalaxySpace"

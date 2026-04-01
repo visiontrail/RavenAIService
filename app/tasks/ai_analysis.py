@@ -370,11 +370,19 @@ def _perform_ai_analysis(
 
         from app.agents.code_analysis_graph import CodeAnalysisGraph
 
-        graph = CodeAnalysisGraph(token_limit=8000, max_iterations=5)
+        _log_type_raw = getattr(log_record, "log_type", None)
+        log_type_str = (
+            _log_type_raw.value
+            if hasattr(_log_type_raw, "value")
+            else str(_log_type_raw or "unknown")
+        )
+
+        graph = CodeAnalysisGraph(token_limit=8000, max_iterations=10)
         analysis_data = graph.run(
             query=query,
             workspace_dir=workspace_dir,
             log_file_path=log_record.file_path,
+            log_type=log_type_str,
         )
 
         if progress_callback:
