@@ -3,9 +3,12 @@
 import json
 import logging
 import re
+import shutil
+import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from celery import current_task
 from sqlalchemy import create_engine
@@ -99,12 +102,136 @@ def _update_ai_task_metadata(
     session.refresh(log_record)
 
 
-def _perform_ai_analysis(
+def _load_log_metadata_dict(log_record: LogRecord) -> Dict[str, Any]:
+    if not log_record.metadata_json:
+        return {}
+    try:
+        parsed = json.loads(log_record.metadata_json)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _looks_like_repo_url(value: str, key: str = "") -> bool:
+    v = value.strip()
+    if not v:
+        return False
+
+    key_lower = key.lower()
+    if key_lower and ("repo" in key_lower or "git" in key_lower or "repository" in key_lower):
+        return v.startswith(("http://", "https://", "git@", "ssh://"))
+
+    if v.startswith(("git@", "ssh://")):
+        return True
+    if v.startswith(("http://", "https://")):
+        low = v.lower()
+        return any(s in low for s in (".git", "github", "gitlab", "bitbucket", "gitee"))
+    return False
+
+
+def _extract_commit_id(text: str) -> Optional[str]:
+    if not isinstance(text, str):
+        return None
+    m = re.search(r"\b[0-9a-fA-F]{7,40}\b", text.strip())
+    return m.group(0) if m else None
+
+
+def _search_repo_context(obj: Any, path: str = "") -> Tuple[Optional[str], Optional[str], str, str]:
+    repo_url: Optional[str] = None
+    commit_id: Optional[str] = None
+    repo_source = ""
+    commit_source = ""
+
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            kp = f"{path}.{k}" if path else str(k)
+
+            if isinstance(v, str):
+                if repo_url is None and _looks_like_repo_url(v, str(k)):
+                    repo_url = v.strip()
+                    repo_source = kp
+
+                if commit_id is None:
+                    key_lower = str(k).lower()
+                    if any(x in key_lower for x in ("commit", "sha", "revision", "git")):
+                        extracted = _extract_commit_id(v)
+                        if extracted:
+                            commit_id = extracted
+                            commit_source = kp
+
+            nested_repo, nested_commit, nested_repo_src, nested_commit_src = _search_repo_context(v, kp)
+            if repo_url is None and nested_repo:
+                repo_url = nested_repo
+                repo_source = nested_repo_src
+            if commit_id is None and nested_commit:
+                commit_id = nested_commit
+                commit_source = nested_commit_src
+
+            if repo_url and commit_id:
+                break
+
+    elif isinstance(obj, list):
+        for idx, item in enumerate(obj):
+            kp = f"{path}[{idx}]"
+            nested_repo, nested_commit, nested_repo_src, nested_commit_src = _search_repo_context(item, kp)
+            if repo_url is None and nested_repo:
+                repo_url = nested_repo
+                repo_source = nested_repo_src
+            if commit_id is None and nested_commit:
+                commit_id = nested_commit
+                commit_source = nested_commit_src
+            if repo_url and commit_id:
+                break
+
+    return repo_url, commit_id, repo_source, commit_source
+
+
+def _extract_repo_metadata(log_record: LogRecord) -> Tuple[Optional[str], Optional[str], Dict[str, Any]]:
+    metadata_dict = _load_log_metadata_dict(log_record)
+    repo_url, commit_id, repo_source, commit_source = _search_repo_context(metadata_dict)
+
+    info = {
+        "repo_source": repo_source,
+        "commit_source": commit_source,
+        "has_metadata": bool(metadata_dict),
+    }
+    return repo_url, commit_id, info
+
+
+def _clone_repository(repo_url: str, commit_id: Optional[str] = None) -> str:
+    workspace_dir = tempfile.mkdtemp(prefix="raven-ai-workspace-")
+
+    def _run_git(cmd: list, timeout: int = 600) -> None:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Git命令失败: {' '.join(cmd)}\n"
+                f"stdout={result.stdout[-500:]}\n"
+                f"stderr={result.stderr[-500:]}"
+            )
+
+    try:
+        _run_git(["git", "clone", "--quiet", repo_url, workspace_dir], timeout=900)
+
+        if commit_id:
+            try:
+                _run_git(["git", "-C", workspace_dir, "checkout", "--quiet", commit_id], timeout=180)
+            except Exception:
+                _run_git(["git", "-C", workspace_dir, "fetch", "--all", "--tags", "--quiet"], timeout=300)
+                _run_git(["git", "-C", workspace_dir, "checkout", "--quiet", commit_id], timeout=180)
+
+        return workspace_dir
+    except Exception:
+        shutil.rmtree(workspace_dir, ignore_errors=True)
+        raise
+
+
+def _perform_legacy_ai_analysis(
     log_record: LogRecord,
     query: str,
     progress_callback=None,
 ) -> Dict[str, Any]:
-    """执行AI分析逻辑，复用API中的结构化/降级逻辑"""
+    """原有单体 LogAnalysisAgent 逻辑，作为无代码仓库元数据时的降级路径。"""
     from app.agents.log_agent import compress_outputs
 
     hints = {
@@ -203,6 +330,92 @@ def _perform_ai_analysis(
         analysis_data["log_id"] = log_record.id
 
     return analysis_data
+
+
+def _perform_ai_analysis(
+    log_record: LogRecord,
+    query: str,
+    progress_callback=None,
+) -> Dict[str, Any]:
+    """优先执行四维多智能体 CodeAnalysisGraph；无仓库元数据时降级到旧 LogAnalysisAgent。"""
+    repo_url, commit_id, repo_meta = _extract_repo_metadata(log_record)
+
+    if not repo_url:
+        logger.info(
+            "No repository metadata found for log %s, fallback to legacy LogAnalysisAgent",
+            log_record.id,
+        )
+        legacy_result = _perform_legacy_ai_analysis(log_record, query, progress_callback=progress_callback)
+        if isinstance(legacy_result, dict):
+            legacy_result.setdefault("mode", "legacy_log_analysis")
+            legacy_result.setdefault("degrade_reason", "missing_repo_metadata")
+        return legacy_result
+
+    workspace_dir: Optional[str] = None
+    try:
+        if progress_callback:
+            progress_callback(20.0)
+
+        workspace_dir = _clone_repository(repo_url, commit_id)
+        logger.info(
+            "Repository cloned for AI code analysis: log_id=%s repo=%s commit=%s workspace=%s",
+            log_record.id,
+            repo_url,
+            commit_id,
+            workspace_dir,
+        )
+
+        if progress_callback:
+            progress_callback(40.0)
+
+        from app.agents.code_analysis_graph import CodeAnalysisGraph
+
+        graph = CodeAnalysisGraph(token_limit=8000, max_iterations=5)
+        analysis_data = graph.run(
+            query=query,
+            workspace_dir=workspace_dir,
+            log_file_path=log_record.file_path,
+        )
+
+        if progress_callback:
+            progress_callback(92.0)
+
+        if isinstance(analysis_data, dict):
+            analysis_data.setdefault("log_id", log_record.id)
+            analysis_data.setdefault("mode", "4_agent_code_analysis")
+            analysis_data["repo_context"] = {
+                "repo_url": repo_url,
+                "commit_id": commit_id,
+                "metadata_source": repo_meta,
+            }
+        return analysis_data
+
+    except Exception as graph_error:
+        logger.error(
+            "4-agent code analysis failed for log %s, fallback to legacy mode: %s",
+            log_record.id,
+            graph_error,
+            exc_info=True,
+        )
+        legacy_result = _perform_legacy_ai_analysis(log_record, query, progress_callback=progress_callback)
+        if isinstance(legacy_result, dict):
+            legacy_result.setdefault("mode", "legacy_log_analysis")
+            legacy_result["degrade_reason"] = "code_graph_failed"
+            legacy_result["degrade_error"] = str(graph_error)
+            legacy_result["repo_context"] = {
+                "repo_url": repo_url,
+                "commit_id": commit_id,
+                "metadata_source": repo_meta,
+            }
+        return legacy_result
+
+    finally:
+        if workspace_dir:
+            try:
+                shutil.rmtree(workspace_dir, ignore_errors=True)
+                logger.info("Workspace cleaned for log %s: %s", log_record.id, workspace_dir)
+            except Exception as cleanup_error:
+                logger.warning("Failed to cleanup workspace %s: %s", workspace_dir, cleanup_error)
 
 
 @celery_app.task(

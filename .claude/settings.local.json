@@ -5,7 +5,13 @@
       "Bash(git commit:*)",
       "Bash(git add:*)",
       "Bash(git config:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(notebooklm status:*)",
+      "Bash(notebooklm create:*)",
+      "Bash(notebooklm source:*)",
+      "Read(//private/tmp/**)",
+      "Bash(cp \"/Users/guoliang/Desktop/workspace/code/GalaxySpace/GalaxySpaceAI/Raven/RavenAIService/app/agents/xml_utils.py\" ./xml_utils.py)",
+      "Bash(git remote:*)"
     ]
   }
 }
