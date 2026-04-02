@@ -1,4 +1,4 @@
-"""四维多智能体日志+代码联合分析图。"""
+"""五维多智能体日志+代码联合分析图（含 Supervisor 总控）。"""
 
 from __future__ import annotations
 
@@ -77,6 +77,9 @@ class InvestigationState(TypedDict):
     workspace_dir: str
     log_file_path: str
     log_type: str        # "oam_antenna" | "stack" | "full" | "unknown"
+    repo_url: str        # 本轮分析允许使用的仓库 URL（优先元数据）
+    repo_branch: str     # 本轮分析优先分支（从日志元数据提取）
+    repo_commit_id: str  # 本轮分析优先 commit（从日志元数据提取）
     repo_cloned: bool    # workspace_dir 是否已指向克隆好的代码仓库
     trace_id: str        # 本次分析链路追踪ID（便于与HTTP日志关联）
     llm_call_count: int  # 当前 run 内累计 LLM 调用轮次
@@ -92,6 +95,10 @@ class InvestigationState(TypedDict):
     purified_logs: str
     log_search_attempts: int
     code_tool_invocations: int
+    supervisor_plan: str
+    supervisor_reflection: str
+    supervisor_round: int
+    next_node: str
 
     # --- 结果产出 ---
     raw_root_cause: str
@@ -101,7 +108,7 @@ class InvestigationState(TypedDict):
 # ─────────────────────────────── 主图 ─────────────────────────────────────
 
 class CodeAnalysisGraph:
-    """四维智能体编排：Code -> Log/Compaction -> Summary。"""
+    """五维智能体编排：Supervisor -> Code/Log/Compaction -> Summary。"""
 
     def __init__(self, token_limit: int = 8000, max_iterations: int = 10):
         if StateGraph is None or END is None:
@@ -125,30 +132,26 @@ class CodeAnalysisGraph:
             self._llm_with_tools = self.llm
 
         graph = StateGraph(InvestigationState)
+        graph.add_node("supervisor_agent", self._supervisor_agent_node)
         graph.add_node("code_agent", self._code_agent_node)
         graph.add_node("log_agent", self._log_agent_node)
         graph.add_node("compaction_agent", self._compaction_agent_node)
         graph.add_node("summary_agent", self._summary_agent_node)
 
-        graph.set_entry_point("code_agent")
+        graph.set_entry_point("supervisor_agent")
         graph.add_conditional_edges(
-            "code_agent",
-            self._route_after_code,
+            "supervisor_agent",
+            self._route_after_supervisor,
             {
                 "code_agent": "code_agent",
                 "log_agent": "log_agent",
+                "compaction_agent": "compaction_agent",
                 "summary_agent": "summary_agent",
             },
         )
-        graph.add_conditional_edges(
-            "log_agent",
-            self._route_after_log,
-            {
-                "code_agent": "code_agent",
-                "compaction_agent": "compaction_agent",
-            },
-        )
-        graph.add_edge("compaction_agent", "code_agent")
+        graph.add_edge("code_agent", "supervisor_agent")
+        graph.add_edge("log_agent", "supervisor_agent")
+        graph.add_edge("compaction_agent", "supervisor_agent")
         graph.add_edge("summary_agent", END)
 
         self._app = graph.compile()
@@ -161,6 +164,9 @@ class CodeAnalysisGraph:
         workspace_dir: str,
         log_file_path: str,
         log_type: str = "unknown",
+        repo_url: str = "",
+        repo_branch: str = "",
+        repo_commit_id: str = "",
         trace_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         start_time = time.time()
@@ -178,6 +184,9 @@ class CodeAnalysisGraph:
             "workspace_dir": workspace_dir,
             "log_file_path": log_file_path,
             "log_type": log_type or "unknown",
+            "repo_url": (repo_url or "").strip(),
+            "repo_branch": (repo_branch or "").strip(),
+            "repo_commit_id": (repo_commit_id or "").strip(),
             "repo_cloned": bool(workspace_dir),
             "trace_id": runtime_trace_id,
             "llm_call_count": 0,
@@ -189,6 +198,10 @@ class CodeAnalysisGraph:
             "purified_logs": "",
             "log_search_attempts": 0,
             "code_tool_invocations": 0,
+            "supervisor_plan": "",
+            "supervisor_reflection": "",
+            "supervisor_round": 0,
+            "next_node": "code_agent",
             "raw_root_cause": "",
             "final_report": "",
         }
@@ -207,37 +220,26 @@ class CodeAnalysisGraph:
 
     # ─────────────────────── Routing ───────────────────────────────────────
 
-    def _route_after_log(self, state: InvestigationState) -> str:
-        if state["token_count"] > self.token_limit:
-            return "compaction_agent"
-        return "code_agent"
-
-    def _route_after_code(self, state: InvestigationState) -> str:
-        if state["iteration_count"] >= self.max_iterations:
-            return "summary_agent"
-
-        last_msg = state["messages"][-1]
-        if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
-            tool_name = last_msg.tool_calls[0]["name"]
-            if tool_name == "AskLogAgentTool":
-                return "log_agent"
-            elif tool_name == "SubmitDiagnosisTool":
-                return "summary_agent"
-
-        return "code_agent"
+    def _route_after_supervisor(self, state: InvestigationState) -> str:
+        nxt = str(state.get("next_node", "code_agent") or "code_agent")
+        if nxt not in {"code_agent", "log_agent", "compaction_agent", "summary_agent"}:
+            return "code_agent"
+        return nxt
 
     # ────────────────────── Tool Definitions ───────────────────────────────
 
     def _build_code_tools(self) -> List[StructuredTool]:
         """构建所有代码分析工具（仅用于 bind_tools；实际执行在 _dispatch_tool 中）。"""
 
-        def clone_repo_tool(log_type: str) -> str:
+        def clone_repo_tool(log_type: str, branch: str = "", force_refresh: bool = True) -> str:
             """根据日志类型将对应的代码仓库克隆到临时工作区，并切换当前工作区路径。
 
             log_type 可选: 'oam_antenna'（OAM天线模块）或 'stack'（协议栈模块）。
+            branch 可选：优先切换到该分支（为空则使用远端默认分支）。
+            force_refresh 默认为 true：每次都重新克隆，避免使用陈旧工作区。
             必须在使用任何代码阅读/搜索工具之前调用，否则工作区为空。
             """
-            return f"已请求克隆仓库: log_type={log_type}"
+            return f"已请求克隆仓库: log_type={log_type}, branch={branch}, force_refresh={force_refresh}"
 
         def read_code_tool(file_path: str, start_line: int, end_line: int) -> str:
             """读取工作区中指定源码文件的片段，每次最多 100 行。
@@ -317,6 +319,101 @@ class CodeAnalysisGraph:
 
     # ─────────────────────── Agent Nodes ───────────────────────────────────
 
+    def _supervisor_agent_node(self, state: InvestigationState) -> Dict[str, Any]:
+        """总控节点：统一做计划、调度与反思。"""
+        trace_id = state.get("trace_id", "unknown")
+        llm_call_count = int(state.get("llm_call_count", 0))
+        supervisor_round = int(state.get("supervisor_round", 0)) + 1
+        current_plan = state.get("supervisor_plan", "")
+        default_next = self._default_next_node(state)
+
+        prompt = (
+            "# 角色设定\n"
+            "你是多智能体排障流程的总控 Supervisor，职责是：规划 -> 调度 -> 反思。\n\n"
+            "# 当前状态\n"
+            f"- 用户问题：{state.get('query', '')}\n"
+            f"- 日志类型：{state.get('log_type', 'unknown')}\n"
+            f"- 工作区：{state.get('workspace_dir', '') or '(empty)'}\n"
+            f"- 元数据分支：{state.get('repo_branch', '') or '(none)'}\n"
+            f"- 元数据提交：{state.get('repo_commit_id', '') or '(none)'}\n"
+            f"- 迭代轮次：{state.get('iteration_count', 0)} / {self.max_iterations}\n"
+            f"- token计数：{state.get('token_count', 0)} / {self.token_limit}\n"
+            f"- 待检索日志关键词：{state.get('pending_log_keywords', [])}\n"
+            f"- 当前根因状态：{('已提交' if state.get('raw_root_cause', '').strip() else '未提交')}\n"
+            f"- 既有计划：{current_plan or '(empty)'}\n"
+            f"- 默认下一跳（规则推导）：{default_next}\n\n"
+            "# 最近上下文（节选）\n"
+            "<recent_messages>\n"
+            f"{self._messages_to_text((state.get('messages') or [])[-6:])}\n"
+            "</recent_messages>\n\n"
+            "# 输出要求\n"
+            "只输出一个 JSON 对象，字段如下：\n"
+            "{\n"
+            '  "plan": "3-5 步简要计划，200字以内",\n'
+            '  "reflection": "本轮反思与纠偏建议，180字以内",\n'
+            '  "next_agent": "code_agent | log_agent | compaction_agent | summary_agent"\n'
+            "}\n"
+            "禁止输出 JSON 之外的任何内容。"
+        )
+
+        plan = current_plan
+        reflection = state.get("supervisor_reflection", "")
+        chosen_next = default_next
+
+        try:
+            call_no = llm_call_count + 1
+            llm_call_count = call_no
+            response = self._invoke_llm_with_trace(
+                llm=self.llm,
+                payload=prompt,
+                trace_id=trace_id,
+                call_no=call_no,
+                agent_name="supervisor_agent",
+                purpose="planning_reflection_and_routing",
+            )
+            content = self._message_content(response).strip()
+            decision = self._extract_json_dict(content)
+            if decision:
+                plan = str(decision.get("plan", plan) or plan).strip()
+                reflection = str(decision.get("reflection", reflection) or reflection).strip()
+                chosen_next = str(decision.get("next_agent", chosen_next) or chosen_next).strip()
+        except Exception as exc:
+            logger.warning("Supervisor LLM 失败，回退规则路由: %s", exc)
+
+        # 总控约束优先于 LLM 建议
+        constrained_next = self._apply_supervisor_constraints(state=state, suggested_next=chosen_next, fallback=default_next)
+        if constrained_next != chosen_next:
+            logger.info(
+                "SUPERVISOR_ROUTE_ADJUST trace_id=%s round=%s suggested=%s constrained=%s",
+                trace_id,
+                supervisor_round,
+                chosen_next,
+                constrained_next,
+            )
+        chosen_next = constrained_next
+
+        short_plan = (plan or "")[:400]
+        short_reflection = (reflection or "")[:320]
+        token_delta = self._estimate_tokens(short_plan + "\n" + short_reflection)
+
+        logger.info(
+            "SUPERVISOR_DECISION trace_id=%s round=%s next=%s plan=%s reflection=%s",
+            trace_id,
+            supervisor_round,
+            chosen_next,
+            self._truncate_for_log(short_plan, 220),
+            self._truncate_for_log(short_reflection, 220),
+        )
+
+        return {
+            "supervisor_round": supervisor_round,
+            "supervisor_plan": short_plan,
+            "supervisor_reflection": short_reflection,
+            "next_node": chosen_next,
+            "llm_call_count": llm_call_count,
+            "token_count": int(state.get("token_count", 0)) + token_delta,
+        }
+
     def _code_agent_node(self, state: InvestigationState) -> Dict[str, Any]:
         workspace_dir = state.get("workspace_dir", "")
         log_type      = state.get("log_type", "unknown")
@@ -332,6 +429,10 @@ class CodeAnalysisGraph:
             log_search_attempts   = int(state.get("log_search_attempts", 0)),
             working_memory = state.get("working_memory", ""),
             purified_logs  = state.get("purified_logs", ""),
+            supervisor_plan = state.get("supervisor_plan", ""),
+            supervisor_reflection = state.get("supervisor_reflection", ""),
+            repo_branch = state.get("repo_branch", ""),
+            repo_commit_id = state.get("repo_commit_id", ""),
         )
 
         prompt_messages: List[BaseMessage] = [
@@ -428,6 +529,9 @@ class CodeAnalysisGraph:
             args          = args,
             workspace_dir = workspace_dir,
             log_type      = log_type,
+            repo_url      = state.get("repo_url", ""),
+            repo_branch   = state.get("repo_branch", ""),
+            repo_commit_id = state.get("repo_commit_id", ""),
         )
 
         tool_msg = ToolMessage(
@@ -458,16 +562,29 @@ class CodeAnalysisGraph:
         args: Dict[str, Any],
         workspace_dir: str,
         log_type: str,
+        repo_url: str,
+        repo_branch: str,
+        repo_commit_id: str,
     ) -> Tuple[str, Dict[str, Any]]:
         """执行工具并返回 (result_text, extra_state_updates)。"""
         extra: Dict[str, Any] = {}
 
         if tool_name == "CloneRepoTool":
             requested_type = str(args.get("log_type", log_type) or log_type).lower().strip()
-            new_workspace, msg = self._clone_repo(requested_type)
+            requested_branch = str(args.get("branch", repo_branch) or repo_branch).strip()
+            force_refresh = self._safe_bool(args.get("force_refresh"), True)
+            new_workspace, msg = self._clone_repo(
+                log_type=requested_type,
+                branch=requested_branch,
+                repo_url_override=str(repo_url or ""),
+                commit_id=str(repo_commit_id or ""),
+                force_refresh=force_refresh,
+            )
             if new_workspace:
                 extra["workspace_dir"] = new_workspace
                 extra["repo_cloned"]   = True
+                if requested_branch:
+                    extra["repo_branch"] = requested_branch
             return msg, extra
 
         if tool_name == "ReadCodeTool":
@@ -792,15 +909,22 @@ class CodeAnalysisGraph:
 
     # ─────────────────────── Tool Implementations ──────────────────────────
 
-    def _clone_repo(self, log_type: str) -> Tuple[str, str]:
-        """克隆代码仓库到临时工作区，返回 (workspace_path, result_message)。"""
+    def _clone_repo(
+        self,
+        log_type: str,
+        branch: str = "",
+        repo_url_override: str = "",
+        commit_id: str = "",
+        force_refresh: bool = True,
+    ) -> Tuple[str, str]:
+        """克隆代码仓库到工作区，返回 (workspace_path, result_message)。"""
         normalized = log_type.lower().strip()
 
         if normalized in _LOG_TYPE_OAM_KEYS:
-            repo_url = settings.code_repo_oam_url
+            configured_repo_url = settings.code_repo_oam_url
             repo_label = "OAM天线"
         elif normalized in _LOG_TYPE_STACK_KEYS:
-            repo_url = settings.code_repo_stack_url
+            configured_repo_url = settings.code_repo_stack_url
             repo_label = "协议栈"
         else:
             return "", (
@@ -808,75 +932,147 @@ class CodeAnalysisGraph:
                 f"可选值：{list(_LOG_TYPE_OAM_KEYS | _LOG_TYPE_STACK_KEYS)}"
             )
 
+        repo_url = (repo_url_override or configured_repo_url or "").strip()
+        normalized_branch = self._normalize_branch_name(branch) or ""
+        normalized_commit = str(commit_id or "").strip()
+
         if not repo_url:
             return "", (
                 f"CloneRepoTool error: {repo_label}代码仓库 URL 未配置。\n"
                 "请在配置文件或环境变量中设置 CODE_REPO_OAM_URL / CODE_REPO_STACK_URL。"
             )
 
-        # 确定本地克隆目标路径
+        # 固定路径 + 强制刷新：保证每次分析都是最新干净工作区
         base_dir = Path(settings.base_dir) / settings.code_repo_clone_base_dir
         clone_dir = base_dir / normalized
-        clone_dir.mkdir(parents=True, exist_ok=True)
+        base_dir.mkdir(parents=True, exist_ok=True)
 
-        # 如果已存在有效的 git 仓库则跳过克隆
-        if (clone_dir / ".git").exists():
-            logger.info("CloneRepoTool: 仓库已存在，跳过克隆: %s", clone_dir)
-            return str(clone_dir), (
-                f"# 仓库已就绪（已跳过克隆）\n"
-                f"- 类型: {repo_label}\n"
-                f"- 工作区: {clone_dir}\n"
-                "已切换工作区到上述路径，可直接使用代码搜索工具。"
+        if clone_dir.exists() and force_refresh:
+            logger.info(
+                "CloneRepoTool: 清理旧工作区后重克隆: %s (log_type=%s branch=%s commit=%s)",
+                clone_dir,
+                normalized,
+                normalized_branch or "(default)",
+                normalized_commit or "(none)",
             )
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+        reuse_existing = clone_dir.exists() and (clone_dir / ".git").exists()
+        if clone_dir.exists() and not (clone_dir / ".git").exists():
+            shutil.rmtree(clone_dir, ignore_errors=True)
+            reuse_existing = False
 
         # 构建带认证的 URL
         auth_url = self._build_auth_url(repo_url)
         depth = max(1, int(settings.code_repo_clone_depth))
 
-        cmd = [
-            "git", "clone",
-            f"--depth={depth}",
-            "--single-branch",
-            auth_url,
-            str(clone_dir),
-        ]
+        if not reuse_existing:
+            cmd = [
+                "git", "clone",
+                f"--depth={depth}",
+                "--single-branch",
+            ]
+            if normalized_branch:
+                cmd.extend(["--branch", normalized_branch])
+            cmd.extend([auth_url, str(clone_dir)])
+
+            logger.info(
+                "CloneRepoTool: 开始克隆 %s 仓库 -> %s (depth=%d branch=%s)",
+                repo_label,
+                clone_dir,
+                depth,
+                normalized_branch or "(default)",
+            )
+
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+            except subprocess.TimeoutExpired:
+                return "", "CloneRepoTool error: 克隆超时（超过 5 分钟），请检查网络或仓库大小。"
+            except FileNotFoundError:
+                return "", "CloneRepoTool error: 系统中未找到 git 命令，请确认 git 已安装。"
+            except Exception as exc:
+                return "", f"CloneRepoTool error: 克隆失败: {exc}"
+
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()[:500]
+                try:
+                    shutil.rmtree(clone_dir, ignore_errors=True)
+                except Exception:
+                    pass
+                return "", f"CloneRepoTool error: git clone 失败（exit={result.returncode}）\n{stderr}"
+        else:
+            logger.info("CloneRepoTool: 复用已有仓库: %s", clone_dir)
+
+        # 分支/提交对齐：优先 commit，再 fallback 分支
+        if normalized_commit:
+            checkout_cmd = ["git", "-C", str(clone_dir), "checkout", "--quiet", normalized_commit]
+            try:
+                checkout_ret = subprocess.run(checkout_cmd, capture_output=True, text=True, timeout=180)
+            except subprocess.TimeoutExpired:
+                return "", f"CloneRepoTool error: checkout commit 超时 '{normalized_commit}'"
+            except Exception as exc:
+                return "", f"CloneRepoTool error: checkout commit 失败: {exc}"
+            if checkout_ret.returncode != 0:
+                try:
+                    fetch_ret = subprocess.run(
+                        ["git", "-C", str(clone_dir), "fetch", "--all", "--tags", "--quiet"],
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                    )
+                except subprocess.TimeoutExpired:
+                    return "", "CloneRepoTool error: git fetch 超时（checkout commit 前置步骤）"
+                except Exception as exc:
+                    return "", f"CloneRepoTool error: git fetch 失败: {exc}"
+                if fetch_ret.returncode != 0:
+                    stderr = (fetch_ret.stderr or "").strip()[:500]
+                    return "", f"CloneRepoTool error: git fetch 失败（checkout commit 前置步骤）\n{stderr}"
+                try:
+                    checkout_ret = subprocess.run(checkout_cmd, capture_output=True, text=True, timeout=180)
+                except subprocess.TimeoutExpired:
+                    return "", f"CloneRepoTool error: checkout commit 超时 '{normalized_commit}'"
+                except Exception as exc:
+                    return "", f"CloneRepoTool error: checkout commit 失败: {exc}"
+                if checkout_ret.returncode != 0:
+                    stderr = (checkout_ret.stderr or "").strip()[:500]
+                    return "", f"CloneRepoTool error: checkout commit 失败 '{normalized_commit}'\n{stderr}"
+        elif normalized_branch and reuse_existing:
+            try:
+                branch_ret = subprocess.run(
+                    ["git", "-C", str(clone_dir), "checkout", "--quiet", normalized_branch],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+            except subprocess.TimeoutExpired:
+                return "", f"CloneRepoTool error: checkout 分支超时 '{normalized_branch}'"
+            except Exception as exc:
+                return "", f"CloneRepoTool error: checkout 分支失败: {exc}"
+            if branch_ret.returncode != 0:
+                stderr = (branch_ret.stderr or "").strip()[:500]
+                return "", f"CloneRepoTool error: checkout 分支失败 '{normalized_branch}'\n{stderr}"
 
         logger.info(
-            "CloneRepoTool: 开始克隆 %s 仓库 -> %s (depth=%d)",
-            repo_label, clone_dir, depth,
+            "CloneRepoTool: 仓库就绪 type=%s dir=%s branch=%s commit=%s refreshed=%s",
+            repo_label,
+            clone_dir,
+            normalized_branch or "(default)",
+            normalized_commit or "(none)",
+            force_refresh,
         )
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
-        except subprocess.TimeoutExpired:
-            return "", "CloneRepoTool error: 克隆超时（超过 5 分钟），请检查网络或仓库大小。"
-        except FileNotFoundError:
-            return "", "CloneRepoTool error: 系统中未找到 git 命令，请确认 git 已安装。"
-        except Exception as exc:
-            return "", f"CloneRepoTool error: 克隆失败: {exc}"
-
-        if result.returncode != 0:
-            stderr = (result.stderr or "").strip()[:500]
-            # 清理可能创建的空目录
-            try:
-                if clone_dir.exists() and not any(clone_dir.iterdir()):
-                    clone_dir.rmdir()
-            except Exception:
-                pass
-            return "", f"CloneRepoTool error: git clone 失败（exit={result.returncode}）\n{stderr}"
-
-        logger.info("CloneRepoTool: 克隆成功: %s -> %s", repo_label, clone_dir)
         return str(clone_dir), (
-            f"# 仓库克隆成功\n"
+            f"# 仓库已就绪（{'重克隆' if force_refresh else '复用'}）\n"
             f"- 类型: {repo_label}\n"
             f"- 来源: {repo_url}\n"
             f"- 工作区: {clone_dir}\n"
             f"- 克隆深度: {depth}\n"
+            f"- 分支: {normalized_branch or '(远端默认分支)'}\n"
+            f"- 提交: {normalized_commit or '(未指定)'}\n"
             "工作区已切换，请使用 GetFileTreeTool 了解代码结构，然后开始分析。"
         )
 
@@ -1213,6 +1409,10 @@ class CodeAnalysisGraph:
         log_search_attempts: int,
         working_memory: str,
         purified_logs: str,
+        supervisor_plan: str,
+        supervisor_reflection: str,
+        repo_branch: str,
+        repo_commit_id: str,
     ) -> str:
         log_type_display = {
             "oam_antenna": "OAM天线模块",
@@ -1237,13 +1437,17 @@ class CodeAnalysisGraph:
             f"- **代码工作区**：{workspace_info}\n"
             f"- **已执行代码工具次数**：{code_tool_invocations}\n"
             f"- **日志检索轮次**：{log_search_attempts}\n"
+            f"- **Supervisor 计划**：{supervisor_plan or '(暂无)'}\n"
+            f"- **Supervisor 反思**：{supervisor_reflection or '(暂无)'}\n"
+            f"- **元数据分支提示**：{repo_branch or '(未提供)'}\n"
+            f"- **元数据提交提示**：{repo_commit_id or '(未提供)'}\n"
             f"- **历史排障备忘录（必读）**：{working_memory or '(空)'}\n"
             f"- **最新日志取证结果**：{purified_logs or '(暂无)'}\n\n"
 
             "# 可用工具说明\n"
             "| 工具 | 用途 |\n"
             "|------|------|\n"
-            "| CloneRepoTool | 按日志类型克隆对应代码仓库，**必须首先调用** |\n"
+            "| CloneRepoTool | 按日志类型克隆对应代码仓库，支持 `branch` 且默认强制重克隆 |\n"
             "| GetFileTreeTool | 获取目录树概览，快速理解代码结构 |\n"
             "| GrepCodeTool | 在源码中搜索关键词/正则，类似 ripgrep |\n"
             "| GlobCodeTool | 按 glob 模式查找文件，如 `**/*.h` |\n"
@@ -1255,7 +1459,7 @@ class CodeAnalysisGraph:
 
             "# 标准排查工作流\n"
             "**第 0 步 - 克隆代码**（如工作区未就绪）：\n"
-            "   调用 `CloneRepoTool(log_type=...)` 克隆对应仓库。\n\n"
+            "   调用 `CloneRepoTool(log_type=..., branch=..., force_refresh=true)` 克隆对应仓库。\n\n"
             "**第 1 步 - 代码结构探索**：\n"
             "   调用 `GetFileTreeTool` 了解模块划分；如有报错文件路径，直接跳到第 3 步。\n\n"
             "**第 2 步 - 日志取证**（当缺乏具体报错线索时）：\n"
@@ -1296,24 +1500,30 @@ class CodeAnalysisGraph:
         plan_steps = [
             {
                 "id": "step_1",
+                "title": "Supervisor 总控",
+                "description": "负责计划制定、路由调度与每轮反思纠偏",
+                "status": "completed" if final_state.get("supervisor_round", 0) else "pending",
+            },
+            {
+                "id": "step_2",
                 "title": "Code Agent 推理",
                 "description": "克隆代码仓库，利用多种代码工具结合日志证据逐步定位根因",
                 "status": "completed",
             },
             {
-                "id": "step_2",
+                "id": "step_3",
                 "title": "Log Agent 取证",
                 "description": "按关键词检索日志并回传精简证据",
                 "status": "completed" if final_state.get("purified_logs") else "pending",
             },
             {
-                "id": "step_3",
+                "id": "step_4",
                 "title": "Compaction Agent 压缩",
                 "description": "当 token 超阈值时压缩上下文并清理历史消息",
                 "status": "completed" if final_state.get("working_memory") else "pending",
             },
             {
-                "id": "step_4",
+                "id": "step_5",
                 "title": "Summary Agent 出报告",
                 "description": "输出业务友好的故障报告",
                 "status": "completed" if final_report else "pending",
@@ -1326,7 +1536,7 @@ class CodeAnalysisGraph:
             "status":    "completed",
             "timestamp": datetime.utcnow().isoformat(),
             "plan": {
-                "content":         "四维智能体流程已执行：Code -> Log -> (Compaction) -> Summary",
+                "content":         "五维智能体流程已执行：Supervisor -> Code/Log/(Compaction) -> Summary",
                 "steps":           plan_steps,
                 "total_steps":     len(plan_steps),
                 "completed_steps": sum(1 for s in plan_steps if s["status"] == "completed"),
@@ -1347,8 +1557,12 @@ class CodeAnalysisGraph:
                 "code_tool_invocations": final_state.get("code_tool_invocations", 0),
                 "trace_id":       final_state.get("trace_id", ""),
                 "log_type":       final_state.get("log_type", "unknown"),
+                "repo_url":       final_state.get("repo_url", ""),
+                "repo_branch":    final_state.get("repo_branch", ""),
+                "repo_commit_id": final_state.get("repo_commit_id", ""),
                 "repo_cloned":    final_state.get("repo_cloned", False),
                 "workspace_dir":  final_state.get("workspace_dir", ""),
+                "supervisor_round": final_state.get("supervisor_round", 0),
             },
             "graph_state": {
                 "raw_root_cause":  raw_root_cause,
@@ -1358,11 +1572,78 @@ class CodeAnalysisGraph:
                 "llm_call_count":  final_state.get("llm_call_count", 0),
                 "log_search_attempts": final_state.get("log_search_attempts", 0),
                 "code_tool_invocations": final_state.get("code_tool_invocations", 0),
+                "supervisor_plan": final_state.get("supervisor_plan", ""),
+                "supervisor_reflection": final_state.get("supervisor_reflection", ""),
+                "supervisor_round": final_state.get("supervisor_round", 0),
                 "trace_id":        final_state.get("trace_id", ""),
             },
         }
 
     # ─────────────────────── Private Helpers ───────────────────────────────
+
+    def _default_next_node(self, state: InvestigationState) -> str:
+        if str(state.get("raw_root_cause", "")).strip():
+            return "summary_agent"
+        if int(state.get("iteration_count", 0)) >= self.max_iterations:
+            return "summary_agent"
+        if int(state.get("token_count", 0)) > self.token_limit:
+            return "compaction_agent"
+        if state.get("pending_log_keywords"):
+            return "log_agent"
+        return "code_agent"
+
+    def _apply_supervisor_constraints(
+        self,
+        state: InvestigationState,
+        suggested_next: str,
+        fallback: str,
+    ) -> str:
+        allowed = {"code_agent", "log_agent", "compaction_agent", "summary_agent"}
+        candidate = suggested_next if suggested_next in allowed else fallback
+
+        if str(state.get("raw_root_cause", "")).strip():
+            return "summary_agent"
+        if int(state.get("iteration_count", 0)) >= self.max_iterations:
+            return "summary_agent"
+        if int(state.get("token_count", 0)) > self.token_limit:
+            return "compaction_agent"
+
+        workspace_ready = bool(state.get("repo_cloned")) and bool(state.get("workspace_dir"))
+        if not workspace_ready:
+            return "code_agent"
+
+        if state.get("pending_log_keywords"):
+            return "log_agent"
+
+        if candidate == "log_agent" and not state.get("pending_log_keywords"):
+            return "code_agent"
+        return candidate
+
+    @staticmethod
+    def _extract_json_dict(text: str) -> Dict[str, Any]:
+        raw = (text or "").strip()
+        if not raw:
+            return {}
+
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+            raw = raw.strip()
+
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            pass
+
+        m = re.search(r"\{[\s\S]*\}", raw)
+        if not m:
+            return {}
+        try:
+            parsed = json.loads(m.group(0))
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
 
     def _resolve_workspace_path(
         self, workspace_dir: str, relative_path: str
@@ -1406,6 +1687,28 @@ class CodeAnalysisGraph:
         return repo_url
 
     @staticmethod
+    def _normalize_branch_name(value: str) -> str:
+        branch = str(value or "").strip()
+        if not branch:
+            return ""
+        low = branch.lower()
+        if low in {"head", "origin/head", "refs/head"}:
+            return ""
+        if branch.startswith("refs/heads/"):
+            branch = branch[len("refs/heads/"):]
+        if branch.startswith("origin/"):
+            branch = branch[len("origin/"):]
+        if re.fullmatch(r"[0-9a-fA-F]{7,40}", branch):
+            return ""
+        if len(branch) > 128:
+            return ""
+        if re.search(r"\s", branch):
+            return ""
+        if not re.fullmatch(r"[A-Za-z0-9._/\-]+", branch):
+            return ""
+        return branch
+
+    @staticmethod
     def _new_id() -> str:
         return str(uuid.uuid4())
 
@@ -1415,6 +1718,20 @@ class CodeAnalysisGraph:
             return int(v)
         except Exception:
             return int(default)
+
+    @staticmethod
+    def _safe_bool(v: Any, default: bool) -> bool:
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        if isinstance(v, str):
+            lv = v.strip().lower()
+            if lv in {"1", "true", "yes", "y", "on"}:
+                return True
+            if lv in {"0", "false", "no", "n", "off"}:
+                return False
+        return bool(default)
 
     def _invoke_llm_with_trace(
         self,

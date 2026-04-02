@@ -10,7 +10,7 @@ from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from celery import current_task
 from sqlalchemy import create_engine
@@ -195,11 +195,40 @@ def _extract_commit_id(text: str) -> Optional[str]:
     return m.group(0) if m else None
 
 
-def _search_repo_context(obj: Any, path: str = "") -> Tuple[Optional[str], Optional[str], str, str]:
+def _normalize_branch_name(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    branch = value.strip()
+    if not branch:
+        return None
+    if branch.startswith("refs/heads/"):
+        branch = branch[len("refs/heads/"):]
+    if branch.startswith("origin/"):
+        branch = branch[len("origin/"):]
+    low = branch.lower()
+    if low in {"head", "origin/head", "refs/head"}:
+        return None
+    if re.fullmatch(r"[0-9a-fA-F]{7,40}", branch):
+        return None
+    if len(branch) > 128:
+        return None
+    if re.search(r"\s", branch):
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9._/\-]+", branch):
+        return None
+    return branch
+
+
+def _search_repo_context(
+    obj: Any,
+    path: str = "",
+) -> Tuple[Optional[str], Optional[str], Optional[str], str, str, str]:
     repo_url: Optional[str] = None
     commit_id: Optional[str] = None
+    branch_name: Optional[str] = None
     repo_source = ""
     commit_source = ""
+    branch_source = ""
 
     if isinstance(obj, dict):
         for k, v in obj.items():
@@ -218,46 +247,81 @@ def _search_repo_context(obj: Any, path: str = "") -> Tuple[Optional[str], Optio
                             commit_id = extracted
                             commit_source = kp
 
-            nested_repo, nested_commit, nested_repo_src, nested_commit_src = _search_repo_context(v, kp)
+                if branch_name is None:
+                    key_lower = str(k).lower()
+                    if any(x in key_lower for x in ("branch", "ref")):
+                        normalized_branch = _normalize_branch_name(v)
+                        if normalized_branch:
+                            branch_name = normalized_branch
+                            branch_source = kp
+
+            nested_repo, nested_commit, nested_branch, nested_repo_src, nested_commit_src, nested_branch_src = _search_repo_context(v, kp)
             if repo_url is None and nested_repo:
                 repo_url = nested_repo
                 repo_source = nested_repo_src
             if commit_id is None and nested_commit:
                 commit_id = nested_commit
                 commit_source = nested_commit_src
+            if branch_name is None and nested_branch:
+                branch_name = nested_branch
+                branch_source = nested_branch_src
 
-            if repo_url and commit_id:
+            if repo_url and commit_id and branch_name:
                 break
 
     elif isinstance(obj, list):
         for idx, item in enumerate(obj):
             kp = f"{path}[{idx}]"
-            nested_repo, nested_commit, nested_repo_src, nested_commit_src = _search_repo_context(item, kp)
+            nested_repo, nested_commit, nested_branch, nested_repo_src, nested_commit_src, nested_branch_src = _search_repo_context(item, kp)
             if repo_url is None and nested_repo:
                 repo_url = nested_repo
                 repo_source = nested_repo_src
             if commit_id is None and nested_commit:
                 commit_id = nested_commit
                 commit_source = nested_commit_src
-            if repo_url and commit_id:
+            if branch_name is None and nested_branch:
+                branch_name = nested_branch
+                branch_source = nested_branch_src
+            if repo_url and commit_id and branch_name:
                 break
 
-    return repo_url, commit_id, repo_source, commit_source
+    return repo_url, commit_id, branch_name, repo_source, commit_source, branch_source
 
 
-def _extract_repo_metadata(log_record: LogRecord) -> Tuple[Optional[str], Optional[str], Dict[str, Any]]:
+def _extract_repo_metadata(log_record: LogRecord) -> Tuple[Optional[str], Optional[str], Optional[str], Dict[str, Any]]:
     metadata_dict = _load_log_metadata_dict(log_record)
-    repo_url, commit_id, repo_source, commit_source = _search_repo_context(metadata_dict)
+    repo_url, commit_id, branch_name, repo_source, commit_source, branch_source = _search_repo_context(metadata_dict)
 
     info = {
         "repo_source": repo_source,
         "commit_source": commit_source,
+        "branch_source": branch_source,
         "has_metadata": bool(metadata_dict),
     }
-    return repo_url, commit_id, info
+    return repo_url, commit_id, branch_name, info
 
 
-def _clone_repository(repo_url: str, commit_id: Optional[str] = None) -> str:
+def _build_auth_repo_url(repo_url: str) -> str:
+    token = settings.code_repo_git_token
+    if not token:
+        return repo_url
+    try:
+        parsed = urlparse(repo_url)
+        if parsed.scheme in ("http", "https") and not parsed.username and parsed.hostname:
+            netloc = f"oauth2:{token}@{parsed.hostname}"
+            if parsed.port:
+                netloc += f":{parsed.port}"
+            return urlunparse(parsed._replace(netloc=netloc))
+    except Exception:
+        pass
+    return repo_url
+
+
+def _clone_repository(
+    repo_url: str,
+    commit_id: Optional[str] = None,
+    branch_name: Optional[str] = None,
+) -> str:
     workspace_dir = tempfile.mkdtemp(prefix="raven-ai-workspace-")
 
     def _run_git(cmd: list, timeout: int = 600) -> None:
@@ -270,7 +334,13 @@ def _clone_repository(repo_url: str, commit_id: Optional[str] = None) -> str:
             )
 
     try:
-        _run_git(["git", "clone", "--quiet", repo_url, workspace_dir], timeout=900)
+        authed_url = _build_auth_repo_url(repo_url)
+        clone_cmd = ["git", "clone", "--quiet", "--single-branch"]
+        normalized_branch = _normalize_branch_name(branch_name)
+        if normalized_branch:
+            clone_cmd.extend(["--branch", normalized_branch])
+        clone_cmd.extend([authed_url, workspace_dir])
+        _run_git(clone_cmd, timeout=900)
 
         if commit_id:
             try:
@@ -278,6 +348,8 @@ def _clone_repository(repo_url: str, commit_id: Optional[str] = None) -> str:
             except Exception:
                 _run_git(["git", "-C", workspace_dir, "fetch", "--all", "--tags", "--quiet"], timeout=300)
                 _run_git(["git", "-C", workspace_dir, "checkout", "--quiet", commit_id], timeout=180)
+        elif normalized_branch:
+            _run_git(["git", "-C", workspace_dir, "checkout", "--quiet", normalized_branch], timeout=120)
 
         return workspace_dir
     except Exception:
@@ -411,29 +483,30 @@ def _perform_ai_analysis(
     query: str,
     progress_callback=None,
 ) -> Dict[str, Any]:
-    """优先执行四维多智能体 CodeAnalysisGraph；无任何仓库来源时降级到旧 LogAnalysisAgent。
+    """优先执行五维多智能体 CodeAnalysisGraph；无任何仓库来源时降级到旧 LogAnalysisAgent。
 
-    触发新流程的两种条件（满足任一即可）：
+    触发新流程的条件（满足任一即可）：
       1. 日志记录的 metadata_json 中内嵌了 git 仓库 URL（随日志上传携带）。
       2. 管理员在 .env 中为当前日志类型预配置了仓库 URL
          （CODE_REPO_OAM_URL / CODE_REPO_STACK_URL）。
 
-    条件 1 会在本层预先克隆并把 workspace_dir 传给 graph；
-    条件 2 不在本层克隆，而是把空 workspace_dir 传给 graph，
-    由 agent 在推理过程中自行调用 CloneRepoTool 完成克隆。
+    只要存在可用仓库来源，都会在本层「每次任务强制重新克隆」后再进入图执行，
+    避免使用历史陈旧工作区。若 metadata 中给出分支名/commit，则优先按其检出。
     """
-    repo_url, commit_id, repo_meta = _extract_repo_metadata(log_record)
+    repo_url, commit_id, branch_name, repo_meta = _extract_repo_metadata(log_record)
     log_type_str = _resolve_log_type_str(log_record)
 
-    # 条件 2：检查是否有针对本日志类型的全局预配置仓库
     preconfigured_url = _preconfigured_repo_url(log_type_str)
+    resolved_repo_url = repo_url or preconfigured_url
     repo_source = repo_meta.get("repo_source") if isinstance(repo_meta, dict) else ""
     commit_source = repo_meta.get("commit_source") if isinstance(repo_meta, dict) else ""
+    branch_source = repo_meta.get("branch_source") if isinstance(repo_meta, dict) else ""
     has_metadata = bool(repo_meta.get("has_metadata")) if isinstance(repo_meta, dict) else False
 
     logger.info(
         "AI route decision: log_id=%s log_type=%s has_metadata=%s "
-        "repo_url_found=%s repo_source=%s commit_found=%s commit_source=%s preconfigured_repo=%s",
+        "repo_url_found=%s repo_source=%s commit_found=%s commit_source=%s "
+        "branch_found=%s branch_source=%s preconfigured_repo=%s",
         log_record.id,
         log_type_str,
         has_metadata,
@@ -441,14 +514,18 @@ def _perform_ai_analysis(
         repo_source,
         bool(commit_id),
         commit_source,
+        bool(branch_name),
+        branch_source,
         bool(preconfigured_url),
     )
     if repo_url:
         logger.info("AI route decision detail: metadata repo_url=%s", _mask_repo_url(repo_url))
     if preconfigured_url:
         logger.info("AI route decision detail: preconfigured repo_url=%s", _mask_repo_url(preconfigured_url))
+    if branch_name:
+        logger.info("AI route decision detail: metadata branch_name=%s", branch_name)
 
-    if not repo_url and not preconfigured_url:
+    if not resolved_repo_url:
         logger.info(
             "No repository source available for log %s (type=%s), fallback to legacy LogAnalysisAgent",
             log_record.id,
@@ -461,29 +538,29 @@ def _perform_ai_analysis(
         return legacy_result
 
     workspace_dir: Optional[str] = None
+    graph_workspace_dir: Optional[str] = None
     clone_mode: str = "none"
 
     try:
         if progress_callback:
             progress_callback(20.0)
 
-        if repo_url:
-            # 条件 1：日志元数据携带了特定 URL，在本层预先克隆
-            workspace_dir = _clone_repository(repo_url, commit_id)
-            clone_mode = "metadata_url"
-            logger.info(
-                "Repository cloned from log metadata: log_id=%s repo=%s commit=%s workspace=%s",
-                log_record.id, repo_url, commit_id, workspace_dir,
-            )
-        else:
-            # 条件 2：预配置 URL，workspace 留空，由 agent 的 CloneRepoTool 负责克隆
-            workspace_dir = ""
-            clone_mode = "agent_clone_tool"
-            logger.info(
-                "Pre-configured repo detected for log_type=%s (url=%s); "
-                "workspace left empty, agent will invoke CloneRepoTool",
-                log_type_str, preconfigured_url,
-            )
+        # 每次任务都重新克隆，确保工作区干净且分支精确
+        workspace_dir = _clone_repository(
+            resolved_repo_url,
+            commit_id=commit_id,
+            branch_name=branch_name,
+        )
+        clone_mode = "metadata_url" if repo_url else "preconfigured_url"
+        logger.info(
+            "Repository cloned for code analysis: log_id=%s clone_mode=%s repo=%s branch=%s commit=%s workspace=%s",
+            log_record.id,
+            clone_mode,
+            _mask_repo_url(resolved_repo_url),
+            branch_name or "(default)",
+            commit_id or "(none)",
+            workspace_dir,
+        )
 
         if progress_callback:
             progress_callback(40.0)
@@ -502,6 +579,9 @@ def _perform_ai_analysis(
             workspace_dir=workspace_dir,
             log_file_path=log_record.file_path,
             log_type=log_type_str,
+            repo_url=resolved_repo_url or "",
+            repo_branch=branch_name or "",
+            repo_commit_id=commit_id or "",
             trace_id=f"log:{log_record.id}",
         )
 
@@ -509,11 +589,15 @@ def _perform_ai_analysis(
             progress_callback(92.0)
 
         if isinstance(analysis_data, dict):
+            graph_metadata = analysis_data.get("metadata", {})
+            if isinstance(graph_metadata, dict):
+                graph_workspace_dir = str(graph_metadata.get("workspace_dir") or "").strip() or None
             analysis_data.setdefault("log_id", log_record.id)
-            analysis_data.setdefault("mode", "4_agent_code_analysis")
+            analysis_data.setdefault("mode", "5_agent_code_analysis")
             analysis_data["repo_context"] = {
-                "repo_url": repo_url or preconfigured_url,
+                "repo_url": resolved_repo_url,
                 "commit_id": commit_id,
+                "branch_name": branch_name,
                 "clone_mode": clone_mode,
                 "metadata_source": repo_meta,
             }
@@ -521,7 +605,7 @@ def _perform_ai_analysis(
 
     except Exception as graph_error:
         logger.error(
-            "4-agent code analysis failed for log %s (clone_mode=%s), fallback to legacy mode: %s",
+            "5-agent code analysis failed for log %s (clone_mode=%s), fallback to legacy mode: %s",
             log_record.id, clone_mode, graph_error,
             exc_info=True,
         )
@@ -531,20 +615,31 @@ def _perform_ai_analysis(
             legacy_result["degrade_reason"] = "code_graph_failed"
             legacy_result["degrade_error"] = str(graph_error)
             legacy_result["repo_context"] = {
-                "repo_url": repo_url or preconfigured_url,
+                "repo_url": resolved_repo_url,
                 "commit_id": commit_id,
+                "branch_name": branch_name,
                 "clone_mode": clone_mode,
                 "metadata_source": repo_meta,
             }
         return legacy_result
 
     finally:
-        if workspace_dir:
+        cleaned = set()
+        for path in (workspace_dir, graph_workspace_dir):
+            if not path:
+                continue
             try:
-                shutil.rmtree(workspace_dir, ignore_errors=True)
-                logger.info("Workspace cleaned for log %s: %s", log_record.id, workspace_dir)
+                resolved = str(Path(path).resolve())
+            except Exception:
+                resolved = str(path)
+            if resolved in cleaned:
+                continue
+            cleaned.add(resolved)
+            try:
+                shutil.rmtree(resolved, ignore_errors=True)
+                logger.info("Workspace cleaned for log %s: %s", log_record.id, resolved)
             except Exception as cleanup_error:
-                logger.warning("Failed to cleanup workspace %s: %s", workspace_dir, cleanup_error)
+                logger.warning("Failed to cleanup workspace %s: %s", resolved, cleanup_error)
 
 
 @celery_app.task(
