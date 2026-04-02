@@ -57,72 +57,37 @@ const XML_CLEANUP_PATTERNS = [
 ]
 
 /**
- * 从顶层```markdown块中提取内容，支持嵌套代码块
- * 改进版v2：使用状态机+更精确的判断正确处理内层嵌套的代码块
+ * 从顶层 ```markdown / ```md 包裹块中提取内容。
+ * 规则：
+ * 1. 仅当内容整体被 markdown 代码块包裹时才提取；
+ * 2. 使用最后一个行首 ``` 作为外层结束标记，避免内层代码块被误截断。
  */
 function extractMarkdownBlock(content: string): string | null {
-  const start = content.indexOf('```markdown')
-  if (start === -1) return null
+  if (!content || typeof content !== 'string') return null
 
-  // 找到开始标记后的换行位置
-  let lineEnd = content.indexOf('\n', start)
-  if (lineEnd === -1) return null
-  
-  let bodyStart = lineEnd + 1
-  
-  // 使用状态机：true=在代码块内，false=在代码块外
-  let insideNestedCodeBlock = false
-  let i = bodyStart
-  
-  while (i < content.length) {
-    // 查找下一个```
-    const nextFence = content.indexOf('```', i)
-    if (nextFence === -1) {
-      // 没有找到结束标记，返回剩余所有内容
-      return content.slice(bodyStart).trim()
-    }
-    
-    // 检查是否在行首（或前面只有空白字符）
-    const lineStart = content.lastIndexOf('\n', nextFence - 1)
-    const beforeFence = content.slice(lineStart + 1, nextFence)
-    const isLineStart = beforeFence.trim() === ''
-    
-    if (isLineStart) {
-      if (insideNestedCodeBlock) {
-        // 当前在内层代码块中，这个```一定是内层代码块的结束
-        insideNestedCodeBlock = false
-      } else {
-        // 当前在内层代码块外
-        // 需要判断这个```是：
-        // 1. 内层代码块的开始（后面跟着语言标识或直接换行，且不是最后一个fence）
-        // 2. 外层markdown块的结束（这应该是最后一个fence）
-        
-        const afterFencePos = nextFence + 3
-        const afterFence = content.slice(afterFencePos)
-        
-        // 检查这个fence后面到下一个换行之间的内容
-        const nextLineBreak = afterFence.indexOf('\n')
-        const lineContent = nextLineBreak >= 0 ? afterFence.slice(0, nextLineBreak) : afterFence
-        
-        // 如果这一行只有空白（没有语言标识符），且后面没有更多内容了，说明这是外层markdown块的结束
-        if (lineContent.trim() === '' && afterFence.trim() === '') {
-          return content.slice(bodyStart, nextFence).trim()
-        }
-        
-        // 否则，这是内层代码块的开始
-        // 可能的情况：
-        // - ```python\n (有语言标识)
-        // - ```\n (无语言标识)
-        // 只要后面还有内容，就认为是内层代码块的开始
-        insideNestedCodeBlock = true
-      }
-    }
-    
-    i = nextFence + 3
+  const normalized = content.replace(/\r\n/g, '\n')
+  const trimmed = normalized.trim()
+  if (!trimmed) return null
+
+  const openMatch = trimmed.match(/^```(?:markdown|md)\s*\n/i)
+  if (!openMatch) return null
+
+  const bodyStart = openMatch[0].length
+
+  // 必须是行首 ``` 且后面只允许空白，取最后一个作为外层关闭标记
+  const closeRegex = /\n```[ \t]*$/gm
+  let closeStart = -1
+  let m: RegExpExecArray | null
+  while ((m = closeRegex.exec(trimmed)) !== null) {
+    closeStart = m.index
   }
-  
-  // 如果循环结束还没找到，返回剩余内容
-  return content.slice(bodyStart).trim()
+
+  if (closeStart < bodyStart) {
+    // 没有合法结束标记时，返回起始后的内容，尽量容错
+    return trimmed.slice(bodyStart).trim()
+  }
+
+  return trimmed.slice(bodyStart, closeStart).trim()
 }
 
 /**
@@ -285,4 +250,3 @@ export function extractPlainText(content: string): string {
   // 简单的HTML标签移除
   return html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
 }
-
