@@ -6,9 +6,11 @@ import re
 import shutil
 import subprocess
 import tempfile
+from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlparse
 
 from celery import current_task
 from sqlalchemy import create_engine
@@ -20,6 +22,63 @@ from app.config import settings
 from app.models.log import LogRecord
 
 logger = logging.getLogger(__name__)
+
+
+def _mask_repo_url(repo_url: Optional[str]) -> str:
+    """日志输出用的仓库URL脱敏显示。"""
+    if not repo_url:
+        return ""
+    v = repo_url.strip()
+    if not v:
+        return ""
+    if v.startswith("git@"):
+        # git@host:group/repo.git -> host:group/repo.git（不含凭据）
+        return v.split("@", 1)[-1]
+    parsed = urlparse(v)
+    if parsed.scheme and parsed.netloc:
+        path = parsed.path or ""
+        return f"{parsed.scheme}://{parsed.netloc}{path}"
+    return v
+
+
+@lru_cache(maxsize=1)
+def _runtime_version_snapshot() -> Dict[str, str]:
+    """采样当前任务代码版本，帮助排查 worker 代码未更新问题。"""
+    module_path = str(Path(__file__).resolve())
+    repo_root = Path(__file__).resolve().parents[2]
+    git_head = "unknown"
+    git_branch = "unknown"
+
+    try:
+        head_ret = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if head_ret.returncode == 0:
+            git_head = (head_ret.stdout or "").strip() or "unknown"
+    except Exception:
+        pass
+
+    try:
+        branch_ret = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if branch_ret.returncode == 0:
+            git_branch = (branch_ret.stdout or "").strip() or "unknown"
+    except Exception:
+        pass
+
+    return {
+        "module_path": module_path,
+        "repo_root": str(repo_root),
+        "git_head": git_head,
+        "git_branch": git_branch,
+    }
 
 
 def _get_sync_database_url() -> str:
@@ -368,6 +427,26 @@ def _perform_ai_analysis(
 
     # 条件 2：检查是否有针对本日志类型的全局预配置仓库
     preconfigured_url = _preconfigured_repo_url(log_type_str)
+    repo_source = repo_meta.get("repo_source") if isinstance(repo_meta, dict) else ""
+    commit_source = repo_meta.get("commit_source") if isinstance(repo_meta, dict) else ""
+    has_metadata = bool(repo_meta.get("has_metadata")) if isinstance(repo_meta, dict) else False
+
+    logger.info(
+        "AI route decision: log_id=%s log_type=%s has_metadata=%s "
+        "repo_url_found=%s repo_source=%s commit_found=%s commit_source=%s preconfigured_repo=%s",
+        log_record.id,
+        log_type_str,
+        has_metadata,
+        bool(repo_url),
+        repo_source,
+        bool(commit_id),
+        commit_source,
+        bool(preconfigured_url),
+    )
+    if repo_url:
+        logger.info("AI route decision detail: metadata repo_url=%s", _mask_repo_url(repo_url))
+    if preconfigured_url:
+        logger.info("AI route decision detail: preconfigured repo_url=%s", _mask_repo_url(preconfigured_url))
 
     if not repo_url and not preconfigured_url:
         logger.info(
@@ -409,8 +488,14 @@ def _perform_ai_analysis(
         if progress_callback:
             progress_callback(40.0)
 
-        from app.agents.code_analysis_graph import CodeAnalysisGraph
+        from app.agents import code_analysis_graph as code_graph_module
 
+        logger.info(
+            "Routing to CodeAnalysisGraph: module=%s",
+            getattr(code_graph_module, "__file__", "unknown"),
+        )
+
+        CodeAnalysisGraph = code_graph_module.CodeAnalysisGraph
         graph = CodeAnalysisGraph(token_limit=8000, max_iterations=10)
         analysis_data = graph.run(
             query=query,
@@ -483,6 +568,14 @@ def run_ai_analysis_task(self, log_id: str, query: str) -> Dict[str, Any]:
             raise FileNotFoundError(f"Log file not found at {log_record.file_path}")
 
         logger.info("AI analysis task started: log_id=%s task_id=%s query='%s'", log_id, task_id, query)
+        runtime_snapshot = _runtime_version_snapshot()
+        logger.info(
+            "AI runtime snapshot: module=%s repo_root=%s git_head=%s git_branch=%s",
+            runtime_snapshot.get("module_path", "unknown"),
+            runtime_snapshot.get("repo_root", "unknown"),
+            runtime_snapshot.get("git_head", "unknown"),
+            runtime_snapshot.get("git_branch", "unknown"),
+        )
 
         _update_ai_task_metadata(
             session,
