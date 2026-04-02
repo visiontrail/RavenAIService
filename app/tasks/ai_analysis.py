@@ -502,6 +502,7 @@ def _perform_ai_analysis(
             workspace_dir=workspace_dir,
             log_file_path=log_record.file_path,
             log_type=log_type_str,
+            trace_id=f"log:{log_record.id}",
         )
 
         if progress_callback:

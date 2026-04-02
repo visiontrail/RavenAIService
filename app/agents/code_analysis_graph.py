@@ -64,6 +64,8 @@ class InvestigationState(TypedDict):
     log_file_path: str
     log_type: str        # "oam_antenna" | "stack" | "full" | "unknown"
     repo_cloned: bool    # workspace_dir 是否已指向克隆好的代码仓库
+    trace_id: str        # 本次分析链路追踪ID（便于与HTTP日志关联）
+    llm_call_count: int  # 当前 run 内累计 LLM 调用轮次
 
     # --- 对话与上下文管理 ---
     messages: Annotated[List[BaseMessage], operator.add]
@@ -143,14 +145,26 @@ class CodeAnalysisGraph:
         workspace_dir: str,
         log_file_path: str,
         log_type: str = "unknown",
+        trace_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         start_time = time.time()
+        runtime_trace_id = (trace_id or f"ca-{uuid.uuid4().hex[:10]}").strip()
+        logger.info(
+            "CodeAnalysisGraph run started: trace_id=%s log_type=%s workspace_dir=%s log_file=%s query=%s",
+            runtime_trace_id,
+            log_type or "unknown",
+            workspace_dir or "(empty)",
+            log_file_path or "(empty)",
+            self._truncate_for_log(query, max_len=180),
+        )
         state: InvestigationState = {
             "query": query,
             "workspace_dir": workspace_dir,
             "log_file_path": log_file_path,
             "log_type": log_type or "unknown",
             "repo_cloned": bool(workspace_dir),
+            "trace_id": runtime_trace_id,
+            "llm_call_count": 0,
             "messages": [HumanMessage(content=query, id=self._new_id())],
             "working_memory": "",
             "token_count": 0,
@@ -162,7 +176,16 @@ class CodeAnalysisGraph:
         }
 
         final_state = self._app.invoke(state, config={"recursion_limit": 80})
-        return self._to_structured_result(final_state, execution_time=time.time() - start_time)
+        elapsed = time.time() - start_time
+        logger.info(
+            "CodeAnalysisGraph run completed: trace_id=%s elapsed=%.3fs iterations=%s llm_calls=%s final_report_chars=%d",
+            runtime_trace_id,
+            elapsed,
+            final_state.get("iteration_count", 0),
+            final_state.get("llm_call_count", 0),
+            len(final_state.get("final_report", "") or ""),
+        )
+        return self._to_structured_result(final_state, execution_time=elapsed)
 
     # ─────────────────────── Routing ───────────────────────────────────────
 
@@ -280,6 +303,7 @@ class CodeAnalysisGraph:
         workspace_dir = state.get("workspace_dir", "")
         log_type      = state.get("log_type", "unknown")
         repo_cloned   = state.get("repo_cloned", False)
+        trace_id      = state.get("trace_id", "unknown")
 
         sys_prompt = self._build_code_agent_prompt(
             query         = state.get("query", ""),
@@ -295,7 +319,15 @@ class CodeAnalysisGraph:
             *state.get("messages", []),
         ]
 
-        response = self._llm_with_tools.invoke(prompt_messages)
+        call_no = int(state.get("llm_call_count", 0)) + 1
+        response = self._invoke_llm_with_trace(
+            llm=self._llm_with_tools,
+            payload=prompt_messages,
+            trace_id=trace_id,
+            call_no=call_no,
+            agent_name="code_agent",
+            purpose="reasoning_and_tool_selection",
+        )
         response = self._normalize_ai_message(response)
 
         token_delta = self._estimate_tokens_for_message(response)
@@ -303,6 +335,7 @@ class CodeAnalysisGraph:
             "messages": [response],
             "iteration_count": int(state.get("iteration_count", 0)) + 1,
             "token_count": int(state.get("token_count", 0)) + token_delta,
+            "llm_call_count": call_no,
         }
 
         tool_calls = self._extract_tool_calls(response)
@@ -331,6 +364,13 @@ class CodeAnalysisGraph:
             return updates
 
         # ── 执行工具并产生 ToolMessage ──
+        logger.info(
+            "TOOL_CALL trace_id=%s iter=%s tool=%s args=%s",
+            trace_id,
+            updates.get("iteration_count", 0),
+            tool_name or "unknown",
+            self._truncate_for_log(json.dumps(args, ensure_ascii=False, sort_keys=True), max_len=800),
+        )
         result_content, extra_state = self._dispatch_tool(
             tool_name     = tool_name,
             args          = args,
@@ -347,6 +387,15 @@ class CodeAnalysisGraph:
         updates["messages"].append(tool_msg)
         updates["token_count"] = int(updates["token_count"]) + self._estimate_tokens(result_content)
         updates.update(extra_state)
+        logger.info(
+            "TOOL_RESULT trace_id=%s iter=%s tool=%s result_chars=%d extra_state_keys=%s preview=%s",
+            trace_id,
+            updates.get("iteration_count", 0),
+            tool_name or "unknown",
+            len(result_content or ""),
+            ",".join(sorted(extra_state.keys())) if extra_state else "(none)",
+            self._truncate_for_log(result_content, max_len=280),
+        )
         return updates
 
     def _dispatch_tool(
@@ -417,6 +466,8 @@ class CodeAnalysisGraph:
     def _log_agent_node(self, state: InvestigationState) -> Dict[str, Any]:
         keywords     = state.get("pending_log_keywords") or []
         log_file_path = state.get("log_file_path", "")
+        trace_id = state.get("trace_id", "unknown")
+        llm_call_count = int(state.get("llm_call_count", 0))
 
         raw_chunks: List[str] = []
         if not keywords:
@@ -452,7 +503,17 @@ class CodeAnalysisGraph:
         )
 
         try:
-            purified_logs = self._message_content(self.llm.invoke(log_prompt)).strip()
+            call_no = llm_call_count + 1
+            llm_call_count = call_no
+            response = self._invoke_llm_with_trace(
+                llm=self.llm,
+                payload=log_prompt,
+                trace_id=trace_id,
+                call_no=call_no,
+                agent_name="log_agent",
+                purpose="log_purification",
+            )
+            purified_logs = self._message_content(response).strip()
         except Exception as e:
             logger.warning("Log Agent 提纯失败，退化为原始片段: %s", e)
             purified_logs = raw_log_output
@@ -472,11 +533,14 @@ class CodeAnalysisGraph:
             "pending_log_keywords": [],
             "messages":             [msg],
             "token_count":          token_after,
+            "llm_call_count":       llm_call_count,
         }
 
     def _compaction_agent_node(self, state: InvestigationState) -> Dict[str, Any]:
         messages = state.get("messages", [])
         mem      = state.get("working_memory", "")
+        trace_id = state.get("trace_id", "unknown")
+        llm_call_count = int(state.get("llm_call_count", 0))
         summary_prompt = (
             "# 角色设定\n"
             "你是一个负责「信息熵压缩」的记忆整理专家。由于排障过程极为漫长，当前对话上下文的 Token 已经接近熔断阈值，你需要将冗长的对话历史折叠成高度浓缩的「排障备忘录（Working Memory）」。\n\n"
@@ -501,7 +565,16 @@ class CodeAnalysisGraph:
         )
 
         try:
-            response = self.llm.invoke(summary_prompt)
+            call_no = llm_call_count + 1
+            llm_call_count = call_no
+            response = self._invoke_llm_with_trace(
+                llm=self.llm,
+                payload=summary_prompt,
+                trace_id=trace_id,
+                call_no=call_no,
+                agent_name="compaction_agent",
+                purpose="context_compaction",
+            )
             new_summary = self._message_content(response).strip()
         except Exception as e:
             logger.warning("Compaction LLM 失败，退化为截断摘要: %s", e)
@@ -510,10 +583,17 @@ class CodeAnalysisGraph:
         new_summary = new_summary[:500]
 
         delete_ops = [RemoveMessage(id=m.id) for m in state["messages"][:-1]]
-        return {"working_memory": new_summary, "messages": delete_ops, "token_count": 0}
+        return {
+            "working_memory": new_summary,
+            "messages": delete_ops,
+            "token_count": 0,
+            "llm_call_count": llm_call_count,
+        }
 
     def _summary_agent_node(self, state: InvestigationState) -> Dict[str, Any]:
         raw_root_cause = state.get("raw_root_cause", "").strip()
+        trace_id = state.get("trace_id", "unknown")
+        llm_call_count = int(state.get("llm_call_count", 0))
         if not raw_root_cause:
             raw_root_cause = "未在循环上限内拿到确凿根因，以下为当前最可信线索。\n" + (
                 state.get("working_memory", "") or "暂无可用线索"
@@ -546,7 +626,16 @@ class CodeAnalysisGraph:
             response = None
             for attempt in range(1, 4):
                 try:
-                    response = self.llm.invoke(prompt)
+                    call_no = llm_call_count + 1
+                    llm_call_count = call_no
+                    response = self._invoke_llm_with_trace(
+                        llm=self.llm,
+                        payload=prompt,
+                        trace_id=trace_id,
+                        call_no=call_no,
+                        agent_name="summary_agent",
+                        purpose=f"final_report_generation_attempt_{attempt}",
+                    )
                     last_error = None
                     break
                 except Exception as e:  # noqa: BLE001
@@ -576,7 +665,7 @@ class CodeAnalysisGraph:
                 "2. 补充对应模块的监控与告警。\n"
             )
 
-        return {"final_report": report}
+        return {"final_report": report, "llm_call_count": llm_call_count}
 
     # ─────────────────────── Tool Implementations ──────────────────────────
 
@@ -1125,6 +1214,8 @@ class CodeAnalysisGraph:
                 "execution_time": round(float(execution_time), 3),
                 "model_used":     getattr(self.llm, "model_name", "unknown"),
                 "tokens_used":    final_state.get("token_count", 0),
+                "llm_calls":      final_state.get("llm_call_count", 0),
+                "trace_id":       final_state.get("trace_id", ""),
                 "log_type":       final_state.get("log_type", "unknown"),
                 "repo_cloned":    final_state.get("repo_cloned", False),
                 "workspace_dir":  final_state.get("workspace_dir", ""),
@@ -1134,6 +1225,8 @@ class CodeAnalysisGraph:
                 "working_memory":  final_state.get("working_memory", ""),
                 "iteration_count": final_state.get("iteration_count", 0),
                 "token_count":     final_state.get("token_count", 0),
+                "llm_call_count":  final_state.get("llm_call_count", 0),
+                "trace_id":        final_state.get("trace_id", ""),
             },
         }
 
@@ -1190,6 +1283,96 @@ class CodeAnalysisGraph:
             return int(v)
         except Exception:
             return int(default)
+
+    def _invoke_llm_with_trace(
+        self,
+        llm: Any,
+        payload: Any,
+        trace_id: str,
+        call_no: int,
+        agent_name: str,
+        purpose: str,
+    ) -> Any:
+        """统一封装 LLM 调用日志，便于将 HTTP 200 与业务轮次一一对应。"""
+        model_name = getattr(llm, "model_name", getattr(self.llm, "model_name", "unknown"))
+        payload_summary = self._summarize_payload(payload)
+        logger.info(
+            "LLM_CALL_START trace_id=%s call_no=%d agent=%s purpose=%s model=%s payload=%s",
+            trace_id,
+            call_no,
+            agent_name,
+            purpose,
+            model_name,
+            payload_summary,
+        )
+        started_at = time.time()
+        try:
+            response = llm.invoke(payload)
+            elapsed_ms = int((time.time() - started_at) * 1000)
+            response_text = self._message_content(response)
+            tool_calls = []
+            if isinstance(response, BaseMessage):
+                tool_calls = self._extract_tool_calls(response)
+            tool_names = [str(tc.get("name")) for tc in tool_calls if isinstance(tc, dict) and tc.get("name")]
+            logger.info(
+                "LLM_CALL_END trace_id=%s call_no=%d agent=%s elapsed_ms=%d output_chars=%d tool_calls=%d tool_names=%s output_preview=%s",
+                trace_id,
+                call_no,
+                agent_name,
+                elapsed_ms,
+                len(response_text or ""),
+                len(tool_names),
+                tool_names if tool_names else [],
+                self._truncate_for_log(response_text, max_len=300),
+            )
+            return response
+        except Exception as exc:
+            elapsed_ms = int((time.time() - started_at) * 1000)
+            logger.warning(
+                "LLM_CALL_ERROR trace_id=%s call_no=%d agent=%s elapsed_ms=%d error_type=%s error=%r",
+                trace_id,
+                call_no,
+                agent_name,
+                elapsed_ms,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            raise
+
+    def _summarize_payload(self, payload: Any) -> str:
+        if isinstance(payload, str):
+            return (
+                f"type=text chars={len(payload)} preview="
+                f"{self._truncate_for_log(payload, max_len=260)}"
+            )
+
+        if isinstance(payload, list):
+            message_parts: List[str] = []
+            total_chars = 0
+            for idx, msg in enumerate(payload[-6:], start=1):
+                role = getattr(msg, "type", msg.__class__.__name__)
+                content = self._message_content(msg)
+                msg_chars = len(content)
+                total_chars += msg_chars
+                message_parts.append(f"{idx}:{role}[{msg_chars}]")
+            return (
+                f"type=messages count={len(payload)} total_chars={total_chars} "
+                f"tail_roles={','.join(message_parts)}"
+            )
+
+        text = self._message_content(payload)
+        return (
+            f"type={type(payload).__name__} chars={len(text)} "
+            f"preview={self._truncate_for_log(text, max_len=220)}"
+        )
+
+    @staticmethod
+    def _truncate_for_log(text: Any, max_len: int = 240) -> str:
+        value = str(text or "").replace("\n", "\\n").replace("\r", "\\r")
+        if len(value) <= max_len:
+            return value
+        return value[: max_len - 3] + "..."
 
     def _normalize_ai_message(self, response: Any) -> AIMessage:
         if isinstance(response, AIMessage):
