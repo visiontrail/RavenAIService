@@ -18,9 +18,15 @@ from enum import Enum
 
 # Optional LangChain imports (gracefully degrade if unavailable)
 try:
-    from langchain_community.chat_models import ChatOpenAI  # type: ignore
+    from langchain_openai import ChatOpenAI as OpenAIChatOpenAI  # type: ignore
+    _CHAT_OPENAI_SOURCE = "langchain_openai"
 except Exception:
-    ChatOpenAI = None
+    try:
+        from langchain_community.chat_models import ChatOpenAI as OpenAIChatOpenAI  # type: ignore
+        _CHAT_OPENAI_SOURCE = "langchain_community"
+    except Exception:
+        OpenAIChatOpenAI = None
+        _CHAT_OPENAI_SOURCE = "unavailable"
 
 try:
     from langchain.prompts import PromptTemplate  # type: ignore
@@ -58,10 +64,31 @@ def _make_chat_openai(api_key: str, base_url: str, model: str):
     os.environ["OPENAI_BASE_URL"] = base_url
     os.environ["OPENAI_API_BASE"] = base_url
     try:
-        logger.debug(f"Initializing ChatOpenAI client: base_url={base_url}, model={model}")
-        return ChatOpenAI(model=model, temperature=settings.llm_temperature)
+        logger.debug(
+            "Initializing ChatOpenAI client: source=%s base_url=%s model=%s",
+            _CHAT_OPENAI_SOURCE, base_url, model,
+        )
+        if OpenAIChatOpenAI is None:
+            return None
+
+        if _CHAT_OPENAI_SOURCE == "langchain_openai":
+            # 新版实现，显式传入 base_url/api_key，工具调用与错误处理更稳定。
+            return OpenAIChatOpenAI(
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                temperature=settings.llm_temperature,
+                max_retries=2,
+                timeout=120,
+            )
+
+        # 兼容旧实现（不推荐，仅兜底）
+        return OpenAIChatOpenAI(model=model, temperature=settings.llm_temperature)
     except Exception as e:
-        logger.warning(f"ChatOpenAI init failed: base_url={base_url}, model={model}, error={e}")
+        logger.warning(
+            "ChatOpenAI init failed: source=%s base_url=%s model=%s error=%r",
+            _CHAT_OPENAI_SOURCE, base_url, model, e, exc_info=True,
+        )
         return None
 from app.agents.xml_utils import wrap_plan, wrap_document
 from app.tools.metadata_tool import get_log_package_metadata_xml
@@ -76,8 +103,8 @@ from app.tools.archive_tool import auto_extract_archive_xml, list_tree_xml, nest
 def get_llm() -> Any:
     """Return an LLM client using the unified DeepSeek configuration."""
     logger.debug("get_llm: provider=deepseek (unified)")
-    if not ChatOpenAI:
-        logger.error("get_llm: ChatOpenAI unavailable")
+    if not OpenAIChatOpenAI:
+        logger.error("get_llm: ChatOpenAI unavailable (source=%s)", _CHAT_OPENAI_SOURCE)
         return None
 
     api_key = getattr(settings, "deepseek_api_key", None)
@@ -94,6 +121,7 @@ def get_llm() -> Any:
     # 确保LLM实例有model_name属性
     if not hasattr(llm, "model_name"):
         llm.model_name = model
+    logger.info("get_llm: initialized model=%s source=%s", model, _CHAT_OPENAI_SOURCE)
     return llm
 
 

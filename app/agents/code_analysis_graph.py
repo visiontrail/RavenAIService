@@ -97,7 +97,13 @@ class CodeAnalysisGraph:
         try:
             self._llm_with_tools = self.llm.bind_tools(self._tools)
         except Exception as e:
-            logger.warning("bind_tools 失败，Code Agent 将退化为无工具模式: %s", e)
+            logger.warning(
+                "bind_tools 失败，Code Agent 将退化为无工具模式: llm_class=%s error_type=%s error=%r",
+                type(self.llm).__name__,
+                type(e).__name__,
+                e,
+                exc_info=True,
+            )
             self._llm_with_tools = self.llm
 
         graph = StateGraph(InvestigationState)
@@ -536,10 +542,29 @@ class CodeAnalysisGraph:
         )
 
         try:
-            response = self.llm.invoke(prompt)
+            last_error: Optional[Exception] = None
+            response = None
+            for attempt in range(1, 4):
+                try:
+                    response = self.llm.invoke(prompt)
+                    last_error = None
+                    break
+                except Exception as e:  # noqa: BLE001
+                    last_error = e
+                    logger.warning(
+                        "Summary Agent LLM 调用失败，第 %d/3 次: error_type=%s error=%r",
+                        attempt,
+                        type(e).__name__,
+                        e,
+                    )
+                    if attempt < 3:
+                        time.sleep(attempt)
+            if response is None and last_error is not None:
+                raise last_error
+
             report = self._message_content(response).strip()
         except Exception as e:
-            logger.warning("Summary Agent LLM 失败，使用模板兜底: %s", e)
+            logger.warning("Summary Agent LLM 失败，使用模板兜底: error_type=%s error=%r", type(e).__name__, e)
             report = (
                 "# 故障分析报告\n\n"
                 "## 现象\n"
