@@ -132,6 +132,9 @@ const handleLogin = async () => {
   isLoggingIn.value = true
   try {
     const res = await adminApi.login(authForm.username, authForm.password)
+    if (!res?.data?.token) {
+      throw new Error(res?.message || '登录失败')
+    }
     adminToken.set(res.data.token)
     isAuthenticated.value = true
     await loadSettings()
@@ -153,6 +156,9 @@ const loadSettings = async () => {
   loading.value = true
   try {
     const res = await adminApi.fetchRepoSettings()
+    if (!res?.data) {
+      throw new Error(res?.message || '读取仓库配置失败')
+    }
     applyServerData(res.data)
   } catch (err) {
     showToast('error', parseError(err))
@@ -181,6 +187,9 @@ const handleSave = async () => {
     // 否则 git_token 字段不传，后端不修改
 
     const res = await adminApi.saveRepoSettings(payload)
+    if (!res?.data) {
+      throw new Error(res?.message || '保存仓库配置失败')
+    }
     applyServerData(res.data)
     // 清除测试结果（URL 可能已变）
     testResults.oam   = null
@@ -236,6 +245,10 @@ const handleNavClick = (item: (typeof navItems)[number]) => {
   router.push(item.path)
 }
 
+const toggleNavVisibility = () => {
+  appStore.toggleAdminSidebar()
+}
+
 // ─── Lifecycle ────────────────────────────────────────────────────
 
 onMounted(async () => {
@@ -253,7 +266,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="admin-layout">
+  <div class="admin-console admin-repo-settings-page">
     <!-- Toast -->
     <Transition name="toast-slide">
       <div
@@ -268,12 +281,43 @@ onMounted(async () => {
       </div>
     </Transition>
 
-    <!-- Sidebar toggle for mobile -->
+    <header class="admin-topbar">
+      <div class="admin-topbar-inner">
+        <div class="admin-topbar-left">
+          <button
+            class="admin-icon-btn"
+            :disabled="!isAuthenticated"
+            @click="toggleNavVisibility"
+            :title="navVisible ? '隐藏侧边栏' : '显示侧边栏'"
+            aria-label="切换侧边栏"
+          >
+            {{ navVisible ? '☰' : '▤' }}
+          </button>
+          <div>
+            <h1 class="admin-title">后台管理</h1>
+            <p class="admin-subtitle">Git 仓库配置</p>
+          </div>
+        </div>
+        <div class="admin-topbar-right">
+          <span class="px-3 py-1 text-xs font-semibold rounded-full" :class="hasUnsavedChanges ? 'bg-amber-100 text-amber-800' : 'bg-slate-700 text-slate-100'">
+            {{ isAuthenticated ? (hasUnsavedChanges ? '有未保存的更改' : '已同步') : '未登录' }}
+          </span>
+          <button
+            v-if="isAuthenticated"
+            class="admin-logout-btn"
+            @click="handleLogout"
+          >
+            退出
+          </button>
+        </div>
+      </div>
+    </header>
+
     <button
-      v-if="isAuthenticated"
-      class="admin-sidebar-toggle"
-      @click="appStore.toggleAdminSidebar()"
-      aria-label="切换侧边栏"
+      v-if="isAuthenticated && navVisible"
+      class="admin-sidebar-backdrop"
+      @click="toggleNavVisibility"
+      aria-label="关闭侧边栏"
     ></button>
 
     <!-- Sidebar -->
@@ -300,7 +344,6 @@ onMounted(async () => {
 
     <!-- Main -->
     <main class="admin-main" :class="{ 'is-sidebar-hidden': !isAuthenticated || !navVisible }">
-
       <!-- Login -->
       <section v-if="!isAuthenticated" class="admin-login-wrap">
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
@@ -344,32 +387,35 @@ onMounted(async () => {
       </section>
 
       <!-- Settings -->
-      <section v-else class="space-y-5">
-
-        <!-- Header -->
-        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 flex items-center justify-between">
-          <div>
-            <h2 class="text-lg font-semibold text-slate-900">Git 代码仓库配置</h2>
-            <p class="text-sm text-slate-500 mt-0.5">
-              配置用于日志代码联合分析的源码仓库。保存后立即生效，无需重启服务。
-            </p>
-          </div>
-          <div class="flex items-center gap-2">
-            <span
-              class="text-xs px-2 py-1 rounded-full"
-              :class="hasUnsavedChanges ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'"
-            >
-              {{ hasUnsavedChanges ? '有未保存的更改' : '已同步' }}
-            </span>
-            <button
-              class="text-xs text-slate-500 hover:text-red-500 transition"
-              @click="handleLogout"
-            >退出</button>
+      <section v-else class="space-y-4">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+          <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 class="text-lg font-semibold text-slate-900">Git 代码仓库配置</h2>
+              <p class="text-sm text-slate-500 mt-0.5">
+                配置用于日志代码联合分析的源码仓库。保存后立即生效，无需重启服务。
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
+              <span
+                class="text-xs px-2 py-1 rounded-full"
+                :class="hasUnsavedChanges ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'"
+              >
+                {{ hasUnsavedChanges ? '有未保存的更改' : '已同步' }}
+              </span>
+              <button
+                class="text-sm text-slate-600 hover:text-slate-900"
+                @click="loadSettings"
+                :disabled="loading"
+              >
+                {{ loading ? '同步中…' : '刷新' }}
+              </button>
+            </div>
           </div>
         </div>
 
         <!-- Auth Method Info -->
-        <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-600 space-y-2">
+        <div class="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm text-slate-600 space-y-2">
           <p class="font-semibold text-slate-700">关于 Git 鉴权方式</p>
           <div class="grid gap-2 md:grid-cols-3">
             <div class="flex items-start gap-2">
@@ -398,11 +444,13 @@ onMounted(async () => {
 
         <!-- OAM Repo -->
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 space-y-4">
-          <div class="flex items-center gap-3">
-            <span class="h-8 w-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-bold">OAM</span>
-            <div>
-              <h3 class="font-semibold text-slate-900 text-sm">OAM 天线模块代码仓库</h3>
-              <p class="text-xs text-slate-400">对应日志类型：<code class="bg-slate-100 px-1 rounded">oam_antenna</code></p>
+          <div>
+            <div class="flex items-center gap-3">
+              <span class="h-8 w-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-bold">OAM</span>
+              <div>
+                <h3 class="font-semibold text-slate-900 text-sm">OAM 天线模块代码仓库</h3>
+                <p class="text-xs text-slate-400">对应日志类型：<code class="bg-slate-100 px-1 rounded">oam_antenna</code></p>
+              </div>
             </div>
           </div>
           <div class="space-y-3">
@@ -425,7 +473,6 @@ onMounted(async () => {
                 </button>
               </div>
             </label>
-            <!-- Test result -->
             <div
               v-if="testResults.oam"
               class="flex items-start gap-2 text-sm rounded-lg px-3 py-2 border"
@@ -580,6 +627,137 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.admin-console {
+  --admin-topbar-height: 72px;
+  --admin-sidebar-width: 280px;
+  min-height: 100vh;
+  background: linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%);
+}
+
+.admin-topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: var(--admin-topbar-height);
+  z-index: 70;
+  background: rgba(15, 23, 42, 0.96);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.3);
+  backdrop-filter: blur(10px);
+}
+
+.admin-topbar-inner {
+  height: 100%;
+  padding: 0 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.admin-topbar-left {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.admin-icon-btn {
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 0.625rem;
+  color: #f8fafc;
+  background: rgba(51, 65, 85, 0.6);
+}
+
+.admin-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.admin-title {
+  color: #f8fafc;
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.admin-subtitle {
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+.admin-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.admin-logout-btn {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 0.55rem;
+  color: #e2e8f0;
+  background: rgba(51, 65, 85, 0.45);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.45rem 0.7rem;
+}
+
+.admin-sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: var(--admin-sidebar-width);
+  height: 100vh;
+  z-index: 60;
+  background: #0f172a;
+  border-right: 1px solid rgba(148, 163, 184, 0.25);
+  padding: calc(var(--admin-topbar-height) + 1rem) 1rem 1rem;
+  transition: transform 0.25s ease;
+  overflow-y: auto;
+}
+
+.admin-sidebar.is-hidden {
+  transform: translateX(calc(-1 * var(--admin-sidebar-width)));
+}
+
+.admin-side-nav-item {
+  width: 100%;
+  text-align: left;
+  padding: 0.8rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(100, 116, 139, 0.45);
+  color: #cbd5e1;
+  background: rgba(30, 41, 59, 0.45);
+}
+
+.admin-side-nav-item.is-active {
+  color: #0f172a;
+  background: #22d3ee;
+  border-color: #22d3ee;
+}
+
+.admin-main {
+  min-height: 100vh;
+  padding: calc(var(--admin-topbar-height) + 1rem) 1rem 1rem calc(var(--admin-sidebar-width) + 1rem);
+  transition: padding-left 0.25s ease;
+}
+
+.admin-main.is-sidebar-hidden {
+  padding-left: 1rem;
+}
+
+.admin-login-wrap {
+  max-width: 960px;
+  margin: 1.25rem auto 0;
+}
+
+.admin-sidebar-backdrop {
+  display: none;
+}
+
 .toast-slide-enter-active,
 .toast-slide-leave-active {
   transition: all 0.25s ease;
@@ -588,5 +766,49 @@ onMounted(async () => {
 .toast-slide-leave-to {
   opacity: 0;
   transform: translateY(-8px);
+}
+
+@media (max-width: 1024px) {
+  .admin-topbar-inner {
+    padding: 0 0.75rem;
+  }
+
+  .admin-topbar-right span {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .admin-console {
+    --admin-sidebar-width: min(84vw, 320px);
+  }
+
+  .admin-main {
+    padding: calc(var(--admin-topbar-height) + 0.85rem) 0.75rem 0.75rem;
+  }
+
+  .admin-main.is-sidebar-hidden {
+    padding-left: 0.75rem;
+  }
+
+  .admin-sidebar {
+    box-shadow: 20px 0 45px rgba(15, 23, 42, 0.35);
+  }
+
+  .admin-sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: var(--admin-topbar-height) 0 0 0;
+    z-index: 55;
+    background: rgba(2, 6, 23, 0.4);
+  }
+
+  .admin-topbar-right {
+    display: none;
+  }
+
+  .admin-subtitle {
+    display: none;
+  }
 }
 </style>
