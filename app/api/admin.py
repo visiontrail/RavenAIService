@@ -1,5 +1,5 @@
 """
-Admin endpoints for prompt configuration management.
+Admin endpoints for prompt configuration and repo settings management.
 """
 
 from __future__ import annotations
@@ -15,6 +15,11 @@ from app.security.admin_auth import ADMIN_TOKEN_HEADER, ADMIN_TOKEN_PREFIX, auth
 from app.services.prompts_config_service import (
     load_prompts_config,
     update_prompts_config,
+)
+from app.services.repo_settings_service import (
+    load_repo_settings,
+    save_repo_settings,
+    test_repo_connection,
 )
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -141,5 +146,112 @@ async def save_prompts_config(
     return PromptsConfigResponse(
         data=PromptsConfigData(**data),
         message="保存成功",
+    )
+
+
+# ─────────────────── Repo Settings ────────────────────────────────
+
+class RepoSettingsData(BaseModel):
+    oam_url: str = ""
+    stack_url: str = ""
+    git_token_set: bool = False
+    clone_depth: int = 1
+    updated_at: str = ""
+
+
+class RepoSettingsResponse(BaseModel):
+    success: bool = True
+    data: RepoSettingsData
+    message: str = "ok"
+
+
+class UpdateRepoSettingsRequest(BaseModel):
+    oam_url: Optional[str] = None
+    stack_url: Optional[str] = None
+    git_token: Optional[str] = None
+    clone_depth: int = Field(default=1, ge=1, le=100)
+    clear_token: bool = False
+
+
+class TestConnectionRequest(BaseModel):
+    url: str
+    token: Optional[str] = None
+
+
+class TestConnectionResponse(BaseModel):
+    success: bool = True
+    data: dict
+    message: str = "ok"
+
+
+@router.get("/repo-settings", response_model=RepoSettingsResponse)
+async def get_repo_settings(
+    _username: str = Depends(require_admin),
+) -> RepoSettingsResponse:
+    """读取当前 Git 代码仓库配置（Token 只返回是否已设置，不返回明文）。"""
+    cfg = load_repo_settings()
+    return RepoSettingsResponse(
+        data=RepoSettingsData(
+            oam_url       = cfg.oam_url,
+            stack_url     = cfg.stack_url,
+            git_token_set = cfg.git_token_set,
+            clone_depth   = cfg.clone_depth,
+            updated_at    = cfg.updated_at,
+        ),
+        message="读取成功",
+    )
+
+
+@router.put("/repo-settings", response_model=RepoSettingsResponse)
+async def update_repo_settings(
+    payload: UpdateRepoSettingsRequest,
+    _username: str = Depends(require_admin),
+) -> RepoSettingsResponse:
+    """保存 Git 代码仓库配置（写入 .env 并立即生效，无需重启）。"""
+    try:
+        cfg = save_repo_settings(
+            oam_url     = payload.oam_url,
+            stack_url   = payload.stack_url,
+            git_token   = payload.git_token,
+            clone_depth = payload.clone_depth,
+            clear_token = payload.clear_token,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"保存失败: {exc}",
+        ) from exc
+
+    return RepoSettingsResponse(
+        data=RepoSettingsData(
+            oam_url       = cfg.oam_url,
+            stack_url     = cfg.stack_url,
+            git_token_set = cfg.git_token_set,
+            clone_depth   = cfg.clone_depth,
+            updated_at    = cfg.updated_at,
+        ),
+        message="保存成功，配置已立即生效",
+    )
+
+
+@router.post("/repo-settings/test-connection", response_model=TestConnectionResponse)
+async def test_repo_connection_endpoint(
+    payload: TestConnectionRequest,
+    _username: str = Depends(require_admin),
+) -> TestConnectionResponse:
+    """测试指定 URL 的 Git 仓库连通性（支持 Token 认证）。"""
+    if not payload.url or not payload.url.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="url 不能为空",
+        )
+    result = test_repo_connection(
+        url   = payload.url.strip(),
+        token = payload.token or None,
+    )
+    return TestConnectionResponse(
+        success = result["success"],
+        data    = result,
+        message = result["message"],
     )
 

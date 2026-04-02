@@ -199,6 +199,21 @@ export interface PromptsConfigData {
   summary: PromptsSummary
 }
 
+// Git 代码仓库配置
+export interface RepoSettingsData {
+  oam_url: string
+  stack_url: string
+  git_token_set: boolean
+  clone_depth: number
+  updated_at: string
+}
+
+export interface TestConnectionResult {
+  success: boolean
+  message: string
+  auth_method: string
+}
+
 // 用户与会话
 export interface UserProfile {
   id: string

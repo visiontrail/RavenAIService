@@ -332,50 +332,84 @@ def _perform_legacy_ai_analysis(
     return analysis_data
 
 
+def _resolve_log_type_str(log_record: LogRecord) -> str:
+    raw = getattr(log_record, "log_type", None)
+    return raw.value if hasattr(raw, "value") else str(raw or "unknown")
+
+
+def _preconfigured_repo_url(log_type_str: str) -> Optional[str]:
+    """根据日志类型返回全局预配置的代码仓库 URL（由管理员在 .env 中配置）。"""
+    lt = log_type_str.lower()
+    if lt in ("oam_antenna", "oam"):
+        return settings.code_repo_oam_url or None
+    if lt in ("stack", "full"):
+        return settings.code_repo_stack_url or None
+    return None
+
+
 def _perform_ai_analysis(
     log_record: LogRecord,
     query: str,
     progress_callback=None,
 ) -> Dict[str, Any]:
-    """优先执行四维多智能体 CodeAnalysisGraph；无仓库元数据时降级到旧 LogAnalysisAgent。"""
-    repo_url, commit_id, repo_meta = _extract_repo_metadata(log_record)
+    """优先执行四维多智能体 CodeAnalysisGraph；无任何仓库来源时降级到旧 LogAnalysisAgent。
 
-    if not repo_url:
+    触发新流程的两种条件（满足任一即可）：
+      1. 日志记录的 metadata_json 中内嵌了 git 仓库 URL（随日志上传携带）。
+      2. 管理员在 .env 中为当前日志类型预配置了仓库 URL
+         （CODE_REPO_OAM_URL / CODE_REPO_STACK_URL）。
+
+    条件 1 会在本层预先克隆并把 workspace_dir 传给 graph；
+    条件 2 不在本层克隆，而是把空 workspace_dir 传给 graph，
+    由 agent 在推理过程中自行调用 CloneRepoTool 完成克隆。
+    """
+    repo_url, commit_id, repo_meta = _extract_repo_metadata(log_record)
+    log_type_str = _resolve_log_type_str(log_record)
+
+    # 条件 2：检查是否有针对本日志类型的全局预配置仓库
+    preconfigured_url = _preconfigured_repo_url(log_type_str)
+
+    if not repo_url and not preconfigured_url:
         logger.info(
-            "No repository metadata found for log %s, fallback to legacy LogAnalysisAgent",
+            "No repository source available for log %s (type=%s), fallback to legacy LogAnalysisAgent",
             log_record.id,
+            log_type_str,
         )
         legacy_result = _perform_legacy_ai_analysis(log_record, query, progress_callback=progress_callback)
         if isinstance(legacy_result, dict):
             legacy_result.setdefault("mode", "legacy_log_analysis")
-            legacy_result.setdefault("degrade_reason", "missing_repo_metadata")
+            legacy_result.setdefault("degrade_reason", "missing_repo_source")
         return legacy_result
 
     workspace_dir: Optional[str] = None
+    clone_mode: str = "none"
+
     try:
         if progress_callback:
             progress_callback(20.0)
 
-        workspace_dir = _clone_repository(repo_url, commit_id)
-        logger.info(
-            "Repository cloned for AI code analysis: log_id=%s repo=%s commit=%s workspace=%s",
-            log_record.id,
-            repo_url,
-            commit_id,
-            workspace_dir,
-        )
+        if repo_url:
+            # 条件 1：日志元数据携带了特定 URL，在本层预先克隆
+            workspace_dir = _clone_repository(repo_url, commit_id)
+            clone_mode = "metadata_url"
+            logger.info(
+                "Repository cloned from log metadata: log_id=%s repo=%s commit=%s workspace=%s",
+                log_record.id, repo_url, commit_id, workspace_dir,
+            )
+        else:
+            # 条件 2：预配置 URL，workspace 留空，由 agent 的 CloneRepoTool 负责克隆
+            workspace_dir = ""
+            clone_mode = "agent_clone_tool"
+            logger.info(
+                "Pre-configured repo detected for log_type=%s (url=%s); "
+                "workspace left empty, agent will invoke CloneRepoTool",
+                log_type_str, preconfigured_url,
+            )
 
         if progress_callback:
             progress_callback(40.0)
 
         from app.agents.code_analysis_graph import CodeAnalysisGraph
-
-        _log_type_raw = getattr(log_record, "log_type", None)
-        log_type_str = (
-            _log_type_raw.value
-            if hasattr(_log_type_raw, "value")
-            else str(_log_type_raw or "unknown")
-        )
 
         graph = CodeAnalysisGraph(token_limit=8000, max_iterations=10)
         analysis_data = graph.run(
@@ -392,17 +426,17 @@ def _perform_ai_analysis(
             analysis_data.setdefault("log_id", log_record.id)
             analysis_data.setdefault("mode", "4_agent_code_analysis")
             analysis_data["repo_context"] = {
-                "repo_url": repo_url,
+                "repo_url": repo_url or preconfigured_url,
                 "commit_id": commit_id,
+                "clone_mode": clone_mode,
                 "metadata_source": repo_meta,
             }
         return analysis_data
 
     except Exception as graph_error:
         logger.error(
-            "4-agent code analysis failed for log %s, fallback to legacy mode: %s",
-            log_record.id,
-            graph_error,
+            "4-agent code analysis failed for log %s (clone_mode=%s), fallback to legacy mode: %s",
+            log_record.id, clone_mode, graph_error,
             exc_info=True,
         )
         legacy_result = _perform_legacy_ai_analysis(log_record, query, progress_callback=progress_callback)
@@ -411,8 +445,9 @@ def _perform_ai_analysis(
             legacy_result["degrade_reason"] = "code_graph_failed"
             legacy_result["degrade_error"] = str(graph_error)
             legacy_result["repo_context"] = {
-                "repo_url": repo_url,
+                "repo_url": repo_url or preconfigured_url,
                 "commit_id": commit_id,
+                "clone_mode": clone_mode,
                 "metadata_source": repo_meta,
             }
         return legacy_result
