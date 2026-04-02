@@ -18,6 +18,7 @@ LOG_DIR="$PROJECT_ROOT/logs"
 TMP_DIR="$PROJECT_ROOT/temp"
 CELERY_PIDFILE="/tmp/celery_worker.pid"
 CELERY_LOGFILE="$LOG_DIR/celery_worker.log"
+CELERY_VERSION_FILE="/tmp/celery_worker.version"
 CELERY_BEAT_PIDFILE="/tmp/celery_beat.pid"
 CELERY_BEAT_LOGFILE="$LOG_DIR/celery_beat.log"
 START_LOGFILE="$LOG_DIR/start_all.log"
@@ -97,6 +98,7 @@ cleanup() {
       fi
     fi
     rm -f "$CELERY_PIDFILE" >/dev/null 2>&1 || true
+    rm -f "$CELERY_VERSION_FILE" >/dev/null 2>&1 || true
   fi
 
   # 如果存在 Redis 的 docker 容器，尝试停止
@@ -285,13 +287,33 @@ run_db_migrations() {
 
 start_celery() {
   log_info "Starting Celery worker (detached) ..."
+  local current_head
+  current_head=$(git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
   # 清理陈旧 PID
   if [[ -f "$CELERY_PIDFILE" ]]; then
     local oldpid
     oldpid=$(cat "$CELERY_PIDFILE" 2>/dev/null || true)
     if [[ -n "${oldpid:-}" ]] && ps -p "$oldpid" >/dev/null 2>&1; then
-      log_warn "Existing Celery worker detected (PID: $oldpid). Reusing it."
-      return
+      local old_head
+      old_head=$(cat "$CELERY_VERSION_FILE" 2>/dev/null || true)
+      if [[ "${FORCE_RESTART_CELERY:-0}" == "1" ]]; then
+        log_warn "FORCE_RESTART_CELERY=1, restarting existing Celery worker (PID: $oldpid)."
+      elif [[ -n "${old_head:-}" && "$old_head" == "$current_head" ]]; then
+        log_warn "Existing Celery worker detected (PID: $oldpid, git_head=$old_head). Reusing it."
+        return
+      else
+        log_warn "Existing Celery worker detected (PID: $oldpid) but version changed (old=${old_head:-unknown}, new=$current_head), restarting."
+      fi
+      kill "$oldpid" >/dev/null 2>&1 || true
+      for i in {1..8}; do
+        if ps -p "$oldpid" >/dev/null 2>&1; then sleep 1; else break; fi
+      done
+      if ps -p "$oldpid" >/dev/null 2>&1; then
+        log_warn "Celery worker did not stop gracefully, forcing..."
+        kill -9 "$oldpid" >/dev/null 2>&1 || true
+      fi
+      rm -f "$CELERY_PIDFILE" || true
     else
       rm -f "$CELERY_PIDFILE" || true
     fi
@@ -314,6 +336,7 @@ start_celery() {
       local pid
       pid=$(cat "$CELERY_PIDFILE" 2>/dev/null || true)
       if [[ -n "${pid:-}" ]] && ps -p "$pid" >/dev/null 2>&1; then
+        echo "$current_head" > "$CELERY_VERSION_FILE"
         log_info "Celery worker started successfully (PID: $pid)"
         return
       fi
@@ -323,6 +346,7 @@ start_celery() {
     ps_pid=$(ps aux | grep -E 'celery.*worker' | grep -E 'app\.celery_app' | grep -v grep | awk '{print $2}' | head -n1 || true)
     if [[ -n "${ps_pid:-}" ]] && ps -p "$ps_pid" >/dev/null 2>&1; then
       echo "$ps_pid" > "$CELERY_PIDFILE"
+      echo "$current_head" > "$CELERY_VERSION_FILE"
       log_info "Celery worker started (detected via ps, PID: $ps_pid)"
       return
     fi
