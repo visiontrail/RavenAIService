@@ -53,6 +53,20 @@ _MAX_FIND_OUTPUT  = 6000   # 符号定义搜索最大字符数
 # 日志类型 -> 仓库 URL 的映射键
 _LOG_TYPE_OAM_KEYS   = {"oam", "oam_antenna"}
 _LOG_TYPE_STACK_KEYS = {"stack", "full"}
+_CODE_EVIDENCE_TOOLS = frozenset({
+    "ReadCodeTool",
+    "GrepCodeTool",
+    "GlobCodeTool",
+    "ListDirTool",
+    "FindDefinitionTool",
+    "GetFileTreeTool",
+})
+_NO_LOG_MATCH_MARKERS = (
+    "未找到匹配的异常日志",
+    "无有效检索结果",
+    "no matching log",
+    "no match",
+)
 
 
 # ─────────────────────────────── 状态 ─────────────────────────────────────
@@ -76,6 +90,8 @@ class InvestigationState(TypedDict):
     # --- 动态指令流转 ---
     pending_log_keywords: List[str]
     purified_logs: str
+    log_search_attempts: int
+    code_tool_invocations: int
 
     # --- 结果产出 ---
     raw_root_cause: str
@@ -171,6 +187,8 @@ class CodeAnalysisGraph:
             "iteration_count": 0,
             "pending_log_keywords": [],
             "purified_logs": "",
+            "log_search_attempts": 0,
+            "code_tool_invocations": 0,
             "raw_root_cause": "",
             "final_report": "",
         }
@@ -310,6 +328,8 @@ class CodeAnalysisGraph:
             workspace_dir = workspace_dir,
             log_type      = log_type,
             repo_cloned   = repo_cloned,
+            code_tool_invocations = int(state.get("code_tool_invocations", 0)),
+            log_search_attempts   = int(state.get("log_search_attempts", 0)),
             working_memory = state.get("working_memory", ""),
             purified_logs  = state.get("purified_logs", ""),
         )
@@ -349,18 +369,50 @@ class CodeAnalysisGraph:
 
         # ── 不产生 ToolMessage 的控制流工具 ──
         if tool_name == "AskLogAgentTool":
+            if not self._has_code_evidence(state):
+                blocked_reason = (
+                    "当前尚无任何代码检索证据。请先调用 GetFileTreeTool / GrepCodeTool / ReadCodeTool "
+                    "至少一次，再发起 AskLogAgentTool。"
+                )
+                logger.info(
+                    "TOOL_BLOCKED trace_id=%s iter=%s tool=%s reason=%s args=%s",
+                    trace_id,
+                    updates.get("iteration_count", 0),
+                    tool_name,
+                    blocked_reason,
+                    json.dumps(args, ensure_ascii=False, sort_keys=True),
+                )
+                updates["messages"].append(SystemMessage(content=blocked_reason, id=self._new_id()))
+                return updates
+
             keywords = args.get("keywords")
             if isinstance(keywords, str):
                 keywords = [k.strip() for k in re.split(r"[,，\s]+", keywords) if k.strip()]
             if not isinstance(keywords, list):
                 keywords = []
             updates["pending_log_keywords"] = [str(k).strip() for k in keywords if str(k).strip()][:8]
+            logger.info(
+                "TOOL_CONTROL trace_id=%s iter=%s tool=%s args=%s pending_keywords=%s",
+                trace_id,
+                updates.get("iteration_count", 0),
+                tool_name,
+                json.dumps(args, ensure_ascii=False, sort_keys=True),
+                updates["pending_log_keywords"],
+            )
             return updates
 
         if tool_name == "SubmitDiagnosisTool":
             analysis = str(args.get("root_cause_analysis", "")).strip()
             if analysis:
                 updates["raw_root_cause"] = analysis
+            logger.info(
+                "TOOL_CONTROL trace_id=%s iter=%s tool=%s args=%s accepted=%s",
+                trace_id,
+                updates.get("iteration_count", 0),
+                tool_name,
+                json.dumps(args, ensure_ascii=False, sort_keys=True),
+                bool(analysis),
+            )
             return updates
 
         # ── 执行工具并产生 ToolMessage ──
@@ -369,7 +421,7 @@ class CodeAnalysisGraph:
             trace_id,
             updates.get("iteration_count", 0),
             tool_name or "unknown",
-            self._truncate_for_log(json.dumps(args, ensure_ascii=False, sort_keys=True), max_len=800),
+            json.dumps(args, ensure_ascii=False, sort_keys=True),
         )
         result_content, extra_state = self._dispatch_tool(
             tool_name     = tool_name,
@@ -387,14 +439,16 @@ class CodeAnalysisGraph:
         updates["messages"].append(tool_msg)
         updates["token_count"] = int(updates["token_count"]) + self._estimate_tokens(result_content)
         updates.update(extra_state)
+        if tool_name in _CODE_EVIDENCE_TOOLS:
+            updates["code_tool_invocations"] = int(state.get("code_tool_invocations", 0)) + 1
         logger.info(
-            "TOOL_RESULT trace_id=%s iter=%s tool=%s result_chars=%d extra_state_keys=%s preview=%s",
+            "TOOL_RESULT trace_id=%s iter=%s tool=%s result_chars=%d extra_state_keys=%s content=%s",
             trace_id,
             updates.get("iteration_count", 0),
             tool_name or "unknown",
             len(result_content or ""),
             ",".join(sorted(extra_state.keys())) if extra_state else "(none)",
-            self._truncate_for_log(result_content, max_len=280),
+            result_content,
         )
         return updates
 
@@ -468,6 +522,9 @@ class CodeAnalysisGraph:
         log_file_path = state.get("log_file_path", "")
         trace_id = state.get("trace_id", "unknown")
         llm_call_count = int(state.get("llm_call_count", 0))
+        query = state.get("query", "")
+        is_metric_query = self._is_metric_analysis_query(query)
+        log_search_attempts = int(state.get("log_search_attempts", 0)) + 1
 
         raw_chunks: List[str] = []
         if not keywords:
@@ -479,28 +536,56 @@ class CodeAnalysisGraph:
                     continue
                 try:
                     xml = grep_file_xml(log_file_path, keyword, context=2)
-                    raw_chunks.append(f"<keyword>{keyword}</keyword>\n{xml[:5000]}")
+                    logger.info(
+                        "LOG_AGENT_RAW_GREP trace_id=%s attempt=%s keyword=%s xml=%s",
+                        trace_id,
+                        log_search_attempts,
+                        keyword,
+                        xml,
+                    )
+                    raw_chunks.append(f"<keyword>{keyword}</keyword>\n{xml}")
                 except Exception as e:
                     raw_chunks.append(f"<keyword>{keyword}</keyword>\n<error>{e}</error>")
 
         raw_log_output = "\n\n".join(raw_chunks).strip() or "[LogAgent] 无有效检索结果。"
-        log_prompt = (
-            "# 角色设定\n"
-            "你是一个极其严谨的日志分析与数据清洗专家。你的唯一目标是从混杂着正常信息的原始日志堆栈中，提取出最致命的报错线索。\n\n"
-            "# 当前任务\n"
-            f"Code Agent 刚刚使用关键词组合 {keywords} 在生产服务器上执行了 grep 搜索，并截取了以下原始日志片段：\n\n"
-            "<raw_logs>\n"
-            f"{raw_log_output}\n"
-            "</raw_logs>\n\n"
-            "# 处理指令\n"
-            "请将上述原始日志提纯为一份高信噪比的「日志化验报告」。你必须遵循以下原则：\n"
-            "1. **去噪**：剔除毫无意义的 DEBUG/INFO 日志，忽略健康检查（Health Check）等噪音。\n"
-            "2. **提取堆栈**：精准保留包含 ERROR、Exception、FATAL、WARN 的那几行，特别是带有【具体代码文件名和行号】的调用栈（Stack Trace）。\n"
-            "3. **保留上下文**：如果报错前紧挨着有 HTTP 请求体或关键变量打印，必须保留，这往往是诱因。\n"
-            "4. **如实汇报**：如果日志中确实没有任何报错信息，请直接输出：「未找到匹配的异常日志，当前的日志均为常规/正常打印。」绝不要伪造报错。\n\n"
-            "# 输出格式\n"
-            "请直接输出提纯后的日志内容（不超过 1000 字），不需要任何寒暄或解释。"
-        )
+        if is_metric_query:
+            log_prompt = (
+                "# 角色设定\n"
+                "你是一个极其严谨的性能日志提纯专家，目标是提取可用于画时序曲线的指标样本。\n\n"
+                "# 当前任务\n"
+                f"用户问题：{query}\n"
+                f"Code Agent 关键词：{keywords}\n\n"
+                "<raw_logs>\n"
+                f"{raw_log_output}\n"
+                "</raw_logs>\n\n"
+                "# 处理指令\n"
+                "1. 仅保留与 CPU/负载/利用率/采样时间 相关的行。\n"
+                "2. 优先提取形如“时间戳 + 数值”的片段；保留最少必要上下文（模块名/线程名）。\n"
+                "3. 如果没有任何可画曲线的样本，必须明确说明“未提取到CPU时序样本”，并列出已尝试关键词。\n"
+                "4. 严禁编造不存在的数据点。\n\n"
+                "# 输出格式\n"
+                "输出 Markdown，包含两段：\n"
+                "- `证据摘要`（2-4 行）\n"
+                "- `时序样本`（若有则用表格；若无则写“未提取到CPU时序样本”）"
+            )
+        else:
+            log_prompt = (
+                "# 角色设定\n"
+                "你是一个极其严谨的日志分析与数据清洗专家。你的唯一目标是从混杂着正常信息的原始日志堆栈中，提取出最致命的报错线索。\n\n"
+                "# 当前任务\n"
+                f"Code Agent 刚刚使用关键词组合 {keywords} 在生产服务器上执行了 grep 搜索，并截取了以下原始日志片段：\n\n"
+                "<raw_logs>\n"
+                f"{raw_log_output}\n"
+                "</raw_logs>\n\n"
+                "# 处理指令\n"
+                "请将上述原始日志提纯为一份高信噪比的「日志化验报告」。你必须遵循以下原则：\n"
+                "1. **去噪**：剔除毫无意义的 DEBUG/INFO 日志，忽略健康检查（Health Check）等噪音。\n"
+                "2. **提取堆栈**：精准保留包含 ERROR、Exception、FATAL、WARN 的那几行，特别是带有【具体代码文件名和行号】的调用栈（Stack Trace）。\n"
+                "3. **保留上下文**：如果报错前紧挨着有 HTTP 请求体或关键变量打印，必须保留，这往往是诱因。\n"
+                "4. **如实汇报**：如果日志中确实没有任何报错信息，请直接输出：「未找到匹配的异常日志，当前的日志均为常规/正常打印。」绝不要伪造报错。\n\n"
+                "# 输出格式\n"
+                "请直接输出提纯后的日志内容（不超过 1000 字），不需要任何寒暄或解释。"
+            )
 
         try:
             call_no = llm_call_count + 1
@@ -517,7 +602,7 @@ class CodeAnalysisGraph:
         except Exception as e:
             logger.warning("Log Agent 提纯失败，退化为原始片段: %s", e)
             purified_logs = raw_log_output
-        purified_logs = (purified_logs or "未找到匹配的异常日志，当前的日志均为常规/正常打印。")[:1000]
+        purified_logs = purified_logs or "未找到匹配的异常日志，当前的日志均为常规/正常打印。"
 
         msg = SystemMessage(
             content=(
@@ -527,13 +612,35 @@ class CodeAnalysisGraph:
             id=self._new_id(),
         )
 
+        no_log_match = self._is_no_log_match_result(purified_logs)
+        reflection_msgs: List[BaseMessage] = []
+        if no_log_match:
+            suggested_keywords = self._suggest_next_log_keywords(query=query, used_keywords=keywords)
+            reflection_text = (
+                "日志检索反思：本轮未提取到有效证据。"
+                f"已尝试关键词={keywords}；建议下一轮改用={suggested_keywords}。"
+                "若仍无结果，请回到代码侧继续定位采样点/打印点，再反向构造关键词。"
+            )
+            logger.info(
+                "REFLECTION_LOG_AGENT trace_id=%s attempt=%s no_match=%s used_keywords=%s suggested_keywords=%s",
+                trace_id,
+                log_search_attempts,
+                no_log_match,
+                keywords,
+                suggested_keywords,
+            )
+            reflection_msgs.append(SystemMessage(content=reflection_text, id=self._new_id()))
+
         token_after = int(state.get("token_count", 0)) + self._estimate_tokens_for_message(msg)
+        for rf_msg in reflection_msgs:
+            token_after += self._estimate_tokens_for_message(rf_msg)
         return {
             "purified_logs":        purified_logs,
             "pending_log_keywords": [],
-            "messages":             [msg],
+            "messages":             [msg, *reflection_msgs],
             "token_count":          token_after,
             "llm_call_count":       llm_call_count,
+            "log_search_attempts":  log_search_attempts,
         }
 
     def _compaction_agent_node(self, state: InvestigationState) -> Dict[str, Any]:
@@ -594,15 +701,27 @@ class CodeAnalysisGraph:
         raw_root_cause = state.get("raw_root_cause", "").strip()
         trace_id = state.get("trace_id", "unknown")
         llm_call_count = int(state.get("llm_call_count", 0))
+        inconclusive = False
         if not raw_root_cause:
+            inconclusive = True
             raw_root_cause = "未在循环上限内拿到确凿根因，以下为当前最可信线索。\n" + (
                 state.get("working_memory", "") or "暂无可用线索"
             )
+        if "未在循环上限内拿到确凿根因" in raw_root_cause:
+            inconclusive = True
+
+        if inconclusive:
+            logger.info(
+                "SUMMARY_GUARDRAIL trace_id=%s mode=inconclusive report_mode=template_fallback llm_calls=%s",
+                trace_id,
+                llm_call_count,
+            )
+            report = self._build_inconclusive_report(state=state, raw_root_cause=raw_root_cause)
+            return {"final_report": report, "llm_call_count": llm_call_count}
 
         prompt = (
             "# 角色设定\n"
-            "你是一位资深的研发技术总监。你的开发团队（Code Agent）刚刚经过艰苦的排查，找到了一个线上故障的根本原因。\n"
-            "你需要将他们提供的硬核技术根因，转译为一份对业务方和开发人员都高度友好的《故障复盘与修复报告》。\n\n"
+            "你是一位资深的研发技术总监。请把输入证据整理为《故障复盘与修复报告》。\n\n"
             "# 输入信息\n"
             f"- 触发本次排障的用户原始反馈：{state.get('query', '')}\n"
             f"- Code Agent 提交的硬核技术诊断结果：{raw_root_cause}\n\n"
@@ -612,12 +731,16 @@ class CodeAnalysisGraph:
             "- 用一句通俗的话概括用户遇到了什么问题。\n\n"
             "## 🔍 2. 根本原因分析 (Root Cause)\n"
             "- 简明扼要地解释为什么会报错（Why it happened）。\n"
-            "- **必须明确指出**：存在缺陷的具体代码文件路径、引发异常的方法名及行号。\n\n"
+            "- **仅当输入证据明确给出时**才填写：代码文件路径、方法名、行号；若未给出，必须写“未定位到具体文件/方法/行号”。\n\n"
             "## 🛠️ 3. 修复方案 (Resolution)\n"
             "- 针对该 Root Cause 提出具体的代码修改建议。\n"
             "- 请使用 Markdown 代码块给出修复前后的对比或补丁示例。\n\n"
             "## 💡 4. 后续改进建议 (Action Items)\n"
             "- 从架构、日志规范或防御性编程的角度，给出 1-2 条改进建议。\n\n"
+            "## 强约束（必须遵守）\n"
+            "- 只允许使用输入中出现过的事实。\n"
+            "- 严禁虚构编程语言、文件路径、类名、方法名、行号、补丁内容。\n"
+            "- 不确定时必须显式写“证据不足”。\n\n"
             "请直接输出 Markdown 报告，无需前言后语。"
         )
 
@@ -1086,6 +1209,8 @@ class CodeAnalysisGraph:
         workspace_dir: str,
         log_type: str,
         repo_cloned: bool,
+        code_tool_invocations: int,
+        log_search_attempts: int,
         working_memory: str,
         purified_logs: str,
     ) -> str:
@@ -1110,6 +1235,8 @@ class CodeAnalysisGraph:
             f"- **用户原始故障描述**：{query}\n"
             f"- **日志类型**：{log_type_display}\n"
             f"- **代码工作区**：{workspace_info}\n"
+            f"- **已执行代码工具次数**：{code_tool_invocations}\n"
+            f"- **日志检索轮次**：{log_search_attempts}\n"
             f"- **历史排障备忘录（必读）**：{working_memory or '(空)'}\n"
             f"- **最新日志取证结果**：{purified_logs or '(暂无)'}\n\n"
 
@@ -1145,8 +1272,9 @@ class CodeAnalysisGraph:
 
             "# 纪律约束\n"
             "- **零幻觉原则**：未读取源码前，绝不猜测代码实现逻辑。\n"
+            "- **顺序约束**：在 `code_tool_invocations == 0` 时，禁止调用 AskLogAgentTool/SubmitDiagnosisTool。\n"
             "- **反思机制**：若日志专家返回「未找到匹配」，换一组更宽泛的关键词再试，最多 3 次。\n"
-            "- **每步先思考**：输出 <thinking>...</thinking> 后再输出工具调用。"
+            "- **输出约束**：禁止输出 `<think>`/`<thinking>` 标签内容。"
         )
 
     # ─────────────────────── Result Builder ────────────────────────────────
@@ -1215,6 +1343,8 @@ class CodeAnalysisGraph:
                 "model_used":     getattr(self.llm, "model_name", "unknown"),
                 "tokens_used":    final_state.get("token_count", 0),
                 "llm_calls":      final_state.get("llm_call_count", 0),
+                "log_search_attempts": final_state.get("log_search_attempts", 0),
+                "code_tool_invocations": final_state.get("code_tool_invocations", 0),
                 "trace_id":       final_state.get("trace_id", ""),
                 "log_type":       final_state.get("log_type", "unknown"),
                 "repo_cloned":    final_state.get("repo_cloned", False),
@@ -1226,6 +1356,8 @@ class CodeAnalysisGraph:
                 "iteration_count": final_state.get("iteration_count", 0),
                 "token_count":     final_state.get("token_count", 0),
                 "llm_call_count":  final_state.get("llm_call_count", 0),
+                "log_search_attempts": final_state.get("log_search_attempts", 0),
+                "code_tool_invocations": final_state.get("code_tool_invocations", 0),
                 "trace_id":        final_state.get("trace_id", ""),
             },
         }
@@ -1296,6 +1428,7 @@ class CodeAnalysisGraph:
         """统一封装 LLM 调用日志，便于将 HTTP 200 与业务轮次一一对应。"""
         model_name = getattr(llm, "model_name", getattr(self.llm, "model_name", "unknown"))
         payload_summary = self._summarize_payload(payload)
+        payload_full = self._format_payload_for_log(payload)
         logger.info(
             "LLM_CALL_START trace_id=%s call_no=%d agent=%s purpose=%s model=%s payload=%s",
             trace_id,
@@ -1305,25 +1438,40 @@ class CodeAnalysisGraph:
             model_name,
             payload_summary,
         )
+        logger.info(
+            "LLM_CALL_INPUT_FULL trace_id=%s call_no=%d agent=%s payload=\n%s",
+            trace_id,
+            call_no,
+            agent_name,
+            payload_full,
+        )
         started_at = time.time()
         try:
             response = llm.invoke(payload)
             elapsed_ms = int((time.time() - started_at) * 1000)
             response_text = self._message_content(response)
+            response_text_sanitized = self._strip_thinking_blocks(response_text).strip()
             tool_calls = []
             if isinstance(response, BaseMessage):
                 tool_calls = self._extract_tool_calls(response)
             tool_names = [str(tc.get("name")) for tc in tool_calls if isinstance(tc, dict) and tc.get("name")]
             logger.info(
-                "LLM_CALL_END trace_id=%s call_no=%d agent=%s elapsed_ms=%d output_chars=%d tool_calls=%d tool_names=%s output_preview=%s",
+                "LLM_CALL_END trace_id=%s call_no=%d agent=%s elapsed_ms=%d output_chars=%d tool_calls=%d tool_names=%s output=%s",
                 trace_id,
                 call_no,
                 agent_name,
                 elapsed_ms,
-                len(response_text or ""),
+                len(response_text_sanitized or ""),
                 len(tool_names),
                 tool_names if tool_names else [],
-                self._truncate_for_log(response_text, max_len=300),
+                response_text_sanitized,
+            )
+            logger.info(
+                "LLM_CALL_OUTPUT_FULL trace_id=%s call_no=%d agent=%s output=\n%s",
+                trace_id,
+                call_no,
+                agent_name,
+                response_text_sanitized,
             )
             return response
         except Exception as exc:
@@ -1367,6 +1515,29 @@ class CodeAnalysisGraph:
             f"preview={self._truncate_for_log(text, max_len=220)}"
         )
 
+    def _format_payload_for_log(self, payload: Any) -> str:
+        """输出用于审计的完整 payload 文本（移除 thinking 内容）。"""
+        if isinstance(payload, str):
+            return self._strip_thinking_blocks(payload)
+
+        if isinstance(payload, list):
+            lines: List[str] = []
+            for idx, msg in enumerate(payload, start=1):
+                role = getattr(msg, "type", msg.__class__.__name__)
+                content = self._strip_thinking_blocks(self._message_content(msg))
+                lines.append(f"[{idx}] role={role}\n{content}")
+            return "\n\n".join(lines)
+
+        return self._strip_thinking_blocks(self._message_content(payload))
+
+    @staticmethod
+    def _strip_thinking_blocks(text: str) -> str:
+        if not text:
+            return ""
+        cleaned = re.sub(r"<thinking>[\s\S]*?</thinking>", "", text, flags=re.IGNORECASE)
+        cleaned = re.sub(r"<think>[\s\S]*?</think>", "", cleaned, flags=re.IGNORECASE)
+        return cleaned
+
     @staticmethod
     def _truncate_for_log(text: Any, max_len: int = 240) -> str:
         value = str(text or "").replace("\n", "\\n").replace("\r", "\\r")
@@ -1379,6 +1550,10 @@ class CodeAnalysisGraph:
             msg = response
         else:
             msg = AIMessage(content=self._message_content(response), id=self._new_id())
+
+        cleaned_content = self._strip_thinking_blocks(self._message_content(msg)).strip()
+        if cleaned_content != self._message_content(msg):
+            msg = msg.model_copy(update={"content": cleaned_content})
 
         if not getattr(msg, "id", None):
             msg = msg.model_copy(update={"id": self._new_id()})
@@ -1454,3 +1629,79 @@ class CodeAnalysisGraph:
             role = getattr(m, "type", m.__class__.__name__)
             chunks.append(f"[{role}] {self._message_content(m)}")
         return "\n\n".join(chunks)
+
+    def _has_code_evidence(self, state: InvestigationState) -> bool:
+        if int(state.get("code_tool_invocations", 0)) > 0:
+            return True
+        for m in state.get("messages", []):
+            if not isinstance(m, ToolMessage):
+                continue
+            if getattr(m, "name", "") in _CODE_EVIDENCE_TOOLS:
+                return True
+        return False
+
+    @staticmethod
+    def _is_metric_analysis_query(query: str) -> bool:
+        q = (query or "").lower()
+        markers = (
+            "cpu",
+            "利用率",
+            "曲线",
+            "趋势",
+            "performance",
+            "load",
+            "usage",
+            "指标",
+            "时序",
+        )
+        return any(m in q for m in markers)
+
+    @staticmethod
+    def _is_no_log_match_result(text: str) -> bool:
+        value = (text or "").strip().lower()
+        if not value:
+            return True
+        return any(marker in value for marker in _NO_LOG_MATCH_MARKERS)
+
+    def _suggest_next_log_keywords(self, query: str, used_keywords: List[str]) -> List[str]:
+        used = {str(k).strip().lower() for k in used_keywords if str(k).strip()}
+        base_keywords = [
+            "cpu", "CPU", "cpu_usage", "cpuUsage", "util", "utilization",
+            "load", "top", "idle", "busy", "/proc/stat", "sched", "thread",
+            "tick", "percent", "usage", "process", "system_resource",
+        ]
+        if "温度" in (query or ""):
+            base_keywords.extend(["temperature", "temp"])
+        candidates = [k for k in base_keywords if k.lower() not in used]
+        return candidates[:8]
+
+    def _build_inconclusive_report(self, state: InvestigationState, raw_root_cause: str) -> str:
+        query = state.get("query", "")
+        purified_logs = state.get("purified_logs", "") or "暂无日志提纯证据"
+        memory = state.get("working_memory", "") or "暂无工作记忆"
+        log_attempts = int(state.get("log_search_attempts", 0))
+        code_invocations = int(state.get("code_tool_invocations", 0))
+
+        return (
+            "# 故障复盘与修复报告\n\n"
+            "## 🚨 1. 故障现象摘要\n"
+            f"- 用户诉求：{query}\n"
+            "- 本轮分析已完成代码与日志联合检索，但当前证据不足以得出唯一根因。\n\n"
+            "## 🔍 2. 根本原因分析 (Root Cause)\n"
+            "- 结论：**未定位到确凿 Root Cause（证据不足）**。\n"
+            f"- 日志检索轮次：{log_attempts}；代码工具调用次数：{code_invocations}。\n"
+            "- 具体代码文件路径/方法名/行号：**未定位到具体文件/方法/行号**。\n"
+            f"- 当前最可信线索：\n{raw_root_cause}\n\n"
+            "## 🛠️ 3. 修复方案 (Resolution)\n"
+            "- 当前阶段不建议提交“定点修复补丁”，避免误修。\n"
+            "- 建议先补采样证据后再进入代码修复：\n"
+            "```text\n"
+            "1) 在目标进程开启 CPU 周期采样日志（含 timestamp + process/thread + usage%）\n"
+            "2) 对照生命周期关键阶段（启动/运行/回收）打点\n"
+            "3) 用新增样本反向定位到具体函数与行号后再提交修复\n"
+            "```\n\n"
+            "## 💡 4. 后续改进建议 (Action Items)\n"
+            f"- 最近一次日志提纯结果：{purified_logs}\n"
+            f"- 当前工作记忆摘要：{memory}\n"
+            "- 为性能问题建立标准化取证模板：指标名、采样周期、时间窗口、阈值、模块维度。"
+        )
