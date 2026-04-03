@@ -52,6 +52,7 @@ _MAX_FIND_OUTPUT  = 6000   # 符号定义搜索最大字符数
 _MAX_TOOL_LOG_CHARS = 2400  # TOOL_RESULT 日志最大字符数（摘要后）
 _FILE_TREE_LOG_HEAD_LINES = 24
 _FILE_TREE_LOG_TAIL_LINES = 12
+_MAX_CODE_AGENT_STEPS_PER_VISIT = 4  # 单次 code_agent 节点内最多连续执行的 ReAct 步数
 
 # 日志类型 -> 仓库 URL 的映射键
 _LOG_TYPE_OAM_KEYS   = {"oam", "oam_antenna"}
@@ -499,153 +500,211 @@ class CodeAnalysisGraph:
         }
 
     def _code_agent_node(self, state: InvestigationState) -> Dict[str, Any]:
+        trace_id = state.get("trace_id", "unknown")
         workspace_dir = state.get("workspace_dir", "")
-        log_type      = state.get("log_type", "unknown")
-        repo_cloned   = state.get("repo_cloned", False)
-        trace_id      = state.get("trace_id", "unknown")
+        log_type = state.get("log_type", "unknown")
+        repo_cloned = bool(state.get("repo_cloned", False))
+        repo_branch = state.get("repo_branch", "")
+        repo_commit_id = state.get("repo_commit_id", "")
 
-        sys_prompt = self._build_code_agent_prompt(
-            query         = state.get("query", ""),
-            workspace_dir = workspace_dir,
-            log_type      = log_type,
-            repo_cloned   = repo_cloned,
-            code_tool_invocations = int(state.get("code_tool_invocations", 0)),
-            log_search_attempts   = int(state.get("log_search_attempts", 0)),
-            working_memory = state.get("working_memory", ""),
-            purified_logs  = state.get("purified_logs", ""),
-            supervisor_plan = state.get("supervisor_plan", ""),
-            supervisor_reflection = state.get("supervisor_reflection", ""),
-            repo_branch = state.get("repo_branch", ""),
-            repo_commit_id = state.get("repo_commit_id", ""),
-        )
+        llm_call_count = int(state.get("llm_call_count", 0))
+        iteration_count = int(state.get("iteration_count", 0))
+        token_count = int(state.get("token_count", 0))
+        code_tool_invocations = int(state.get("code_tool_invocations", 0))
 
-        prompt_messages: List[BaseMessage] = [
-            SystemMessage(content=sys_prompt, id=self._new_id()),
-            *state.get("messages", []),
-        ]
+        produced_messages: List[BaseMessage] = []
+        conversation_messages: List[BaseMessage] = list(state.get("messages", []))
+        pending_log_keywords = None
+        raw_root_cause = ""
+        merged_extra_state: Dict[str, Any] = {}
+        exit_reason = "step_limit_reached"
 
-        call_no = int(state.get("llm_call_count", 0)) + 1
-        response = self._invoke_llm_with_trace(
-            llm=self._code_llm_with_tools,
-            payload=prompt_messages,
-            trace_id=trace_id,
-            call_no=call_no,
-            agent_name="code_agent",
-            purpose="reasoning_and_tool_selection",
-        )
-        response = self._normalize_ai_message(response)
+        for step in range(1, _MAX_CODE_AGENT_STEPS_PER_VISIT + 1):
+            sys_prompt = self._build_code_agent_prompt(
+                query=state.get("query", ""),
+                workspace_dir=workspace_dir,
+                log_type=log_type,
+                repo_cloned=repo_cloned,
+                code_tool_invocations=code_tool_invocations,
+                log_search_attempts=int(state.get("log_search_attempts", 0)),
+                working_memory=state.get("working_memory", ""),
+                purified_logs=state.get("purified_logs", ""),
+                supervisor_plan=state.get("supervisor_plan", ""),
+                supervisor_reflection=state.get("supervisor_reflection", ""),
+                repo_branch=repo_branch,
+                repo_commit_id=repo_commit_id,
+            )
+            prompt_messages: List[BaseMessage] = [
+                SystemMessage(content=sys_prompt, id=self._new_id()),
+                *conversation_messages,
+            ]
 
-        token_delta = self._estimate_tokens_for_message(response)
-        updates: Dict[str, Any] = {
-            "messages": [response],
-            "iteration_count": int(state.get("iteration_count", 0)) + 1,
-            "token_count": int(state.get("token_count", 0)) + token_delta,
-            "llm_call_count": call_no,
-        }
+            call_no = llm_call_count + 1
+            response = self._invoke_llm_with_trace(
+                llm=self._code_llm_with_tools,
+                payload=prompt_messages,
+                trace_id=trace_id,
+                call_no=call_no,
+                agent_name="code_agent",
+                purpose=f"reasoning_and_tool_selection_step_{step}",
+            )
+            response = self._normalize_ai_message(response)
 
-        tool_calls = self._extract_tool_calls(response)
-        if not tool_calls:
-            return updates
+            llm_call_count = call_no
+            iteration_count += 1
+            token_count += self._estimate_tokens_for_message(response)
+            produced_messages.append(response)
+            conversation_messages.append(response)
 
-        first_call = tool_calls[0]
-        tool_name  = first_call.get("name")
-        args       = self._coerce_args(first_call.get("args"))
-        call_id    = str(first_call.get("id") or self._new_id())
+            tool_calls = self._extract_tool_calls(response)
+            if not tool_calls:
+                exit_reason = "no_tool_call"
+                break
 
-        # ── 不产生 ToolMessage 的控制流工具 ──
-        if tool_name == "AskLogAgentTool":
-            if not self._has_code_evidence(state):
-                blocked_reason = (
-                    "当前尚无任何代码检索证据。请先调用 GetFileTreeTool / GrepCodeTool / ReadCodeTool "
-                    "至少一次，再发起 AskLogAgentTool。"
+            first_call = tool_calls[0]
+            tool_name = first_call.get("name")
+            args = self._coerce_args(first_call.get("args"))
+            call_id = str(first_call.get("id") or self._new_id())
+
+            if tool_name == "AskLogAgentTool":
+                evidence_available = code_tool_invocations > 0
+                if not evidence_available:
+                    for existing_msg in conversation_messages:
+                        if isinstance(existing_msg, ToolMessage) and getattr(existing_msg, "name", "") in _CODE_EVIDENCE_TOOLS:
+                            evidence_available = True
+                            break
+                if not evidence_available:
+                    blocked_reason = (
+                        "当前尚无任何代码检索证据。请先调用 GetFileTreeTool / GrepCodeTool / ReadCodeTool "
+                        "至少一次，再发起 AskLogAgentTool。"
+                    )
+                    logger.info(
+                        "TOOL_BLOCKED trace_id=%s iter=%s tool=%s reason=%s args=%s",
+                        trace_id,
+                        iteration_count,
+                        tool_name,
+                        blocked_reason,
+                        json.dumps(args, ensure_ascii=False, sort_keys=True),
+                    )
+                    blocked_msg = SystemMessage(content=blocked_reason, id=self._new_id())
+                    produced_messages.append(blocked_msg)
+                    conversation_messages.append(blocked_msg)
+                    token_count += self._estimate_tokens_for_message(blocked_msg)
+                    exit_reason = "ask_log_blocked_no_evidence"
+                    continue
+
+                keywords = args.get("keywords")
+                if isinstance(keywords, str):
+                    keywords = [k.strip() for k in re.split(r"[,，\s]+", keywords) if k.strip()]
+                if not isinstance(keywords, list):
+                    keywords = []
+                pending_log_keywords = self._normalize_english_keywords(
+                    keywords=keywords,
+                    query=state.get("query", ""),
+                    limit=8,
                 )
                 logger.info(
-                    "TOOL_BLOCKED trace_id=%s iter=%s tool=%s reason=%s args=%s",
+                    "TOOL_CONTROL trace_id=%s iter=%s tool=%s args=%s pending_keywords=%s",
                     trace_id,
-                    updates.get("iteration_count", 0),
+                    iteration_count,
                     tool_name,
-                    blocked_reason,
                     json.dumps(args, ensure_ascii=False, sort_keys=True),
+                    pending_log_keywords,
                 )
-                updates["messages"].append(SystemMessage(content=blocked_reason, id=self._new_id()))
-                return updates
+                exit_reason = "handoff_to_log_agent"
+                break
 
-            keywords = args.get("keywords")
-            if isinstance(keywords, str):
-                keywords = [k.strip() for k in re.split(r"[,，\s]+", keywords) if k.strip()]
-            if not isinstance(keywords, list):
-                keywords = []
-            updates["pending_log_keywords"] = self._normalize_english_keywords(
-                keywords=keywords,
-                query=state.get("query", ""),
-                limit=8,
+            if tool_name == "SubmitDiagnosisTool":
+                analysis = str(args.get("root_cause_analysis", "")).strip()
+                if analysis:
+                    raw_root_cause = analysis
+                logger.info(
+                    "TOOL_CONTROL trace_id=%s iter=%s tool=%s args=%s accepted=%s",
+                    trace_id,
+                    iteration_count,
+                    tool_name,
+                    json.dumps(args, ensure_ascii=False, sort_keys=True),
+                    bool(analysis),
+                )
+                exit_reason = "diagnosis_submitted"
+                break
+
+            logger.info(
+                "TOOL_CALL trace_id=%s iter=%s tool=%s args=%s",
+                trace_id,
+                iteration_count,
+                tool_name or "unknown",
+                json.dumps(args, ensure_ascii=False, sort_keys=True),
+            )
+            result_content, extra_state = self._dispatch_tool(
+                tool_name=tool_name,
+                args=args,
+                workspace_dir=workspace_dir,
+                log_type=log_type,
+                repo_url=state.get("repo_url", ""),
+                repo_branch=repo_branch,
+                repo_commit_id=repo_commit_id,
+            )
+
+            tool_msg = ToolMessage(
+                content=result_content,
+                tool_call_id=call_id,
+                name=tool_name or "UnknownTool",
+                id=self._new_id(),
+            )
+            produced_messages.append(tool_msg)
+            conversation_messages.append(tool_msg)
+            token_count += self._estimate_tokens(result_content)
+
+            if extra_state:
+                merged_extra_state.update(extra_state)
+                workspace_dir = str(extra_state.get("workspace_dir", workspace_dir) or workspace_dir)
+                log_type = str(extra_state.get("log_type", log_type) or log_type)
+                repo_branch = str(extra_state.get("repo_branch", repo_branch) or repo_branch)
+                repo_commit_id = str(extra_state.get("repo_commit_id", repo_commit_id) or repo_commit_id)
+                repo_cloned = bool(extra_state.get("repo_cloned", repo_cloned))
+
+            if tool_name in _CODE_EVIDENCE_TOOLS:
+                code_tool_invocations += 1
+
+            logged_content = self._summarize_tool_result_for_log(
+                tool_name=tool_name or "unknown",
+                result_content=result_content,
             )
             logger.info(
-                "TOOL_CONTROL trace_id=%s iter=%s tool=%s args=%s pending_keywords=%s",
+                "TOOL_RESULT trace_id=%s iter=%s tool=%s result_chars=%d extra_state_keys=%s content=%s",
                 trace_id,
-                updates.get("iteration_count", 0),
-                tool_name,
-                json.dumps(args, ensure_ascii=False, sort_keys=True),
-                updates["pending_log_keywords"],
+                iteration_count,
+                tool_name or "unknown",
+                len(result_content or ""),
+                ",".join(sorted(extra_state.keys())) if extra_state else "(none)",
+                logged_content,
             )
-            return updates
+            exit_reason = "tool_executed_continue"
 
-        if tool_name == "SubmitDiagnosisTool":
-            analysis = str(args.get("root_cause_analysis", "")).strip()
-            if analysis:
-                updates["raw_root_cause"] = analysis
-            logger.info(
-                "TOOL_CONTROL trace_id=%s iter=%s tool=%s args=%s accepted=%s",
-                trace_id,
-                updates.get("iteration_count", 0),
-                tool_name,
-                json.dumps(args, ensure_ascii=False, sort_keys=True),
-                bool(analysis),
-            )
-            return updates
-
-        # ── 执行工具并产生 ToolMessage ──
         logger.info(
-            "TOOL_CALL trace_id=%s iter=%s tool=%s args=%s",
+            "CODE_AGENT_VISIT_END trace_id=%s final_iter=%s llm_calls=%s steps_limit=%s exit_reason=%s produced_msgs=%s",
             trace_id,
-            updates.get("iteration_count", 0),
-            tool_name or "unknown",
-            json.dumps(args, ensure_ascii=False, sort_keys=True),
-        )
-        result_content, extra_state = self._dispatch_tool(
-            tool_name     = tool_name,
-            args          = args,
-            workspace_dir = workspace_dir,
-            log_type      = log_type,
-            repo_url      = state.get("repo_url", ""),
-            repo_branch   = state.get("repo_branch", ""),
-            repo_commit_id = state.get("repo_commit_id", ""),
+            iteration_count,
+            llm_call_count,
+            _MAX_CODE_AGENT_STEPS_PER_VISIT,
+            exit_reason,
+            len(produced_messages),
         )
 
-        tool_msg = ToolMessage(
-            content      = result_content,
-            tool_call_id = call_id,
-            name         = tool_name or "UnknownTool",
-            id           = self._new_id(),
-        )
-        updates["messages"].append(tool_msg)
-        updates["token_count"] = int(updates["token_count"]) + self._estimate_tokens(result_content)
-        updates.update(extra_state)
-        if tool_name in _CODE_EVIDENCE_TOOLS:
-            updates["code_tool_invocations"] = int(state.get("code_tool_invocations", 0)) + 1
-        logged_content = self._summarize_tool_result_for_log(
-            tool_name=tool_name or "unknown",
-            result_content=result_content,
-        )
-        logger.info(
-            "TOOL_RESULT trace_id=%s iter=%s tool=%s result_chars=%d extra_state_keys=%s content=%s",
-            trace_id,
-            updates.get("iteration_count", 0),
-            tool_name or "unknown",
-            len(result_content or ""),
-            ",".join(sorted(extra_state.keys())) if extra_state else "(none)",
-            logged_content,
-        )
+        updates: Dict[str, Any] = {
+            "messages": produced_messages,
+            "iteration_count": iteration_count,
+            "token_count": token_count,
+            "llm_call_count": llm_call_count,
+            "code_tool_invocations": code_tool_invocations,
+        }
+        if pending_log_keywords is not None:
+            updates["pending_log_keywords"] = pending_log_keywords
+        if raw_root_cause:
+            updates["raw_root_cause"] = raw_root_cause
+        if merged_extra_state:
+            updates.update(merged_extra_state)
         return updates
 
     def _dispatch_tool(
@@ -1746,6 +1805,10 @@ class CodeAnalysisGraph:
 
         if state.get("pending_log_keywords"):
             return "log_agent"
+
+        if candidate == "summary_agent":
+            # 防止 Supervisor LLM 在未满足完成条件时提前收敛到 summary。
+            return fallback if fallback in {"code_agent", "log_agent", "compaction_agent"} else "code_agent"
 
         if candidate == "log_agent" and not state.get("pending_log_keywords"):
             return "code_agent"
