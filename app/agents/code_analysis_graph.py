@@ -53,6 +53,22 @@ _MAX_FIND_OUTPUT  = 6000   # 符号定义搜索最大字符数
 # 日志类型 -> 仓库 URL 的映射键
 _LOG_TYPE_OAM_KEYS   = {"oam", "oam_antenna"}
 _LOG_TYPE_STACK_KEYS = {"stack", "full"}
+_CODE_EXECUTION_TOOL_NAMES = frozenset({
+    "CloneRepoTool",
+    "ReadCodeTool",
+    "GrepCodeTool",
+    "GlobCodeTool",
+    "ListDirTool",
+    "FindDefinitionTool",
+    "GetFileTreeTool",
+})
+_CODE_CONTROL_TOOL_NAMES = frozenset({
+    "AskLogAgentTool",
+    "SubmitDiagnosisTool",
+})
+_LOG_AGENT_TOOL_NAMES = frozenset({
+    "LogKeywordSearchTool",
+})
 _CODE_EVIDENCE_TOOLS = frozenset({
     "ReadCodeTool",
     "GrepCodeTool",
@@ -117,10 +133,13 @@ class CodeAnalysisGraph:
         self.token_limit = int(token_limit)
         self.max_iterations = int(max_iterations)
         self.llm = get_llm()
-        self._tools = self._build_code_tools()
+        self._code_execution_tools = self._build_code_execution_tools()
+        self._code_control_tools = self._build_code_control_tools()
+        self._code_tools = [*self._code_execution_tools, *self._code_control_tools]
+        self._log_tools = self._build_log_agent_tools()
 
         try:
-            self._llm_with_tools = self.llm.bind_tools(self._tools)
+            self._code_llm_with_tools = self.llm.bind_tools(self._code_tools)
         except Exception as e:
             logger.warning(
                 "bind_tools 失败，Code Agent 将退化为无工具模式: llm_class=%s error_type=%s error=%r",
@@ -129,7 +148,14 @@ class CodeAnalysisGraph:
                 e,
                 exc_info=True,
             )
-            self._llm_with_tools = self.llm
+            self._code_llm_with_tools = self.llm
+
+        logger.info(
+            "AGENT_TOOLSETS_INIT code_execution=%s code_control=%s log_agent=%s",
+            sorted(_CODE_EXECUTION_TOOL_NAMES),
+            sorted(_CODE_CONTROL_TOOL_NAMES),
+            sorted(_LOG_AGENT_TOOL_NAMES),
+        )
 
         graph = StateGraph(InvestigationState)
         graph.add_node("supervisor_agent", self._supervisor_agent_node)
@@ -218,6 +244,17 @@ class CodeAnalysisGraph:
         )
         return self._to_structured_result(final_state, execution_time=elapsed)
 
+    def get_agent_toolset_allocation(self) -> Dict[str, List[str]]:
+        """返回多 Agent 的工具分配，便于审计与后续调参。"""
+        return {
+            "supervisor_agent": [],
+            "code_agent.execution": sorted(_CODE_EXECUTION_TOOL_NAMES),
+            "code_agent.control": sorted(_CODE_CONTROL_TOOL_NAMES),
+            "log_agent": sorted(_LOG_AGENT_TOOL_NAMES),
+            "compaction_agent": [],
+            "summary_agent": [],
+        }
+
     # ─────────────────────── Routing ───────────────────────────────────────
 
     def _route_after_supervisor(self, state: InvestigationState) -> str:
@@ -228,8 +265,8 @@ class CodeAnalysisGraph:
 
     # ────────────────────── Tool Definitions ───────────────────────────────
 
-    def _build_code_tools(self) -> List[StructuredTool]:
-        """构建所有代码分析工具（仅用于 bind_tools；实际执行在 _dispatch_tool 中）。"""
+    def _build_code_execution_tools(self) -> List[StructuredTool]:
+        """构建 Code Agent 的代码执行工具集合。"""
 
         def clone_repo_tool(log_type: str, branch: str = "", force_refresh: bool = True) -> str:
             """根据日志类型将对应的代码仓库克隆到临时工作区，并切换当前工作区路径。
@@ -297,6 +334,19 @@ class CodeAnalysisGraph:
             """
             return f"已请求获取文件树: directory={directory}"
 
+        return [
+            StructuredTool.from_function(clone_repo_tool,      name="CloneRepoTool"),
+            StructuredTool.from_function(read_code_tool,       name="ReadCodeTool"),
+            StructuredTool.from_function(grep_code_tool,       name="GrepCodeTool"),
+            StructuredTool.from_function(glob_code_tool,       name="GlobCodeTool"),
+            StructuredTool.from_function(list_dir_tool,        name="ListDirTool"),
+            StructuredTool.from_function(find_definition_tool, name="FindDefinitionTool"),
+            StructuredTool.from_function(get_file_tree_tool,   name="GetFileTreeTool"),
+        ]
+
+    def _build_code_control_tools(self) -> List[StructuredTool]:
+        """构建 Code Agent 的跨 Agent 控制工具集合。"""
+
         def ask_log_agent_tool(keywords: List[str]) -> str:
             """当不确定代码何处报错时，提供关键词组合，让日志专家去生产日志中取证。"""
             return f"日志关键词已提交: {keywords}"
@@ -306,16 +356,45 @@ class CodeAnalysisGraph:
             return f"已提交根因分析: {root_cause_analysis[:120]}"
 
         return [
-            StructuredTool.from_function(clone_repo_tool,      name="CloneRepoTool"),
-            StructuredTool.from_function(read_code_tool,       name="ReadCodeTool"),
-            StructuredTool.from_function(grep_code_tool,       name="GrepCodeTool"),
-            StructuredTool.from_function(glob_code_tool,       name="GlobCodeTool"),
-            StructuredTool.from_function(list_dir_tool,        name="ListDirTool"),
-            StructuredTool.from_function(find_definition_tool, name="FindDefinitionTool"),
-            StructuredTool.from_function(get_file_tree_tool,   name="GetFileTreeTool"),
-            StructuredTool.from_function(ask_log_agent_tool,   name="AskLogAgentTool"),
+            StructuredTool.from_function(ask_log_agent_tool,    name="AskLogAgentTool"),
             StructuredTool.from_function(submit_diagnosis_tool, name="SubmitDiagnosisTool"),
         ]
+
+    def _build_log_agent_tools(self) -> Dict[str, Any]:
+        """构建 Log Agent 的日志取证工具集合。"""
+
+        def log_keyword_search_tool(
+            log_file_path: str,
+            keywords: List[str],
+            context_lines: int = 2,
+            trace_id: str = "unknown",
+            attempt: int = 0,
+        ) -> str:
+            if not keywords:
+                return "[LogAgent] 未收到关键词，无法执行日志检索。"
+
+            chunks: List[str] = []
+            for raw_keyword in keywords[:8]:
+                keyword = str(raw_keyword).strip()
+                if not keyword:
+                    continue
+                try:
+                    xml = grep_file_xml(log_file_path, keyword, context=context_lines)
+                    logger.info(
+                        "LOG_AGENT_RAW_GREP trace_id=%s attempt=%s keyword=%s xml=%s",
+                        trace_id,
+                        attempt,
+                        keyword,
+                        xml,
+                    )
+                    chunks.append(f"<keyword>{keyword}</keyword>\n{xml}")
+                except Exception as e:
+                    chunks.append(f"<keyword>{keyword}</keyword>\n<error>{e}</error>")
+            return "\n\n".join(chunks).strip() or "[LogAgent] 无有效检索结果。"
+
+        return {
+            "LogKeywordSearchTool": log_keyword_search_tool,
+        }
 
     # ─────────────────────── Agent Nodes ───────────────────────────────────
 
@@ -442,7 +521,7 @@ class CodeAnalysisGraph:
 
         call_no = int(state.get("llm_call_count", 0)) + 1
         response = self._invoke_llm_with_trace(
-            llm=self._llm_with_tools,
+            llm=self._code_llm_with_tools,
             payload=prompt_messages,
             trace_id=trace_id,
             call_no=call_no,
@@ -634,6 +713,16 @@ class CodeAnalysisGraph:
 
         return f"未知工具: {tool_name}", extra
 
+    def _dispatch_log_tool(self, tool_name: str, **kwargs: Any) -> str:
+        tool_fn = self._log_tools.get(tool_name)
+        if not callable(tool_fn):
+            return f"[LogAgent] 未知工具: {tool_name}"
+        try:
+            return str(tool_fn(**kwargs))
+        except Exception as e:
+            logger.warning("Log tool '%s' execution failed: %s", tool_name, e)
+            return f"[LogAgent] 工具执行失败({tool_name}): {e}"
+
     def _log_agent_node(self, state: InvestigationState) -> Dict[str, Any]:
         keywords     = state.get("pending_log_keywords") or []
         log_file_path = state.get("log_file_path", "")
@@ -643,28 +732,14 @@ class CodeAnalysisGraph:
         is_metric_query = self._is_metric_analysis_query(query)
         log_search_attempts = int(state.get("log_search_attempts", 0)) + 1
 
-        raw_chunks: List[str] = []
-        if not keywords:
-            raw_chunks.append("[LogAgent] 未收到关键词，无法执行日志检索。")
-        else:
-            for kw in keywords[:8]:
-                keyword = str(kw).strip()
-                if not keyword:
-                    continue
-                try:
-                    xml = grep_file_xml(log_file_path, keyword, context=2)
-                    logger.info(
-                        "LOG_AGENT_RAW_GREP trace_id=%s attempt=%s keyword=%s xml=%s",
-                        trace_id,
-                        log_search_attempts,
-                        keyword,
-                        xml,
-                    )
-                    raw_chunks.append(f"<keyword>{keyword}</keyword>\n{xml}")
-                except Exception as e:
-                    raw_chunks.append(f"<keyword>{keyword}</keyword>\n<error>{e}</error>")
-
-        raw_log_output = "\n\n".join(raw_chunks).strip() or "[LogAgent] 无有效检索结果。"
+        raw_log_output = self._dispatch_log_tool(
+            "LogKeywordSearchTool",
+            log_file_path=log_file_path,
+            keywords=keywords,
+            context_lines=2,
+            trace_id=trace_id,
+            attempt=log_search_attempts,
+        )
         if is_metric_query:
             log_prompt = (
                 "# 角色设定\n"
@@ -1445,6 +1520,7 @@ class CodeAnalysisGraph:
             f"- **最新日志取证结果**：{purified_logs or '(暂无)'}\n\n"
 
             "# 可用工具说明\n"
+            "## A. Code 执行工具（仅用于源码操作）\n"
             "| 工具 | 用途 |\n"
             "|------|------|\n"
             "| CloneRepoTool | 按日志类型克隆对应代码仓库，支持 `branch` 且默认强制重克隆 |\n"
@@ -1453,7 +1529,10 @@ class CodeAnalysisGraph:
             "| GlobCodeTool | 按 glob 模式查找文件，如 `**/*.h` |\n"
             "| ListDirTool | 列出目录详细内容 |\n"
             "| FindDefinitionTool | 定位函数/类/宏的定义位置 |\n"
-            "| ReadCodeTool | 读取指定文件的代码片段（最多 100 行）|\n"
+            "| ReadCodeTool | 读取指定文件的代码片段（最多 100 行）|\n\n"
+            "## B. 协作控制工具（仅用于跨 Agent 协作）\n"
+            "| 工具 | 用途 |\n"
+            "|------|------|\n"
             "| AskLogAgentTool | 提供关键词，让日志专家从生产日志取证 |\n"
             "| SubmitDiagnosisTool | 提交确凿的根因分析，结束排查 |\n\n"
 
