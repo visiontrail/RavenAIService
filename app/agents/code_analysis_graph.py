@@ -53,6 +53,12 @@ _MAX_TOOL_LOG_CHARS = 2400  # TOOL_RESULT 日志最大字符数（摘要后）
 _FILE_TREE_LOG_HEAD_LINES = 24
 _FILE_TREE_LOG_TAIL_LINES = 12
 _MAX_CODE_AGENT_STEPS_PER_VISIT = 4  # 单次 code_agent 节点内最多连续执行的 ReAct 步数
+_MAX_SUBAGENT_RESULT_CHARS = 2200
+_EXPLORE_STEP_LIMITS = {
+    "quick": 2,
+    "medium": 4,
+    "very_thorough": 6,
+}
 
 # 日志类型 -> 仓库 URL 的映射键
 _LOG_TYPE_OAM_KEYS   = {"oam", "oam_antenna"}
@@ -66,8 +72,16 @@ _CODE_EXECUTION_TOOL_NAMES = frozenset({
     "FindDefinitionTool",
     "GetFileTreeTool",
 })
+_EXPLORE_AGENT_TOOL_NAMES = frozenset({
+    "ReadCodeTool",
+    "GrepCodeTool",
+    "GlobCodeTool",
+    "ListDirTool",
+    "FindDefinitionTool",
+    "GetFileTreeTool",
+})
 _CODE_CONTROL_TOOL_NAMES = frozenset({
-    "AskLogAgentTool",
+    "DelegateSubAgentTool",
     "SubmitDiagnosisTool",
 })
 _LOG_AGENT_TOOL_NAMES = frozenset({
@@ -128,7 +142,7 @@ class InvestigationState(TypedDict):
 # ─────────────────────────────── 主图 ─────────────────────────────────────
 
 class CodeAnalysisGraph:
-    """五维智能体编排：Supervisor -> Code/Log/Compaction -> Summary。"""
+    """多智能体排障编排：Supervisor -> Code/(SubAgents)/Compaction -> Summary。"""
 
     def __init__(self, token_limit: int = 8000, max_iterations: int = 10):
         if StateGraph is None or END is None:
@@ -138,33 +152,33 @@ class CodeAnalysisGraph:
         self.max_iterations = int(max_iterations)
         self.llm = get_llm()
         self._code_execution_tools = self._build_code_execution_tools()
+        self._explore_tools = [
+            tool for tool in self._code_execution_tools
+            if tool.name in _EXPLORE_AGENT_TOOL_NAMES
+        ]
         self._code_control_tools = self._build_code_control_tools()
         self._code_tools = [*self._code_execution_tools, *self._code_control_tools]
         self._log_tools = self._build_log_agent_tools()
-
-        try:
-            self._code_llm_with_tools = self.llm.bind_tools(self._code_tools)
-        except Exception as e:
-            logger.warning(
-                "bind_tools 失败，Code Agent 将退化为无工具模式: llm_class=%s error_type=%s error=%r",
-                type(self.llm).__name__,
-                type(e).__name__,
-                e,
-                exc_info=True,
-            )
-            self._code_llm_with_tools = self.llm
+        self._code_llm_with_tools = self._bind_tools_with_fallback(
+            tools=self._code_tools,
+            agent_label="Code Agent",
+        )
+        self._explore_llm_with_tools = self._bind_tools_with_fallback(
+            tools=self._explore_tools,
+            agent_label="Explore SubAgent",
+        )
 
         logger.info(
-            "AGENT_TOOLSETS_INIT code_execution=%s code_control=%s log_agent=%s",
+            "AGENT_TOOLSETS_INIT code_execution=%s code_control=%s explore_subagent=%s log_agent=%s",
             sorted(_CODE_EXECUTION_TOOL_NAMES),
             sorted(_CODE_CONTROL_TOOL_NAMES),
+            sorted(_EXPLORE_AGENT_TOOL_NAMES),
             sorted(_LOG_AGENT_TOOL_NAMES),
         )
 
         graph = StateGraph(InvestigationState)
         graph.add_node("supervisor_agent", self._supervisor_agent_node)
         graph.add_node("code_agent", self._code_agent_node)
-        graph.add_node("log_agent", self._log_agent_node)
         graph.add_node("compaction_agent", self._compaction_agent_node)
         graph.add_node("summary_agent", self._summary_agent_node)
 
@@ -174,13 +188,11 @@ class CodeAnalysisGraph:
             self._route_after_supervisor,
             {
                 "code_agent": "code_agent",
-                "log_agent": "log_agent",
                 "compaction_agent": "compaction_agent",
                 "summary_agent": "summary_agent",
             },
         )
         graph.add_edge("code_agent", "supervisor_agent")
-        graph.add_edge("log_agent", "supervisor_agent")
         graph.add_edge("compaction_agent", "supervisor_agent")
         graph.add_edge("summary_agent", END)
 
@@ -254,7 +266,8 @@ class CodeAnalysisGraph:
             "supervisor_agent": [],
             "code_agent.execution": sorted(_CODE_EXECUTION_TOOL_NAMES),
             "code_agent.control": sorted(_CODE_CONTROL_TOOL_NAMES),
-            "log_agent": sorted(_LOG_AGENT_TOOL_NAMES),
+            "subagent.explore": sorted(_EXPLORE_AGENT_TOOL_NAMES),
+            "subagent.log": sorted(_LOG_AGENT_TOOL_NAMES),
             "compaction_agent": [],
             "summary_agent": [],
         }
@@ -263,9 +276,23 @@ class CodeAnalysisGraph:
 
     def _route_after_supervisor(self, state: InvestigationState) -> str:
         nxt = str(state.get("next_node", "code_agent") or "code_agent")
-        if nxt not in {"code_agent", "log_agent", "compaction_agent", "summary_agent"}:
+        if nxt not in {"code_agent", "compaction_agent", "summary_agent"}:
             return "code_agent"
         return nxt
+
+    def _bind_tools_with_fallback(self, tools: List[StructuredTool], agent_label: str) -> Any:
+        try:
+            return self.llm.bind_tools(tools)
+        except Exception as e:
+            logger.warning(
+                "bind_tools 失败，%s 将退化为无工具模式: llm_class=%s error_type=%s error=%r",
+                agent_label,
+                type(self.llm).__name__,
+                type(e).__name__,
+                e,
+                exc_info=True,
+            )
+            return self.llm
 
     # ────────────────────── Tool Definitions ───────────────────────────────
 
@@ -353,16 +380,33 @@ class CodeAnalysisGraph:
     def _build_code_control_tools(self) -> List[StructuredTool]:
         """构建 Code Agent 的跨 Agent 控制工具集合。"""
 
-        def ask_log_agent_tool(keywords: List[str]) -> str:
-            """当不确定代码何处报错时，提供英文关键词组合，让日志专家去生产日志中取证。"""
-            return f"日志关键词已提交: {keywords}"
+        def delegate_subagent_tool(
+            subagent_type: str,
+            task: str,
+            expected_output: str = "",
+            thoroughness: str = "medium",
+            keywords: Optional[List[str]] = None,
+        ) -> str:
+            """委托受限子代理执行聚焦任务，并把结果作为单条消息返回给当前 Code Agent。
+
+            这是参考 opencode TaskTool 的协作模式：主 Agent 不做硬切换，而是在需要时主动发起委托。
+            - subagent_type: 'explore' | 'log'
+            - task: 明确描述子代理要解决的子问题、搜索范围、返回形式
+            - expected_output: 希望子代理最终回传的结果结构
+            - thoroughness: explore 子代理的探索强度，可选 quick | medium | very thorough
+            - keywords: log 子代理使用的英文日志关键词；为空时会自动从 task / query 中推断
+            """
+            return (
+                "已请求子代理: "
+                f"subagent_type={subagent_type}, thoroughness={thoroughness}, keywords={keywords or []}"
+            )
 
         def submit_diagnosis_tool(root_cause_analysis: str) -> str:
             """当通过源码找到了确凿的缺陷后，调用此工具提交技术分析报告并结束排查。"""
             return f"已提交根因分析: {root_cause_analysis[:120]}"
 
         return [
-            StructuredTool.from_function(ask_log_agent_tool,    name="AskLogAgentTool"),
+            StructuredTool.from_function(delegate_subagent_tool, name="DelegateSubAgentTool"),
             StructuredTool.from_function(submit_diagnosis_tool, name="SubmitDiagnosisTool"),
         ]
 
@@ -415,6 +459,7 @@ class CodeAnalysisGraph:
         prompt = (
             "# 角色设定\n"
             "你是多智能体排障流程的总控 Supervisor，职责是：规划 -> 调度 -> 反思。\n\n"
+            "注意：`explore/log` 是 Code Agent 可自主委托的受限子代理，不是需要你硬切换的顶层节点。\n\n"
             "# 当前状态\n"
             f"- 用户问题：{state.get('query', '')}\n"
             f"- 日志类型：{state.get('log_type', 'unknown')}\n"
@@ -423,7 +468,6 @@ class CodeAnalysisGraph:
             f"- 元数据提交：{state.get('repo_commit_id', '') or '(none)'}\n"
             f"- 迭代轮次：{state.get('iteration_count', 0)} / {self.max_iterations}\n"
             f"- token计数：{state.get('token_count', 0)} / {self.token_limit}\n"
-            f"- 待检索日志关键词：{state.get('pending_log_keywords', [])}\n"
             f"- 当前根因状态：{('已提交' if state.get('raw_root_cause', '').strip() else '未提交')}\n"
             f"- 既有计划：{current_plan or '(empty)'}\n"
             f"- 默认下一跳（规则推导）：{default_next}\n\n"
@@ -436,7 +480,7 @@ class CodeAnalysisGraph:
             "{\n"
             '  "plan": "3-5 步简要计划，200字以内",\n'
             '  "reflection": "本轮反思与纠偏建议，180字以内",\n'
-            '  "next_agent": "code_agent | log_agent | compaction_agent | summary_agent"\n'
+            '  "next_agent": "code_agent | compaction_agent | summary_agent"\n'
             "}\n"
             "禁止输出 JSON 之外的任何内容。"
         )
@@ -514,7 +558,6 @@ class CodeAnalysisGraph:
 
         produced_messages: List[BaseMessage] = []
         conversation_messages: List[BaseMessage] = list(state.get("messages", []))
-        pending_log_keywords = None
         raw_root_cause = ""
         merged_extra_state: Dict[str, Any] = {}
         exit_reason = "step_limit_reached"
@@ -566,54 +609,6 @@ class CodeAnalysisGraph:
             args = self._coerce_args(first_call.get("args"))
             call_id = str(first_call.get("id") or self._new_id())
 
-            if tool_name == "AskLogAgentTool":
-                evidence_available = code_tool_invocations > 0
-                if not evidence_available:
-                    for existing_msg in conversation_messages:
-                        if isinstance(existing_msg, ToolMessage) and getattr(existing_msg, "name", "") in _CODE_EVIDENCE_TOOLS:
-                            evidence_available = True
-                            break
-                if not evidence_available:
-                    blocked_reason = (
-                        "当前尚无任何代码检索证据。请先调用 GetFileTreeTool / GrepCodeTool / ReadCodeTool "
-                        "至少一次，再发起 AskLogAgentTool。"
-                    )
-                    logger.info(
-                        "TOOL_BLOCKED trace_id=%s iter=%s tool=%s reason=%s args=%s",
-                        trace_id,
-                        iteration_count,
-                        tool_name,
-                        blocked_reason,
-                        json.dumps(args, ensure_ascii=False, sort_keys=True),
-                    )
-                    blocked_msg = SystemMessage(content=blocked_reason, id=self._new_id())
-                    produced_messages.append(blocked_msg)
-                    conversation_messages.append(blocked_msg)
-                    token_count += self._estimate_tokens_for_message(blocked_msg)
-                    exit_reason = "ask_log_blocked_no_evidence"
-                    continue
-
-                keywords = args.get("keywords")
-                if isinstance(keywords, str):
-                    keywords = [k.strip() for k in re.split(r"[,，\s]+", keywords) if k.strip()]
-                if not isinstance(keywords, list):
-                    keywords = []
-                pending_log_keywords = self._normalize_english_keywords(
-                    keywords=keywords,
-                    query=state.get("query", ""),
-                    limit=8,
-                )
-                logger.info(
-                    "TOOL_CONTROL trace_id=%s iter=%s tool=%s args=%s pending_keywords=%s",
-                    trace_id,
-                    iteration_count,
-                    tool_name,
-                    json.dumps(args, ensure_ascii=False, sort_keys=True),
-                    pending_log_keywords,
-                )
-                exit_reason = "handoff_to_log_agent"
-                break
-
             if tool_name == "SubmitDiagnosisTool":
                 analysis = str(args.get("root_cause_analysis", "")).strip()
                 if analysis:
@@ -644,6 +639,15 @@ class CodeAnalysisGraph:
                 repo_url=state.get("repo_url", ""),
                 repo_branch=repo_branch,
                 repo_commit_id=repo_commit_id,
+                trace_id=trace_id,
+                llm_call_count=llm_call_count,
+                query=state.get("query", ""),
+                working_memory=state.get("working_memory", ""),
+                purified_logs=state.get("purified_logs", ""),
+                log_file_path=state.get("log_file_path", ""),
+                log_search_attempts=int(state.get("log_search_attempts", 0)),
+                supervisor_plan=state.get("supervisor_plan", ""),
+                supervisor_reflection=state.get("supervisor_reflection", ""),
             )
 
             tool_msg = ToolMessage(
@@ -663,8 +667,11 @@ class CodeAnalysisGraph:
                 repo_branch = str(extra_state.get("repo_branch", repo_branch) or repo_branch)
                 repo_commit_id = str(extra_state.get("repo_commit_id", repo_commit_id) or repo_commit_id)
                 repo_cloned = bool(extra_state.get("repo_cloned", repo_cloned))
+                llm_call_count = int(extra_state.get("llm_call_count", llm_call_count))
 
             if tool_name in _CODE_EVIDENCE_TOOLS:
+                code_tool_invocations += 1
+            elif tool_name == "DelegateSubAgentTool" and str(extra_state.get("subagent_type", "")).lower() == "explore":
                 code_tool_invocations += 1
 
             logged_content = self._summarize_tool_result_for_log(
@@ -699,8 +706,6 @@ class CodeAnalysisGraph:
             "llm_call_count": llm_call_count,
             "code_tool_invocations": code_tool_invocations,
         }
-        if pending_log_keywords is not None:
-            updates["pending_log_keywords"] = pending_log_keywords
         if raw_root_cause:
             updates["raw_root_cause"] = raw_root_cause
         if merged_extra_state:
@@ -716,6 +721,15 @@ class CodeAnalysisGraph:
         repo_url: str,
         repo_branch: str,
         repo_commit_id: str,
+        trace_id: str = "unknown",
+        llm_call_count: int = 0,
+        query: str = "",
+        working_memory: str = "",
+        purified_logs: str = "",
+        log_file_path: str = "",
+        log_search_attempts: int = 0,
+        supervisor_plan: str = "",
+        supervisor_reflection: str = "",
     ) -> Tuple[str, Dict[str, Any]]:
         """执行工具并返回 (result_text, extra_state_updates)。"""
         extra: Dict[str, Any] = {}
@@ -783,6 +797,51 @@ class CodeAnalysisGraph:
                 max_depth     = self._safe_int(args.get("max_depth"), 3),
             ), extra
 
+        if tool_name == "DelegateSubAgentTool":
+            subagent_type = self._normalize_subagent_type(args.get("subagent_type"))
+            task = str(args.get("task", "") or "").strip()
+            expected_output = str(args.get("expected_output", "") or "").strip()
+            thoroughness = self._normalize_thoroughness(args.get("thoroughness"))
+            raw_keywords = args.get("keywords")
+
+            if subagent_type == "explore":
+                return self._run_explore_subagent(
+                    task=task,
+                    expected_output=expected_output,
+                    thoroughness=thoroughness,
+                    workspace_dir=workspace_dir,
+                    query=query,
+                    working_memory=working_memory,
+                    purified_logs=purified_logs,
+                    trace_id=trace_id,
+                    llm_call_count=llm_call_count,
+                    supervisor_plan=supervisor_plan,
+                    supervisor_reflection=supervisor_reflection,
+                )
+
+            if subagent_type == "log":
+                keywords = raw_keywords
+                if isinstance(keywords, str):
+                    keywords = [k.strip() for k in re.split(r"[,，\s]+", keywords) if k.strip()]
+                if not isinstance(keywords, list):
+                    keywords = []
+                return self._run_log_subagent(
+                    task=task,
+                    expected_output=expected_output,
+                    keywords=keywords,
+                    query=query,
+                    log_file_path=log_file_path,
+                    trace_id=trace_id,
+                    llm_call_count=llm_call_count,
+                    log_search_attempts=log_search_attempts,
+                )
+
+            return (
+                "DelegateSubAgentTool error: 未知子代理类型。"
+                "可选值：explore | log",
+                {"subagent_type": subagent_type, "llm_call_count": llm_call_count},
+            )
+
         return f"未知工具: {tool_name}", extra
 
     def _dispatch_log_tool(self, tool_name: str, **kwargs: Any) -> str:
@@ -795,61 +854,360 @@ class CodeAnalysisGraph:
             logger.warning("Log tool '%s' execution failed: %s", tool_name, e)
             return f"[LogAgent] 工具执行失败({tool_name}): {e}"
 
-    def _log_agent_node(self, state: InvestigationState) -> Dict[str, Any]:
-        keywords     = state.get("pending_log_keywords") or []
-        log_file_path = state.get("log_file_path", "")
-        trace_id = state.get("trace_id", "unknown")
-        llm_call_count = int(state.get("llm_call_count", 0))
-        query = state.get("query", "")
-        is_metric_query = self._is_metric_analysis_query(query)
-        log_search_attempts = int(state.get("log_search_attempts", 0)) + 1
+    @staticmethod
+    def _normalize_subagent_type(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if text in {"explore", "search", "file_search", "file-search"}:
+            return "explore"
+        if text in {"log", "logs", "log_agent", "log-agent"}:
+            return "log"
+        return text
 
-        raw_log_output = self._dispatch_log_tool(
-            "LogKeywordSearchTool",
-            log_file_path=log_file_path,
-            keywords=keywords,
-            context_lines=2,
-            trace_id=trace_id,
-            attempt=log_search_attempts,
+    @staticmethod
+    def _normalize_thoroughness(value: Any) -> str:
+        text = str(value or "medium").strip().lower().replace("-", " ").replace("_", " ")
+        if text in {"quick", "fast"}:
+            return "quick"
+        if text in {"very thorough", "verythorough", "thorough", "deep"}:
+            return "very_thorough"
+        return "medium"
+
+    def _explore_step_limit(self, thoroughness: str) -> int:
+        return int(_EXPLORE_STEP_LIMITS.get(thoroughness, _EXPLORE_STEP_LIMITS["medium"]))
+
+    def _build_explore_agent_prompt(
+        self,
+        task: str,
+        expected_output: str,
+        thoroughness: str,
+        workspace_dir: str,
+        query: str,
+        working_memory: str,
+        purified_logs: str,
+        supervisor_plan: str,
+        supervisor_reflection: str,
+    ) -> str:
+        thoroughness_display = {
+            "quick": "quick",
+            "medium": "medium",
+            "very_thorough": "very thorough",
+        }.get(thoroughness, "medium")
+        return (
+            "You are a file search specialist. You excel at thoroughly navigating and exploring codebases.\n\n"
+            "Your strengths:\n"
+            "- Rapidly finding files using glob patterns\n"
+            "- Searching code and text with powerful regex patterns\n"
+            "- Reading and analyzing file contents\n\n"
+            "Available tools in this sandbox:\n"
+            "- GlobCodeTool for broad file pattern matching\n"
+            "- GrepCodeTool for searching file contents with regex\n"
+            "- ReadCodeTool when you know the specific file path to inspect\n"
+            "- ListDirTool and GetFileTreeTool for directory discovery\n"
+            "- FindDefinitionTool for locating symbols\n\n"
+            "Guidelines:\n"
+            "- Adapt your search approach based on the caller thoroughness level\n"
+            "- Return file paths as absolute paths in your final response\n"
+            "- Do not create files, do not modify the workspace, and do not ask for agent switching\n"
+            "- Prefer concise findings that help the caller decide what to read next\n\n"
+            "Caller context:\n"
+            f"- Workspace root: {workspace_dir}\n"
+            f"- Thoroughness: {thoroughness_display}\n"
+            f"- User issue: {query or '(none)'}\n"
+            f"- Working memory: {working_memory or '(none)'}\n"
+            f"- Latest log evidence: {purified_logs or '(none)'}\n"
+            f"- Supervisor plan: {supervisor_plan or '(none)'}\n"
+            f"- Supervisor reflection: {supervisor_reflection or '(none)'}\n\n"
+            "Task from caller:\n"
+            f"{task or query or '(empty)'}\n\n"
+            "Expected output:\n"
+            f"{expected_output or 'Summarize the most relevant files/symbols and suggest the next code reads.'}\n\n"
+            "Final response format:\n"
+            "## Findings\n"
+            "- key findings\n"
+            "## Candidate Files\n"
+            "- /abs/path/to/file: why it matters\n"
+            "## Suggested Next Reads\n"
+            "- /abs/path/to/file:start-end"
         )
-        if is_metric_query:
-            log_prompt = (
+
+    def _fallback_explore_summary(self, messages: List[BaseMessage]) -> str:
+        tool_outputs = [
+            self._message_content(msg).strip()
+            for msg in messages
+            if isinstance(msg, ToolMessage) and self._message_content(msg).strip()
+        ]
+        if not tool_outputs:
+            return "未产出有效探索结果。"
+        tail = "\n\n".join(tool_outputs[-3:])
+        return f"基于工具检索，当前最相关的线索如下：\n{tail}"[:_MAX_SUBAGENT_RESULT_CHARS]
+
+    def _format_subagent_result(
+        self,
+        subagent_type: str,
+        task: str,
+        body: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        lines = [f"# {subagent_type} subagent result", f"- task: {task or '(empty)'}"]
+        for key, value in (metadata or {}).items():
+            text = str(value or "").strip()
+            if text:
+                lines.append(f"- {key}: {text}")
+        lines.append("")
+        lines.append((body or "未产出结果。").strip())
+        text = "\n".join(lines).strip()
+        if len(text) <= _MAX_SUBAGENT_RESULT_CHARS:
+            return text
+        return text[: _MAX_SUBAGENT_RESULT_CHARS - 3] + "..."
+
+    def _run_explore_subagent(
+        self,
+        task: str,
+        expected_output: str,
+        thoroughness: str,
+        workspace_dir: str,
+        query: str,
+        working_memory: str,
+        purified_logs: str,
+        trace_id: str,
+        llm_call_count: int,
+        supervisor_plan: str,
+        supervisor_reflection: str,
+    ) -> Tuple[str, Dict[str, Any]]:
+        if not workspace_dir:
+            result = self._format_subagent_result(
+                subagent_type="explore",
+                task=task or query,
+                body="Explore subagent error: workspace_dir 为空，请先调用 CloneRepoTool 准备代码工作区。",
+                metadata={"thoroughness": thoroughness},
+            )
+            return result, {"subagent_type": "explore", "llm_call_count": llm_call_count}
+
+        system_prompt = self._build_explore_agent_prompt(
+            task=task,
+            expected_output=expected_output,
+            thoroughness=thoroughness,
+            workspace_dir=workspace_dir,
+            query=query,
+            working_memory=working_memory,
+            purified_logs=purified_logs,
+            supervisor_plan=supervisor_plan,
+            supervisor_reflection=supervisor_reflection,
+        )
+        conversation: List[BaseMessage] = [
+            HumanMessage(
+                content=(
+                    "# Caller Request\n"
+                    f"{task or query or '(empty)'}\n\n"
+                    "# Expected Output\n"
+                    f"{expected_output or 'Return the most relevant files and why they matter.'}"
+                ),
+                id=self._new_id(),
+            )
+        ]
+        final_text = ""
+        max_steps = self._explore_step_limit(thoroughness)
+        steps_used = 0
+
+        for step in range(1, max_steps + 1):
+            steps_used = step
+            call_no = llm_call_count + 1
+            llm_call_count = call_no
+            response = self._invoke_llm_with_trace(
+                llm=self._explore_llm_with_tools,
+                payload=[SystemMessage(content=system_prompt, id=self._new_id()), *conversation],
+                trace_id=trace_id,
+                call_no=call_no,
+                agent_name="explore_subagent",
+                purpose=f"exploration_step_{step}",
+            )
+            response = self._normalize_ai_message(response)
+            conversation.append(response)
+
+            tool_calls = self._extract_tool_calls(response)
+            if not tool_calls:
+                final_text = self._message_content(response).strip()
+                break
+
+            first_call = tool_calls[0]
+            tool_name = first_call.get("name")
+            args = self._coerce_args(first_call.get("args"))
+            call_id = str(first_call.get("id") or self._new_id())
+
+            if tool_name not in _EXPLORE_AGENT_TOOL_NAMES:
+                blocked_result = (
+                    "Explore subagent error: 不允许使用该工具。"
+                    f"tool={tool_name}; allowed={sorted(_EXPLORE_AGENT_TOOL_NAMES)}"
+                )
+                conversation.append(
+                    ToolMessage(
+                        content=blocked_result,
+                        tool_call_id=call_id,
+                        name=tool_name or "UnknownTool",
+                        id=self._new_id(),
+                    )
+                )
+                continue
+
+            result_content, nested_extra = self._dispatch_tool(
+                tool_name=tool_name,
+                args=args,
+                workspace_dir=workspace_dir,
+                log_type="",
+                repo_url="",
+                repo_branch="",
+                repo_commit_id="",
+                trace_id=trace_id,
+                llm_call_count=llm_call_count,
+                query=query,
+                working_memory=working_memory,
+                purified_logs=purified_logs,
+                supervisor_plan=supervisor_plan,
+                supervisor_reflection=supervisor_reflection,
+            )
+            llm_call_count = int(nested_extra.get("llm_call_count", llm_call_count))
+            conversation.append(
+                ToolMessage(
+                    content=result_content,
+                    tool_call_id=call_id,
+                    name=tool_name or "UnknownTool",
+                    id=self._new_id(),
+                )
+            )
+
+        if not final_text:
+            call_no = llm_call_count + 1
+            llm_call_count = call_no
+            response = self._invoke_llm_with_trace(
+                llm=self.llm,
+                payload=[
+                    SystemMessage(
+                        content=(
+                            system_prompt
+                            + "\n\nYou have finished tool use. Summarize the findings now."
+                            " Do not ask for more tools."
+                        ),
+                        id=self._new_id(),
+                    ),
+                    *conversation,
+                ],
+                trace_id=trace_id,
+                call_no=call_no,
+                agent_name="explore_subagent",
+                purpose="final_summary",
+            )
+            final_text = self._message_content(response).strip()
+
+        final_text = final_text or self._fallback_explore_summary(conversation)
+        result = self._format_subagent_result(
+            subagent_type="explore",
+            task=task or query,
+            body=final_text,
+            metadata={
+                "thoroughness": {
+                    "quick": "quick",
+                    "medium": "medium",
+                    "very_thorough": "very thorough",
+                }.get(thoroughness, "medium"),
+                "workspace": workspace_dir,
+                "steps_used": steps_used,
+            },
+        )
+        return result, {
+            "subagent_type": "explore",
+            "llm_call_count": llm_call_count,
+            "pending_log_keywords": [],
+        }
+
+    def _build_log_purification_prompt(
+        self,
+        query: str,
+        task: str,
+        keywords: List[str],
+        raw_log_output: str,
+        expected_output: str,
+    ) -> str:
+        effective_query = task or query
+        if self._is_metric_analysis_query(effective_query):
+            return (
                 "# 角色设定\n"
                 "你是一个极其严谨的性能日志提纯专家，目标是提取可用于画时序曲线的指标样本。\n\n"
                 "# 当前任务\n"
                 f"用户问题：{query}\n"
-                f"Code Agent 关键词：{keywords}\n\n"
+                f"子任务：{effective_query}\n"
+                f"关键词：{keywords}\n"
+                f"期望输出：{expected_output or '(none)'}\n\n"
                 "<raw_logs>\n"
                 f"{raw_log_output}\n"
                 "</raw_logs>\n\n"
                 "# 处理指令\n"
                 "1. 仅保留与 CPU/负载/利用率/采样时间 相关的行。\n"
-                "2. 优先提取形如“时间戳 + 数值”的片段；保留最少必要上下文（模块名/线程名）。\n"
-                "3. 如果没有任何可画曲线的样本，必须明确说明“未提取到CPU时序样本”，并列出已尝试关键词。\n"
+                "2. 优先提取形如“时间戳 + 数值”的片段；保留最少必要上下文。\n"
+                "3. 如果没有任何可画曲线的样本，必须明确说明“未提取到CPU时序样本”。\n"
                 "4. 严禁编造不存在的数据点。\n\n"
                 "# 输出格式\n"
-                "输出 Markdown，包含两段：\n"
-                "- `证据摘要`（2-4 行）\n"
-                "- `时序样本`（若有则用表格；若无则写“未提取到CPU时序样本”）"
+                "输出 Markdown，包含 `证据摘要` 与 `时序样本` 两段。"
             )
-        else:
-            log_prompt = (
-                "# 角色设定\n"
-                "你是一个极其严谨的日志分析与数据清洗专家。你的唯一目标是从混杂着正常信息的原始日志堆栈中，提取出最致命的报错线索。\n\n"
-                "# 当前任务\n"
-                f"Code Agent 刚刚使用关键词组合 {keywords} 在生产服务器上执行了 grep 搜索，并截取了以下原始日志片段：\n\n"
-                "<raw_logs>\n"
-                f"{raw_log_output}\n"
-                "</raw_logs>\n\n"
-                "# 处理指令\n"
-                "请将上述原始日志提纯为一份高信噪比的「日志化验报告」。你必须遵循以下原则：\n"
-                "1. **去噪**：剔除毫无意义的 DEBUG/INFO 日志，忽略健康检查（Health Check）等噪音。\n"
-                "2. **提取堆栈**：精准保留包含 ERROR、Exception、FATAL、WARN 的那几行，特别是带有【具体代码文件名和行号】的调用栈（Stack Trace）。\n"
-                "3. **保留上下文**：如果报错前紧挨着有 HTTP 请求体或关键变量打印，必须保留，这往往是诱因。\n"
-                "4. **如实汇报**：如果日志中确实没有任何报错信息，请直接输出：「未找到匹配的异常日志，当前的日志均为常规/正常打印。」绝不要伪造报错。\n\n"
-                "# 输出格式\n"
-                "请直接输出提纯后的日志内容（不超过 1000 字），不需要任何寒暄或解释。"
+        return (
+            "# 角色设定\n"
+            "你是一个极其严谨的日志分析与数据清洗专家。你的唯一目标是从原始日志中提取最致命的报错线索。\n\n"
+            "# 当前任务\n"
+            f"用户问题：{query}\n"
+            f"子任务：{effective_query}\n"
+            f"关键词：{keywords}\n"
+            f"期望输出：{expected_output or '(none)'}\n\n"
+            "<raw_logs>\n"
+            f"{raw_log_output}\n"
+            "</raw_logs>\n\n"
+            "# 处理指令\n"
+            "1. 去噪：剔除无意义的 DEBUG/INFO 与健康检查噪音。\n"
+            "2. 提取堆栈：优先保留 ERROR、Exception、FATAL、WARN 以及带文件名/行号的栈信息。\n"
+            "3. 保留上下文：如果报错前有关键请求体或变量打印，保留最少必要上下文。\n"
+            "4. 如实汇报：没有异常时必须明确写“未找到匹配的异常日志”。\n\n"
+            "# 输出格式\n"
+            "请直接输出提纯后的日志内容（不超过 1000 字）。"
+        )
+
+    def _run_log_subagent(
+        self,
+        task: str,
+        expected_output: str,
+        keywords: List[Any],
+        query: str,
+        log_file_path: str,
+        trace_id: str,
+        llm_call_count: int,
+        log_search_attempts: int,
+    ) -> Tuple[str, Dict[str, Any]]:
+        if not log_file_path:
+            result = self._format_subagent_result(
+                subagent_type="log",
+                task=task or query,
+                body="Log subagent error: log_file_path 为空，无法检索生产日志。",
             )
+            return result, {"subagent_type": "log", "llm_call_count": llm_call_count}
+
+        normalized_keywords = self._normalize_english_keywords(
+            keywords=list(keywords or []),
+            query=f"{query}\n{task}",
+            limit=8,
+        )
+        current_attempt = int(log_search_attempts) + 1
+        raw_log_output = self._dispatch_log_tool(
+            "LogKeywordSearchTool",
+            log_file_path=log_file_path,
+            keywords=normalized_keywords,
+            context_lines=2,
+            trace_id=trace_id,
+            attempt=current_attempt,
+        )
+        log_prompt = self._build_log_purification_prompt(
+            query=query,
+            task=task,
+            keywords=normalized_keywords,
+            raw_log_output=raw_log_output,
+            expected_output=expected_output,
+        )
 
         try:
             call_no = llm_call_count + 1
@@ -859,52 +1217,63 @@ class CodeAnalysisGraph:
                 payload=log_prompt,
                 trace_id=trace_id,
                 call_no=call_no,
-                agent_name="log_agent",
+                agent_name="log_subagent",
                 purpose="log_purification",
             )
             purified_logs = self._message_content(response).strip()
         except Exception as e:
-            logger.warning("Log Agent 提纯失败，退化为原始片段: %s", e)
+            logger.warning("Log subagent 提纯失败，退化为原始片段: %s", e)
             purified_logs = raw_log_output
+
         purified_logs = purified_logs or "未找到匹配的异常日志，当前的日志均为常规/正常打印。"
+        result_body = purified_logs
+        if self._is_no_log_match_result(purified_logs):
+            suggested_keywords = self._suggest_next_log_keywords(
+                query=task or query,
+                used_keywords=normalized_keywords,
+            )
+            result_body = (
+                f"{purified_logs}\n\n"
+                f"建议下一轮关键词: {suggested_keywords}\n"
+                "若仍无结果，请回到代码侧定位打印点/采样点，再反向构造关键词。"
+            )
 
-        msg = SystemMessage(
-            content=(
-                "以下是 Log Agent 的日志取证结果（已精简）：\n"
-                f"{purified_logs}"
-            ),
-            id=self._new_id(),
+        result = self._format_subagent_result(
+            subagent_type="log",
+            task=task or query,
+            body=result_body,
+            metadata={
+                "keywords": ", ".join(normalized_keywords),
+                "attempt": current_attempt,
+            },
         )
-
-        no_log_match = self._is_no_log_match_result(purified_logs)
-        reflection_msgs: List[BaseMessage] = []
-        if no_log_match:
-            suggested_keywords = self._suggest_next_log_keywords(query=query, used_keywords=keywords)
-            reflection_text = (
-                "日志检索反思：本轮未提取到有效证据。"
-                f"已尝试关键词={keywords}；建议下一轮改用={suggested_keywords}。"
-                "若仍无结果，请回到代码侧继续定位采样点/打印点，再反向构造关键词。"
-            )
-            logger.info(
-                "REFLECTION_LOG_AGENT trace_id=%s attempt=%s no_match=%s used_keywords=%s suggested_keywords=%s",
-                trace_id,
-                log_search_attempts,
-                no_log_match,
-                keywords,
-                suggested_keywords,
-            )
-            reflection_msgs.append(SystemMessage(content=reflection_text, id=self._new_id()))
-
-        token_after = int(state.get("token_count", 0)) + self._estimate_tokens_for_message(msg)
-        for rf_msg in reflection_msgs:
-            token_after += self._estimate_tokens_for_message(rf_msg)
-        return {
-            "purified_logs":        purified_logs,
+        return result, {
+            "subagent_type": "log",
+            "purified_logs": purified_logs,
             "pending_log_keywords": [],
-            "messages":             [msg, *reflection_msgs],
-            "token_count":          token_after,
-            "llm_call_count":       llm_call_count,
-            "log_search_attempts":  log_search_attempts,
+            "log_search_attempts": current_attempt,
+            "llm_call_count": llm_call_count,
+        }
+
+    def _log_agent_node(self, state: InvestigationState) -> Dict[str, Any]:
+        result_content, extra_state = self._run_log_subagent(
+            task=state.get("query", ""),
+            expected_output="返回精简后的高信噪比日志证据。",
+            keywords=state.get("pending_log_keywords") or [],
+            query=state.get("query", ""),
+            log_file_path=state.get("log_file_path", ""),
+            trace_id=state.get("trace_id", "unknown"),
+            llm_call_count=int(state.get("llm_call_count", 0)),
+            log_search_attempts=int(state.get("log_search_attempts", 0)),
+        )
+        msg = SystemMessage(content=result_content, id=self._new_id())
+        return {
+            "purified_logs": extra_state.get("purified_logs", ""),
+            "pending_log_keywords": [],
+            "messages": [msg],
+            "token_count": int(state.get("token_count", 0)) + self._estimate_tokens_for_message(msg),
+            "llm_call_count": int(extra_state.get("llm_call_count", state.get("llm_call_count", 0))),
+            "log_search_attempts": int(extra_state.get("log_search_attempts", state.get("log_search_attempts", 0))),
         }
 
     def _compaction_agent_node(self, state: InvestigationState) -> Dict[str, Any]:
@@ -1643,23 +2012,29 @@ class CodeAnalysisGraph:
             "## B. 协作控制工具（仅用于跨 Agent 协作）\n"
             "| 工具 | 用途 |\n"
             "|------|------|\n"
-            "| AskLogAgentTool | 提供关键词，让日志专家从生产日志取证 |\n"
+            "| DelegateSubAgentTool | 参考 opencode TaskTool，委托 `explore` 或 `log` 子代理做聚焦任务，并把结果回传给当前 Code Agent |\n"
             "| SubmitDiagnosisTool | 提交确凿的根因分析，结束排查 |\n\n"
+
+            "## C. 可委托子代理（由 `DelegateSubAgentTool` 触发，不做硬切换）\n"
+            "| 子代理 | 擅长问题 |\n"
+            "|------|------|\n"
+            "| explore | 大范围找文件、按模式扫代码、先帮你缩小候选文件/符号集合 |\n"
+            "| log | 根据英文关键词去日志里取证，并回传高信噪比日志证据 |\n\n"
 
             "# 标准排查工作流\n"
             "**第 0 步 - 克隆代码**（如工作区未就绪）：\n"
             "   调用 `CloneRepoTool(log_type=..., branch=..., force_refresh=true)` 克隆对应仓库。\n\n"
             "**第 1 步 - 代码结构探索**：\n"
-            "   调用 `GetFileTreeTool` 了解模块划分；如有报错文件路径，直接跳到第 3 步。\n\n"
+            "   小范围问题直接自己调用 `GetFileTreeTool`/`GlobCodeTool`/`GrepCodeTool`；大范围找文件时优先委托 `explore` 子代理。\n\n"
             "**第 2 步 - 日志取证**（当缺乏具体报错线索时）：\n"
-            "   先把用户问题翻译为英文检索词，再调用 `AskLogAgentTool` 提交关键词组合，取回精简报错堆栈。\n\n"
+            "   把用户问题翻译为英文检索词，并通过 `DelegateSubAgentTool(subagent_type='log', ...)` 委托日志子代理取证。\n\n"
             "**第 3 步 - 代码溯源**：\n"
             "   - 用 `GrepCodeTool` 搜索报错字符串、函数名；\n"
             "   - 用 `FindDefinitionTool` 找到函数/类的定义文件和行号；\n"
             "   - 用 `ReadCodeTool` 精读关键代码逻辑。\n\n"
             "**第 4 步 - 深度推理**：\n"
             "   结合日志证据和源码，推理变量为何为空、条件为何未命中。\n"
-            "   如需追踪调用链，继续使用 `GrepCodeTool`/`FindDefinitionTool`/`ReadCodeTool`。\n\n"
+            "   若搜索空间过大，可再次委托 `explore` 子代理而不是机械切换到别的顶层节点。\n\n"
             "**第 5 步 - 结案**：\n"
             "   当确信找到具体代码缺陷后，调用 `SubmitDiagnosisTool` 提交分析报告。\n\n"
 
@@ -1667,8 +2042,8 @@ class CodeAnalysisGraph:
             "- **英文检索强制**：`pattern` / `symbol` / `keywords` 必须优先使用英文；中文描述先翻译成英文关键词后再搜索。\n"
             "- **返回约束**：优先让工具结果只包含“函数名”或“日志打印关键词”，避免返回大段源码和整行日志。\n"
             "- **零幻觉原则**：未读取源码前，绝不猜测代码实现逻辑。\n"
-            "- **顺序约束**：在 `code_tool_invocations == 0` 时，禁止调用 AskLogAgentTool/SubmitDiagnosisTool。\n"
-            "- **反思机制**：若日志专家返回「未找到匹配」，换一组更宽泛的关键词再试，最多 3 次。\n"
+            "- **协作约束**：优先把子代理当成可选工具，委托时必须写清楚任务范围和期望回传内容。\n"
+            "- **反思机制**：若日志子代理返回「未找到匹配」，换一组更宽泛的关键词再试，最多 3 次。\n"
             "- **输出约束**：禁止输出 `<think>`/`<thinking>` 标签内容。"
         )
 
@@ -1703,8 +2078,8 @@ class CodeAnalysisGraph:
             },
             {
                 "id": "step_3",
-                "title": "Log Agent 取证",
-                "description": "按关键词检索日志并回传精简证据",
+                "title": "SubAgent 协作",
+                "description": "Code Agent 按需委托 explore/log 子代理取证，再回到主推理链继续分析",
                 "status": "completed" if final_state.get("purified_logs") else "pending",
             },
             {
@@ -1727,7 +2102,7 @@ class CodeAnalysisGraph:
             "status":    "completed",
             "timestamp": datetime.utcnow().isoformat(),
             "plan": {
-                "content":         "五维智能体流程已执行：Supervisor -> Code/Log/(Compaction) -> Summary",
+                "content":         "多智能体流程已执行：Supervisor -> Code/(Explore|Log SubAgents)/(Compaction) -> Summary",
                 "steps":           plan_steps,
                 "total_steps":     len(plan_steps),
                 "completed_steps": sum(1 for s in plan_steps if s["status"] == "completed"),
@@ -1779,8 +2154,6 @@ class CodeAnalysisGraph:
             return "summary_agent"
         if int(state.get("token_count", 0)) > self.token_limit:
             return "compaction_agent"
-        if state.get("pending_log_keywords"):
-            return "log_agent"
         return "code_agent"
 
     def _apply_supervisor_constraints(
@@ -1789,7 +2162,7 @@ class CodeAnalysisGraph:
         suggested_next: str,
         fallback: str,
     ) -> str:
-        allowed = {"code_agent", "log_agent", "compaction_agent", "summary_agent"}
+        allowed = {"code_agent", "compaction_agent", "summary_agent"}
         candidate = suggested_next if suggested_next in allowed else fallback
 
         if str(state.get("raw_root_cause", "")).strip():
@@ -1803,15 +2176,9 @@ class CodeAnalysisGraph:
         if not workspace_ready:
             return "code_agent"
 
-        if state.get("pending_log_keywords"):
-            return "log_agent"
-
         if candidate == "summary_agent":
             # 防止 Supervisor LLM 在未满足完成条件时提前收敛到 summary。
-            return fallback if fallback in {"code_agent", "log_agent", "compaction_agent"} else "code_agent"
-
-        if candidate == "log_agent" and not state.get("pending_log_keywords"):
-            return "code_agent"
+            return fallback if fallback in {"code_agent", "compaction_agent"} else "code_agent"
         return candidate
 
     @staticmethod
