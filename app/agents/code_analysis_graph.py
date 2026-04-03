@@ -298,6 +298,7 @@ class CodeAnalysisGraph:
             directory: 限定搜索的子目录（相对于工作区根，空则搜索全工作区）。
             file_glob: 文件类型过滤，如 '*.c', '*.h', '**/*.py', 'src/**/*.java'。
             context_lines: 每个匹配行前后显示的上下文行数（默认 2）。
+            返回值将优先提炼为“函数名 / 日志关键词”候选，而不是完整代码片段。
             """
             return f"已请求代码搜索: pattern={pattern}"
 
@@ -322,6 +323,7 @@ class CodeAnalysisGraph:
 
             symbol: 要查找的符号名，如 'oam_init', 'RadioContext', 'MAX_RETRY'。
             file_glob: 文件过滤，如 '*.c', '*.h', '*.py'（空则搜索所有文本文件）。
+            返回值将优先给出定义命中的函数名候选列表。
             """
             return f"已请求查找符号定义: symbol={symbol}"
 
@@ -348,7 +350,7 @@ class CodeAnalysisGraph:
         """构建 Code Agent 的跨 Agent 控制工具集合。"""
 
         def ask_log_agent_tool(keywords: List[str]) -> str:
-            """当不确定代码何处报错时，提供关键词组合，让日志专家去生产日志中取证。"""
+            """当不确定代码何处报错时，提供英文关键词组合，让日志专家去生产日志中取证。"""
             return f"日志关键词已提交: {keywords}"
 
         def submit_diagnosis_tool(root_cause_analysis: str) -> str:
@@ -570,7 +572,11 @@ class CodeAnalysisGraph:
                 keywords = [k.strip() for k in re.split(r"[,，\s]+", keywords) if k.strip()]
             if not isinstance(keywords, list):
                 keywords = []
-            updates["pending_log_keywords"] = [str(k).strip() for k in keywords if str(k).strip()][:8]
+            updates["pending_log_keywords"] = self._normalize_english_keywords(
+                keywords=keywords,
+                query=state.get("query", ""),
+                limit=8,
+            )
             logger.info(
                 "TOOL_CONTROL trace_id=%s iter=%s tool=%s args=%s pending_keywords=%s",
                 trace_id,
@@ -1206,9 +1212,10 @@ class CodeAnalysisGraph:
     def _grep_with_rg(
         self, pattern: str, path: str, file_glob: str, context: int
     ) -> str:
+        _ = context  # 关键词抽取模式下不返回上下文片段
         cmd = [
-            _RG_BIN, "-n", "--no-heading", f"-C{context}",
-            "--max-count=50", "--max-filesize=5M",
+            _RG_BIN, "-n", "--no-heading",
+            "--max-count=120", "--max-filesize=5M",
         ]
         if file_glob:
             cmd.extend(["--glob", file_glob])
@@ -1226,13 +1233,29 @@ class CodeAnalysisGraph:
 
         if not output:
             return f"GrepCodeTool: 未在 {path} 中找到匹配 '{pattern}'"
-        header = f"# GrepCode: '{pattern}'" + (f"  glob={file_glob}" if file_glob else "")
-        return f"{header}\n{output}"[:_MAX_GREP_OUTPUT]
+
+        lines = [ln for ln in output.splitlines() if ln.strip()]
+        fn_names, log_keywords = self._extract_candidate_terms(lines=lines, max_items=24)
+        if not fn_names and not log_keywords:
+            for token in self._extract_ascii_tokens(pattern):
+                t = token.strip()
+                if t and t not in fn_names:
+                    fn_names.append(t)
+                if len(fn_names) >= 5:
+                    break
+        result = self._format_candidate_result(
+            tool_name="GrepCodeTool",
+            query_value=pattern,
+            function_names=fn_names,
+            log_keywords=log_keywords,
+        )
+        return result[:_MAX_GREP_OUTPUT]
 
     def _grep_with_python(
         self, pattern: str, path: str, file_glob: str, context: int
     ) -> str:
         """纯 Python 回退实现（当 ripgrep 不可用时）。"""
+        _ = context
         try:
             regex = re.compile(pattern, re.MULTILINE)
         except re.error:
@@ -1257,21 +1280,34 @@ class CodeAnalysisGraph:
                 for i, line in enumerate(file_lines):
                     if regex.search(line):
                         rel = os.path.relpath(fpath, path)
-                        start = max(0, i - context)
-                        end   = min(len(file_lines), i + context + 1)
-                        lines_out.append(f"# {rel}:{i + 1}")
-                        for j in range(start, end):
-                            prefix = ">" if j == i else " "
-                            lines_out.append(f"{j + 1:>6}{prefix}| {file_lines[j].rstrip()}")
-                        lines_out.append("")
+                        lines_out.append(f"{rel}:{i + 1}:{line.rstrip()}")
                         match_count += 1
-                        if match_count >= 50:
-                            lines_out.append("(已达到 50 条匹配上限)")
-                            return "\n".join(lines_out)[:_MAX_GREP_OUTPUT]
+                        if match_count >= 120:
+                            fn_names, log_keywords = self._extract_candidate_terms(lines_out, max_items=24)
+                            return self._format_candidate_result(
+                                tool_name="GrepCodeTool",
+                                query_value=pattern,
+                                function_names=fn_names,
+                                log_keywords=log_keywords,
+                            )[:_MAX_GREP_OUTPUT]
 
         if not lines_out:
             return f"GrepCodeTool: 未在 {path} 中找到匹配 '{pattern}'"
-        return "\n".join(lines_out)[:_MAX_GREP_OUTPUT]
+
+        fn_names, log_keywords = self._extract_candidate_terms(lines=lines_out, max_items=24)
+        if not fn_names and not log_keywords:
+            for token in self._extract_ascii_tokens(pattern):
+                t = token.strip()
+                if t and t not in fn_names:
+                    fn_names.append(t)
+                if len(fn_names) >= 5:
+                    break
+        return self._format_candidate_result(
+            tool_name="GrepCodeTool",
+            query_value=pattern,
+            function_names=fn_names,
+            log_keywords=log_keywords,
+        )[:_MAX_GREP_OUTPUT]
 
     def _glob_code(self, workspace_dir: str, pattern: str, directory: str) -> str:
         if not workspace_dir:
@@ -1408,7 +1444,7 @@ class CodeAnalysisGraph:
                 logger.debug("FindDefinitionTool rg error: %s", exc)
         else:
             output = self._grep_with_python(combined_pattern, str(ws), file_glob, 1)
-            if output.startswith("GrepCodeTool:"):
+            if output.startswith("GrepCodeTool"):
                 output = ""
 
         if not output:
@@ -1428,8 +1464,16 @@ class CodeAnalysisGraph:
                     output = ""
             if not output:
                 return f"FindDefinitionTool: 未找到符号 '{symbol}' 的定义"
-
-        return f"# FindDefinition: '{symbol}'\n{output}"[:_MAX_FIND_OUTPUT]
+        lines = [ln for ln in (output or "").splitlines() if ln.strip()]
+        fn_names, _ = self._extract_candidate_terms(lines=lines, max_items=20)
+        if symbol not in fn_names:
+            fn_names.insert(0, symbol)
+        return self._format_candidate_result(
+            tool_name="FindDefinitionTool",
+            query_value=symbol,
+            function_names=fn_names[:20],
+            log_keywords=[],
+        )[:_MAX_FIND_OUTPUT]
 
     def _get_file_tree(
         self, workspace_dir: str, directory: str, max_depth: int
@@ -1542,7 +1586,7 @@ class CodeAnalysisGraph:
             "**第 1 步 - 代码结构探索**：\n"
             "   调用 `GetFileTreeTool` 了解模块划分；如有报错文件路径，直接跳到第 3 步。\n\n"
             "**第 2 步 - 日志取证**（当缺乏具体报错线索时）：\n"
-            "   调用 `AskLogAgentTool` 提交关键词组合，取回精简报错堆栈。\n\n"
+            "   先把用户问题翻译为英文检索词，再调用 `AskLogAgentTool` 提交关键词组合，取回精简报错堆栈。\n\n"
             "**第 3 步 - 代码溯源**：\n"
             "   - 用 `GrepCodeTool` 搜索报错字符串、函数名；\n"
             "   - 用 `FindDefinitionTool` 找到函数/类的定义文件和行号；\n"
@@ -1554,6 +1598,8 @@ class CodeAnalysisGraph:
             "   当确信找到具体代码缺陷后，调用 `SubmitDiagnosisTool` 提交分析报告。\n\n"
 
             "# 纪律约束\n"
+            "- **英文检索强制**：`pattern` / `symbol` / `keywords` 必须优先使用英文；中文描述先翻译成英文关键词后再搜索。\n"
+            "- **返回约束**：优先让工具结果只包含“函数名”或“日志打印关键词”，避免返回大段源码和整行日志。\n"
             "- **零幻觉原则**：未读取源码前，绝不猜测代码实现逻辑。\n"
             "- **顺序约束**：在 `code_tool_invocations == 0` 时，禁止调用 AskLogAgentTool/SubmitDiagnosisTool。\n"
             "- **反思机制**：若日志专家返回「未找到匹配」，换一组更宽泛的关键词再试，最多 3 次。\n"
@@ -2009,6 +2055,151 @@ class CodeAnalysisGraph:
                     out.append(str(item))
             return "\n".join(out)
         return str(content)
+
+    @staticmethod
+    def _extract_ascii_tokens(text: str) -> List[str]:
+        if not text:
+            return []
+        return re.findall(r"[A-Za-z][A-Za-z0-9_]{1,63}", text)
+
+    def _normalize_english_keywords(self, keywords: List[Any], query: str, limit: int = 8) -> List[str]:
+        """标准化日志检索关键词：优先英文 token，缺失时从用户描述推断英文关键词。"""
+        normalized: List[str] = []
+        seen = set()
+        for raw in keywords:
+            for token in self._extract_ascii_tokens(str(raw or "")):
+                tk = token.strip().lower()
+                if not tk or tk in seen:
+                    continue
+                seen.add(tk)
+                normalized.append(tk)
+                if len(normalized) >= limit:
+                    return normalized
+
+        if len(normalized) < limit:
+            for token in self._derive_english_keywords_from_text(query):
+                tk = token.strip().lower()
+                if not tk or tk in seen:
+                    continue
+                seen.add(tk)
+                normalized.append(tk)
+                if len(normalized) >= limit:
+                    break
+        return normalized
+
+    def _derive_english_keywords_from_text(self, text: str) -> List[str]:
+        """从用户问题中提炼英文检索词，兼容中英混输场景。"""
+        candidates: List[str] = []
+        for token in self._extract_ascii_tokens(text):
+            tk = token.lower()
+            if tk not in candidates:
+                candidates.append(tk)
+
+        zh_map = {
+            "超时": "timeout",
+            "失败": "failed",
+            "异常": "exception",
+            "报错": "error",
+            "错误": "error",
+            "空指针": "null",
+            "崩溃": "crash",
+            "重启": "restart",
+            "升级": "upgrade",
+            "下载": "download",
+            "上传": "upload",
+            "连接": "connect",
+            "网络": "network",
+            "内存": "memory",
+            "磁盘": "disk",
+            "线程": "thread",
+            "死锁": "deadlock",
+            "卡死": "hang",
+            "性能": "performance",
+            "告警": "alarm",
+            "cpu": "cpu",
+        }
+        lowered = str(text or "").lower()
+        for zh, en in zh_map.items():
+            if zh in lowered and en not in candidates:
+                candidates.append(en)
+
+        if not candidates:
+            candidates = ["error", "exception", "failed", "timeout", "null", "crash"]
+        return candidates[:12]
+
+    @staticmethod
+    def _extract_candidate_terms(lines: List[str], max_items: int = 20) -> Tuple[List[str], List[str]]:
+        """从搜索命中行提取函数名和日志关键词。"""
+        function_names: List[str] = []
+        log_keywords: List[str] = []
+        fn_seen = set()
+        kw_seen = set()
+
+        fn_stop = {
+            "if", "for", "while", "switch", "return", "sizeof", "catch", "throw",
+            "new", "delete", "case", "else", "do", "try", "finally", "class", "def",
+            "async", "log", "printf", "print", "logger",
+        }
+        kw_stop = {
+            "info", "debug", "warn", "warning", "error", "failed", "failure",
+            "start", "stop", "success", "value", "message",
+        }
+
+        for raw in lines:
+            line = raw.strip()
+            if not line:
+                continue
+            m = re.match(r"^[^:]+:\d+:(.*)$", line)
+            code = (m.group(1) if m else line).strip()
+            if not code:
+                continue
+
+            for p in (
+                r"\b(?:def|async\s+def|class)\s+([A-Za-z_][A-Za-z0-9_]*)",
+                r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+            ):
+                for hit in re.findall(p, code):
+                    name = str(hit).strip()
+                    low = name.lower()
+                    if not name or low in fn_stop or low in fn_seen:
+                        continue
+                    fn_seen.add(low)
+                    function_names.append(name)
+                    if len(function_names) >= max_items:
+                        break
+                if len(function_names) >= max_items:
+                    break
+
+            quoted = re.findall(r"['\"]([^'\"]{3,120})['\"]", code)
+            for seg in quoted:
+                for token in re.findall(r"[A-Za-z][A-Za-z0-9_]{2,63}", seg):
+                    low = token.lower()
+                    if low in kw_stop or low in kw_seen:
+                        continue
+                    kw_seen.add(low)
+                    log_keywords.append(low)
+                    if len(log_keywords) >= max_items:
+                        break
+                if len(log_keywords) >= max_items:
+                    break
+
+            if len(function_names) >= max_items and len(log_keywords) >= max_items:
+                break
+
+        return function_names[:max_items], log_keywords[:max_items]
+
+    @staticmethod
+    def _format_candidate_result(tool_name: str, query_value: str, function_names: List[str], log_keywords: List[str]) -> str:
+        """统一格式化：仅返回函数名或日志关键词。"""
+        if not function_names and not log_keywords:
+            return f"{tool_name}: 未提取到函数名或日志关键词 (query={query_value})"
+        fn_text = ", ".join(function_names) if function_names else "(none)"
+        kw_text = ", ".join(log_keywords) if log_keywords else "(none)"
+        return (
+            f"{tool_name} candidates ({query_value})\n"
+            f"function_names: {fn_text}\n"
+            f"log_keywords: {kw_text}"
+        )
 
     def _estimate_tokens_for_message(self, msg: BaseMessage) -> int:
         return self._estimate_tokens(self._message_content(msg))
