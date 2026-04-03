@@ -1888,7 +1888,7 @@ class CodeAnalysisGraph:
             payload_summary,
         )
         logger.info(
-            "LLM_CALL_INPUT_FULL trace_id=%s call_no=%d agent=%s payload=\n%s",
+            "LLM_CALL_INPUT_FULL trace_id=%s call_no=%d agent=%s payload=\n======\n%s\n======",
             trace_id,
             call_no,
             agent_name,
@@ -1916,7 +1916,7 @@ class CodeAnalysisGraph:
                 response_text_sanitized,
             )
             logger.info(
-                "LLM_CALL_OUTPUT_FULL trace_id=%s call_no=%d agent=%s output=\n%s",
+                "LLM_CALL_OUTPUT_FULL trace_id=%s call_no=%d agent=%s output=\n++++++\n%s\n++++++",
                 trace_id,
                 call_no,
                 agent_name,
