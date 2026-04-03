@@ -49,6 +49,9 @@ _MAX_GLOB_FILES   = 80     # glob 结果最大文件数
 _MAX_TREE_LINES   = 150    # 文件树最大行数
 _MAX_LIST_ENTRIES = 200    # 目录列表最大条目数
 _MAX_FIND_OUTPUT  = 6000   # 符号定义搜索最大字符数
+_MAX_TOOL_LOG_CHARS = 2400  # TOOL_RESULT 日志最大字符数（摘要后）
+_FILE_TREE_LOG_HEAD_LINES = 24
+_FILE_TREE_LOG_TAIL_LINES = 12
 
 # 日志类型 -> 仓库 URL 的映射键
 _LOG_TYPE_OAM_KEYS   = {"oam", "oam_antenna"}
@@ -630,6 +633,10 @@ class CodeAnalysisGraph:
         updates.update(extra_state)
         if tool_name in _CODE_EVIDENCE_TOOLS:
             updates["code_tool_invocations"] = int(state.get("code_tool_invocations", 0)) + 1
+        logged_content = self._summarize_tool_result_for_log(
+            tool_name=tool_name or "unknown",
+            result_content=result_content,
+        )
         logger.info(
             "TOOL_RESULT trace_id=%s iter=%s tool=%s result_chars=%d extra_state_keys=%s content=%s",
             trace_id,
@@ -637,7 +644,7 @@ class CodeAnalysisGraph:
             tool_name or "unknown",
             len(result_content or ""),
             ",".join(sorted(extra_state.keys())) if extra_state else "(none)",
-            result_content,
+            logged_content,
         )
         return updates
 
@@ -1986,6 +1993,22 @@ class CodeAnalysisGraph:
         if len(value) <= max_len:
             return value
         return value[: max_len - 3] + "..."
+
+    def _summarize_tool_result_for_log(self, tool_name: str, result_content: Any) -> str:
+        text = str(result_content or "")
+        if tool_name != "GetFileTreeTool":
+            return self._truncate_for_log(text, max_len=_MAX_TOOL_LOG_CHARS)
+
+        lines = text.splitlines()
+        keep = _FILE_TREE_LOG_HEAD_LINES + _FILE_TREE_LOG_TAIL_LINES
+        if len(lines) <= keep + 1:
+            return self._truncate_for_log(text, max_len=_MAX_TOOL_LOG_CHARS)
+
+        head = lines[:_FILE_TREE_LOG_HEAD_LINES]
+        tail = lines[-_FILE_TREE_LOG_TAIL_LINES:]
+        omitted = len(lines) - len(head) - len(tail)
+        summary = "\n".join([*head, f"... (日志省略 {omitted} 行)", *tail])
+        return self._truncate_for_log(summary, max_len=_MAX_TOOL_LOG_CHARS)
 
     def _normalize_ai_message(self, response: Any) -> AIMessage:
         if isinstance(response, AIMessage):
