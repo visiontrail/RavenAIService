@@ -125,11 +125,11 @@ class RuntimeDataCleaner:
         except FileNotFoundError:
             pass  # pkill 命令不存在
         
-        # 如果有stop.sh脚本，使用它
-        stop_script = self.project_root / 'stop.sh'
+        # 如果有统一 Docker 停止脚本，优先使用它
+        stop_script = self.project_root / 'scripts' / 'docker-stop.sh'
         if stop_script.exists():
             try:
-                subprocess.run(['bash', str(stop_script)], 
+                subprocess.run(['bash', str(stop_script)],
                              capture_output=True, check=False)
             except Exception:
                 pass
@@ -241,16 +241,20 @@ class RuntimeDataCleaner:
             return
         
         try:
-            # 使用docker-compose清理
+            # 使用 Docker Compose 清理
             compose_file = self.project_root / 'docker-compose.yml'
             if compose_file.exists():
-                subprocess.run(['docker-compose', 'down', '-v'], 
-                             cwd=self.project_root, capture_output=True, check=False)
-                self.logger.success("已执行docker-compose清理")
+                if shutil.which('docker-compose'):
+                    subprocess.run(['docker-compose', 'down', '-v'],
+                                 cwd=self.project_root, capture_output=True, check=False)
+                else:
+                    subprocess.run(['docker', 'compose', 'down', '-v'],
+                                 cwd=self.project_root, capture_output=True, check=False)
+                self.logger.success("已执行 Docker Compose 清理")
             
             # 清理相关容器
             result = subprocess.run(['docker', 'ps', '-a', '--filter', 
-                                   'name=logstagingservice', '--format', '{{.Names}}'],
+                                   'name=raven-', '--format', '{{.Names}}'],
                                   capture_output=True, text=True, check=False)
             
             if result.stdout.strip():
@@ -264,7 +268,7 @@ class RuntimeDataCleaner:
             
             # 清理相关volumes
             result = subprocess.run(['docker', 'volume', 'ls', '--filter', 
-                                   'name=logstagingservice', '--format', '{{.Name}}'],
+                                   'name=raven-ai-service', '--format', '{{.Name}}'],
                                   capture_output=True, text=True, check=False)
             
             if result.stdout.strip():
@@ -356,10 +360,10 @@ def main():
     args = parser.parse_args()
     
     # 获取项目根目录
-    script_dir = Path(__file__).parent.absolute()
+    project_root = Path(__file__).resolve().parent.parent
     
     # 检查是否在项目根目录
-    if not (script_dir / 'app' / 'main.py').exists():
+    if not (project_root / 'app' / 'main.py').exists():
         Logger.error("请在LogStagingService项目根目录下运行此脚本")
         sys.exit(1)
     
@@ -368,7 +372,7 @@ def main():
     
     # 创建清理器
     cleaner = RuntimeDataCleaner(
-        project_root=script_dir,
+        project_root=project_root,
         keep_uploads=keep_uploads,
         docker_cleanup=args.docker,
         dry_run=args.dry_run,
@@ -418,7 +422,7 @@ def main():
             Logger.success("✅ 清理完成！所有运行时数据已清理")
             print()
             Logger.info("💡 提示：")
-            print("   • 可以使用 ./start.sh 重新启动服务")
+            print("   • 可以使用 ./scripts/docker-start.sh 重新启动服务")
             print("   • 数据库将在下次启动时自动初始化")
             print("   • 如需恢复数据，请从备份中还原")
             

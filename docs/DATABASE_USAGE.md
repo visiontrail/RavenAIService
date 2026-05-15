@@ -448,12 +448,12 @@ LIMIT 10;
 
 ```bash
 # 完整设置（推荐）
-python manage_db.py setup
+python scripts/manage-db.py setup
 
 # 或分步执行
-python manage_db.py init      # 初始化数据库
-python manage_db.py check     # 检查连接
-python manage_db.py info      # 查看配置信息
+python scripts/manage-db.py init      # 初始化数据库
+python scripts/manage-db.py check     # 检查连接
+python scripts/manage-db.py info      # 查看配置信息
 ```
 
 ### 2. 手动初始化
@@ -471,7 +471,7 @@ await init_database()
 
 ```bash
 # 生成迁移文件
-python manage_db.py make-migration
+python scripts/manage-db.py make-migration
 
 # 或直接使用alembic
 alembic revision --autogenerate -m "描述信息"
@@ -481,7 +481,7 @@ alembic revision --autogenerate -m "描述信息"
 
 ```bash
 # 应用迁移
-python manage_db.py migrate
+python scripts/manage-db.py migrate
 
 # 或直接使用alembic
 alembic upgrade head
@@ -518,7 +518,7 @@ POSTGRES_USER=raven_user
 POSTGRES_PASSWORD=your-secure-password
 
 # 3. 初始化PostgreSQL表结构
-python manage_db.py migrate
+python scripts/manage-db.py migrate
 
 # 4. 数据迁移（需要自定义脚本）
 python scripts/migrate_sqlite_to_postgres.py
@@ -572,4 +572,3 @@ WHERE is_deleted = 1
 - [Alembic 迁移文档](https://alembic.sqlalchemy.org/)
 - [SQLite 文档](https://www.sqlite.org/docs.html)
 - [PostgreSQL 文档](https://www.postgresql.org/docs/)
-

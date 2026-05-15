@@ -1,101 +1,189 @@
-version: '3.8'
+name: raven-ai-service
+
+x-env-files: &env_files
+  - path: .env.example
+    required: true
+  - path: .env
+    required: false
+
+x-backend-service: &backend_service
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: ${DOCKERHUB_NAMESPACE:-galaxyspaceai}/raven-backend:${IMAGE_TAG:-local}
+  env_file: *env_files
+  environment:
+    ENVIRONMENT: ${ENVIRONMENT:-development}
+    PORT: 8085
+    HOST: 0.0.0.0
+    CELERY_BROKER_URL: redis://redis:6379/0
+    CELERY_RESULT_BACKEND: redis://redis:6379/0
+    REDIS_HOST: redis
+    REDIS_PORT: 6379
+    SQLITE_FILE: /app/data/logs.db
+    DEVICE_LINK_STORE_FILE: /app/data/device_links.json
+    TEMP_DIR: /app/temp
+    LOGS_DIR: /app/logs
+    LOG_FILE_PATH: /app/logs/app.log
+    DEBUG_LOG_FILE_PATH: /app/logs/debug.log
+  volumes:
+    - app_logs:/app/logs
+    - app_temp:/app/temp
+    - app_data:/app/data
+  depends_on:
+    data-store:
+      condition: service_started
+    redis:
+      condition: service_started
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
 
 services:
-  app:
-    build: .
-    expose:
-      - "8085"
-      - "8083"
+  data-store:
+    image: busybox:1.36
+    container_name: raven-data-store
+    command: >
+      sh -c "mkdir -p /data/app /data/logs /data/temp /data/raven/uploads /data/raven/vector-store
+      && chown -R 1000:1000 /data
+      && chmod -R 0775 /data
+      && tail -f /dev/null"
     volumes:
-      - app_logs:/app/logs
-      - app_temp:/app/temp
-      - app_data:/app/data
-      - ./package-server/.env:/app/package-server/.env:ro
-      - ./.env:/app/.env:ro
-    depends_on:
-      - redis
-    env_file:
-      - .env.example
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - app_data:/data/app
+      - app_logs:/data/logs
+      - app_temp:/data/temp
+      - raven_data:/data/raven
+    restart: unless-stopped
     logging:
-      driver: "json-file"
+      driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
   redis:
-    image: "redis:7-alpine"
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
     expose:
       - "6379"
     volumes:
       - redis_data:/data
+    depends_on:
+      data-store:
+        condition: service_started
+    restart: unless-stopped
     logging:
-      driver: "json-file"
+      driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
-  worker:
-    build: .
-    command: celery -A app.celery_app worker --loglevel=info --concurrency=2 --queues=log_processing,ai_analysis,maintenance,default --hostname=worker@%h
-    volumes:
-      - app_logs:/app/logs
-      - app_temp:/app/temp
-      - app_data:/app/data
-      - ./.env:/app/.env:ro
-    depends_on:
-      - redis
-    env_file:
-      - .env.example
+  backend:
+    <<: *backend_service
+    container_name: raven-backend
+    expose:
+      - "8085"
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:8085/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+      start_period: 20s
+
+  worker:
+    <<: *backend_service
+    container_name: raven-worker
+    command: >
+      celery -A app.celery_app worker
+      --loglevel=info
+      --concurrency=${CELERY_WORKER_CONCURRENCY:-2}
+      --queues=log_processing,ai_analysis,maintenance,default
+      --hostname=worker@%h
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping --destination=worker@$$(hostname) || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   beat:
-    build: .
-    command: celery -A app.celery_app beat --loglevel=info --pidfile=/tmp/celery_beat.pid --schedule=/tmp/celerybeat-schedule
+    <<: *backend_service
+    container_name: raven-beat
+    command: >
+      celery -A app.celery_app beat
+      --loglevel=info
+      --pidfile=/tmp/celery_beat.pid
+      --schedule=/tmp/celerybeat-schedule
+
+  package-server:
+    build:
+      context: ./package-server
+      dockerfile: Dockerfile
+    image: ${DOCKERHUB_NAMESPACE:-galaxyspaceai}/raven-package-server:${IMAGE_TAG:-local}
+    container_name: raven-package-server
+    env_file: *env_files
+    environment:
+      NODE_ENV: production
+      PORT: 8083
+      RAVEN_BASE_PATH: /raven
+      RAVEN_DATA_DIR: /app/data/raven
+      RAVEN_METADATA_FILE: /app/data/raven/package-metadata.json
+      RAVEN_VECTOR_STORE_PATH: /app/data/raven/vector-store
+      UPLOAD_DIR: /app/data/raven/uploads
+      LOG_API_PORT: 8085
+    expose:
+      - "8083"
     volumes:
-      - app_logs:/app/logs
-      - app_temp:/app/temp
-      - app_data:/app/data
-      - ./.env:/app/.env:ro
+      - raven_data:/app/data/raven
+      - huggingface_cache:/home/node/.cache/huggingface
     depends_on:
-      - redis
-    env_file:
-      - .env.example
+      data-store:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8083/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    restart: unless-stopped
     logging:
-      driver: "json-file"
+      driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
-  nginx:
-    image: nginx:alpine
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: ${DOCKERHUB_NAMESPACE:-galaxyspaceai}/raven-frontend:${IMAGE_TAG:-local}
+    container_name: raven-frontend
     ports:
-      - "8085:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - "${HTTP_PORT:-8085}:80"
     depends_on:
-      - app
+      backend:
+        condition: service_started
+      package-server:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
     logging:
-      driver: "json-file"
+      driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
 volumes:
-  redis_data:
+  app_data:
   app_logs:
   app_temp:
-  app_data:
+  redis_data:
+  raven_data:
+  huggingface_cache:

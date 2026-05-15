@@ -120,21 +120,21 @@ alembic upgrade head
 
 ### 5. 启动服务
 
-#### 方式一：使用综合启动脚本（推荐）
+#### 方式一：使用统一 Docker 启动脚本（推荐）
 ```bash
-./start_all.sh
+./scripts/docker-start.sh
 ```
 
 #### 方式二：分别启动各个服务
 ```bash
 # 启动Redis
-./start_redis.sh
+docker compose up -d redis
 
 # 启动Celery Worker
-./start_celery.sh
+docker compose up -d worker
 
 # 启动FastAPI应用
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8085
+docker compose up -d backend
 ```
 
 ## 使用示例

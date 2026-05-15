@@ -48,8 +48,8 @@ docker-compose logs -f
 # 进入项目目录
 cd /path/to/package-server
 
-# 执行重启脚本（包含完整流程）
-./scripts/restart.sh
+# 从仓库根目录执行统一重启脚本
+../scripts/docker-restart.sh
 ```
 
 ### 选项 3: 首次全新部署
@@ -314,12 +314,10 @@ echo "=========================================="
 
 | 操作 | 命令 |
 |-----|------|
-| **检查环境** | `./scripts/check-deployment.sh` |
-| **首次部署** | `docker-compose up -d --build` |
-| **重新部署** | `./scripts/restart.sh` 或 `docker-compose down && docker-compose build --no-cache && docker-compose up -d` |
-| **快速重启** | `docker-compose restart` |
-| **查看日志** | `docker-compose logs -f` |
-| **停止服务** | `docker-compose down` |
+| **首次部署** | `../scripts/docker-start.sh` |
+| **重新部署** | `../scripts/docker-restart.sh` |
+| **查看日志** | `../scripts/docker-logs.sh package-server` |
+| **停止服务** | `../scripts/docker-stop.sh` |
 | **进入容器** | `docker-compose exec package-server sh` |
 | **重建索引** | `curl -X POST http://localhost:8083/api/search/rebuild-index` |
 
@@ -340,7 +338,7 @@ echo "=========================================="
 
 **推荐方案（最简单）**：
 ```bash
-./scripts/restart.sh
+../scripts/docker-restart.sh
 ```
 
 **或者使用 Docker Compose**：
@@ -362,4 +360,3 @@ docker-compose up -d --build
 **状态**: ✅ 已验证  
 **更新时间**: 2024-11-13  
 **检查结果**: 环境准备就绪，可以部署
-

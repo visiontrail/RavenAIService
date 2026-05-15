@@ -15,3 +15,14 @@ env/
 *.swp
 frontend/node_modules/
 frontend/dist/
+package-server/node_modules/
+package-server/data/
+package-server/uploads/
+package-server/logs/
+data/
+logs/
+temp/
+uploads/
+.env
+.env.*
+!.env.example

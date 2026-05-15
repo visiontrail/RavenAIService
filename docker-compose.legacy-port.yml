@@ -1,6 +1,0 @@
-version: '3.8'
-
-services:
-  app:
-    ports:
-      - "${RAVEN_LEGACY_HOST_PORT:-8083}:8083"

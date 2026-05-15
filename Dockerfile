@@ -1,85 +1,52 @@
-# Base image
 FROM python:3.11-slim
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
 
-# Install system dependencies including Node.js and build tools for psutil
+WORKDIR /app
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tar \
-    gzip \
+    build-essential \
+    cmake \
     curl \
-    nodejs \
-    npm \
     gcc \
     g++ \
-    cmake \
+    gzip \
+    nodejs \
+    npm \
     python3-dev \
-    build-essential \
+    tar \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy tool_log_decompress to system directory (as root)
-COPY bin/tool_log_decompress /usr/local/bin/
-RUN chmod +x /usr/local/bin/tool_log_decompress
-
-# Create a non-root user
-RUN useradd -m -u 1000 appuser
-
-# Set working directory
-WORKDIR /app
-
-# Copy requirements and install dependencies (as root first)
 COPY requirements.txt .
 
-# Upgrade pip and configure for better network handling
-RUN pip install --upgrade pip
+RUN pip install --upgrade pip \
+    && pip install --no-cache-dir \
+      --timeout 300 \
+      --retries 5 \
+      --trusted-host pypi.org \
+      --trusted-host pypi.python.org \
+      --trusted-host files.pythonhosted.org \
+      -r requirements.txt
 
-# Install dependencies with increased timeout and retries
-RUN pip install --no-cache-dir \
-    --timeout 300 \
-    --retries 5 \
-    --trusted-host pypi.org \
-    --trusted-host pypi.python.org \
-    --trusted-host files.pythonhosted.org \
-    -r requirements.txt
-
-# Copy application code and change ownership
 COPY . .
 
-# Create necessary directories and set permissions
-RUN mkdir -p /app/logs /app/temp/logs /app/temp/downloads /app/data /app/uploads/packages
+RUN if [ -f /app/bin/tool_log_decompress ]; then \
+      cp /app/bin/tool_log_decompress /usr/local/bin/tool_log_decompress \
+      && chmod +x /usr/local/bin/tool_log_decompress; \
+    else \
+      echo "WARN: bin/tool_log_decompress not found; protocol stack decompression tasks will require it at runtime."; \
+    fi \
+    && mkdir -p /app/logs /app/temp/logs /app/temp/downloads /app/data /app/uploads/packages \
+    && useradd -m -u 1000 appuser \
+    && chown -R appuser:appuser /app
 
-# Make cleanup script executable
-RUN chmod +x /app/cleanup_runtime_data.py
-
-RUN chown -R appuser:appuser /app
-
-# Build frontend (as root before changing ownership)
-WORKDIR /app/frontend
-RUN if [ -f package.json ]; then \
-    npm install && \
-    npm run build; \
-    fi
-
-# Install Raven package server dependencies
-WORKDIR /app/package-server
-RUN if [ -f package.json ]; then \
-    npm ci --omit=dev; \
-    fi
-
-# Change ownership and switch back to app directory
-WORKDIR /app
-RUN chown -R appuser:appuser /app
-RUN chmod +x /app/start_combined.sh
-
-# Switch to non-root user
 USER appuser
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-  CMD [ "curl", "-f", "http://localhost:8085/health" ]
+EXPOSE 8085
 
-# Expose port and run the application
-EXPOSE 8085 8083
-CMD ["./start_combined.sh"]
+HEALTHCHECK --interval=30s --timeout=30s --start-period=10s --retries=3 \
+  CMD ["curl", "-f", "http://localhost:8085/health"]
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8085"]

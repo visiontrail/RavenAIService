@@ -2,6 +2,8 @@
 
 [中文](README.md) | English
 
+> Release, packaging, and Docker workflows are now centralized in [QUICKSTART.md](QUICKSTART.md). Use `scripts/docker-start.sh`, `scripts/docker-stop.sh`, and `scripts/docker-publish.sh`; the old root-level scripts have been removed.
+
 RavenAIService is the core service repository of the `Raven` intelligent testing platform. It is designed for complex telecom testing scenarios and brings together log intake, intelligent analysis, device collaboration, version asset management, and release operations into one platform foundation.
 
 It is no longer just a “log staging service”. It is the business backbone that connects test data, AI capabilities, device-side execution, and package assets across testing, R&D, delivery, and operations workflows.
@@ -149,27 +151,22 @@ RavenAIService/
 │   └── main.py                  # FastAPI app entry
 ├── frontend/                    # Vue 3 + Vite frontend
 ├── package-server/              # Node.js rebuild package service
-├── data/                        # SQLite, releases, Raven data
-├── logs/                        # application logs
-├── nginx/                       # Nginx config
+├── data/                        # local placeholder; container data lives in Docker volumes
+├── logs/                        # local placeholder; container logs live in Docker volumes
+├── scripts/                     # Docker start/stop/clean/publish scripts
 ├── alembic/                     # database migrations
 ├── tests/                       # Python-side tests
-├── docker-compose.yml           # standard deployment stack
-├── Dockerfile                   # combined image build
-├── start_all.sh                 # local FastAPI/Celery/Redis bootstrap script
-└── start_combined.sh            # container entrypoint for FastAPI + package-server
+├── docker-compose.yml           # unified frontend/backend/task/data/package orchestration
+├── Dockerfile                   # backend and Celery image build
+└── QUICKSTART.md                # release, packaging, and Docker workflow guide
 ```
 
 ## Quick Start
 
-### Option 1: Docker, recommended
-
-This is the fastest way to experience the full platform and the closest option to a production-style deployment.
+See [QUICKSTART.md](QUICKSTART.md) for the full release, packaging, and Docker workflow. The common entry is:
 
 ```bash
-cp .env.example .env
-cp package-server/.env.example package-server/.env
-./deploy.sh
+./scripts/docker-start.sh
 ```
 
 After startup:
@@ -182,111 +179,14 @@ After startup:
 - Health check: `http://localhost:8085/health`
 - Swagger docs: `http://localhost:8085/docs` in development only
 
-Notes:
-
-- `docker-compose.yml` only exposes `8085` publicly, through `nginx`
-- `deploy.sh` handles stale container conflicts and may enable an optional `8083` compatibility entry when possible
-- Inside the `app` container, `FastAPI` and `package-server` are started together
-
-### Option 2: Native local development
-
-This is suitable for engineering debugging and local validation, but you need to run Python, Redis, Celery, and the Node subservice separately.
-
-#### 1. Prerequisites
-
-Recommended versions:
-
-- Python `3.11`
-- Node.js `20+`, minimum `18+`
-- Redis `7+`
-
-#### 2. Initialize config files
+Common scripts:
 
 ```bash
-cp .env.example .env
-cp package-server/.env.example package-server/.env
+./scripts/docker-logs.sh
+./scripts/docker-restart.sh
+./scripts/docker-stop.sh
+./scripts/docker-publish.sh <dockerhub_namespace> <tag>
 ```
-
-#### 3. Install Python dependencies
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -U pip
-pip install -r requirements.txt
-```
-
-#### 4. Run database migrations
-
-```bash
-alembic upgrade head
-```
-
-#### 5. Start Redis
-
-If Redis is not already available locally, use the repo helper:
-
-```bash
-./start_redis.sh
-```
-
-#### 6. Start Celery worker
-
-```bash
-celery -A app.celery_app worker \
-  --loglevel=info \
-  --concurrency=2 \
-  --queues=log_processing,ai_analysis,maintenance,default
-```
-
-#### 7. Start Celery beat
-
-```bash
-celery -A app.celery_app beat --loglevel=info
-```
-
-#### 8. Build the frontend
-
-```bash
-cd frontend
-npm install
-npm run build
-cd ..
-```
-
-#### 9. Start package-server
-
-```bash
-cd package-server
-npm install
-PORT=8083 node src/index.js
-```
-
-#### 10. Start FastAPI
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8085 --reload
-```
-
-### Local bootstrap helper
-
-The repository includes `start_all.sh`, which helps bring up most of the local development environment automatically:
-
-- create/activate `venv`
-- install Python dependencies
-- start Redis
-- run Alembic migrations
-- start Celery worker and beat
-- build frontend
-- start FastAPI
-
-Run it with:
-
-```bash
-./start_all.sh
-```
-
-Important: `start_all.sh` currently does **not** start `package-server`, so `/raven` package and RAG features still require a separate Node process.
 
 ## Configuration
 

@@ -104,9 +104,9 @@ app/
 
 ## 🚀 快速启动
 
-### 使用启动脚本（推荐）
+### 使用统一 Docker 启动脚本（推荐）
 ```bash
-./start.sh
+./scripts/docker-start.sh
 ```
 
 ### 手动启动

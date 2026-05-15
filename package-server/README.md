@@ -1,5 +1,7 @@
 # Raven 包管理系统
 
+> 该服务已纳入仓库根目录 `docker-compose.yml` 统一编排，请使用根目录 [QUICKSTART.md](../QUICKSTART.md) 中的 `scripts/docker-start.sh` 和 `scripts/docker-publish.sh`。本目录不再维护单独的 Compose/部署脚本。
+
 一个现代化的包管理Web应用，用于管理和分发Galaxy Space升级包。
 
 ## 功能特性
@@ -31,11 +33,11 @@
    cd /path/to/package-server
    ```
 
-2. **运行部署脚本**
+2. **从仓库根目录启动统一 Docker 编排**
 
    ```bash
-   chmod +x scripts/deploy.sh
-   ./scripts/deploy.sh
+   cd ..
+   ./scripts/docker-start.sh
    ```
 
 3. **访问应用**
@@ -46,13 +48,14 @@
 
 ```bash
 # 启动服务
-docker-compose up -d
+cd ..
+./scripts/docker-start.sh
 
 # 查看日志
-docker-compose logs -f
+./scripts/docker-logs.sh package-server
 
 # 停止服务
-docker-compose down
+./scripts/docker-stop.sh
 ```
 
 ### 本地开发
@@ -136,22 +139,22 @@ package-server/
 
 ## 管理脚本
 
-### 部署
+### 启动
 
 ```bash
-./scripts/deploy.sh
+../scripts/docker-start.sh
 ```
 
 ### 停止服务
 
 ```bash
-./scripts/stop.sh
+../scripts/docker-stop.sh
 ```
 
 ### 重启服务
 
 ```bash
-./scripts/restart.sh
+../scripts/docker-restart.sh
 ```
 
 ## 故障排除

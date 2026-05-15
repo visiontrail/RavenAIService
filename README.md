@@ -2,6 +2,8 @@
 
 中文 | [English](README_EN.md)
 
+> 发布、打包、Docker 启停流程已经统一到 [QUICKSTART.md](QUICKSTART.md)。请优先使用 `scripts/docker-start.sh`、`scripts/docker-stop.sh`、`scripts/docker-publish.sh`，根目录旧脚本已移除。
+
 RavenAIService 是 Raven 智能测试平台的核心服务仓库，面向通信行业复杂测试场景，围绕日志接入、智能分析、设备联动、版本资产管理与发布协同，提供一体化的平台能力。
 
 它不只是一个“日志上传服务”，而是把测试数据、AI 能力、设备能力和版本资产串联起来的业务底座，服务于测试、研发、交付与运维之间的协同闭环。
@@ -147,27 +149,22 @@ RavenAIService/
 │   └── main.py                  # FastAPI 应用入口
 ├── frontend/                    # Vue 3 + Vite 前端
 ├── package-server/              # Node.js 重构包服务
-├── data/                        # SQLite、发布包、Raven 数据目录
-├── logs/                        # 应用日志
-├── nginx/                       # Nginx 配置
+├── data/                        # 本地占位目录，容器数据通过 Docker volumes 持久化
+├── logs/                        # 本地占位目录，容器日志通过 Docker volumes 持久化
+├── scripts/                     # Docker 启停、清理、发布脚本
 ├── alembic/                     # 数据库迁移
 ├── tests/                       # Python 侧测试
-├── docker-compose.yml           # 标准部署编排
-├── Dockerfile                   # 组合镜像构建
-├── start_all.sh                 # 本地启动 FastAPI/Celery/Redis 的脚本
-└── start_combined.sh            # 容器内同时拉起 FastAPI + package-server
+├── docker-compose.yml           # 前端/后端/任务/数据/包服务统一编排
+├── Dockerfile                   # 后端与 Celery 镜像构建
+└── QUICKSTART.md                # 发布、打包、容器启动规范
 ```
 
 ## 快速开始
 
-### 方式一：Docker 部署，推荐
-
-如果你希望最快体验完整的平台能力，这是最推荐的方式，也是最接近线上使用状态的部署方式。
+完整的发布、打包、容器启动规范请阅读 [QUICKSTART.md](QUICKSTART.md)。常用入口如下：
 
 ```bash
-cp .env.example .env
-cp package-server/.env.example package-server/.env
-./deploy.sh
+./scripts/docker-start.sh
 ```
 
 等服务就绪后访问：
@@ -180,111 +177,14 @@ cp package-server/.env.example package-server/.env
 - 健康检查: `http://localhost:8085/health`
 - Swagger 文档: `http://localhost:8085/docs` 仅在开发环境提供
 
-说明：
-
-- `docker-compose.yml` 对外暴露的是 `8085`，由 `nginx` 统一转发
-- `deploy.sh` 会处理旧容器端口冲突，并在条件允许时启用 `8083` 兼容入口
-- 容器内 `app` 服务会同时拉起 FastAPI 和 `package-server`
-
-### 方式二：本地原生开发
-
-适合研发联调、功能验证和问题排查，但需要分别启动 Python、Redis、Celery 和 Node 子服务。
-
-#### 1. 准备环境
-
-建议版本：
-
-- Python `3.11`
-- Node.js `20+`，最低建议 `18+`
-- Redis `7+`
-
-#### 2. 初始化配置
+常用脚本：
 
 ```bash
-cp .env.example .env
-cp package-server/.env.example package-server/.env
+./scripts/docker-logs.sh
+./scripts/docker-restart.sh
+./scripts/docker-stop.sh
+./scripts/docker-publish.sh <dockerhub_namespace> <tag>
 ```
-
-#### 3. 安装 Python 依赖
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -U pip
-pip install -r requirements.txt
-```
-
-#### 4. 执行数据库迁移
-
-```bash
-alembic upgrade head
-```
-
-#### 5. 启动 Redis
-
-如果本机没有现成 Redis，可使用仓库脚本：
-
-```bash
-./start_redis.sh
-```
-
-#### 6. 启动 Celery Worker
-
-```bash
-celery -A app.celery_app worker \
-  --loglevel=info \
-  --concurrency=2 \
-  --queues=log_processing,ai_analysis,maintenance,default
-```
-
-#### 7. 启动 Celery Beat
-
-```bash
-celery -A app.celery_app beat --loglevel=info
-```
-
-#### 8. 构建前端
-
-```bash
-cd frontend
-npm install
-npm run build
-cd ..
-```
-
-#### 9. 启动 package-server
-
-```bash
-cd package-server
-npm install
-PORT=8083 node src/index.js
-```
-
-#### 10. 启动 FastAPI
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8085 --reload
-```
-
-### 本地开发快捷脚本
-
-仓库里的 `start_all.sh` 可以帮助你快速拉起大部分本地研发环境：
-
-- 创建/激活 `venv`
-- 安装 Python 依赖
-- 启动 Redis
-- 执行 Alembic 迁移
-- 启动 Celery worker 和 beat
-- 构建前端
-- 启动 FastAPI
-
-直接执行：
-
-```bash
-./start_all.sh
-```
-
-但要注意：`start_all.sh` 当前**不会启动** `package-server`，因此如果你要调试 `/raven` 包管理与 RAG 搜索，仍然需要额外启动一个 Node 进程。
 
 ## 配置说明
 

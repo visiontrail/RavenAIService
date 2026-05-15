@@ -66,8 +66,8 @@ curl http://localhost:8083/api/search/status
 #### 重启服务（代码更新后）
 
 ```bash
-# 使用提供的重启脚本
-./scripts/restart.sh
+# 使用仓库根目录统一重启脚本
+../scripts/docker-restart.sh
 
 # 或手动执行
 docker-compose down
@@ -435,33 +435,31 @@ watch -n 30 'curl -s http://localhost:8083/health | jq'
 
 ```bash
 # 方法 1: 使用提供的脚本（推荐）
-cd /path/to/package-server
-./scripts/restart.sh
+cd /path/to/RavenAIService
+./scripts/docker-restart.sh
 
 # 方法 2: 使用 Docker Compose（推荐）
-cd /path/to/package-server
-docker-compose down
-docker-compose build --no-cache
-docker-compose up -d
+cd /path/to/RavenAIService
+docker compose down
+docker compose up -d --build
 
 # 方法 3: 查看构建和启动日志
-docker-compose up --build
+docker compose up --build
 ```
 
 **首次部署使用：**
 ```bash
-cd /path/to/package-server
-docker-compose up -d --build
+cd /path/to/RavenAIService
+./scripts/docker-start.sh
 ```
 
 选择哪个？
-- **首次部署**: 使用 `docker-compose up -d --build`
-- **代码更新**: 使用 `./scripts/restart.sh` 或 `docker-compose` 命令
-- **快速重启**（仅重启，不重建）: `docker-compose restart`
+- **首次部署**: 使用 `./scripts/docker-start.sh`
+- **代码更新**: 使用 `./scripts/docker-restart.sh`
+- **查看日志**: 使用 `./scripts/docker-logs.sh package-server`
 
 ---
 
 **状态**: ✅ 已验证  
 **最后更新**: 2024-11-13  
 **适用版本**: 1.0.0+RAG
-

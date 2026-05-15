@@ -10,8 +10,8 @@ import sys
 import os
 from pathlib import Path
 
-# 添加项目根目录到Python路径
-sys.path.insert(0, str(Path(__file__).parent))
+# 添加项目根目录到 Python 路径
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.database import init_database, create_tables, drop_tables, reset_database, check_database_connection
 from app.config import settings
