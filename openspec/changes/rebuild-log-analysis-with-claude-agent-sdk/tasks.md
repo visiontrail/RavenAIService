@@ -14,7 +14,7 @@
 - [x] 2.3 新增 `app/services/project_repo_service.py`：`list_repos()`、`get_by_id(id)`、`get_by_project_code(code)`（输入做 `.strip().lower()`，且写入路径同样 normalize）、`create()`、`update()`（支持 `git_token=="••••••••"` 表示不修改）、`delete()`、`test_connection(id)`（复用 `repo_settings_service.test_repo_connection` 的实现）
 - [x] 2.4 新增 admin endpoints 在 `app/api/admin.py`：`GET/POST /admin/project-repos`、`GET/PUT/DELETE /admin/project-repos/{id}`、`POST /admin/project-repos/{id}/test-connection`；走现有 admin auth；响应中 token 永远以 `git_token_set: bool` 表达
 - [x] 2.5 改造 `GET /admin/repo-settings`：在 `oam_url` / `stack_url` 字段附加 `deprecated: true`；`PUT /admin/repo-settings` 忽略对这两个字段的写入并返回 `warnings` 数组
-- [ ] 2.6 前端：在 `frontend/src/views/AdminRelease.vue` (frontend task - deferred) 等管理页新增"项目仓库管理"子页（列表 + 增改删 + 连通性测试）；`api/admin.ts` 新增对应方法；旧"OAM/Stack 仓库设置"页加"已迁移"提示
+- [x] 2.6 前端：在 `frontend/src/views/AdminRelease.vue` (frontend task - deferred) 等管理页新增"项目仓库管理"子页（列表 + 增改删 + 连通性测试）；`api/admin.ts` 新增对应方法；旧"OAM/Stack 仓库设置"页加"已迁移"提示
 - [x] 2.7 单元 / API 测试：CRUD 正常路径、masked token PUT 不改 token、case-insensitive lookup、disabled 行不返回、连通性测试 mock `git ls-remote`
 
 ## 3. 工作区与日志解压

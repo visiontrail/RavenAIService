@@ -202,16 +202,42 @@ export interface PromptsConfigData {
 // Git 代码仓库配置
 export interface RepoSettingsData {
   oam_url: string
+  oam_url_deprecated?: boolean
   stack_url: string
+  stack_url_deprecated?: boolean
   git_token_set: boolean
   clone_depth: number
   updated_at: string
+  warnings?: string[]
 }
 
 export interface TestConnectionResult {
   success: boolean
   message: string
   auth_method: string
+}
+
+export interface ProjectRepo {
+  id: number
+  project_code: string
+  project_name: string
+  repo_url: string
+  default_branch: string
+  git_token_set: boolean
+  description?: string | null
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectRepoPayload {
+  project_code?: string
+  project_name?: string
+  repo_url?: string
+  default_branch?: string
+  git_token?: string | null
+  description?: string | null
+  enabled?: boolean
 }
 
 // 用户与会话

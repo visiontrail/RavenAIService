@@ -4,6 +4,8 @@ import type {
   AdminAuthData,
   ApiResponse,
   PromptsConfigData,
+  ProjectRepo,
+  ProjectRepoPayload,
   RepoSettingsData,
   TestConnectionResult,
   UserProfile,
@@ -113,6 +115,28 @@ export const adminApi = {
     token?: string | null
   }): Promise<ApiResponse<TestConnectionResult>> =>
     adminClient.post('/admin/repo-settings/test-connection', payload),
+
+  listProjectRepos: (params?: {
+    include_disabled?: boolean
+    offset?: number
+    limit?: number
+  }): Promise<ApiResponse<ProjectRepo[]>> =>
+    adminClient.get('/admin/project-repos', { params }),
+
+  createProjectRepo: (payload: ProjectRepoPayload): Promise<ApiResponse<ProjectRepo>> =>
+    adminClient.post('/admin/project-repos', payload),
+
+  updateProjectRepo: (
+    repoId: number,
+    payload: ProjectRepoPayload
+  ): Promise<ApiResponse<ProjectRepo>> =>
+    adminClient.put(`/admin/project-repos/${repoId}`, payload),
+
+  deleteProjectRepo: (repoId: number): Promise<void> =>
+    adminClient.delete(`/admin/project-repos/${repoId}`),
+
+  testProjectRepoConnection: (repoId: number): Promise<ApiResponse<TestConnectionResult>> =>
+    adminClient.post(`/admin/project-repos/${repoId}/test-connection`),
 }
 
 export default adminApi

@@ -152,6 +152,14 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/admin/project-repos',
+    name: 'AdminProjectRepos',
+    component: () => import('../views/AdminProjectRepos.vue'),
+    meta: {
+      title: '项目仓库管理',
+    },
+  },
+  {
     path: '/admin/repo-settings',
     name: 'AdminRepoSettings',
     component: () => import('../views/AdminRepoSettings.vue'),

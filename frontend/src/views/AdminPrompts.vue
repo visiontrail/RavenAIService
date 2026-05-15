@@ -3,38 +3,14 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
+import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
 import type { PromptsConfigData } from '@/types'
 
 const appStore = useAppStore()
 const router = useRouter()
 const route = useRoute()
 
-const navItems = [
-  {
-    key: 'prompts',
-    label: 'Prompt 配置',
-    path: '/admin/prompts',
-    description: '编辑 prompts_config.yaml 并刷新缓存',
-  },
-  {
-    key: 'users',
-    label: '用户管理',
-    path: '/admin/users',
-    description: '管理对话用户、重置密码',
-  },
-  {
-    key: 'releases',
-    label: 'App Release',
-    path: '/admin/releases',
-    description: '上传 Linux / macOS / Windows 发布包',
-  },
-  {
-    key: 'repo-settings',
-    label: 'Git 仓库配置',
-    path: '/admin/repo-settings',
-    description: '配置 OAM/协议栈代码仓库地址与鉴权',
-  },
-]
+const navItems = adminNavItems
 
 const configState = reactive<PromptsConfigData>({
   path: 'app/prompts/prompts_config.yaml',
@@ -125,13 +101,7 @@ const readableUpdatedAt = computed(() => {
   return `${formatTimestamp(configState.updated_at)} (${formatRelative(configState.updated_at)})`
 })
 
-const activeNavKey = computed(() => {
-  if (route.path.startsWith('/admin/users')) return 'users'
-  if (route.path.startsWith('/admin/releases')) return 'releases'
-  if (route.path.startsWith('/admin/repo-settings')) return 'repo-settings'
-  if (route.path.startsWith('/admin')) return 'prompts'
-  return ''
-})
+const activeNavKey = computed(() => resolveAdminNavKey(route.path))
 
 const parseErrorMessage = (err: any) => {
   if (err?.response?.data?.detail) return err.response.data.detail

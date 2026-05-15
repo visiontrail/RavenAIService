@@ -3,38 +3,14 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
+import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
 import type { RepoSettingsData, TestConnectionResult } from '@/types'
 
 const appStore = useAppStore()
 const route = useRoute()
 const router = useRouter()
 
-const navItems = [
-  {
-    key: 'prompts',
-    label: 'Prompt 配置',
-    path: '/admin/prompts',
-    description: '编辑 prompts_config.yaml 并刷新缓存',
-  },
-  {
-    key: 'users',
-    label: '用户管理',
-    path: '/admin/users',
-    description: '管理对话用户、重置密码',
-  },
-  {
-    key: 'releases',
-    label: 'App Release',
-    path: '/admin/releases',
-    description: '上传 Linux / macOS / Windows 发布包',
-  },
-  {
-    key: 'repo-settings',
-    label: 'Git 仓库配置',
-    path: '/admin/repo-settings',
-    description: '配置 OAM/协议栈代码仓库地址与鉴权',
-  },
-]
+const navItems = adminNavItems
 
 // ─── State ───────────────────────────────────────────────────────
 
@@ -77,16 +53,10 @@ const toast = reactive({ visible: false, type: 'success' as 'success' | 'error',
 const navVisible = computed(() => appStore.adminSidebarVisible)
 
 const activeNavKey = computed(() => {
-  if (route.path.startsWith('/admin/repo-settings')) return 'repo-settings'
-  if (route.path.startsWith('/admin/releases')) return 'releases'
-  if (route.path.startsWith('/admin/users')) return 'users'
-  if (route.path.startsWith('/admin')) return 'prompts'
-  return ''
+  return resolveAdminNavKey(route.path)
 })
 
 const hasUnsavedChanges = computed(() =>
-  form.oam_url     !== saved.oam_url   ||
-  form.stack_url   !== saved.stack_url ||
   form.clone_depth !== saved.clone_depth ||
   form.git_token   !== ''
 )
@@ -295,7 +265,7 @@ onMounted(async () => {
           </button>
           <div>
             <h1 class="admin-title">后台管理</h1>
-            <p class="admin-subtitle">Git 仓库配置</p>
+            <p class="admin-subtitle">旧仓库设置</p>
           </div>
         </div>
         <div class="admin-topbar-right">
@@ -391,9 +361,9 @@ onMounted(async () => {
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
           <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <h2 class="text-lg font-semibold text-slate-900">Git 代码仓库配置</h2>
+              <h2 class="text-lg font-semibold text-slate-900">旧 Git 代码仓库配置</h2>
               <p class="text-sm text-slate-500 mt-0.5">
-                配置用于日志代码联合分析的源码仓库。保存后立即生效，无需重启服务。
+                OAM/Stack 固定仓库地址已迁移到项目仓库注册表；此页仅保留全局 Token 与浅克隆深度。
               </p>
             </div>
             <div class="flex items-center gap-2">
@@ -411,6 +381,23 @@ onMounted(async () => {
                 {{ loading ? '同步中…' : '刷新' }}
               </button>
             </div>
+          </div>
+        </div>
+
+        <div class="bg-cyan-50 border border-cyan-200 rounded-2xl p-4 text-sm text-cyan-900">
+          <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p class="font-semibold">已迁移到项目仓库管理</p>
+              <p class="mt-0.5 text-cyan-800">
+                新版日志分析会按 metadata.json 的 project_code 查询项目仓库注册表；旧 OAM/Stack URL 字段只读展示，保存时后端会忽略这些字段。
+              </p>
+            </div>
+            <button
+              class="shrink-0 rounded-lg bg-cyan-700 px-3 py-2 text-sm font-semibold text-white hover:bg-cyan-800"
+              @click="router.push('/admin/project-repos')"
+            >
+              打开项目仓库管理
+            </button>
           </div>
         </div>
 
@@ -449,7 +436,7 @@ onMounted(async () => {
               <span class="h-8 w-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center text-sm font-bold">OAM</span>
               <div>
                 <h3 class="font-semibold text-slate-900 text-sm">OAM 天线模块代码仓库</h3>
-                <p class="text-xs text-slate-400">对应日志类型：<code class="bg-slate-100 px-1 rounded">oam_antenna</code></p>
+                <p class="text-xs text-slate-400">已迁移：请在项目仓库管理中维护 <code class="bg-slate-100 px-1 rounded">oam_antenna</code></p>
               </div>
             </div>
           </div>
@@ -463,6 +450,7 @@ onMounted(async () => {
                   class="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
                   placeholder="https://gitlab.example.com/project/oam-module.git"
                   spellcheck="false"
+                  readonly
                 />
                 <button
                   class="px-3 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
@@ -495,7 +483,7 @@ onMounted(async () => {
             <span class="h-8 w-8 rounded-lg bg-violet-100 text-violet-600 flex items-center justify-center text-sm font-bold">STK</span>
             <div>
               <h3 class="font-semibold text-slate-900 text-sm">协议栈模块代码仓库</h3>
-              <p class="text-xs text-slate-400">对应日志类型：<code class="bg-slate-100 px-1 rounded">stack</code> / <code class="bg-slate-100 px-1 rounded">full</code></p>
+              <p class="text-xs text-slate-400">已迁移：请在项目仓库管理中维护 <code class="bg-slate-100 px-1 rounded">stack</code> / <code class="bg-slate-100 px-1 rounded">full</code></p>
             </div>
           </div>
           <div class="space-y-3">
@@ -508,6 +496,7 @@ onMounted(async () => {
                   class="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
                   placeholder="https://gitlab.example.com/project/stack-module.git"
                   spellcheck="false"
+                  readonly
                 />
                 <button
                   class="px-3 py-2 text-sm rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"

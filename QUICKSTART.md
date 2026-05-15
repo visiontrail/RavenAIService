@@ -108,7 +108,7 @@ docker login
 示例：
 
 ```bash
-./scripts/docker-publish.sh galaxyspaceai v1.0.0
+./scripts/docker-publish.sh colingg v1.0.0
 ```
 
 会构建并推送以下镜像：
@@ -120,7 +120,7 @@ docker login
 默认也会推送 `latest`。如果不想推送 `latest`：
 
 ```bash
-PUSH_LATEST=false ./scripts/docker-publish.sh galaxyspaceai v1.0.0
+PUSH_LATEST=false ./scripts/docker-publish.sh colingg v1.0.0
 ```
 
 ## 数据持久化
