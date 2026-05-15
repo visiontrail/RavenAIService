@@ -160,14 +160,6 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
-    path: '/admin/repo-settings',
-    name: 'AdminRepoSettings',
-    component: () => import('../views/AdminRepoSettings.vue'),
-    meta: {
-      title: 'Git 仓库配置',
-    },
-  },
-  {
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
     component: () => import('../views/NotFound.vue'),

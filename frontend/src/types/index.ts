@@ -199,18 +199,6 @@ export interface PromptsConfigData {
   summary: PromptsSummary
 }
 
-// Git 代码仓库配置
-export interface RepoSettingsData {
-  oam_url: string
-  oam_url_deprecated?: boolean
-  stack_url: string
-  stack_url_deprecated?: boolean
-  git_token_set: boolean
-  clone_depth: number
-  updated_at: string
-  warnings?: string[]
-}
-
 export interface TestConnectionResult {
   success: boolean
   message: string

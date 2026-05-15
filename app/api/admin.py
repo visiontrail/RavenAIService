@@ -18,11 +18,6 @@ from app.services.prompts_config_service import (
     load_prompts_config,
     update_prompts_config,
 )
-from app.services.repo_settings_service import (
-    load_repo_settings,
-    save_repo_settings,
-    test_repo_connection,
-)
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -151,123 +146,6 @@ async def save_prompts_config(
     )
 
 
-# ─────────────────── Repo Settings ────────────────────────────────
-
-class RepoSettingsData(BaseModel):
-    oam_url: str = ""
-    oam_url_deprecated: bool = True
-    stack_url: str = ""
-    stack_url_deprecated: bool = True
-    git_token_set: bool = False
-    clone_depth: int = 1
-    updated_at: str = ""
-    warnings: List[str] = Field(default_factory=list)
-
-
-class RepoSettingsResponse(BaseModel):
-    success: bool = True
-    data: RepoSettingsData
-    message: str = "ok"
-
-
-class UpdateRepoSettingsRequest(BaseModel):
-    oam_url: Optional[str] = None
-    stack_url: Optional[str] = None
-    git_token: Optional[str] = None
-    clone_depth: int = Field(default=1, ge=1, le=100)
-    clear_token: bool = False
-
-
-class TestConnectionRequest(BaseModel):
-    url: str
-    token: Optional[str] = None
-
-
-class TestConnectionResponse(BaseModel):
-    success: bool = True
-    data: dict
-    message: str = "ok"
-
-
-@router.get("/repo-settings", response_model=RepoSettingsResponse)
-async def get_repo_settings(
-    _username: str = Depends(require_admin),
-) -> RepoSettingsResponse:
-    """读取当前 Git 代码仓库配置（oam_url/stack_url 已弃用，请使用 /admin/project-repos）。"""
-    cfg = load_repo_settings()
-    return RepoSettingsResponse(
-        data=RepoSettingsData(
-            oam_url=cfg.oam_url,
-            oam_url_deprecated=True,
-            stack_url=cfg.stack_url,
-            stack_url_deprecated=True,
-            git_token_set=cfg.git_token_set,
-            clone_depth=cfg.clone_depth,
-            updated_at=cfg.updated_at,
-            warnings=["oam_url and stack_url are deprecated; use /admin/project-repos"],
-        ),
-        message="读取成功",
-    )
-
-
-@router.put("/repo-settings", response_model=RepoSettingsResponse)
-async def update_repo_settings(
-    payload: UpdateRepoSettingsRequest,
-    _username: str = Depends(require_admin),
-) -> RepoSettingsResponse:
-    """保存 Git 代码仓库配置（oam_url/stack_url 已弃用，写入被忽略）。"""
-    try:
-        cfg = save_repo_settings(
-            oam_url     = None,   # deprecated: ignored
-            stack_url   = None,   # deprecated: ignored
-            git_token   = payload.git_token,
-            clone_depth = payload.clone_depth,
-            clear_token = payload.clear_token,
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"保存失败: {exc}",
-        ) from exc
-
-    warnings = []
-    if payload.oam_url is not None or payload.stack_url is not None:
-        warnings.append("oam_url/stack_url ignored; use /admin/project-repos")
-
-    return RepoSettingsResponse(
-        data=RepoSettingsData(
-            oam_url       = cfg.oam_url,
-            stack_url     = cfg.stack_url,
-            git_token_set = cfg.git_token_set,
-            clone_depth   = cfg.clone_depth,
-            updated_at    = cfg.updated_at,
-            warnings      = warnings,
-        ),
-        message="保存成功，配置已立即生效",
-    )
-
-
-@router.post("/repo-settings/test-connection", response_model=TestConnectionResponse)
-async def test_repo_connection_endpoint(
-    payload: TestConnectionRequest,
-    _username: str = Depends(require_admin),
-) -> TestConnectionResponse:
-    """测试指定 URL 的 Git 仓库连通性（支持 Token 认证）。"""
-    if not payload.url or not payload.url.strip():
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="url 不能为空",
-        )
-    result = test_repo_connection(
-        url   = payload.url.strip(),
-        token = payload.token or None,
-    )
-    return TestConnectionResponse(
-        success = result["success"],
-        data    = result,
-        message = result["message"],
-    )
-
 
 # ─────────────────── Project Repo Registry ────────────────────────
 
@@ -313,6 +191,12 @@ class UpdateProjectRepoRequest(BaseModel):
     git_token: Optional[str] = None
     description: Optional[str] = None
     enabled: Optional[bool] = None
+
+
+class TestConnectionResponse(BaseModel):
+    success: bool = True
+    data: dict
+    message: str = "ok"
 
 
 def _repo_to_data(repo) -> ProjectRepoData:

@@ -23,12 +23,6 @@ export const adminNavItems = [
     path: '/admin/project-repos',
     description: '维护 project_code 到 Git 仓库的映射',
   },
-  {
-    key: 'repo-settings',
-    label: '旧仓库设置',
-    path: '/admin/repo-settings',
-    description: '迁移后仅保留全局 Token 与 Clone Depth',
-  },
 ] as const
 
 export type AdminNavItem = (typeof adminNavItems)[number]
@@ -37,7 +31,6 @@ export const resolveAdminNavKey = (path: string) => {
   if (path.startsWith('/admin/users')) return 'users'
   if (path.startsWith('/admin/releases')) return 'releases'
   if (path.startsWith('/admin/project-repos')) return 'project-repos'
-  if (path.startsWith('/admin/repo-settings')) return 'repo-settings'
   if (path.startsWith('/admin')) return 'prompts'
   return ''
 }

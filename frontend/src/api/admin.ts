@@ -6,7 +6,6 @@ import type {
   PromptsConfigData,
   ProjectRepo,
   ProjectRepoPayload,
-  RepoSettingsData,
   TestConnectionResult,
   UserProfile,
 } from '@/types'
@@ -97,24 +96,6 @@ export const adminApi = {
 
   disableUser: (userId: string): Promise<ApiResponse<UserProfile>> =>
     adminClient.delete(`/api/v1/users/${userId}`),
-
-  fetchRepoSettings: (): Promise<ApiResponse<RepoSettingsData>> =>
-    adminClient.get('/admin/repo-settings'),
-
-  saveRepoSettings: (payload: {
-    oam_url?: string | null
-    stack_url?: string | null
-    git_token?: string | null
-    clone_depth?: number
-    clear_token?: boolean
-  }): Promise<ApiResponse<RepoSettingsData>> =>
-    adminClient.put('/admin/repo-settings', payload),
-
-  testRepoConnection: (payload: {
-    url: string
-    token?: string | null
-  }): Promise<ApiResponse<TestConnectionResult>> =>
-    adminClient.post('/admin/repo-settings/test-connection', payload),
 
   listProjectRepos: (params?: {
     include_disabled?: boolean
