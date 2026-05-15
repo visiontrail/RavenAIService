@@ -188,3 +188,46 @@ _generate_final_result()
 3. 测试不同类型的日志文件，确保摘要提取正常
 4. 验证建议措施的提取和显示是否正确
 
+
+---
+
+## v2 输出 Schema（Claude Agent SDK 版）
+
+从 Claude Agent SDK 迁移后，`LogRecord.ai_analysis_result` 的 JSON 结构升级为 `schema_version: 2`。
+
+### 完整字段列表
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `engine` | string | 固定值 `"claude-agent-sdk"` |
+| `model` | string | 实际使用的模型 ID（含 provider profile 默认值后解析） |
+| `schema_version` | number | `2`（前端可据此与旧 v1 区分） |
+| `status` | string | `"ok"` / `"schema_mismatch"` / `"error"` |
+| `error_kind` | string? | 见下方枚举，仅 `status="error"` 时存在 |
+| `summary` | string | 一段摘要（中文）|
+| `severity` | string | `"info"` / `"warn"` / `"error"` / `"critical"` |
+| `root_cause_hypotheses` | array | 每项含 `hypothesis`、`evidence`（`["repo:path:line", ...]`）、`confidence` |
+| `recommended_actions` | array | 建议措施列表 |
+| `related_keywords` | array | 相关关键字 |
+| `tool_trace` | array | Agent 工具调用记录，每项含 `name`、`input`（已脱敏）、`output_excerpt`（前 1KiB，已脱敏）|
+| `raw` | string | Agent 最终输出原文 |
+| `duration_seconds` | number | Agent 运行耗时（秒）|
+| `token_usage` | object | `input_tokens`、`output_tokens`、`cache_read_tokens` |
+
+### `error_kind` 枚举
+
+| 值 | 含义 | 建议提示 |
+|----|------|---------|
+| `missing_archive` | 日志归档文件缺失 | 请上传归档文件后重试 |
+| `missing_metadata_json` | 归档中无 `metadata.json` | 请检查日志打包工具是否包含元数据文件 |
+| `missing_project_identity` | `metadata.json` 中无项目代号字段 | 请联系日志采集方补全 `project_code` 字段 |
+| `project_repo_not_registered` | 项目仓库未在 admin 注册 | 请管理员前往「项目仓库管理」页面添加对应条目 |
+| `timeout` | AI 分析超时 | 请联系管理员增大 `ANTHROPIC_REQUEST_TIMEOUT_SECONDS` |
+| `schema_mismatch` | Agent 输出未包含合规 JSON | 见 `raw` 字段获取原始输出 |
+
+### 前端兼容建议
+
+1. 检查 `schema_version`：若为 `2`，使用新字段解析；若为 `1` 或不存在，使用旧逻辑。
+2. 优先展示 `summary` 与 `root_cause_hypotheses`；`tool_trace` 可折叠展示。
+3. `status === "error"` 时，根据 `error_kind` 给出可操作的提示信息（参见上表）。
+4. `model` 字段可在 UI 中展示，便于用户了解使用了哪个 AI 服务商。

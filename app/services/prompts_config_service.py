@@ -132,16 +132,13 @@ def update_prompts_config(
         temp_name = tmp.name
     Path(temp_name).replace(path)
 
-    # Reset agent prompt caches so new values take effect immediately
+    # Invalidate cached claude_agent_log_analysis prompts so new values take effect immediately
     try:
-        from app.agents import log_agent
+        from app.agents.log_analysis import prompts as log_analysis_prompts
 
-        log_agent._PROMPTS_CACHE = {}  # type: ignore[attr-defined]
-        log_agent._PROMPT_TEMPLATES_CACHE = {}  # type: ignore[attr-defined]
-        if hasattr(log_agent, "refresh_prompts_config"):
-            log_agent.refresh_prompts_config()
+        if hasattr(log_analysis_prompts, "_PROMPTS_CACHE"):
+            log_analysis_prompts._PROMPTS_CACHE.clear()  # type: ignore[attr-defined]
     except Exception:
-        # Best effort: if refresh fails, the next agent call will reload from disk
         pass
 
     stat = path.stat()

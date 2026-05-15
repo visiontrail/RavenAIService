@@ -1,22 +1,24 @@
-"""AI分析异步任务"""
+"""AI 日志分析 Celery 任务（Claude Agent SDK 版）。"""
 
 import json
 import logging
-import re
-import shutil
-import subprocess
-import tempfile
-from functools import lru_cache
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
-from urllib.parse import urlparse, urlunparse
+from typing import Any, Dict, Optional
 
 from celery import current_task
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.agents.log_agent import LogAnalysisAgent
+from app.agents.log_analysis.agent import LogAnalysisAgent
+from app.agents.log_analysis.workspace import (
+    MissingArchiveError,
+    MissingMetadataJsonError,
+    WorkspaceError,
+    cleanup,
+    prepare,
+)
 from app.celery_app import celery_app
 from app.config import settings
 from app.models.log import LogRecord
@@ -24,65 +26,7 @@ from app.models.log import LogRecord
 logger = logging.getLogger(__name__)
 
 
-def _mask_repo_url(repo_url: Optional[str]) -> str:
-    """日志输出用的仓库URL脱敏显示。"""
-    if not repo_url:
-        return ""
-    v = repo_url.strip()
-    if not v:
-        return ""
-    if v.startswith("git@"):
-        # git@host:group/repo.git -> host:group/repo.git（不含凭据）
-        return v.split("@", 1)[-1]
-    parsed = urlparse(v)
-    if parsed.scheme and parsed.netloc:
-        path = parsed.path or ""
-        return f"{parsed.scheme}://{parsed.netloc}{path}"
-    return v
-
-
-@lru_cache(maxsize=1)
-def _runtime_version_snapshot() -> Dict[str, str]:
-    """采样当前任务代码版本，帮助排查 worker 代码未更新问题。"""
-    module_path = str(Path(__file__).resolve())
-    repo_root = Path(__file__).resolve().parents[2]
-    git_head = "unknown"
-    git_branch = "unknown"
-
-    try:
-        head_ret = subprocess.run(
-            ["git", "-C", str(repo_root), "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-        if head_ret.returncode == 0:
-            git_head = (head_ret.stdout or "").strip() or "unknown"
-    except Exception:
-        pass
-
-    try:
-        branch_ret = subprocess.run(
-            ["git", "-C", str(repo_root), "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-        if branch_ret.returncode == 0:
-            git_branch = (branch_ret.stdout or "").strip() or "unknown"
-    except Exception:
-        pass
-
-    return {
-        "module_path": module_path,
-        "repo_root": str(repo_root),
-        "git_head": git_head,
-        "git_branch": git_branch,
-    }
-
-
 def _get_sync_database_url() -> str:
-    """将异步数据库URL转换为同步版本，便于Celery任务使用"""
     database_url = settings.get_database_url()
     if "sqlite+aiosqlite" in database_url:
         return database_url.replace("sqlite+aiosqlite", "sqlite")
@@ -91,7 +35,6 @@ def _get_sync_database_url() -> str:
     return database_url.replace("+asyncpg", "").replace("+aiosqlite", "")
 
 
-# 为AI分析任务创建独立的同步数据库会话
 _sync_engine = create_engine(
     _get_sync_database_url(),
     pool_size=1,
@@ -116,7 +59,6 @@ def _update_ai_task_metadata(
     finished_at: Optional[datetime] = None,
     task_id: Optional[str] = None,
 ) -> None:
-    """更新日志记录中的AI分析元数据"""
     metadata_dict: Dict[str, Any] = {}
     try:
         if log_record.metadata_json:
@@ -155,576 +97,143 @@ def _update_ai_task_metadata(
     metadata_dict["extra_fields"] = extra_fields
     log_record.metadata_json = json.dumps(metadata_dict, ensure_ascii=False, default=str)
     log_record.updated_at = datetime.utcnow()
-
     session.add(log_record)
     session.commit()
     session.refresh(log_record)
 
 
-def _load_log_metadata_dict(log_record: LogRecord) -> Dict[str, Any]:
-    if not log_record.metadata_json:
-        return {}
-    try:
-        parsed = json.loads(log_record.metadata_json)
-        return parsed if isinstance(parsed, dict) else {}
-    except Exception:
-        return {}
-
-
-def _looks_like_repo_url(value: str, key: str = "") -> bool:
-    v = value.strip()
-    if not v:
-        return False
-
-    key_lower = key.lower()
-    if key_lower and ("repo" in key_lower or "git" in key_lower or "repository" in key_lower):
-        return v.startswith(("http://", "https://", "git@", "ssh://"))
-
-    if v.startswith(("git@", "ssh://")):
-        return True
-    if v.startswith(("http://", "https://")):
-        low = v.lower()
-        return any(s in low for s in (".git", "github", "gitlab", "bitbucket", "gitee"))
-    return False
-
-
-def _extract_commit_id(text: str) -> Optional[str]:
-    if not isinstance(text, str):
-        return None
-    m = re.search(r"\b[0-9a-fA-F]{7,40}\b", text.strip())
-    return m.group(0) if m else None
-
-
-def _normalize_branch_name(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    branch = value.strip()
-    if not branch:
-        return None
-    if branch.startswith("refs/heads/"):
-        branch = branch[len("refs/heads/"):]
-    if branch.startswith("origin/"):
-        branch = branch[len("origin/"):]
-    low = branch.lower()
-    if low in {"head", "origin/head", "refs/head"}:
-        return None
-    if re.fullmatch(r"[0-9a-fA-F]{7,40}", branch):
-        return None
-    if len(branch) > 128:
-        return None
-    if re.search(r"\s", branch):
-        return None
-    if not re.fullmatch(r"[A-Za-z0-9._/\-]+", branch):
-        return None
-    return branch
-
-
-def _search_repo_context(
-    obj: Any,
-    path: str = "",
-) -> Tuple[Optional[str], Optional[str], Optional[str], str, str, str]:
-    repo_url: Optional[str] = None
-    commit_id: Optional[str] = None
-    branch_name: Optional[str] = None
-    repo_source = ""
-    commit_source = ""
-    branch_source = ""
-
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            kp = f"{path}.{k}" if path else str(k)
-
-            if isinstance(v, str):
-                if repo_url is None and _looks_like_repo_url(v, str(k)):
-                    repo_url = v.strip()
-                    repo_source = kp
-
-                if commit_id is None:
-                    key_lower = str(k).lower()
-                    if any(x in key_lower for x in ("commit", "sha", "revision", "git")):
-                        extracted = _extract_commit_id(v)
-                        if extracted:
-                            commit_id = extracted
-                            commit_source = kp
-
-                if branch_name is None:
-                    key_lower = str(k).lower()
-                    if any(x in key_lower for x in ("branch", "ref")):
-                        normalized_branch = _normalize_branch_name(v)
-                        if normalized_branch:
-                            branch_name = normalized_branch
-                            branch_source = kp
-
-            nested_repo, nested_commit, nested_branch, nested_repo_src, nested_commit_src, nested_branch_src = _search_repo_context(v, kp)
-            if repo_url is None and nested_repo:
-                repo_url = nested_repo
-                repo_source = nested_repo_src
-            if commit_id is None and nested_commit:
-                commit_id = nested_commit
-                commit_source = nested_commit_src
-            if branch_name is None and nested_branch:
-                branch_name = nested_branch
-                branch_source = nested_branch_src
-
-            if repo_url and commit_id and branch_name:
-                break
-
-    elif isinstance(obj, list):
-        for idx, item in enumerate(obj):
-            kp = f"{path}[{idx}]"
-            nested_repo, nested_commit, nested_branch, nested_repo_src, nested_commit_src, nested_branch_src = _search_repo_context(item, kp)
-            if repo_url is None and nested_repo:
-                repo_url = nested_repo
-                repo_source = nested_repo_src
-            if commit_id is None and nested_commit:
-                commit_id = nested_commit
-                commit_source = nested_commit_src
-            if branch_name is None and nested_branch:
-                branch_name = nested_branch
-                branch_source = nested_branch_src
-            if repo_url and commit_id and branch_name:
-                break
-
-    return repo_url, commit_id, branch_name, repo_source, commit_source, branch_source
-
-
-def _extract_repo_metadata(log_record: LogRecord) -> Tuple[Optional[str], Optional[str], Optional[str], Dict[str, Any]]:
-    metadata_dict = _load_log_metadata_dict(log_record)
-    repo_url, commit_id, branch_name, repo_source, commit_source, branch_source = _search_repo_context(metadata_dict)
-
-    info = {
-        "repo_source": repo_source,
-        "commit_source": commit_source,
-        "branch_source": branch_source,
-        "has_metadata": bool(metadata_dict),
-    }
-    return repo_url, commit_id, branch_name, info
-
-
-def _build_auth_repo_url(repo_url: str) -> str:
-    token = settings.code_repo_git_token
-    if not token:
-        return repo_url
-    try:
-        parsed = urlparse(repo_url)
-        if parsed.scheme in ("http", "https") and not parsed.username and parsed.hostname:
-            netloc = f"oauth2:{token}@{parsed.hostname}"
-            if parsed.port:
-                netloc += f":{parsed.port}"
-            return urlunparse(parsed._replace(netloc=netloc))
-    except Exception:
-        pass
-    return repo_url
-
-
-def _clone_repository(
-    repo_url: str,
-    commit_id: Optional[str] = None,
-    branch_name: Optional[str] = None,
-) -> str:
-    workspace_dir = tempfile.mkdtemp(prefix="raven-ai-workspace-")
-
-    def _run_git(cmd: list, timeout: int = 600) -> None:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"Git命令失败: {' '.join(cmd)}\n"
-                f"stdout={result.stdout[-500:]}\n"
-                f"stderr={result.stderr[-500:]}"
-            )
-
-    try:
-        authed_url = _build_auth_repo_url(repo_url)
-        clone_cmd = ["git", "clone", "--quiet", "--single-branch"]
-        normalized_branch = _normalize_branch_name(branch_name)
-        if normalized_branch:
-            clone_cmd.extend(["--branch", normalized_branch])
-        clone_cmd.extend([authed_url, workspace_dir])
-        _run_git(clone_cmd, timeout=900)
-
-        if commit_id:
-            try:
-                _run_git(["git", "-C", workspace_dir, "checkout", "--quiet", commit_id], timeout=180)
-            except Exception:
-                _run_git(["git", "-C", workspace_dir, "fetch", "--all", "--tags", "--quiet"], timeout=300)
-                _run_git(["git", "-C", workspace_dir, "checkout", "--quiet", commit_id], timeout=180)
-        elif normalized_branch:
-            _run_git(["git", "-C", workspace_dir, "checkout", "--quiet", normalized_branch], timeout=120)
-
-        return workspace_dir
-    except Exception:
-        shutil.rmtree(workspace_dir, ignore_errors=True)
-        raise
-
-
-def _perform_legacy_ai_analysis(
-    log_record: LogRecord,
-    query: str,
-    progress_callback=None,
-) -> Dict[str, Any]:
-    """原有单体 LogAnalysisAgent 逻辑，作为无代码仓库元数据时的降级路径。"""
-    from app.agents.log_agent import compress_outputs
-
-    hints = {
-        "archive_path": log_record.file_path,
-        "path": log_record.file_path,
-        "log_id": log_record.id,
-        "filename": log_record.original_filename or log_record.filename,
-        "log_type": getattr(log_record, "log_type", None),
+def _error_result(error_kind: str, message: str = "") -> Dict[str, Any]:
+    return {
+        "engine": "claude-agent-sdk",
+        "model": settings.anthropic_model or "unknown",
+        "schema_version": 2,
+        "status": "error",
+        "error_kind": error_kind,
+        "summary": message,
+        "severity": "error",
+        "root_cause_hypotheses": [],
+        "recommended_actions": [],
+        "related_keywords": [],
+        "tool_trace": [],
+        "raw": "",
+        "duration_seconds": 0.0,
+        "token_usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0},
     }
 
-    agent = LogAnalysisAgent()
 
-    if progress_callback:
-        progress_callback(15.0)
-
-    try:
-        structured_result = agent.run_structured(query, hints=hints)
-        if progress_callback:
-            progress_callback(90.0)
-        analysis_data = structured_result
-    except Exception as structured_error:
-        logger.error("Structured analysis failed for %s: %s", log_record.id, structured_error)
-        logger.info("Falling back to legacy analysis method for log %s", log_record.id)
-
-        # 执行分析 - 先生成计划
-        plan_xml = agent.plan(query, hints=hints)
-
-        # 解析计划步骤
-        steps = re.findall(r"<step[^>]*>(.*?)</step>", plan_xml, flags=re.DOTALL)
-        steps = [s.strip() for s in steps]
-
-        reasoning_process = []
-        completed_steps = []
-
-        for idx, step in enumerate(steps):
-            if progress_callback:
-                progress_callback(15.0 + (idx + 1) * (60.0 / max(len(steps), 1)))
-            try:
-                step_output = agent._execute_step(step, query, hints=hints)
-                try:
-                    step_thought = compress_outputs([step_output], log_type=hints.get("log_type"))
-                except Exception:
-                    step_thought = f"步骤 {idx + 1} 执行完成"
-
-                reasoning_process.append(
-                    {
-                        "step_number": idx + 1,
-                        "step_description": step,
-                        "thought": step_thought,
-                        "output": step_output,
-                    }
-                )
-                completed_steps.append(step)
-            except Exception as step_error:
-                logger.warning("AI analysis step %s failed: %s", idx + 1, step_error)
-                reasoning_process.append(
-                    {
-                        "step_number": idx + 1,
-                        "step_description": step,
-                        "thought": f"步骤执行失败: {step_error}",
-                        "output": "",
-                        "error": str(step_error),
-                    }
-                )
-
-        try:
-            final_result_xml = agent.run(query, hints=hints)
-        except Exception as run_error:
-            logger.warning("Full agent run failed, using partial results: %s", run_error)
-            final_result_xml = (
-                f"<document><partial_result>{''.join([r.get('output', '') for r in reasoning_process])}"
-                f"</partial_result></document>"
-            )
-
-        summary = f"完成分析，执行了 {len(completed_steps)}/{len(steps)} 个步骤"
-
-        analysis_data = {
-            "log_id": log_record.id,
-            "query": query,
-            "plan": {
-                "steps": steps,
-                "completed_steps": completed_steps,
-                "total_steps": len(steps),
-                "completed_count": len(completed_steps),
-            },
-            "reasoning": reasoning_process,
-            "result": final_result_xml,
-            "summary": summary,
-            "status": "completed" if len(completed_steps) == len(steps) else "partial",
-        }
-
-    if progress_callback:
-        progress_callback(95.0)
-
-    if isinstance(analysis_data, dict) and "log_id" not in analysis_data:
-        analysis_data["log_id"] = log_record.id
-
-    return analysis_data
-
-
-def _resolve_log_type_str(log_record: LogRecord) -> str:
-    raw = getattr(log_record, "log_type", None)
-    return raw.value if hasattr(raw, "value") else str(raw or "unknown")
-
-
-def _preconfigured_repo_url(log_type_str: str) -> Optional[str]:
-    """根据日志类型返回全局预配置的代码仓库 URL（由管理员在 .env 中配置）。"""
-    lt = log_type_str.lower()
-    if lt in ("oam_antenna", "oam"):
-        return settings.code_repo_oam_url or None
-    if lt in ("stack", "full"):
-        return settings.code_repo_stack_url or None
-    return None
-
-
-def _perform_ai_analysis(
-    log_record: LogRecord,
-    query: str,
-    progress_callback=None,
-) -> Dict[str, Any]:
-    """优先执行五维多智能体 CodeAnalysisGraph；无任何仓库来源时降级到旧 LogAnalysisAgent。
-
-    触发新流程的条件（满足任一即可）：
-      1. 日志记录的 metadata_json 中内嵌了 git 仓库 URL（随日志上传携带）。
-      2. 管理员在 .env 中为当前日志类型预配置了仓库 URL
-         （CODE_REPO_OAM_URL / CODE_REPO_STACK_URL）。
-
-    只要存在可用仓库来源，都会在本层「每次任务强制重新克隆」后再进入图执行，
-    避免使用历史陈旧工作区。若 metadata 中给出分支名/commit，则优先按其检出。
-    """
-    repo_url, commit_id, branch_name, repo_meta = _extract_repo_metadata(log_record)
-    log_type_str = _resolve_log_type_str(log_record)
-
-    preconfigured_url = _preconfigured_repo_url(log_type_str)
-    resolved_repo_url = repo_url or preconfigured_url
-    repo_source = repo_meta.get("repo_source") if isinstance(repo_meta, dict) else ""
-    commit_source = repo_meta.get("commit_source") if isinstance(repo_meta, dict) else ""
-    branch_source = repo_meta.get("branch_source") if isinstance(repo_meta, dict) else ""
-    has_metadata = bool(repo_meta.get("has_metadata")) if isinstance(repo_meta, dict) else False
-
-    logger.info(
-        "AI route decision: log_id=%s log_type=%s has_metadata=%s "
-        "repo_url_found=%s repo_source=%s commit_found=%s commit_source=%s "
-        "branch_found=%s branch_source=%s preconfigured_repo=%s",
-        log_record.id,
-        log_type_str,
-        has_metadata,
-        bool(repo_url),
-        repo_source,
-        bool(commit_id),
-        commit_source,
-        bool(branch_name),
-        branch_source,
-        bool(preconfigured_url),
-    )
-    if repo_url:
-        logger.info("AI route decision detail: metadata repo_url=%s", _mask_repo_url(repo_url))
-    if preconfigured_url:
-        logger.info("AI route decision detail: preconfigured repo_url=%s", _mask_repo_url(preconfigured_url))
-    if branch_name:
-        logger.info("AI route decision detail: metadata branch_name=%s", branch_name)
-
-    if not resolved_repo_url:
-        logger.info(
-            "No repository source available for log %s (type=%s), fallback to legacy LogAnalysisAgent",
-            log_record.id,
-            log_type_str,
-        )
-        legacy_result = _perform_legacy_ai_analysis(log_record, query, progress_callback=progress_callback)
-        if isinstance(legacy_result, dict):
-            legacy_result.setdefault("mode", "legacy_log_analysis")
-            legacy_result.setdefault("degrade_reason", "missing_repo_source")
-        return legacy_result
-
-    workspace_dir: Optional[str] = None
-    graph_workspace_dir: Optional[str] = None
-    clone_mode: str = "none"
-
-    try:
-        if progress_callback:
-            progress_callback(20.0)
-
-        # 每次任务都重新克隆，确保工作区干净且分支精确
-        workspace_dir = _clone_repository(
-            resolved_repo_url,
-            commit_id=commit_id,
-            branch_name=branch_name,
-        )
-        clone_mode = "metadata_url" if repo_url else "preconfigured_url"
-        logger.info(
-            "Repository cloned for code analysis: log_id=%s clone_mode=%s repo=%s branch=%s commit=%s workspace=%s",
-            log_record.id,
-            clone_mode,
-            _mask_repo_url(resolved_repo_url),
-            branch_name or "(default)",
-            commit_id or "(none)",
-            workspace_dir,
-        )
-
-        if progress_callback:
-            progress_callback(40.0)
-
-        from app.agents import code_analysis_graph as code_graph_module
-
-        logger.info(
-            "Routing to CodeAnalysisGraph: module=%s",
-            getattr(code_graph_module, "__file__", "unknown"),
-        )
-
-        CodeAnalysisGraph = code_graph_module.CodeAnalysisGraph
-        graph = CodeAnalysisGraph(token_limit=8000, max_iterations=10)
-        analysis_data = graph.run(
-            query=query,
-            workspace_dir=workspace_dir,
-            log_file_path=log_record.file_path,
-            log_type=log_type_str,
-            repo_url=resolved_repo_url or "",
-            repo_branch=branch_name or "",
-            repo_commit_id=commit_id or "",
-            trace_id=f"log:{log_record.id}",
-        )
-
-        if progress_callback:
-            progress_callback(92.0)
-
-        if isinstance(analysis_data, dict):
-            graph_metadata = analysis_data.get("metadata", {})
-            if isinstance(graph_metadata, dict):
-                graph_workspace_dir = str(graph_metadata.get("workspace_dir") or "").strip() or None
-            analysis_data.setdefault("log_id", log_record.id)
-            analysis_data.setdefault("mode", "5_agent_code_analysis")
-            analysis_data["repo_context"] = {
-                "repo_url": resolved_repo_url,
-                "commit_id": commit_id,
-                "branch_name": branch_name,
-                "clone_mode": clone_mode,
-                "metadata_source": repo_meta,
-            }
-        return analysis_data
-
-    except Exception as graph_error:
-        logger.error(
-            "5-agent code analysis failed for log %s (clone_mode=%s), fallback to legacy mode: %s",
-            log_record.id, clone_mode, graph_error,
-            exc_info=True,
-        )
-        legacy_result = _perform_legacy_ai_analysis(log_record, query, progress_callback=progress_callback)
-        if isinstance(legacy_result, dict):
-            legacy_result.setdefault("mode", "legacy_log_analysis")
-            legacy_result["degrade_reason"] = "code_graph_failed"
-            legacy_result["degrade_error"] = str(graph_error)
-            legacy_result["repo_context"] = {
-                "repo_url": resolved_repo_url,
-                "commit_id": commit_id,
-                "branch_name": branch_name,
-                "clone_mode": clone_mode,
-                "metadata_source": repo_meta,
-            }
-        return legacy_result
-
-    finally:
-        cleaned = set()
-        for path in (workspace_dir, graph_workspace_dir):
-            if not path:
-                continue
-            try:
-                resolved = str(Path(path).resolve())
-            except Exception:
-                resolved = str(path)
-            if resolved in cleaned:
-                continue
-            cleaned.add(resolved)
-            try:
-                shutil.rmtree(resolved, ignore_errors=True)
-                logger.info("Workspace cleaned for log %s: %s", log_record.id, resolved)
-            except Exception as cleanup_error:
-                logger.warning("Failed to cleanup workspace %s: %s", resolved, cleanup_error)
+_timeout = settings.anthropic_request_timeout_seconds
+_soft_limit = _timeout + 60
+_hard_limit = _soft_limit + 60
 
 
 @celery_app.task(
     bind=True,
     name="app.tasks.ai_analysis.run_ai_analysis_task",
     max_retries=settings.max_retry_attempts,
+    soft_time_limit=_soft_limit,
+    time_limit=_hard_limit,
 )
 def run_ai_analysis_task(self, log_id: str, query: str) -> Dict[str, Any]:
-    """Celery任务：异步运行日志AI分析"""
+    """Celery 任务：调用 Claude Agent SDK LogAnalysisAgent 完成日志分析。"""
     session = SessionLocal()
     log_record: Optional[LogRecord] = None
     task_id = getattr(current_task.request, "id", None)
     start_time = datetime.utcnow()
+    workspace_ctx = None
 
     try:
         log_record = session.query(LogRecord).filter(LogRecord.id == log_id).first()
         if not log_record or getattr(log_record, "is_deleted", False):
             raise FileNotFoundError(f"Log with id {log_id} not found")
 
-        file_path = Path(log_record.file_path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"Log file not found at {log_record.file_path}")
+        _update_ai_task_metadata(
+            session, log_record,
+            status="running", progress=5.0,
+            query=query, started_at=start_time, task_id=task_id,
+        )
 
-        logger.info("AI analysis task started: log_id=%s task_id=%s query='%s'", log_id, task_id, query)
-        runtime_snapshot = _runtime_version_snapshot()
+        # Fast-fail: no archive
+        if not getattr(log_record, "archive_path", None):
+            result = _error_result("missing_archive", "No archive_path on LogRecord")
+            _update_ai_task_metadata(
+                session, log_record,
+                status="failed", progress=100.0,
+                result=result, finished_at=datetime.utcnow(), task_id=task_id,
+            )
+            return {"status": "error", "error_kind": "missing_archive", "log_id": log_id}
+
+        # Prepare workspace (extract archive, verify metadata.json)
+        try:
+            workspace_ctx = prepare(log_record)
+        except MissingArchiveError as exc:
+            result = _error_result("missing_archive", str(exc))
+            _update_ai_task_metadata(
+                session, log_record,
+                status="failed", progress=100.0,
+                result=result, finished_at=datetime.utcnow(), task_id=task_id,
+            )
+            return {"status": "error", "error_kind": "missing_archive", "log_id": log_id}
+        except MissingMetadataJsonError as exc:
+            result = _error_result("missing_metadata_json", str(exc))
+            _update_ai_task_metadata(
+                session, log_record,
+                status="failed", progress=100.0,
+                result=result, finished_at=datetime.utcnow(), task_id=task_id,
+            )
+            return {"status": "error", "error_kind": "missing_metadata_json", "log_id": log_id}
+        except WorkspaceError as exc:
+            result = _error_result("workspace_error", str(exc))
+            _update_ai_task_metadata(
+                session, log_record,
+                status="failed", progress=100.0,
+                result=result, finished_at=datetime.utcnow(), task_id=task_id,
+            )
+            return {"status": "error", "error_kind": "workspace_error", "log_id": log_id}
+
+        _update_ai_task_metadata(
+            session, log_record, status="running", progress=20.0, task_id=task_id,
+        )
+
+        # Store question in workspace context metadata
+        workspace_ctx.metadata["question"] = query
+        workspace_ctx.metadata["log_type"] = getattr(log_record, "log_type", None)
+
+        try:
+            analysis_result = LogAnalysisAgent().run_sync(workspace_ctx)
+        finally:
+            cleanup(workspace_ctx)
+
+        _update_ai_task_metadata(
+            session, log_record,
+            status="completed", progress=100.0,
+            result=analysis_result, finished_at=datetime.utcnow(), task_id=task_id,
+        )
+
         logger.info(
-            "AI runtime snapshot: module=%s repo_root=%s git_head=%s git_branch=%s",
-            runtime_snapshot.get("module_path", "unknown"),
-            runtime_snapshot.get("repo_root", "unknown"),
-            runtime_snapshot.get("git_head", "unknown"),
-            runtime_snapshot.get("git_branch", "unknown"),
+            "AI analysis complete: log_id=%s status=%s engine=%s model=%s",
+            log_id,
+            analysis_result.get("status"),
+            analysis_result.get("engine"),
+            analysis_result.get("model"),
         )
-
-        _update_ai_task_metadata(
-            session,
-            log_record,
-            status="running",
-            progress=5.0,
-            query=query,
-            started_at=start_time,
-            task_id=task_id,
-        )
-
-        analysis_data = _perform_ai_analysis(
-            log_record,
-            query,
-            progress_callback=lambda p: _update_ai_task_metadata(
-                session,
-                log_record,
-                status="running",
-                progress=p,
-                task_id=task_id,
-                query=query,
-            ),
-        )
-
-        # 持久化最终结果
-        _update_ai_task_metadata(
-            session,
-            log_record,
-            status="completed",
-            progress=100.0,
-            result=analysis_data,
-            finished_at=datetime.utcnow(),
-            task_id=task_id,
-        )
-
-        logger.info("AI analysis task completed: log_id=%s task_id=%s", log_id, task_id)
         return {"status": "completed", "task_id": task_id, "log_id": log_id}
 
     except Exception as exc:
-        logger.error("AI analysis task failed for log %s: %s", log_id, exc, exc_info=True)
+        logger.error("AI analysis task failed: log_id=%s error=%s", log_id, exc, exc_info=True)
+        if workspace_ctx:
+            try:
+                cleanup(workspace_ctx)
+            except Exception:
+                pass
         try:
             if log_record:
                 _update_ai_task_metadata(
-                    session,
-                    log_record,
-                    status="failed",
-                    progress=100.0,
-                    error=str(exc),
-                    finished_at=datetime.utcnow(),
-                    task_id=task_id,
+                    session, log_record,
+                    status="failed", progress=100.0,
+                    error=str(exc), finished_at=datetime.utcnow(), task_id=task_id,
                 )
-        except Exception as update_error:
-            logger.error("Failed to update AI analysis task metadata after error: %s", update_error)
+        except Exception:
+            pass
         raise
     finally:
         try:

@@ -1204,6 +1204,16 @@ async def analyze_log(
         if not file_path.exists():
             raise FileNotFoundError(filename=str(file_path))
 
+        # Pre-validate: archive_path must exist before dispatching to Celery
+        if not getattr(log_record, "archive_path", None):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_kind": "missing_archive",
+                    "message": "日志归档文件（archive_path）未设置，无法执行 AI 分析。请先上传归档文件。",
+                },
+            )
+
         logger.info(f"Queue AI analysis for log {log_id}: query='{query}'")
 
         # 触发Celery异步任务
@@ -1275,6 +1285,26 @@ async def get_ai_analysis_status(
         request_validator.validate_log_id(log_id)
         log_info = await log_service.get_log_detail(db, log_id)
 
+        result_raw = getattr(log_info, "ai_analysis_result", None)
+        error_kind = None
+        if isinstance(result_raw, dict):
+            error_kind = result_raw.get("error_kind")
+        elif isinstance(result_raw, str):
+            try:
+                import json as _json
+                parsed = _json.loads(result_raw)
+                error_kind = parsed.get("error_kind") if isinstance(parsed, dict) else None
+            except Exception:
+                pass
+
+        _ERROR_KIND_MESSAGES = {
+            "missing_archive": "日志归档文件缺失，请联系管理员上传归档",
+            "missing_metadata_json": "归档中缺少 metadata.json，无法识别项目信息",
+            "missing_project_identity": "metadata.json 中缺少项目代号字段，请补全上报数据",
+            "project_repo_not_registered": "项目仓库未在系统注册，请管理员在「项目仓库管理」页面添加",
+            "timeout": "AI 分析超时，请联系管理员检查配置或增大超时限制",
+        }
+
         return {
             "success": True,
             "message": "AI分析状态获取成功",
@@ -1285,9 +1315,11 @@ async def get_ai_analysis_status(
                 "progress": getattr(log_info, "ai_analysis_progress", None),
                 "query": getattr(log_info, "ai_analysis_query", None),
                 "error": getattr(log_info, "ai_analysis_error", None),
+                "error_kind": error_kind,
+                "error_kind_message": _ERROR_KIND_MESSAGES.get(error_kind) if error_kind else None,
                 "started_at": getattr(log_info, "ai_analysis_started_at", None),
                 "finished_at": getattr(log_info, "ai_analysis_finished_at", None),
-                "result": getattr(log_info, "ai_analysis_result", None)
+                "result": result_raw,
             }
         }
     except Exception as e:
