@@ -48,7 +48,7 @@ To support that end-to-end workflow, the repository includes these platform modu
 
 - `FastAPI` main service: core business flows for logs, AI, users, devices, and releases
 - `Vue 3 + Vite` console: the unified web workspace for testers and administrators
-- `Node.js package-server`: rebuild package center, semantic search, and download distribution
+- `FastAPI Raven package module`: rebuild package center, search, and download distribution
 - `Celery + Redis`: asynchronous execution for protocol-stack processing, AI analysis, and maintenance jobs
 - `Nginx`: a single external entry to simplify deployment and access
 
@@ -60,9 +60,11 @@ Browser
   | http://localhost:8085
   v
 Nginx
-  |-- /                -> FastAPI (8085)
+  |-- /                -> Vue SPA
+  |-- /api/*           -> FastAPI (8085)
+  |-- /raven/api/*     -> FastAPI Raven package API
   |-- /ws/device-link  -> FastAPI WebSocket
-  |-- /raven           -> Node package-server (8083)
+  |-- /raven           -> Vue SPA Raven page
 
 FastAPI
   |-- /health
@@ -71,6 +73,10 @@ FastAPI
   |-- /api/v1/users/*
   |-- /api/v1/device-links/*
   |-- /api/v1/releases/*
+  |-- /raven/api/packages/*
+  |-- /raven/api/upload/*
+  |-- /raven/api/download/*
+  |-- /raven/api/search/*
   |-- /admin/*
   |-- frontend/dist static site
 
@@ -78,13 +84,6 @@ Celery + Redis
   |-- protocol-stack log processing
   |-- AI analysis jobs
   |-- scheduled cleanup jobs
-
-Node package-server
-  |-- /raven/api/packages/*
-  |-- /raven/api/upload/*
-  |-- /raven/api/download/*
-  |-- /raven/api/search/*
-  |-- FAISS vector index
 ```
 
 ## Capability Map
@@ -121,9 +120,9 @@ Node package-server
 
 ### 5. Version Asset Center and Semantic Retrieval
 
-- `package-server` handles upload, delete, detail, download, and batch download flows
-- Package metadata is stored in JSON and cached in memory
-- `LangChain + FAISS` is used for semantic search and suggestion generation
+- The FastAPI backend handles upload, delete, detail, download, and batch download flows
+- Package metadata is stored in `data/raven/package-metadata.json` and remains compatible with existing volumes
+- The unified `/raven/api/search/*` API provides search, suggestions, index status, and index rebuild
 - Supports index rebuild and index status inspection
 - Default package entry is `http://localhost:8085/raven`
 
@@ -150,13 +149,12 @@ RavenAIService/
 │   ├── config.py                # main config entry
 │   └── main.py                  # FastAPI app entry
 ├── frontend/                    # Vue 3 + Vite frontend
-├── package-server/              # Node.js rebuild package service
 ├── data/                        # local placeholder; container data lives in Docker volumes
 ├── logs/                        # local placeholder; container logs live in Docker volumes
 ├── scripts/                     # Docker start/stop/clean/publish scripts
 ├── alembic/                     # database migrations
 ├── tests/                       # Python-side tests
-├── docker-compose.yml           # unified frontend/backend/task/data/package orchestration
+├── docker-compose.yml           # unified frontend/backend/task/data orchestration
 ├── Dockerfile                   # backend and Celery image build
 └── QUICKSTART.md                # release, packaging, and Docker workflow guide
 ```
@@ -218,7 +216,7 @@ Common scripts:
 - `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`: configure for a custom provider or to override provider defaults
 - `PROMPTS_CONFIG_PATH`
 
-#### package-server / RAG
+#### Raven package management / RAG
 
 - `RAVEN_BASE_PATH`: default `/raven`
 - `RAVEN_DATA_DIR`: default `data/raven`
@@ -307,9 +305,9 @@ Common scripts:
 - `GET /api/v1/releases`
 - `GET /api/v1/releases/{release_id}/download`
 
-### package-server
+### Raven package API
 
-By default, the Node subservice is exposed under `/raven/api/*`, with optional legacy compatibility under `/api/*`.
+By default, the FastAPI backend exposes this API under `/raven/api/*`, with optional legacy compatibility under `/api/*`.
 
 Its main responsibilities are:
 
@@ -317,8 +315,6 @@ Its main responsibilities are:
 - single download, batch download, type-based download
 - single and batch upload
 - semantic search, suggestions, vector index status, index rebuild
-
-For deeper subservice details, see [package-server/README.md](package-server/README.md).
 
 ## Data and Persistence
 
@@ -334,13 +330,13 @@ Main data locations in this repository:
 | `data/device_links.json` | last persisted device snapshots |
 | `data/raven/package-metadata.json` | rebuild package metadata |
 | `data/raven/vector-store*` | RAG vector index |
-| `package-server/data/` | fallback package-server data directory |
 
 In Docker deployment, these are persisted through volumes, especially:
 
 - `app_logs`
 - `app_temp`
 - `app_data`
+- `raven_data`
 - `redis_data`
 
 ## Development and Testing
@@ -365,18 +361,11 @@ npm run type-check
 npm run build
 ```
 
-### package-server
-
-```bash
-cd package-server
-npm start
-```
-
 ## Operational Notes
 
 - Protocol-stack processing depends on `tool_log_decompress`. The Docker image installs it automatically into `/usr/local/bin`; for native development you must make sure it is executable and available in `PATH`.
 - Development defaults to SQLite. For production, PostgreSQL is the safer choice, configured through `DATABASE_URL` or the PG-specific variables.
-- `frontend/dist` is reused by both FastAPI and `package-server`, so frontend changes must be rebuilt before they are reflected in the integrated UI.
+- The Raven package API is now part of the FastAPI backend; rebuild `frontend/dist` or the frontend image after frontend changes.
 - Admin accounts are defined in `app/admin_auth.yaml`. Replace default credentials and use hashed passwords before any real deployment.
 - Example configuration files are for development reference only. Do not reuse exposed API keys, default passwords, or permissive CORS settings in production.
 
@@ -386,5 +375,4 @@ npm start
 - [DEPLOY_USAGE.md](DEPLOY_USAGE.md)
 - [docs/DATABASE_USAGE.md](docs/DATABASE_USAGE.md)
 - [docs/API_SUMMARY.md](docs/API_SUMMARY.md)
-- [package-server/README.md](package-server/README.md)
 - [frontend/README.md](frontend/README.md)

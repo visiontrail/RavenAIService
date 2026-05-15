@@ -26,10 +26,17 @@ x-backend-service: &backend_service
     LOGS_DIR: /app/logs
     LOG_FILE_PATH: /app/logs/app.log
     DEBUG_LOG_FILE_PATH: /app/logs/debug.log
+    RAVEN_BASE_PATH: /raven
+    RAVEN_DATA_DIR: /app/data/raven
+    RAVEN_METADATA_FILE: /app/data/raven/package-metadata.json
+    RAVEN_VECTOR_STORE_PATH: /app/data/raven/vector-store
+    UPLOAD_DIR: /app/data/raven/uploads
+    LOG_API_PORT: 8085
   volumes:
     - app_logs:/app/logs
     - app_temp:/app/temp
     - app_data:/app/data
+    - raven_data:/app/data/raven
   depends_on:
     data-store:
       condition: service_started
@@ -117,43 +124,6 @@ services:
       --pidfile=/tmp/celery_beat.pid
       --schedule=/tmp/celerybeat-schedule
 
-  package-server:
-    build:
-      context: ./package-server
-      dockerfile: Dockerfile
-    image: ${DOCKERHUB_NAMESPACE:-galaxyspaceai}/raven-package-server:${IMAGE_TAG:-local}
-    container_name: raven-package-server
-    env_file: *env_files
-    environment:
-      NODE_ENV: production
-      PORT: 8083
-      RAVEN_BASE_PATH: /raven
-      RAVEN_DATA_DIR: /app/data/raven
-      RAVEN_METADATA_FILE: /app/data/raven/package-metadata.json
-      RAVEN_VECTOR_STORE_PATH: /app/data/raven/vector-store
-      UPLOAD_DIR: /app/data/raven/uploads
-      LOG_API_PORT: 8085
-    expose:
-      - "8083"
-    volumes:
-      - raven_data:/app/data/raven
-      - huggingface_cache:/home/node/.cache/huggingface
-    depends_on:
-      data-store:
-        condition: service_started
-    healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8083/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 90s
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
   frontend:
     build:
       context: ./frontend
@@ -164,8 +134,6 @@ services:
       - "${HTTP_PORT:-8085}:80"
     depends_on:
       backend:
-        condition: service_started
-      package-server:
         condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost/health"]
@@ -186,4 +154,3 @@ volumes:
   app_temp:
   redis_data:
   raven_data:
-  huggingface_cache:

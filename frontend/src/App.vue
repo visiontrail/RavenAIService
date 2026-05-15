@@ -26,11 +26,11 @@ const showAIOrb = computed(() => {
 const shouldShowNavbar = computed(() => {
   if (typeof window === 'undefined') return true
   
-  const configuredPort = (window as any).__RAVEN_SERVER_PORT__ || '8083'
+  const configuredPort = (window as any).__RAVEN_SERVER_PORT__
   const currentPort = window.location.port
   
-  // 如果当前端口是 package-server 端口（默认 8083），则不显示 NavBar
-  if (currentPort === configuredPort) {
+  // 兼容历史独立包服务端口；统一后端部署默认不再设置该值
+  if (configuredPort && currentPort === String(configuredPort)) {
     return false
   }
   
@@ -152,7 +152,7 @@ onUnmounted(() => {
 
 <template>
   <div id="app" class="min-h-screen bg-gray-50">
-    <!-- 导航栏 - 仅在非 package-server 端口显示 -->
+    <!-- 导航栏 - 兼容历史独立 Raven 端口时隐藏 -->
     <AppNavbar v-if="shouldShowNavbar" />
     
     <!-- 主要内容区域 -->

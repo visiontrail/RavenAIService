@@ -15,7 +15,6 @@ usage() {
 发布镜像:
   <namespace>/raven-backend:<tag>
   <namespace>/raven-frontend:<tag>
-  <namespace>/raven-package-server:<tag>
   同时推送 latest 标签，除非设置 PUSH_LATEST=false。
 USAGE
 }
@@ -43,7 +42,6 @@ cd "${PROJECT_ROOT}"
 images=(
   "raven-backend:."
   "raven-frontend:./frontend"
-  "raven-package-server:./package-server"
 )
 
 for item in "${images[@]}"; do

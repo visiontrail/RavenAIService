@@ -1,14 +1,13 @@
 # RavenAIService 快速开始
 
-本文档是本项目唯一推荐的发布、打包、容器启动入口。默认使用 Docker Compose 一键启动前端、后端、异步任务、Redis、Raven 包管理服务和独立数据容器。
+本文档是本项目唯一推荐的发布、打包、容器启动入口。默认使用 Docker Compose 一键启动前端、统一后端、异步任务、Redis 和独立数据容器。
 
 ## 目录规范
 
 - `scripts/`：所有运维脚本统一放在这里。
 - `docker-compose.yml`：本地和服务器 Docker 编排入口。
-- `Dockerfile`：Python 后端、Celery Worker、Celery Beat 共用镜像。
+- `Dockerfile`：FastAPI 后端、Raven 包管理接口、Celery Worker、Celery Beat 共用镜像。
 - `frontend/Dockerfile`：前端构建并通过 Nginx 提供访问入口。
-- `package-server/Dockerfile`：Raven 包管理服务镜像。
 - `data/`、`logs/`、`temp/`：仅保留本地占位文件，容器运行数据默认写入 Docker volumes。
 
 ## 容器划分
@@ -16,10 +15,9 @@
 当前 Compose 会启动以下容器：
 
 - `raven-frontend`：前端静态站点和统一反向代理，对外暴露 `HTTP_PORT`，默认 `8085`。
-- `raven-backend`：FastAPI 后端服务。
+- `raven-backend`：FastAPI 统一后端服务，包含日志、AI、发布、Raven 包管理接口。
 - `raven-worker`：Celery 异步任务 Worker。
 - `raven-beat`：Celery 定时任务。
-- `raven-package-server`：Raven 包管理与 RAG 搜索服务。
 - `redis`：任务队列和结果后端。
 - `raven-data-store`：独立数据容器，集中挂载应用数据、日志、临时目录和包管理数据 volumes。
 
@@ -69,7 +67,6 @@ HTTP_PORT=18085 ./scripts/docker-start.sh
 ```bash
 ./scripts/docker-logs.sh backend
 ./scripts/docker-logs.sh frontend
-./scripts/docker-logs.sh package-server
 ./scripts/docker-logs.sh worker
 ```
 
@@ -115,7 +112,6 @@ docker login
 
 - `<dockerhub_namespace>/raven-backend:<tag>`
 - `<dockerhub_namespace>/raven-frontend:<tag>`
-- `<dockerhub_namespace>/raven-package-server:<tag>`
 
 默认也会推送 `latest`。如果不想推送 `latest`：
 
@@ -132,7 +128,6 @@ PUSH_LATEST=false ./scripts/docker-publish.sh colingg v1.0.0
 - `raven-ai-service_app_temp`：日志处理临时文件。
 - `raven-ai-service_raven_data`：Raven 包元数据、上传包、向量索引。
 - `raven-ai-service_redis_data`：Redis AOF 数据。
-- `raven-ai-service_huggingface_cache`：RAG 本地模型缓存。
 
 `raven-data-store` 会挂载这些 volumes，业务容器只消费对应路径，避免数据散落在多个镜像层或代码目录中。
 
@@ -154,5 +149,5 @@ docker compose exec backend python -m alembic upgrade head
 ## 注意事项
 
 - 不再使用根目录旧脚本，所有 Docker 工作流都通过 `scripts/docker-*.sh` 执行。
-- 不再单独进入 `package-server/` 使用独立 Compose，包管理服务已纳入根 Compose。
+- Raven 包管理服务已统一进 `raven-backend`，不再单独维护独立包服务容器或镜像。
 - 删除 volumes 会删除上传包、向量索引、SQLite 数据库和 Redis 数据，请先确认备份。

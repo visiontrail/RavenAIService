@@ -48,7 +48,7 @@ Raven 平台聚焦通信行业测试流程中的几类典型痛点：
 
 - `FastAPI` 主服务：承接日志、AI、用户、设备、发布等核心业务
 - `Vue 3 + Vite` 控制台：提供统一的 Web 工作台与运营界面
-- `Node.js package-server` 子服务：承载重构包中心、语义检索与下载分发
+- `FastAPI Raven 包管理模块`：承载重构包中心、检索与下载分发
 - `Celery + Redis` 异步任务：支撑协议栈日志处理、AI 分析和定时维护
 - `Nginx` 网关：对外提供统一入口，降低部署和访问复杂度
 
@@ -58,9 +58,11 @@ Browser
   | http://localhost:8085
   v
 Nginx
-  |-- /                -> FastAPI (8085)
+  |-- /                -> Vue SPA
+  |-- /api/*           -> FastAPI (8085)
+  |-- /raven/api/*     -> FastAPI Raven 包管理
   |-- /ws/device-link  -> FastAPI WebSocket
-  |-- /raven           -> Node package-server (8083)
+  |-- /raven           -> Vue SPA Raven 页面
 
 FastAPI
   |-- /health
@@ -69,6 +71,10 @@ FastAPI
   |-- /api/v1/users/*
   |-- /api/v1/device-links/*
   |-- /api/v1/releases/*
+  |-- /raven/api/packages/*
+  |-- /raven/api/upload/*
+  |-- /raven/api/download/*
+  |-- /raven/api/search/*
   |-- /admin/*
   |-- frontend/dist 静态站点
 
@@ -76,13 +82,6 @@ Celery + Redis
   |-- 协议栈日志处理
   |-- AI 分析任务
   |-- 定时清理任务
-
-Node package-server
-  |-- /raven/api/packages/*
-  |-- /raven/api/upload/*
-  |-- /raven/api/download/*
-  |-- /raven/api/search/*
-  |-- FAISS 向量索引
 ```
 
 ## 平台能力地图
@@ -119,9 +118,9 @@ Node package-server
 
 ### 5. 版本资产中心与语义搜索
 
-- `package-server` 负责重构包的上传、删除、详情、下载和批量下载
-- 包元数据保存在 JSON 文件中，并同步加载到内存 `Map`，便于高频访问
-- 通过 `LangChain + FAISS` 维护向量索引，支持语义检索和建议词
+- FastAPI 后端负责重构包的上传、删除、详情、下载和批量下载
+- 包元数据保存在 `data/raven/package-metadata.json`，兼容旧数据卷
+- 通过统一的 `/raven/api/search/*` 接口提供检索、建议词、索引状态与重建能力
 - 支持重建向量索引、查看索引状态，提升测试资产的可发现性
 - 默认访问入口为 `http://localhost:8085/raven`
 
@@ -148,13 +147,12 @@ RavenAIService/
 │   ├── config.py                # 主配置入口
 │   └── main.py                  # FastAPI 应用入口
 ├── frontend/                    # Vue 3 + Vite 前端
-├── package-server/              # Node.js 重构包服务
 ├── data/                        # 本地占位目录，容器数据通过 Docker volumes 持久化
 ├── logs/                        # 本地占位目录，容器日志通过 Docker volumes 持久化
 ├── scripts/                     # Docker 启停、清理、发布脚本
 ├── alembic/                     # 数据库迁移
 ├── tests/                       # Python 侧测试
-├── docker-compose.yml           # 前端/后端/任务/数据/包服务统一编排
+├── docker-compose.yml           # 前端/后端/任务/数据统一编排
 ├── Dockerfile                   # 后端与 Celery 镜像构建
 └── QUICKSTART.md                # 发布、打包、容器启动规范
 ```
@@ -216,7 +214,7 @@ RavenAIService/
 - `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`: 自定义 provider 或覆盖默认 profile 时配置
 - `PROMPTS_CONFIG_PATH`
 
-#### package-server / RAG
+#### Raven 包管理 / RAG
 
 - `RAVEN_BASE_PATH`: 默认 `/raven`
 - `RAVEN_DATA_DIR`: 默认 `data/raven`
@@ -305,7 +303,7 @@ RavenAIService/
 - `GET /api/v1/releases`
 - `GET /api/v1/releases/{release_id}/download`
 
-### package-server
+### Raven 包管理接口
 
 默认通过 `/raven/api/*` 暴露，兼容模式下也可走旧版 `/api/*`。
 
@@ -315,8 +313,6 @@ RavenAIService/
 - 单个下载、批量下载、按类型下载
 - 单文件/批量上传
 - 智能语义搜索、建议词、向量索引状态、重建索引
-
-更细的子服务说明见 [package-server/README.md](package-server/README.md)。
 
 ## 数据与持久化
 
@@ -332,13 +328,13 @@ RavenAIService/
 | `data/device_links.json` | 最近一次设备注册快照 |
 | `data/raven/package-metadata.json` | 重构包元数据 |
 | `data/raven/vector-store*` | RAG 向量索引 |
-| `package-server/data/` | package-server 兜底数据目录 |
 
 Docker 部署下，这些目录会被卷持久化，尤其是：
 
 - `app_logs`
 - `app_temp`
 - `app_data`
+- `raven_data`
 - `redis_data`
 
 ## 开发与测试
@@ -363,18 +359,11 @@ npm run type-check
 npm run build
 ```
 
-### package-server
-
-```bash
-cd package-server
-npm start
-```
-
 ## 运行注意事项
 
 - 协议栈日志处理依赖 `tool_log_decompress`。Docker 镜像已经自动复制到 `/usr/local/bin`；本地运行时要保证该工具在 `PATH` 中可执行。
 - 开发环境默认使用 SQLite；生产环境建议改为 PostgreSQL，并显式配置 `DATABASE_URL` 或 PG 相关变量。
-- `frontend/dist` 会同时被 FastAPI 和 `package-server` 复用，因此修改前端后要重新构建。
+- Raven 包管理接口已经统一到 FastAPI 后端；修改前端后需重新构建 `frontend/dist` 或前端镜像。
 - 管理员账户定义在 `app/admin_auth.yaml`，上线前应修改默认凭据并改用哈希密码。
 - 仓库中的示例配置仅适合作为开发参考，不应直接沿用到生产环境，尤其是 API Key、默认口令和开放 CORS 配置。
 
@@ -384,5 +373,4 @@ npm start
 - [DEPLOY_USAGE.md](DEPLOY_USAGE.md)
 - [docs/DATABASE_USAGE.md](docs/DATABASE_USAGE.md)
 - [docs/API_SUMMARY.md](docs/API_SUMMARY.md)
-- [package-server/README.md](package-server/README.md)
 - [frontend/README.md](frontend/README.md)

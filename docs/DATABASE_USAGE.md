@@ -23,10 +23,9 @@
 | **日志文件** | 文件系统 | `/app/logs/` | Docker Volume `app_logs` | 实际的日志文件内容（.tar.gz等） |
 | **临时文件** | 文件系统 | `/app/temp/` | Docker Volume `app_temp` | 解压缩、处理过程中的临时文件 |
 | **SQLite数据库** | 文件系统 | `/app/data/logs.db` | Docker Volume `app_data` | 开发环境和Docker默认数据库文件 |
-| **重构包文件** | 文件系统 | `package-server/uploads/` | 本地目录（非Docker Volume） | 实际的重构包文件（.bin等） |
-| **重构包元数据** | JSON文件 | `package-server/data/package-metadata.json` | [package-server/src/services/PackageService.js](../package-server/src/services/PackageService.js) | 重构包名称、版本、描述等元信息 |
-| **向量索引** | FAISS文件 | `package-server/data/vector-store/*.faiss` | [package-server/src/services/IntelligentSearchService.js](../package-server/src/services/IntelligentSearchService.js) | 用于智能语义搜索的向量数据 |
-| **向量文档** | JSON文件 | `package-server/data/vector-store/docstore.json` | [package-server/src/services/IntelligentSearchService.js](../package-server/src/services/IntelligentSearchService.js) | 向量对应的文档内容 |
+| **重构包文件** | 文件系统 | `data/raven/uploads/` | Docker Volume `raven_data` | 实际的重构包文件（.tgz/.tar.gz） |
+| **重构包元数据** | JSON文件 | `data/raven/package-metadata.json` | [app/services/raven_package_service.py](../app/services/raven_package_service.py) | 重构包名称、版本、描述等元信息 |
+| **向量索引/检索文档** | JSON文件 | `data/raven/vector-store*` | [app/services/raven_package_service.py](../app/services/raven_package_service.py) | 用于包检索的索引元信息与文档 |
 | **Celery任务队列** | Redis | Redis DB 0 | Celery配置 | 异步任务队列 |
 | **Celery任务结果** | Redis | Redis DB 0 | Celery配置 | 任务执行结果缓存 |
 
@@ -203,9 +202,9 @@ log_records (日志元数据表)
 ```
 1. 用户上传重构包文件（.bin）
    ↓
-2. 文件保存到：package-server/uploads/pkg-xyz.bin
+2. 文件保存到：data/raven/uploads/pkg-xyz.tgz
    ↓
-3. 元数据写入JSON：package-server/data/package-metadata.json
+3. 元数据写入JSON：data/raven/package-metadata.json
    {
      "id": "pkg-xyz",
      "name": "无线配置v3.2",

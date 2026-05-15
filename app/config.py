@@ -43,6 +43,18 @@ class Settings(BaseSettings):
     temp_dir: str = "temp"
     logs_dir: str = "logs"
     disk_reserve_bytes: int = 512 * 1024 * 1024  # 默认预留512MB空间，防止磁盘写满
+
+    # Raven 包管理配置（已统一到 FastAPI 后端）
+    raven_base_path: str = "/raven"
+    raven_enable_legacy_paths: bool = True
+    raven_data_dir: str = "data/raven"
+    raven_metadata_file: str = "data/raven/package-metadata.json"
+    raven_vector_store_path: str = "data/raven/vector-store"
+    upload_dir: str = "data/raven/uploads"
+    upload_max_size_mb: int = 500
+    rag_embedding_provider: str = "local"
+    rag_embedding_model: str = "local"
+    openai_base_url: Optional[str] = None
     
     # Agent配置（日志分析智能体）
     agent_enabled: bool = True

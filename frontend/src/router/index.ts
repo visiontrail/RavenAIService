@@ -197,8 +197,7 @@ const shouldRedirectToRaven = (to: RouteLocationNormalized, from: RouteLocationN
 
   const configuredPort =
     normalizePort((window as any).__RAVEN_SERVER_PORT__) ||
-    normalizePort(import.meta.env.VITE_RAVEN_PORT) ||
-    '8083'
+    normalizePort(import.meta.env.VITE_RAVEN_PORT)
   const currentPort = normalizePort(window.location.port)
 
   return configuredPort !== '' && currentPort === configuredPort

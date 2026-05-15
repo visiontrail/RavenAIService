@@ -218,6 +218,7 @@ def create_app() -> FastAPI:
     app.include_router(releases_admin_router, tags=["Admin"])
     app.include_router(releases_public_router, tags=["Releases"])
     app.include_router(packages.router, prefix="/api", tags=["软件包管理"])
+    app.include_router(packages.router, prefix="/raven/api", tags=["Raven 软件包管理"])
     
     # 挂载前端静态站点（若已构建）
     try:
@@ -237,6 +238,8 @@ def create_app() -> FastAPI:
             async def serve_spa(request: Request, full_path: str):
                 # 检查是否是API路径，如果是则跳过（让FastAPI的404处理）
                 if (full_path.startswith("api/") or 
+                    full_path.startswith("raven/api/") or
+                    full_path == "raven/api" or
                     full_path.startswith("docs") or 
                     full_path.startswith("redoc") or 
                     full_path.startswith("openapi.json") or

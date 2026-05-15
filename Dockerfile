@@ -13,8 +13,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     gzip \
-    nodejs \
-    npm \
     python3-dev \
     tar \
     && rm -rf /var/lib/apt/lists/*
