@@ -190,8 +190,7 @@ RavenAIService/
 
 ### 主配置文件
 
-- `.env`: FastAPI、数据库、Redis、Celery、LLM 等主配置
-- `package-server/.env`: 包管理服务与 RAG 检索配置
+- `.env`: FastAPI、数据库、Redis、Celery、LLM、包管理服务与 RAG 检索等主配置
 - `app/prompts/prompts_config.yaml`: AI Prompt 配置
 - `app/admin_auth.yaml`: 管理员账户与 Token TTL 配置
 
@@ -212,6 +211,9 @@ RavenAIService/
 - `DEEPSEEK_BASE_URL`
 - `LLM_MODEL_NAME`
 - `LLM_REASONING_MODEL`
+- `ANTHROPIC_PROVIDER`: `deepseek | anthropic | custom`，日志分析 Agent 使用
+- `ANTHROPIC_API_KEY`: 日志分析 Agent 必填
+- `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`: 自定义 provider 或覆盖默认 profile 时配置
 - `PROMPTS_CONFIG_PATH`
 
 #### package-server / RAG

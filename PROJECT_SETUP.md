@@ -32,7 +32,7 @@ log-staging-service/
 │   └── .gitkeep
 ├── venv/                  # Python虚拟环境
 ├── docs/                  # 文档目录
-├── .env.template          # 环境变量模板
+├── .env.example           # 环境变量模板
 ├── .gitignore            # Git忽略文件
 ├── requirements.txt       # Python依赖
 ├── start.sh              # 启动脚本
@@ -66,7 +66,7 @@ source venv/bin/activate
 pip install fastapi uvicorn python-dotenv psutil pydantic pydantic-settings starlette python-multipart click h11 --upgrade --prefer-binary
 
 # 4. 创建环境文件
-cp .env.template .env
+cp .env.example .env
 
 # 5. 启动应用
 uvicorn app.main:app --host 0.0.0.0 --port 8085 --reload
@@ -115,7 +115,7 @@ curl http://localhost:8085/health
 
 ### 环境变量配置
 
-复制 `.env.template` 为 `.env` 并根据需要修改：
+复制 `.env.example` 为 `.env` 并根据需要修改：
 
 ```bash
 # 环境配置

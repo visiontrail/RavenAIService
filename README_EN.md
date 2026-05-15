@@ -192,8 +192,7 @@ Common scripts:
 
 ### Main config files
 
-- `.env`: FastAPI, database, Redis, Celery, LLM, and base service config
-- `package-server/.env`: package management and RAG config
+- `.env`: FastAPI, database, Redis, Celery, LLM, package management, and RAG config
 - `app/prompts/prompts_config.yaml`: AI prompt configuration
 - `app/admin_auth.yaml`: admin accounts and token TTL settings
 
@@ -214,6 +213,9 @@ Common scripts:
 - `DEEPSEEK_BASE_URL`
 - `LLM_MODEL_NAME`
 - `LLM_REASONING_MODEL`
+- `ANTHROPIC_PROVIDER`: `deepseek | anthropic | custom`, used by the log analysis agent
+- `ANTHROPIC_API_KEY`: required for the log analysis agent
+- `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`: configure for a custom provider or to override provider defaults
 - `PROMPTS_CONFIG_PATH`
 
 #### package-server / RAG
