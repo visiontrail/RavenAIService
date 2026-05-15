@@ -29,6 +29,12 @@ const navItems = [
     path: '/admin/releases',
     description: '上传 Linux / macOS / Windows 发布包',
   },
+  {
+    key: 'repo-settings',
+    label: 'Git 仓库配置',
+    path: '/admin/repo-settings',
+    description: '配置 OAM/协议栈代码仓库地址与鉴权',
+  },
 ]
 
 const PLATFORM_LABELS: Record<string, string> = {
@@ -65,6 +71,9 @@ const navVisible = computed(() => appStore.adminSidebarVisible)
 
 const activeNavKey = computed(() => {
   if (route.path.startsWith('/admin/releases')) return 'releases'
+  if (route.path.startsWith('/admin/repo-settings')) return 'repo-settings'
+  if (route.path.startsWith('/admin/users')) return 'users'
+  if (route.path.startsWith('/admin')) return 'prompts'
   return ''
 })
 

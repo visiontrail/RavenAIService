@@ -725,7 +725,6 @@ import {
 } from '../utils'
 import { logApi } from '../api'
 import AIAnalysisResult from '../components/AIAnalysisResult.vue'
-import { FormatAdapter } from '../utils/formatAdapter'
 import { renderMarkdown } from '../utils/markdownRenderer'
 import {
   ArrowLeft,
@@ -755,7 +754,6 @@ const props = defineProps<Props>()
 const route = useRoute()
 const router = useRouter()
 const logStore = useLogStore()
-const formatAdapter = FormatAdapter.getInstance()
 
 // 响应式变量
 const downloadLoading = ref(false)
@@ -799,6 +797,59 @@ const aiAnalysisPollTimer = ref<number | null>(null)
 const aiAnalysisProgressTimer = ref<number | null>(null)
 const showReasoningProcess = ref(false)
 const showDetailedOutput = ref(false)
+
+const normalizeAIAnalysisResult = (raw: any) => {
+  if (!raw) return null
+
+  if (typeof raw === 'string') {
+    return {
+      id: `analysis_${Date.now()}`,
+      query: aiAnalysisQuery.value || logStore.currentLog?.issue_description || '',
+      status: 'completed',
+      timestamp: new Date().toISOString(),
+      final_result: {
+        content: raw,
+        summary: '',
+        recommendations: [],
+        confidence: 0
+      },
+      metadata: {
+        execution_time: 0,
+        model_used: 'unknown'
+      }
+    }
+  }
+
+  const rawContent = raw?.final_result?.content ?? raw?.final_report ?? raw?.content ?? ''
+  const content = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent, null, 2)
+  const firstNonEmptyLine = content
+    .split('\n')
+    .map((line: string) => line.trim())
+    .find((line: string) => line.length > 0)
+  const summary =
+    raw?.final_result?.summary ||
+    (firstNonEmptyLine ? firstNonEmptyLine.replace(/^#+\s*/, '').slice(0, 200) : '分析完成')
+
+  return {
+    ...raw,
+    id: raw?.id || `analysis_${Date.now()}`,
+    query: raw?.query || aiAnalysisQuery.value || logStore.currentLog?.issue_description || '',
+    status: raw?.status || 'completed',
+    timestamp: raw?.timestamp || new Date().toISOString(),
+    final_result: {
+      ...(raw?.final_result || {}),
+      content,
+      summary,
+      recommendations: Array.isArray(raw?.final_result?.recommendations) ? raw.final_result.recommendations : [],
+      confidence: Number(raw?.final_result?.confidence ?? 0),
+    },
+    metadata: {
+      execution_time: Number(raw?.metadata?.execution_time ?? 0),
+      model_used: raw?.metadata?.model_used || 'unknown',
+      tokens_used: raw?.metadata?.tokens_used
+    }
+  }
+}
 
 // 示例查询
 const exampleQueries = [
@@ -1220,7 +1271,7 @@ const fetchAIAnalysisStatus = async () => {
 
       if (status === 'completed') {
         if (result) {
-          aiAnalysisResult.value = formatAdapter.adaptResult(result)
+          aiAnalysisResult.value = normalizeAIAnalysisResult(result)
           if (logStore.currentLog) {
             logStore.currentLog.ai_analysis_result = result
           }
@@ -1499,7 +1550,7 @@ watch(
   () => logStore.currentLog?.ai_analysis_result,
   (savedResult) => {
     if (savedResult) {
-      aiAnalysisResult.value = formatAdapter.adaptResult(savedResult)
+      aiAnalysisResult.value = normalizeAIAnalysisResult(savedResult)
     } else {
       aiAnalysisResult.value = null
     }
