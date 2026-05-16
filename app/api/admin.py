@@ -16,6 +16,7 @@ from app.security.admin_auth import ADMIN_TOKEN_HEADER, ADMIN_TOKEN_PREFIX, auth
 from app.services import project_repo_service
 from app.services.prompts_config_service import (
     load_prompts_config,
+    update_prompt_entries,
     update_prompts_config,
 )
 
@@ -50,6 +51,23 @@ class PromptsSummary(BaseModel):
     log_type_keys: list[str] = Field(default_factory=list)
     has_default_plan: bool = False
     has_default_summary: bool = False
+    function_keys: list[str] = Field(default_factory=list)
+    editable_prompt_count: int = 0
+
+
+class PromptEntryData(BaseModel):
+    id: str
+    function_key: str
+    function_name: str
+    function_description: Optional[str] = None
+    agent_key: str
+    agent_name: str
+    agent_description: Optional[str] = None
+    prompt_key: str
+    prompt_label: str
+    prompt_type: str
+    path: list[str]
+    content: str
 
 
 class PromptsConfigData(BaseModel):
@@ -59,6 +77,7 @@ class PromptsConfigData(BaseModel):
     size: int
     checksum: str
     summary: PromptsSummary
+    prompts: list[PromptEntryData] = Field(default_factory=list)
 
 
 class PromptsConfigResponse(BaseModel):
@@ -68,7 +87,8 @@ class PromptsConfigResponse(BaseModel):
 
 
 class UpdatePromptsRequest(BaseModel):
-    content: str
+    content: Optional[str] = None
+    prompts: Optional[list[dict[str, str]]] = None
     expected_checksum: Optional[str] = None
     force: bool = False
 
@@ -135,11 +155,23 @@ async def save_prompts_config(
     payload: UpdatePromptsRequest,
     _username: str = Depends(require_admin),
 ) -> PromptsConfigResponse:
-    data = update_prompts_config(
-        new_content=payload.content,
-        expected_checksum=payload.expected_checksum,
-        force=payload.force,
-    )
+    if payload.prompts is not None:
+        data = update_prompt_entries(
+            prompt_updates=payload.prompts,
+            expected_checksum=payload.expected_checksum,
+            force=payload.force,
+        )
+    elif payload.content is not None:
+        data = update_prompts_config(
+            new_content=payload.content,
+            expected_checksum=payload.expected_checksum,
+            force=payload.force,
+        )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either prompts or content is required.",
+        )
     return PromptsConfigResponse(
         data=PromptsConfigData(**data),
         message="保存成功",
@@ -318,4 +350,3 @@ async def test_project_repo_connection(
         data=result,
         message=result["message"],
     )
-

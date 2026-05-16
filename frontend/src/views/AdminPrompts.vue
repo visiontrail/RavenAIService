@@ -1,10 +1,27 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { LogOut, Menu, PanelLeftClose, RefreshCw, Save } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
-import type { PromptsConfigData } from '@/types'
+import type { PromptEntry, PromptsConfigData } from '@/types'
+
+type PromptSnapshot = Record<string, string>
+
+interface PromptAgentGroup {
+  key: string
+  name: string
+  description?: string | null
+  prompts: PromptEntry[]
+}
+
+interface PromptFunctionGroup {
+  key: string
+  name: string
+  description?: string | null
+  agents: PromptAgentGroup[]
+}
 
 const appStore = useAppStore()
 const router = useRouter()
@@ -22,11 +39,15 @@ const configState = reactive<PromptsConfigData>({
     log_type_keys: [],
     has_default_plan: false,
     has_default_summary: false,
+    function_keys: [],
+    editable_prompt_count: 0,
   },
+  prompts: [],
 })
 
 const lastChecksum = ref('')
-const lastSavedContent = ref('')
+const lastSavedPrompts = ref<PromptSnapshot>({})
+const selectedPromptId = ref('')
 
 const isAuthenticated = ref(false)
 const isLoggingIn = ref(false)
@@ -77,14 +98,71 @@ const formatRelative = (value?: string) => {
   return `${days} 天前`
 }
 
-const hasUnsavedChanges = computed(() => configState.content !== lastSavedContent.value)
+const snapshotPrompts = (prompts: PromptEntry[]): PromptSnapshot =>
+  prompts.reduce<PromptSnapshot>((acc, prompt) => {
+    acc[prompt.id] = prompt.content
+    return acc
+  }, {})
+
+const currentPromptSnapshot = computed(() => snapshotPrompts(configState.prompts))
+
+const hasUnsavedChanges = computed(() => {
+  const current = currentPromptSnapshot.value
+  const saved = lastSavedPrompts.value
+  const currentKeys = Object.keys(current).sort()
+  const savedKeys = Object.keys(saved).sort()
+  if (currentKeys.length !== savedKeys.length) return true
+  return currentKeys.some((key, index) => key !== savedKeys[index] || current[key] !== saved[key])
+})
+
+const selectedPrompt = computed(() =>
+  configState.prompts.find((prompt) => prompt.id === selectedPromptId.value) || null
+)
+
+const selectedPromptContent = computed({
+  get: () => selectedPrompt.value?.content || '',
+  set: (value: string) => {
+    const prompt = selectedPrompt.value
+    if (prompt) prompt.content = value
+  },
+})
+
+const promptGroups = computed<PromptFunctionGroup[]>(() => {
+  const functionMap = new Map<string, PromptFunctionGroup>()
+
+  configState.prompts.forEach((prompt) => {
+    if (!functionMap.has(prompt.function_key)) {
+      functionMap.set(prompt.function_key, {
+        key: prompt.function_key,
+        name: prompt.function_name,
+        description: prompt.function_description,
+        agents: [],
+      })
+    }
+
+    const functionGroup = functionMap.get(prompt.function_key) as PromptFunctionGroup
+    let agentGroup = functionGroup.agents.find((agent) => agent.key === prompt.agent_key)
+    if (!agentGroup) {
+      agentGroup = {
+        key: prompt.agent_key,
+        name: prompt.agent_name,
+        description: prompt.agent_description,
+        prompts: [],
+      }
+      functionGroup.agents.push(agentGroup)
+    }
+    agentGroup.prompts.push(prompt)
+  })
+
+  return Array.from(functionMap.values())
+})
 
 const statusLabel = computed(() => {
   if (!isAuthenticated.value) return '未登录'
   if (loadingConfig.value) return '同步中'
   if (saving.value) return '保存中'
   if (conflict.value) return '检测到冲突'
-  return hasUnsavedChanges.value ? '草稿未保存' : '已与磁盘同步'
+  return hasUnsavedChanges.value ? '草稿未保存' : '已同步'
 })
 
 const statusTone = computed(() => {
@@ -120,6 +198,11 @@ const clearAuth = () => {
   authForm.password = ''
 }
 
+const ensureSelectedPrompt = () => {
+  if (configState.prompts.some((prompt) => prompt.id === selectedPromptId.value)) return
+  selectedPromptId.value = configState.prompts[0]?.id || ''
+}
+
 const fetchConfig = async (withToast = false) => {
   loadingConfig.value = true
   conflict.value = false
@@ -131,7 +214,8 @@ const fetchConfig = async (withToast = false) => {
     }
     Object.assign(configState, resp.data)
     lastChecksum.value = resp.data.checksum
-    lastSavedContent.value = resp.data.content
+    lastSavedPrompts.value = snapshotPrompts(resp.data.prompts || [])
+    ensureSelectedPrompt()
     if (withToast) {
       appStore.showNotification({
         title: '已从磁盘刷新',
@@ -187,13 +271,16 @@ const handleLogin = async () => {
 }
 
 const handleSave = async (force = false) => {
-  if (!isAuthenticated.value) return
+  if (!isAuthenticated.value || !configState.prompts.length) return
   saving.value = true
   conflict.value = false
   conflictMessage.value = ''
   try {
     const resp = await adminApi.savePromptsConfig({
-      content: configState.content,
+      prompts: configState.prompts.map((prompt) => ({
+        id: prompt.id,
+        content: prompt.content,
+      })),
       expected_checksum: lastChecksum.value || undefined,
       force,
     })
@@ -202,10 +289,11 @@ const handleSave = async (force = false) => {
     }
     Object.assign(configState, resp.data)
     lastChecksum.value = resp.data.checksum
-    lastSavedContent.value = resp.data.content
+    lastSavedPrompts.value = snapshotPrompts(resp.data.prompts || [])
+    ensureSelectedPrompt()
     appStore.showNotification({
       title: '保存成功',
-      message: '文件已更新',
+      message: '系统提示词已更新并刷新 Agent 缓存',
       type: 'success',
     })
   } catch (err: any) {
@@ -231,7 +319,7 @@ const handleSave = async (force = false) => {
 
 const handleReload = async () => {
   if (hasUnsavedChanges.value) {
-    const confirmed = window.confirm('有未保存的修改，确定要丢弃并从磁盘重新加载吗？')
+    const confirmed = window.confirm('有未保存的系统提示词修改，确定要丢弃并从磁盘重新加载吗？')
     if (!confirmed) return
   }
   await fetchConfig(true)
@@ -308,11 +396,12 @@ onBeforeUnmount(() => {
             :title="navVisible ? '隐藏侧边栏' : '显示侧边栏'"
             aria-label="切换侧边栏"
           >
-            {{ navVisible ? '☰' : '▤' }}
+            <PanelLeftClose v-if="navVisible" :size="18" />
+            <Menu v-else :size="18" />
           </button>
           <div>
             <h1 class="admin-title">后台管理</h1>
-            <p class="admin-subtitle">Prompt 配置中心</p>
+            <p class="admin-subtitle">系统提示词配置</p>
           </div>
         </div>
         <div class="admin-topbar-right">
@@ -324,7 +413,8 @@ onBeforeUnmount(() => {
             class="admin-logout-btn"
             @click="handleLogout"
           >
-            退出
+            <LogOut :size="14" />
+            <span>退出</span>
           </button>
         </div>
       </div>
@@ -409,11 +499,11 @@ onBeforeUnmount(() => {
             <div class="bg-slate-50 rounded-lg p-4 space-y-3 text-sm text-slate-700">
               <div class="flex items-center gap-2">
                 <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
-                <span>仅限内部管理访问，凭证按需分发</span>
+                <span>登录后按功能和 Agent 维护系统提示词</span>
               </div>
               <div class="flex items-center gap-2">
                 <span class="h-2 w-2 rounded-full bg-cyan-400"></span>
-                <span>登录后可进行配置维护，未登录状态不会读取数据</span>
+                <span>保存后立即刷新后台 Agent 提示词缓存</span>
               </div>
               <div class="flex items-center gap-2">
                 <span class="h-2 w-2 rounded-full bg-amber-400"></span>
@@ -425,78 +515,118 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else class="space-y-4">
-        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
-          <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-3">
+        <div class="prompt-header-panel bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h2 class="text-lg font-semibold text-slate-900">prompts_config.yaml</h2>
+              <h2 class="text-lg font-semibold text-slate-900">Agent 系统提示词</h2>
               <p class="text-sm text-slate-500">
-                输入框内即为磁盘内容，保存后立即刷新 Agent 缓存；Ctrl/Cmd + S 可快速保存
+                按功能与 Agent 选择对应的系统提示词，保存后立即刷新运行时缓存
               </p>
             </div>
             <div class="editor-toolbar-actions flex items-center gap-2">
               <button
-                class="px-3 py-2 text-sm rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50"
+                class="admin-command-btn"
                 :disabled="loadingConfig"
                 @click="handleReload"
               >
-                重新加载
+                <RefreshCw :size="15" />
+                <span>重新加载</span>
               </button>
               <button
-                class="px-3 py-2 text-sm rounded-lg bg-cyan-600 text-white hover:bg-cyan-700 transition disabled:opacity-60"
+                class="admin-command-btn primary"
                 :disabled="saving || !hasUnsavedChanges"
                 @click="handleSave"
               >
-                {{ saving ? '保存中…' : '保存更改' }}
+                <Save :size="15" />
+                <span>{{ saving ? '保存中' : '保存' }}</span>
               </button>
               <button
                 v-if="conflict"
-                class="px-3 py-2 text-sm rounded-lg border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100"
+                class="admin-command-btn warning"
                 :disabled="saving"
                 @click="handleSave(true)"
               >
-                强制保存
+                <Save :size="15" />
+                <span>强制保存</span>
               </button>
             </div>
           </div>
-          <div class="editor-file-summary mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-            <div class="grid gap-2 text-xs text-slate-600 md:grid-cols-2">
-              <div class="flex items-center gap-2">
-                <span class="text-slate-500">路径</span>
-                <span class="font-mono text-[11px] text-slate-800 break-all">{{ configState.path }}</span>
+          <div class="prompt-meta-strip">
+            <span>可编辑提示词：{{ configState.summary.editable_prompt_count || configState.prompts.length }}</span>
+            <span>配置大小：{{ formatBytes(configState.size) }}</span>
+            <span>最近修改：{{ readableUpdatedAt }}</span>
+            <span class="prompt-path">{{ configState.path }}</span>
+          </div>
+        </div>
+
+        <div class="prompt-workbench">
+          <aside class="prompt-list-panel">
+            <div class="prompt-list-title">
+              <span>功能与 Agent</span>
+              <span>{{ configState.prompts.length }}</span>
+            </div>
+            <div v-if="!promptGroups.length" class="prompt-empty">
+              未发现可编辑的系统提示词
+            </div>
+            <div v-for="group in promptGroups" :key="group.key" class="prompt-function-group">
+              <div class="prompt-function-name">
+                <span>{{ group.name }}</span>
+                <small>{{ group.agents.length }} 个 Agent</small>
               </div>
-              <div class="flex items-center gap-2">
-                <span class="text-slate-500">大小</span>
-                <span>{{ formatBytes(configState.size) }}</span>
+              <p v-if="group.description" class="prompt-function-desc">{{ group.description }}</p>
+              <button
+                v-for="agent in group.agents"
+                :key="agent.key"
+                class="prompt-agent-item"
+                :class="{ 'is-active': agent.prompts.some((prompt) => prompt.id === selectedPromptId) }"
+                @click="selectedPromptId = agent.prompts[0]?.id || ''"
+              >
+                <span class="prompt-agent-name">{{ agent.name }}</span>
+                <span class="prompt-agent-desc">{{ agent.description }}</span>
+                <span class="prompt-agent-foot">
+                  {{ agent.prompts.map((prompt) => prompt.prompt_label).join('、') }}
+                </span>
+              </button>
+            </div>
+          </aside>
+
+          <section class="prompt-editor-panel">
+            <template v-if="selectedPrompt">
+              <div class="prompt-editor-head">
+                <div>
+                  <div class="prompt-breadcrumb">
+                    {{ selectedPrompt.function_name }} / {{ selectedPrompt.agent_name }}
+                  </div>
+                  <h3>{{ selectedPrompt.prompt_label }}</h3>
+                  <p v-if="selectedPrompt.agent_description">{{ selectedPrompt.agent_description }}</p>
+                </div>
+                <span
+                  class="prompt-dirty-badge"
+                  :class="currentPromptSnapshot[selectedPrompt.id] !== lastSavedPrompts[selectedPrompt.id] ? 'is-dirty' : 'is-clean'"
+                >
+                  {{ currentPromptSnapshot[selectedPrompt.id] !== lastSavedPrompts[selectedPrompt.id] ? '未保存' : '已同步' }}
+                </span>
               </div>
+              <textarea
+                v-model="selectedPromptContent"
+                class="prompt-textarea"
+                spellcheck="false"
+                :disabled="loadingConfig || saving"
+              ></textarea>
+              <div class="prompt-editor-footer">
+                <div class="flex items-center gap-3 flex-wrap">
+                  <span>长度：{{ selectedPromptContent.length }} 字符</span>
+                  <span v-if="conflict" class="text-amber-700 font-semibold">
+                    {{ conflictMessage || '文件在其他位置被更新' }}
+                  </span>
+                </div>
+                <span>校验和：{{ lastChecksum || configState.checksum }}</span>
+              </div>
+            </template>
+            <div v-else class="prompt-empty editor-empty">
+              请选择一个 Agent 的系统提示词
             </div>
-          </div>
-          <div class="rounded-lg border border-slate-200 bg-slate-50 overflow-hidden">
-            <textarea
-              v-model="configState.content"
-              class="w-full h-[420px] md:h-[560px] resize-none bg-white font-mono text-xs text-slate-800 p-4 focus:outline-none"
-              spellcheck="false"
-              :disabled="loadingConfig"
-            ></textarea>
-          </div>
-          <div class="editor-meta-row flex items-center justify-between text-xs text-slate-500 mt-2">
-            <div class="editor-meta-left flex items-center gap-3">
-              <span>长度：{{ configState.content.length }} 字符</span>
-              <span
-                :class="hasUnsavedChanges ? 'text-amber-600' : 'text-emerald-600'"
-              >{{ hasUnsavedChanges ? '有未保存的修改' : '已与磁盘同步' }}</span>
-              <span v-if="conflict" class="text-amber-700 font-semibold">
-                {{ conflictMessage || '文件在其他位置被更新' }}
-              </span>
-            </div>
-            <div class="editor-meta-right flex items-center gap-2">
-              <span class="px-2 py-1 rounded bg-slate-100 border border-slate-200">
-                {{ readableUpdatedAt }}
-              </span>
-              <span class="px-2 py-1 rounded bg-slate-100 border border-slate-200">
-                校验和：{{ lastChecksum || configState.checksum }}
-              </span>
-            </div>
-          </div>
+          </section>
         </div>
       </section>
     </main>
@@ -543,6 +673,9 @@ onBeforeUnmount(() => {
 .admin-icon-btn {
   width: 2.25rem;
   height: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 0.625rem;
   color: #f8fafc;
@@ -573,6 +706,9 @@ onBeforeUnmount(() => {
 }
 
 .admin-logout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 0.55rem;
   color: #e2e8f0;
@@ -635,6 +771,274 @@ onBeforeUnmount(() => {
   display: none;
 }
 
+.admin-command-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.55rem;
+  color: #334155;
+  background: #ffffff;
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 0.55rem 0.8rem;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.admin-command-btn:hover:not(:disabled) {
+  background: #f8fafc;
+}
+
+.admin-command-btn.primary {
+  color: #ffffff;
+  background: #0891b2;
+  border-color: #0891b2;
+}
+
+.admin-command-btn.primary:hover:not(:disabled) {
+  background: #0e7490;
+}
+
+.admin-command-btn.warning {
+  color: #92400e;
+  background: #fffbeb;
+  border-color: #fbbf24;
+}
+
+.admin-command-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.prompt-meta-strip {
+  margin-top: 0.9rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  color: #475569;
+  font-size: 0.75rem;
+}
+
+.prompt-meta-strip span {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  background: #f8fafc;
+  padding: 0.35rem 0.55rem;
+}
+
+.prompt-meta-strip .prompt-path {
+  max-width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  word-break: break-all;
+}
+
+.prompt-workbench {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 1rem;
+}
+
+.prompt-list-panel,
+.prompt-editor-panel {
+  border: 1px solid #e2e8f0;
+  border-radius: 1rem;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.prompt-list-panel {
+  padding: 0.85rem;
+  align-self: start;
+}
+
+.prompt-list-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #0f172a;
+  font-size: 0.85rem;
+  font-weight: 800;
+  margin-bottom: 0.75rem;
+}
+
+.prompt-list-title span:last-child {
+  min-width: 1.5rem;
+  text-align: center;
+  color: #0e7490;
+  background: #ecfeff;
+  border: 1px solid #a5f3fc;
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+}
+
+.prompt-function-group + .prompt-function-group {
+  margin-top: 1rem;
+}
+
+.prompt-function-name {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #0f172a;
+  font-size: 0.82rem;
+  font-weight: 800;
+  margin-bottom: 0.25rem;
+}
+
+.prompt-function-name small {
+  color: #64748b;
+  font-weight: 600;
+}
+
+.prompt-function-desc {
+  color: #64748b;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  margin-bottom: 0.55rem;
+}
+
+.prompt-agent-item {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 0.25rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  background: #f8fafc;
+  padding: 0.75rem;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.prompt-agent-item + .prompt-agent-item {
+  margin-top: 0.5rem;
+}
+
+.prompt-agent-item:hover,
+.prompt-agent-item.is-active {
+  border-color: #06b6d4;
+  background: #ecfeff;
+}
+
+.prompt-agent-name {
+  color: #0f172a;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+.prompt-agent-desc {
+  min-height: 2.45rem;
+  color: #64748b;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.prompt-agent-foot {
+  color: #0e7490;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.prompt-editor-panel {
+  min-height: 640px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.prompt-editor-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.prompt-editor-head h3 {
+  color: #0f172a;
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.prompt-editor-head p {
+  color: #64748b;
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+}
+
+.prompt-breadcrumb {
+  color: #0e7490;
+  font-size: 0.72rem;
+  font-weight: 800;
+  margin-bottom: 0.2rem;
+}
+
+.prompt-dirty-badge {
+  white-space: nowrap;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 0.25rem 0.55rem;
+}
+
+.prompt-dirty-badge.is-dirty {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.prompt-dirty-badge.is-clean {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.prompt-textarea {
+  flex: 1;
+  min-height: 500px;
+  width: 100%;
+  resize: vertical;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  color: #1e293b;
+  background: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.65;
+  padding: 1rem;
+}
+
+.prompt-textarea:disabled {
+  background: #f8fafc;
+}
+
+.prompt-editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-top: 1px solid #e2e8f0;
+  color: #64748b;
+  background: #f8fafc;
+  font-size: 0.75rem;
+  padding: 0.65rem 1rem;
+}
+
+.prompt-empty {
+  color: #64748b;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 0.75rem;
+  font-size: 0.85rem;
+  padding: 1rem;
+}
+
+.editor-empty {
+  margin: auto;
+}
+
 @media (max-width: 1024px) {
   .admin-topbar-inner {
     padding: 0 0.75rem;
@@ -642,6 +1046,10 @@ onBeforeUnmount(() => {
 
   .admin-topbar-right span {
     display: none;
+  }
+
+  .prompt-workbench {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -694,15 +1102,18 @@ onBeforeUnmount(() => {
     width: 100%;
   }
 
-  .editor-meta-row {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.5rem;
+  .prompt-header-panel {
+    border-radius: 0.85rem;
   }
 
-  .editor-meta-right,
-  .editor-meta-left {
-    flex-wrap: wrap;
+  .prompt-editor-panel {
+    min-height: 560px;
+  }
+
+  .prompt-editor-head,
+  .prompt-editor-footer {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 </style>

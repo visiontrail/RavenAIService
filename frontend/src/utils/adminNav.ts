@@ -3,7 +3,7 @@ export const adminNavItems = [
     key: 'prompts',
     label: 'Prompt 配置',
     path: '/admin/prompts',
-    description: '编辑 prompts_config.yaml 并刷新缓存',
+    description: '按功能和 Agent 编辑系统提示词',
   },
   {
     key: 'users',

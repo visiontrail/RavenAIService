@@ -70,7 +70,8 @@ export const adminApi = {
     adminClient.get('/admin/prompts/config'),
 
   savePromptsConfig: (payload: {
-    content: string
+    content?: string
+    prompts?: Array<{ id: string; content: string }>
     expected_checksum?: string
     force?: boolean
   }): Promise<ApiResponse<PromptsConfigData>> => adminClient.put('/admin/prompts/config', payload),

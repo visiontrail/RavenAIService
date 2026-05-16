@@ -188,6 +188,23 @@ export interface PromptsSummary {
   log_type_keys: string[]
   has_default_plan: boolean
   has_default_summary: boolean
+  function_keys: string[]
+  editable_prompt_count: number
+}
+
+export interface PromptEntry {
+  id: string
+  function_key: string
+  function_name: string
+  function_description?: string | null
+  agent_key: string
+  agent_name: string
+  agent_description?: string | null
+  prompt_key: string
+  prompt_label: string
+  prompt_type: string
+  path: string[]
+  content: string
 }
 
 export interface PromptsConfigData {
@@ -197,6 +214,7 @@ export interface PromptsConfigData {
   size: number
   checksum: string
   summary: PromptsSummary
+  prompts: PromptEntry[]
 }
 
 export interface TestConnectionResult {
