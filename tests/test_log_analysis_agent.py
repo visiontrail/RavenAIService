@@ -141,28 +141,21 @@ def workspace_ctx():
 
 def _patch_build_options():
     fake_options = MagicMock()
-    return patch("app.agents.log_analysis.agent.build_options", return_value=fake_options)
+    return patch("app.agents.anthropic_client.build_options", return_value=fake_options)
 
 
 def _patch_mcp_server():
-    return patch("app.agents.log_analysis.agent.get_mcp_server", return_value=MagicMock())
+    return patch("app.agents.log_analysis.mcp_tools.get_mcp_server", return_value=MagicMock())
 
 
 def _patch_prompts():
     system = "You are a test agent."
     user_tmpl = "Question: {question} log_type: {log_type} task_id: {task_id} hints: {hints}"
-    return patch("app.agents.log_analysis.agent.get_prompts", return_value=(system, user_tmpl))
+    return patch("app.agents.log_analysis.prompts.get_prompts", return_value=(system, user_tmpl))
 
 
-def _patch_settings():
-    s = MagicMock()
-    s.anthropic_model = "deepseek-v4-pro"
-    s.anthropic_provider = "deepseek"
-    s.anthropic_request_timeout_seconds = 600
-    from app.agents.anthropic_client import PROVIDER_PROFILES
-    with patch("app.agents.log_analysis.agent.settings", s), \
-         patch("app.agents.log_analysis.agent.PROVIDER_PROFILES", PROVIDER_PROFILES):
-        yield s
+def _patch_skills():
+    return patch("app.services.skills_service.materialize_enabled_skills", return_value=[])
 
 
 # ─────────────────────── Tests ─────────────────────────────────────
@@ -176,20 +169,18 @@ class TestLogAnalysisAgentRun:
         fake_sdk.query = _fake_query_ok
         fake_sdk.ClaudeAgentOptions = MagicMock
 
-        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), \
+        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), _patch_skills(), \
              patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
-             patch("app.agents.log_analysis.agent.settings", MagicMock(
+             patch("app.config.settings", MagicMock(
                  anthropic_model="deepseek-v4-pro",
                  anthropic_provider="deepseek",
                  anthropic_request_timeout_seconds=600,
              )):
-            from app.agents.anthropic_client import PROVIDER_PROFILES
-            with patch("app.agents.log_analysis.agent.PROVIDER_PROFILES", PROVIDER_PROFILES):
-                result = await LogAnalysisAgent().run(workspace_ctx)
+            result = await LogAnalysisAgent().run(workspace_ctx)
 
         assert result["status"] == "ok"
         assert result["engine"] == "claude-agent-sdk"
-        assert result["schema_version"] == 2
+        assert result["schema_version"] == 3
         assert result["summary"] == "Found issue in module X"
         assert result["severity"] == "error"
         assert len(result["root_cause_hypotheses"]) == 1
@@ -201,16 +192,14 @@ class TestLogAnalysisAgentRun:
         fake_sdk = MagicMock()
         fake_sdk.query = _fake_query_ok
 
-        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), \
+        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), _patch_skills(), \
              patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
-             patch("app.agents.log_analysis.agent.settings", MagicMock(
+             patch("app.config.settings", MagicMock(
                  anthropic_model="deepseek-v4-pro",
                  anthropic_provider="deepseek",
                  anthropic_request_timeout_seconds=600,
              )):
-            from app.agents.anthropic_client import PROVIDER_PROFILES
-            with patch("app.agents.log_analysis.agent.PROVIDER_PROFILES", PROVIDER_PROFILES):
-                result = await LogAnalysisAgent().run(workspace_ctx)
+            result = await LogAnalysisAgent().run(workspace_ctx)
 
         # tool_trace should not contain plaintext token
         trace_str = json.dumps(result["tool_trace"])
@@ -224,16 +213,14 @@ class TestLogAnalysisAgentRun:
         fake_sdk = MagicMock()
         fake_sdk.query = _fake_query_schema_mismatch
 
-        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), \
+        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), _patch_skills(), \
              patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
-             patch("app.agents.log_analysis.agent.settings", MagicMock(
+             patch("app.config.settings", MagicMock(
                  anthropic_model="deepseek-v4-pro",
                  anthropic_provider="deepseek",
                  anthropic_request_timeout_seconds=600,
              )):
-            from app.agents.anthropic_client import PROVIDER_PROFILES
-            with patch("app.agents.log_analysis.agent.PROVIDER_PROFILES", PROVIDER_PROFILES):
-                result = await LogAnalysisAgent().run(workspace_ctx)
+            result = await LogAnalysisAgent().run(workspace_ctx)
 
         assert result["status"] == "schema_mismatch"
         assert "cannot format" in result["raw"]
@@ -245,30 +232,80 @@ class TestLogAnalysisAgentRun:
         fake_sdk = MagicMock()
         fake_sdk.query = _fake_query_not_registered
 
-        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), \
+        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), _patch_skills(), \
              patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
-             patch("app.agents.log_analysis.agent.settings", MagicMock(
+             patch("app.config.settings", MagicMock(
                  anthropic_model="deepseek-v4-pro",
                  anthropic_provider="deepseek",
                  anthropic_request_timeout_seconds=600,
              )):
-            from app.agents.anthropic_client import PROVIDER_PROFILES
-            with patch("app.agents.log_analysis.agent.PROVIDER_PROFILES", PROVIDER_PROFILES):
-                result = await LogAnalysisAgent().run(workspace_ctx)
+            result = await LogAnalysisAgent().run(workspace_ctx)
 
         assert result["status"] == "error"
         assert result["error_kind"] == "project_repo_not_registered"
+
+    @pytest.mark.asyncio
+    async def test_uses_context_question_over_task_json_question(self, workspace_ctx):
+        from app.agents.log_analysis.agent import LogAnalysisAgent
+
+        prompts: List[str] = []
+
+        async def _fake_query_capture(*args, **kwargs) -> AsyncIterator[Any]:
+            prompts.append(kwargs.get("prompt") or args[0])
+            yield FakeResultMessage(result=_make_good_result_json())
+
+        workspace_ctx.metadata["question"] = "克隆代码仓库并告诉我最新两次修改"
+
+        fake_sdk = MagicMock()
+        fake_sdk.query = _fake_query_capture
+
+        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), _patch_skills(), \
+             patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
+             patch("app.config.settings", MagicMock(
+                 anthropic_model="deepseek-v4-pro",
+                 anthropic_provider="deepseek",
+                 anthropic_request_timeout_seconds=600,
+             )):
+            result = await LogAnalysisAgent().run(workspace_ctx)
+
+        assert result["status"] == "ok"
+        assert prompts
+        assert "克隆代码仓库" in prompts[0]
+        assert "What failed?" not in prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_deepseek_does_not_register_mcp_server(self, workspace_ctx):
+        from app.agents.log_analysis.agent import LogAnalysisAgent
+
+        fake_sdk = MagicMock()
+        fake_sdk.query = _fake_query_schema_mismatch
+
+        with _patch_build_options() as mock_build_options, \
+             _patch_mcp_server() as mock_get_mcp_server, \
+             _patch_prompts(), _patch_skills(), \
+             patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
+             patch("app.config.settings", MagicMock(
+                 anthropic_model="deepseek-v4-pro",
+                 anthropic_provider="deepseek",
+                 anthropic_request_timeout_seconds=600,
+             )):
+            await LogAnalysisAgent().run(workspace_ctx)
+
+        mock_get_mcp_server.assert_not_called()
+        kwargs = mock_build_options.call_args.kwargs
+        assert kwargs["mcp_servers"] is None
+        assert "mcp__project_repo__lookup_project_repo" not in kwargs["allowed_tools"]
 
 
 class TestRunSync:
     def test_run_sync_timeout(self, workspace_ctx):
         from app.agents.log_analysis.agent import LogAnalysisAgent
 
-        async def _slow_run(_):
+        async def _slow_run(self, _):
             await asyncio.sleep(9999)
 
         with patch.object(LogAnalysisAgent, "run", _slow_run), \
-             patch("app.agents.log_analysis.agent.settings", MagicMock(
+             patch("app.config.settings", MagicMock(
                  anthropic_request_timeout_seconds=0.01,
              )):
             result = LogAnalysisAgent().run_sync(workspace_ctx)
@@ -316,6 +353,7 @@ class TestFastFailCeleryTask:
         import tempfile
         import io
         from pathlib import Path
+        from app.tasks.ai_analysis import run_ai_analysis_task
 
         tmpdir = tempfile.mkdtemp()
         archive = Path(tmpdir) / "test.tar.gz"
@@ -331,13 +369,13 @@ class TestFastFailCeleryTask:
         with patch("app.tasks.ai_analysis.SessionLocal") as MockSession, \
              patch("app.tasks.ai_analysis.settings") as mock_settings, \
              patch("app.tasks.ai_analysis.current_task") as mock_task, \
-             patch("app.agents.log_analysis.workspace.settings") as ws_settings:
+             patch("app.config.settings") as cfg_settings:
             mock_settings.max_retry_attempts = 0
             mock_settings.anthropic_model = "deepseek-v4-pro"
             mock_settings.anthropic_request_timeout_seconds = 600
             mock_task.request.id = "test-task"
-            ws_settings.code_repo_clone_base_dir = tmpdir
-            ws_settings.ai_analysis_max_extract_bytes = 100 * 1024 * 1024
+            cfg_settings.code_repo_clone_base_dir = tmpdir
+            cfg_settings.ai_analysis_max_extract_bytes = 100 * 1024 * 1024
             session = self._make_session(log_record)
             MockSession.return_value = session
 

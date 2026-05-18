@@ -168,6 +168,8 @@ def build_options(
         else:
             effective_thinking = {"budget_tokens": thinking_budget_tokens}
 
+    effective_allowed_tools = list(allowed_tools)
+
     # MCP servers 能力检查（不支持的 provider 不注入）
     effective_mcp_servers: Dict[str, Any] = {}
     if mcp_servers:
@@ -175,10 +177,26 @@ def build_options(
             logger.warning(
                 "Provider '%s' does not support MCP server tools "
                 "(supports_mcp_server_tools=False). "
-                "MCP servers will be registered but may not function correctly.",
+                "MCP servers will not be registered.",
                 provider_name,
             )
-        effective_mcp_servers = mcp_servers
+        else:
+            effective_mcp_servers = mcp_servers
+
+    if not profile.supports_mcp_server_tools:
+        filtered_allowed_tools = [
+            name for name in effective_allowed_tools
+            if not str(name).startswith("mcp__")
+        ]
+        removed_count = len(effective_allowed_tools) - len(filtered_allowed_tools)
+        if removed_count:
+            logger.warning(
+                "Provider '%s' does not support MCP server tools; removed %d MCP "
+                "allowed tool(s).",
+                provider_name,
+                removed_count,
+            )
+        effective_allowed_tools = filtered_allowed_tools
 
     logger.info(
         "Building ClaudeAgentOptions: provider=%s model=%s base_url=%s max_turns=%d",
@@ -200,7 +218,7 @@ def build_options(
     options_kwargs: Dict[str, Any] = {
         "model": effective_model,
         "system_prompt": system_prompt,
-        "allowed_tools": allowed_tools,
+        "allowed_tools": effective_allowed_tools,
         "cwd": cwd,
         "max_turns": effective_max_turns,
         "permission_mode": effective_permission_mode,

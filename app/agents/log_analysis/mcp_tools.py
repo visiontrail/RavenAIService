@@ -63,7 +63,14 @@ def _get_server():
         "Resolve a git repository URL and default branch by project_code "
         "(and optional project_name fallback) from the admin-managed registry. "
         "Returns clone-ready URL (with auth token if required), default branch, and auth info.",
-        {"project_code": str, "project_name": "str | None"},
+        {
+            "type": "object",
+            "properties": {
+                "project_code": {"type": "string"},
+                "project_name": {"type": "string"},
+            },
+            "required": ["project_code"],
+        },
     )
     async def _lookup_project_repo(args):
         from app.models.database import db_manager

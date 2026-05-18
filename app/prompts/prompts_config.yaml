@@ -30,7 +30,7 @@ claude_agent_log_analysis:
 
       ```
       <workspace>/
-        task.json          # Non-sensitive task metadata: log_id, question, log_type, hints
+        task.json          # Task metadata: log_id, question, log_type, hints, optional repo_info
         logs/              # Extracted log archive — metadata.json is somewhere in this tree
         repo/              # Empty placeholder; clone the source code here ONLY if needed
       ```
@@ -38,7 +38,7 @@ claude_agent_log_analysis:
       ## Available Tools
       - Read, Grep, Glob   — read and search files
       - Bash               — run shell commands (whitelist: git, grep, rg, tar, zcat, gunzip, find, cat, head, tail, wc, jq, ls, awk, sed)
-      - mcp__project_repo__lookup_project_repo  — resolve project_code → repo URL + branch
+      - mcp__project_repo__lookup_project_repo  — resolve project_code → repo URL + branch, only when this tool is present in your allowed tools
 
       ## Mandatory Workflow
 
@@ -76,17 +76,22 @@ claude_agent_log_analysis:
 
       ### Step 2 — Extract repository information (only if you need the repo)
       You only need to resolve the repo when investigation requires reading
-      source code. For pure `meta`, `stats`, `search`, and many `qa` /
-      `other` questions, you can skip Step 3 and Step 4 entirely.
+      source code or repository history. If the user's question explicitly asks
+      to clone code, inspect a code repository, use git, read commits/branches,
+      or report recent/latest changes, the repo is REQUIRED even if the question
+      also mentions metadata.json.
 
       If you do need it, read repository information from both
       `metadata.json` and `task.json`. Prefer explicit repository fields over
       project-code lookup:
       1. `repo_info.clone_url` / `repo_info.repo_url` + `repo_info.default_branch`
       2. `project_info.clone_url` / `project_info.repo_url` + `project_info.default_branch`
-      3. top-level `clone_url` / `repo_url` + `default_branch`
-      4. project identity for registry lookup:
-         `project_info.project_code` → `project_code` → `issue_info.service_name`
+      3. top-level `clone_url` / `repo_url` / `repository_url` + `default_branch`
+      4. `git_context.repository_url` + `git_context.branch_name` / `git_context.commit_id`
+      5. project identity for registry lookup:
+         `project_info.project_code` → `project_code` → `issue_info.project_code` →
+         `log_types.<log_type>.project_code` → any `log_types.*.project_code` →
+         `issue_info.service_name`
 
       Also read `project_info.project_name` → `project_name` for retry fallback.
 
@@ -99,14 +104,18 @@ claude_agent_log_analysis:
       info, use it directly and proceed to Step 4. This is the expected path
       when the archive metadata already includes the code repository.
 
-      Only if explicit repository info is absent, call
-      `mcp__project_repo__lookup_project_repo` with `{"project_code": "<value>"}`.
+      Only if explicit repository info is absent AND
+      `mcp__project_repo__lookup_project_repo` is present in your allowed tools,
+      call it with `{"project_code": "<value>"}`.
 
       - If the tool returns `{"error": "not_found", ...}` AND you have a `project_name`:
         retry once with `{"project_code": "<project_name>"}`.
       - If both attempts return `not_found` AND you actually need the repo
         to answer the question: output the final JSON with
         `"status": "error", "error_kind": "project_repo_not_registered"` and STOP.
+      - If the lookup tool is not present in your allowed tools AND explicit
+        repository info is absent AND you actually need the repo: output the
+        same `project_repo_not_registered` final JSON and STOP.
       - If you don't strictly need the repo, just continue without it and
         say so in `answer`.
 
@@ -121,6 +130,11 @@ claude_agent_log_analysis:
       ```
 
       Do NOT print or echo the variable. After cloning, unset it if you can.
+      If `commit_id` is present and the user's question is about that captured
+      version, check it out after cloning. If the user asks for latest commits
+      or recent repository changes, prefer the branch/default_branch and run
+      `git -C repo log -2 --oneline --decorate` (or a more detailed `git log -2`)
+      to answer directly.
 
       ### Step 5 — Investigate (driven by the user's question, not by template)
       **Everything you do here must be in service of answering the user's

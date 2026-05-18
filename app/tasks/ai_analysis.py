@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -24,6 +25,87 @@ from app.config import settings
 from app.models.log import LogRecord
 
 logger = logging.getLogger(__name__)
+
+_TOKEN_URL_RE = re.compile(r"https://[^@\s]+@")
+_HEX_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+
+_REPO_URL_FIELD_PATHS = (
+    ("repo_info", "clone_url"),
+    ("repo_info", "repo_url"),
+    ("project_info", "clone_url"),
+    ("project_info", "repo_url"),
+    ("project_info", "repository_url"),
+    ("clone_url",),
+    ("repo_url",),
+    ("repository_url",),
+    ("git_context", "clone_url"),
+    ("git_context", "repo_url"),
+    ("git_context", "repository_url"),
+    ("git_context", "remote_url"),
+    ("git_context", "git_url"),
+    ("scm", "repository_url"),
+    ("scm", "repo_url"),
+    ("vcs", "repository_url"),
+    ("vcs", "repo_url"),
+    ("extra_fields", "metadata_json", "repo_info", "clone_url"),
+    ("extra_fields", "metadata_json", "repo_info", "repo_url"),
+    ("extra_fields", "metadata_json", "project_info", "repo_url"),
+    ("extra_fields", "metadata_json", "project_info", "repository_url"),
+    ("extra_fields", "metadata_json", "git_context", "clone_url"),
+    ("extra_fields", "metadata_json", "git_context", "repo_url"),
+    ("extra_fields", "metadata_json", "git_context", "repository_url"),
+)
+
+_BRANCH_FIELD_PATHS = (
+    ("repo_info", "default_branch"),
+    ("repo_info", "branch_name"),
+    ("repo_info", "branch"),
+    ("project_info", "default_branch"),
+    ("project_info", "branch_name"),
+    ("project_info", "branch"),
+    ("default_branch",),
+    ("branch_name",),
+    ("branch",),
+    ("git_context", "default_branch"),
+    ("git_context", "branch_name"),
+    ("git_context", "branch"),
+    ("git_context", "ref_name"),
+    ("scm", "branch_name"),
+    ("scm", "branch"),
+    ("vcs", "branch_name"),
+    ("vcs", "branch"),
+    ("extra_fields", "metadata_json", "repo_info", "default_branch"),
+    ("extra_fields", "metadata_json", "repo_info", "branch_name"),
+    ("extra_fields", "metadata_json", "project_info", "default_branch"),
+    ("extra_fields", "metadata_json", "project_info", "branch_name"),
+    ("extra_fields", "metadata_json", "git_context", "default_branch"),
+    ("extra_fields", "metadata_json", "git_context", "branch_name"),
+    ("extra_fields", "metadata_json", "git_context", "branch"),
+)
+
+_COMMIT_FIELD_PATHS = (
+    ("repo_info", "commit_id"),
+    ("repo_info", "commit_sha"),
+    ("project_info", "commit_id"),
+    ("project_info", "commit_sha"),
+    ("commit_id",),
+    ("commit_sha",),
+    ("revision",),
+    ("git_context", "commit_id"),
+    ("git_context", "commit_sha"),
+    ("git_context", "revision"),
+    ("scm", "commit_id"),
+    ("scm", "commit_sha"),
+    ("vcs", "commit_id"),
+    ("vcs", "commit_sha"),
+    ("extra_fields", "metadata_json", "repo_info", "commit_id"),
+    ("extra_fields", "metadata_json", "repo_info", "commit_sha"),
+    ("extra_fields", "metadata_json", "project_info", "commit_id"),
+    ("extra_fields", "metadata_json", "project_info", "commit_sha"),
+    ("extra_fields", "metadata_json", "git_context", "commit_id"),
+    ("extra_fields", "metadata_json", "git_context", "commit_sha"),
+    ("extra_fields", "metadata_json", "git_context", "revision"),
+)
 
 
 def _get_sync_database_url() -> str:
@@ -122,6 +204,198 @@ def _update_ai_task_metadata(
         logger.warning("_update_ai_task_metadata: 提交后校验失败: %s", ve)
 
 
+def _mask_repo_url(url: str) -> str:
+    return _TOKEN_URL_RE.sub("https://***@", url)
+
+
+def _get_nested_string(data: Dict[str, Any], path: tuple[str, ...]) -> Optional[str]:
+    current: Any = data
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    if isinstance(current, str) and current.strip():
+        return current.strip()
+    return None
+
+
+def _first_nested_string(
+    data: Dict[str, Any],
+    paths: tuple[tuple[str, ...], ...],
+) -> tuple[Optional[str], Optional[str]]:
+    for path in paths:
+        value = _get_nested_string(data, path)
+        if value:
+            return value, ".".join(path)
+    return None, None
+
+
+def _normalize_project_code(value: Any) -> Optional[str]:
+    if isinstance(value, str) and value.strip():
+        return value.strip().lower()
+    return None
+
+
+def _log_type_value(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    raw = getattr(value, "value", value)
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip().lower()
+    return None
+
+
+def _project_code_candidates_from_metadata(
+    meta: Dict[str, Any],
+    log_type: Any = None,
+) -> list[str]:
+    """Collect likely project codes from known metadata.json shapes.
+
+    OAM archives may carry the real code under
+    `log_types.<component_type>.project_code` while `issue_info.service_name`
+    can be a human name. Keep the human-facing fallback, but prefer structured
+    project codes first.
+    """
+    project_info = meta.get("project_info") if isinstance(meta.get("project_info"), dict) else {}
+    issue_info = meta.get("issue_info") if isinstance(meta.get("issue_info"), dict) else {}
+    log_types = meta.get("log_types") if isinstance(meta.get("log_types"), dict) else {}
+
+    preferred_log_type = _log_type_value(log_type)
+    log_type_codes: list[str] = []
+    if log_types:
+        if preferred_log_type:
+            for key, info in log_types.items():
+                if str(key).strip().lower() == preferred_log_type and isinstance(info, dict):
+                    code = _normalize_project_code(info.get("project_code"))
+                    if code:
+                        log_type_codes.append(code)
+        for info in log_types.values():
+            if isinstance(info, dict):
+                code = _normalize_project_code(info.get("project_code"))
+                if code:
+                    log_type_codes.append(code)
+
+    raw_candidates: list[Any] = [
+        project_info.get("project_code"),
+        meta.get("project_code"),
+        issue_info.get("project_code"),
+        *log_type_codes,
+        project_info.get("project_name"),
+        meta.get("project_name"),
+        issue_info.get("project_name"),
+        issue_info.get("service_name"),
+    ]
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for value in raw_candidates:
+        code = _normalize_project_code(value)
+        if code and code not in seen:
+            seen.add(code)
+            candidates.append(code)
+    return candidates
+
+
+def _normalize_branch_name(value: Optional[str]) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    branch = value.strip()
+    if not branch or branch == "HEAD" or any(ch.isspace() for ch in branch):
+        return None
+    for prefix in ("refs/heads/", "origin/"):
+        if branch.startswith(prefix):
+            branch = branch[len(prefix):].strip()
+            break
+    if not branch or branch == "HEAD" or _HEX_COMMIT_RE.fullmatch(branch):
+        return None
+    return branch
+
+
+def _extract_repo_fields_from_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract explicit git fields from known metadata.json shapes."""
+    repo_url, repo_source = _first_nested_string(meta, _REPO_URL_FIELD_PATHS)
+    branch_raw, branch_source = _first_nested_string(meta, _BRANCH_FIELD_PATHS)
+    commit_id, commit_source = _first_nested_string(meta, _COMMIT_FIELD_PATHS)
+    branch_name = _normalize_branch_name(branch_raw)
+
+    extracted: Dict[str, Any] = {}
+    if repo_url:
+        extracted["repo_url"] = repo_url
+        extracted["repo_source"] = repo_source
+    if branch_raw:
+        extracted["branch_raw"] = branch_raw
+        extracted["branch_source"] = branch_source
+    if branch_name:
+        extracted["branch_name"] = branch_name
+        extracted["default_branch"] = branch_name
+    if commit_id:
+        extracted["commit_id"] = commit_id.strip()
+        extracted["commit_source"] = commit_source
+    return extracted
+
+
+def _metadata_debug_keys(meta: Dict[str, Any]) -> Dict[str, Any]:
+    def _keys_at(path: tuple[str, ...]) -> list[str]:
+        current: Any = meta
+        for key in path:
+            if not isinstance(current, dict):
+                return []
+            current = current.get(key)
+        if isinstance(current, dict):
+            return sorted(str(k) for k in current.keys())[:30]
+        return []
+
+    log_types = meta.get("log_types") if isinstance(meta.get("log_types"), dict) else {}
+    log_type_project_codes = {
+        str(key): value.get("project_code")
+        for key, value in log_types.items()
+        if isinstance(value, dict) and value.get("project_code")
+    }
+
+    return {
+        "top_keys": sorted(str(k) for k in meta.keys())[:30],
+        "project_info_keys": _keys_at(("project_info",)),
+        "issue_info_keys": _keys_at(("issue_info",)),
+        "log_types_keys": sorted(str(k) for k in log_types.keys())[:30],
+        "log_type_project_codes": log_type_project_codes,
+        "git_context_keys": _keys_at(("git_context",)),
+        "extra_metadata_keys": _keys_at(("extra_fields", "metadata_json")),
+    }
+
+
+def _write_task_json_fields(workspace_ctx, fields: Dict[str, Any]) -> None:
+    task_json_path = Path(workspace_ctx.task_json_path)
+    try:
+        task_data = json.loads(task_json_path.read_text(encoding="utf-8"))
+        if not isinstance(task_data, dict):
+            task_data = {}
+    except Exception:
+        task_data = {}
+
+    task_data.update(fields)
+    task_json_path.write_text(
+        json.dumps(task_data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _bind_query_to_workspace(workspace_ctx, *, query: str, log_type: Any) -> None:
+    workspace_ctx.metadata["question"] = query or ""
+    workspace_ctx.metadata["log_type"] = log_type
+    _write_task_json_fields(
+        workspace_ctx,
+        {
+            "question": query or "",
+            "log_type": log_type,
+        },
+    )
+    logger.info(
+        "AI analysis workspace query bound: task_id=%s query_len=%d log_type=%s",
+        getattr(workspace_ctx, "task_id", "?"),
+        len(query or ""),
+        log_type or "-",
+    )
+
+
 def _inject_repo_info(session, workspace_ctx) -> None:
     """Pre-resolve project_repo and write `repo_info` into task.json.
 
@@ -145,25 +419,61 @@ def _inject_repo_info(session, workspace_ctx) -> None:
     except Exception as exc:
         logger.warning("_inject_repo_info: failed to parse metadata.json: %s", exc)
         return
+    if not isinstance(meta, dict):
+        logger.info("_inject_repo_info: metadata.json is not an object")
+        return
 
-    project_info = meta.get("project_info") if isinstance(meta.get("project_info"), dict) else {}
-    issue_info = meta.get("issue_info") if isinstance(meta.get("issue_info"), dict) else {}
+    meta_keys = _metadata_debug_keys(meta)
+    explicit_repo_fields = _extract_repo_fields_from_metadata(meta)
+    logger.info(
+        "_inject_repo_info: metadata path=%s keys=%s explicit_repo_source=%s "
+        "branch_source=%s commit_source=%s",
+        meta_path.relative_to(logs_dir),
+        meta_keys,
+        explicit_repo_fields.get("repo_source") or "-",
+        explicit_repo_fields.get("branch_source") or "-",
+        explicit_repo_fields.get("commit_source") or "-",
+    )
 
-    raw_candidates = [
-        project_info.get("project_code"),
-        meta.get("project_code"),
-        issue_info.get("service_name"),
-        project_info.get("project_name"),
-        meta.get("project_name"),
-    ]
-    candidates: list[str] = []
-    seen: set[str] = set()
-    for v in raw_candidates:
-        if isinstance(v, str) and v.strip():
-            norm = v.strip().lower()
-            if norm not in seen:
-                seen.add(norm)
-                candidates.append(norm)
+    if explicit_repo_fields.get("repo_url"):
+        effective_token = settings.code_repo_git_token or ""
+        repo_url = explicit_repo_fields["repo_url"]
+        clone_url = build_clone_url(repo_url, effective_token or None)
+        repo_info = {
+            "project_code": None,
+            "project_name": None,
+            "repo_url": _mask_repo_url(repo_url),
+            "clone_url": clone_url,
+            "default_branch": explicit_repo_fields.get("default_branch") or "main",
+            "auth_required": bool(effective_token),
+            "matched_via": explicit_repo_fields.get("repo_source"),
+            "source": "metadata.json",
+        }
+        if explicit_repo_fields.get("branch_name"):
+            repo_info["branch_name"] = explicit_repo_fields["branch_name"]
+        if explicit_repo_fields.get("branch_raw"):
+            repo_info["branch_raw"] = explicit_repo_fields["branch_raw"]
+            repo_info["branch_source"] = explicit_repo_fields.get("branch_source")
+        if explicit_repo_fields.get("commit_id"):
+            repo_info["commit_id"] = explicit_repo_fields["commit_id"]
+            repo_info["commit_source"] = explicit_repo_fields.get("commit_source")
+
+        _write_task_json_fields(workspace_ctx, {"repo_info": repo_info})
+        logger.info(
+            "_inject_repo_info: injected explicit repo_info source=%s repo_url=%s "
+            "branch=%s commit_present=%s auth=%s",
+            explicit_repo_fields.get("repo_source"),
+            _mask_repo_url(repo_url),
+            repo_info.get("default_branch"),
+            bool(repo_info.get("commit_id")),
+            bool(effective_token),
+        )
+        return
+
+    candidates = _project_code_candidates_from_metadata(
+        meta,
+        getattr(workspace_ctx, "metadata", {}).get("log_type") if getattr(workspace_ctx, "metadata", None) else None,
+    )
 
     if not candidates:
         logger.info("_inject_repo_info: no project identity in metadata.json")
@@ -182,9 +492,18 @@ def _inject_repo_info(session, workspace_ctx) -> None:
             break
 
     if not repo:
+        registered_codes = [
+            row[0]
+            for row in session.query(ProjectRepo.project_code)
+            .filter(ProjectRepo.enabled.is_(True))
+            .order_by(ProjectRepo.project_code)
+            .limit(20)
+            .all()
+        ]
         logger.info(
-            "_inject_repo_info: no project_repo match candidates=%s",
+            "_inject_repo_info: no project_repo match candidates=%s enabled_repo_sample=%s",
             candidates,
+            registered_codes,
         )
         return
 
@@ -206,6 +525,14 @@ def _inject_repo_info(session, workspace_ctx) -> None:
         "auth_required": bool(effective_token),
         "matched_via": matched_code,
     }
+    if explicit_repo_fields.get("branch_name"):
+        task_data["repo_info"]["branch_name"] = explicit_repo_fields["branch_name"]
+        task_data["repo_info"]["branch_source"] = explicit_repo_fields.get("branch_source")
+    if explicit_repo_fields.get("branch_raw"):
+        task_data["repo_info"]["branch_raw"] = explicit_repo_fields["branch_raw"]
+    if explicit_repo_fields.get("commit_id"):
+        task_data["repo_info"]["commit_id"] = explicit_repo_fields["commit_id"]
+        task_data["repo_info"]["commit_source"] = explicit_repo_fields.get("commit_source")
     task_json_path.write_text(
         json.dumps(task_data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -307,6 +634,12 @@ def run_ai_analysis_task(self, log_id: str, query: str) -> Dict[str, Any]:
             )
             return {"status": "error", "error_kind": "workspace_error", "log_id": log_id}
 
+        _bind_query_to_workspace(
+            workspace_ctx,
+            query=query,
+            log_type=getattr(log_record, "log_type", None),
+        )
+
         # Pre-resolve project_repo from metadata.json so the agent can clone
         # via plain Bash. Required for providers (e.g. deepseek) that can't
         # invoke the MCP lookup tool.
@@ -318,10 +651,6 @@ def run_ai_analysis_task(self, log_id: str, query: str) -> Dict[str, Any]:
         _update_ai_task_metadata(
             session, log_record, status="running", progress=20.0, task_id=task_id,
         )
-
-        # Store question in workspace context metadata
-        workspace_ctx.metadata["question"] = query
-        workspace_ctx.metadata["log_type"] = getattr(log_record, "log_type", None)
 
         try:
             analysis_result = LogAnalysisAgent().run_sync(workspace_ctx)

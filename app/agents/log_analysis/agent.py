@@ -28,6 +28,7 @@ _BASH_ALLOWLIST = frozenset([
 
 # Regex to scrub token-injected URLs from tool traces
 _TOKEN_URL_RE = re.compile(r"https://[^@\s]+@")
+PROJECT_REPO_MCP_TOOL = "mcp__project_repo__lookup_project_repo"
 
 ALLOWED_TOOLS = [
     "Bash",
@@ -35,7 +36,7 @@ ALLOWED_TOOLS = [
     "Grep",
     "Glob",
     "Skill",  # 允许模型调用通过 setting_sources 加载的用户自定义 Skill
-    "mcp__project_repo__lookup_project_repo",
+    PROJECT_REPO_MCP_TOOL,
 ]
 
 # Agent 唯一键，与 skills_service.SUPPORTED_AGENTS 对应
@@ -88,8 +89,7 @@ class LogAnalysisAgent:
 
     async def run(self, ctx: WorkspaceContext) -> Dict[str, Any]:
         """Run the agent loop and return the structured result dict."""
-        from app.agents.anthropic_client import build_options
-        from app.agents.log_analysis.mcp_tools import get_mcp_server
+        from app.agents.anthropic_client import PROVIDER_PROFILES, build_options
         from app.agents.log_analysis.prompts import get_prompts, render_user_prompt
         from app.config import settings
 
@@ -114,18 +114,38 @@ class LogAnalysisAgent:
         user_prompt = render_user_prompt(
             user_prompt_template,
             task_id=ctx.task_id,
-            question=task_data.get("question", ""),
-            log_type=task_data.get("log_type"),
+            question=ctx.metadata.get("question") or task_data.get("question", ""),
+            log_type=ctx.metadata.get("log_type") or task_data.get("log_type"),
             hints=task_data.get("hints", ""),
         )
 
-        mcp_server = get_mcp_server()
-
         # Resolve effective model before run for logging & result
-        from app.agents.anthropic_client import PROVIDER_PROFILES
         provider = settings.anthropic_provider
         profile = PROVIDER_PROFILES.get(provider)
         effective_model = settings.anthropic_model or (profile.default_model if profile else "unknown")
+        supports_mcp = bool(profile and profile.supports_mcp_server_tools)
+
+        allowed_tools = list(ALLOWED_TOOLS)
+        mcp_servers = None
+        if supports_mcp:
+            from app.agents.log_analysis.mcp_tools import get_mcp_server
+            mcp_servers = {"project_repo": get_mcp_server()}
+        else:
+            allowed_tools = [
+                name for name in allowed_tools if name != PROJECT_REPO_MCP_TOOL
+            ]
+            system_prompt += (
+                "\n\n## Runtime Constraint\n"
+                f"The active provider `{provider}` does not support MCP server tools. "
+                "`mcp__project_repo__lookup_project_repo` is unavailable in this run. "
+                "If source code is required, use explicit repository fields or "
+                "`repo_info` from `task.json`. If neither exists, finish with "
+                '`"status": "error", "error_kind": "project_repo_not_registered"`.'
+            )
+            logger.info(
+                "LogAnalysisAgent: provider=%s does not support MCP; using repo_info fallback only",
+                provider,
+            )
 
         # 物化已启用 Skill 到 cwd/.claude/skills/<name>/，配合 setting_sources=["project"]
         # 让 Claude Agent SDK 通过官方约定自动加载 Skill
@@ -148,10 +168,10 @@ class LogAnalysisAgent:
 
         options = build_options(
             system_prompt=system_prompt,
-            allowed_tools=ALLOWED_TOOLS,
+            allowed_tools=allowed_tools,
             cwd=ctx.temp_dir,
             permission_mode="acceptEdits",
-            mcp_servers={"project_repo": mcp_server},
+            mcp_servers=mcp_servers,
             setting_sources=setting_sources,
         )
 

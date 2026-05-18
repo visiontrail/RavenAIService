@@ -75,7 +75,7 @@ class TestProviderProfiles:
 class TestAssertAnthropicConfigured:
     def test_missing_api_key_raises(self, base_settings):
         base_settings.anthropic_api_key = None
-        with patch("app.agents.anthropic_client.settings", base_settings):
+        with patch("app.config.settings", base_settings):
             from app.agents.anthropic_client import AnthropicConfigurationError, assert_anthropic_configured
 
             with pytest.raises(AnthropicConfigurationError, match="anthropic_api_key"):
@@ -85,7 +85,7 @@ class TestAssertAnthropicConfigured:
         base_settings.anthropic_provider = "custom"
         base_settings.anthropic_base_url = None
         base_settings.anthropic_model = "some-model"
-        with patch("app.agents.anthropic_client.settings", base_settings):
+        with patch("app.config.settings", base_settings):
             from app.agents.anthropic_client import AnthropicConfigurationError, assert_anthropic_configured
 
             with pytest.raises(AnthropicConfigurationError, match="anthropic_base_url"):
@@ -95,14 +95,14 @@ class TestAssertAnthropicConfigured:
         base_settings.anthropic_provider = "custom"
         base_settings.anthropic_base_url = "https://custom.example.com"
         base_settings.anthropic_model = None
-        with patch("app.agents.anthropic_client.settings", base_settings):
+        with patch("app.config.settings", base_settings):
             from app.agents.anthropic_client import AnthropicConfigurationError, assert_anthropic_configured
 
             with pytest.raises(AnthropicConfigurationError, match="anthropic_model"):
                 assert_anthropic_configured()
 
     def test_valid_deepseek_config_passes(self, base_settings):
-        with patch("app.agents.anthropic_client.settings", base_settings):
+        with patch("app.config.settings", base_settings):
             from app.agents.anthropic_client import assert_anthropic_configured
 
             assert_anthropic_configured()  # should not raise
@@ -110,7 +110,7 @@ class TestAssertAnthropicConfigured:
 
 class TestBuildOptions:
     def _build(self, settings_mock, **kwargs) -> FakeClaudeAgentOptions:
-        with patch("app.agents.anthropic_client.settings", settings_mock), \
+        with patch("app.config.settings", settings_mock), \
              patch.dict("sys.modules", {"claude_agent_sdk": _make_fake_sdk()}):
             # Re-import to pick up patched modules
             import importlib
@@ -139,7 +139,7 @@ class TestBuildOptions:
         assert opts.model == "deepseek-v4-flash"
 
     def test_image_input_rejected_on_deepseek(self, base_settings):
-        with patch("app.agents.anthropic_client.settings", base_settings), \
+        with patch("app.config.settings", base_settings), \
              patch.dict("sys.modules", {"claude_agent_sdk": _make_fake_sdk()}):
             import importlib
             import app.agents.anthropic_client as mod
@@ -161,6 +161,16 @@ class TestBuildOptions:
     def test_effective_model_in_options(self, base_settings):
         opts = self._build(base_settings)
         assert opts.model == "deepseek-v4-pro"
+
+    def test_mcp_servers_and_allowed_tools_dropped_on_deepseek(self, base_settings):
+        opts = self._build(
+            base_settings,
+            allowed_tools=["Bash", "mcp__project_repo__lookup_project_repo"],
+            mcp_servers={"project_repo": MagicMock()},
+        )
+
+        assert opts.mcp_servers is None
+        assert opts.allowed_tools == ["Bash"]
 
 
 class TestConfigValidation:
