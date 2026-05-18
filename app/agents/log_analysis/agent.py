@@ -34,8 +34,12 @@ ALLOWED_TOOLS = [
     "Read",
     "Grep",
     "Glob",
+    "Skill",  # 允许模型调用通过 setting_sources 加载的用户自定义 Skill
     "mcp__project_repo__lookup_project_repo",
 ]
+
+# Agent 唯一键，与 skills_service.SUPPORTED_AGENTS 对应
+AGENT_KEY = "log_analysis"
 
 
 def _mask_tokens(text: str) -> str:
@@ -110,12 +114,32 @@ class LogAnalysisAgent:
         profile = PROVIDER_PROFILES.get(provider)
         effective_model = settings.anthropic_model or (profile.default_model if profile else "unknown")
 
+        # 物化已启用 Skill 到 cwd/.claude/skills/<name>/，配合 setting_sources=["project"]
+        # 让 Claude Agent SDK 通过官方约定自动加载 Skill
+        materialized_skills: List[str] = []
+        try:
+            from app.services import skills_service
+            materialized_skills = skills_service.materialize_enabled_skills(
+                AGENT_KEY, ctx.temp_dir
+            )
+            if materialized_skills:
+                logger.info(
+                    "LogAnalysisAgent: loaded %d skill(s): %s",
+                    len(materialized_skills),
+                    ", ".join(materialized_skills),
+                )
+        except Exception as exc:
+            logger.warning("LogAnalysisAgent: failed to materialize skills: %s", exc)
+
+        setting_sources = ["project"] if materialized_skills else None
+
         options = build_options(
             system_prompt=system_prompt,
             allowed_tools=ALLOWED_TOOLS,
             cwd=ctx.temp_dir,
             permission_mode="acceptEdits",
             mcp_servers={"project_repo": mcp_server},
+            setting_sources=setting_sources,
         )
 
         tool_trace: List[Dict[str, str]] = []

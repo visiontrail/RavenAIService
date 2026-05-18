@@ -160,6 +160,14 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/admin/agent-skills',
+    name: 'AdminAgentSkills',
+    component: () => import('../views/AdminAgentSkills.vue'),
+    meta: {
+      title: 'Agent Skill 管理',
+    },
+  },
+  {
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
     component: () => import('../views/NotFound.vue'),

@@ -104,6 +104,7 @@ def build_options(
     requires_document_input: bool = False,
     thinking_budget_tokens: Optional[int] = None,
     mcp_servers: Optional[Dict[str, Any]] = None,
+    setting_sources: Optional[List[str]] = None,
 ) -> Any:
     """构建 ClaudeAgentOptions，按 caller override → Settings → provider profile 优先级解析参数。
 
@@ -217,5 +218,8 @@ def build_options(
 
     if effective_mcp_servers:
         options_kwargs["mcp_servers"] = effective_mcp_servers
+
+    if setting_sources:
+        options_kwargs["setting_sources"] = list(setting_sources)
 
     return ClaudeAgentOptions(**options_kwargs)

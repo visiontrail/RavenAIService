@@ -2,6 +2,8 @@ import axios from 'axios'
 import { API_BASE_URL } from './index'
 import type {
   AdminAuthData,
+  AgentSkill,
+  AgentSkillAgentInfo,
   ApiResponse,
   PromptsConfigData,
   ProjectRepo,
@@ -119,6 +121,41 @@ export const adminApi = {
 
   testProjectRepoConnection: (repoId: number): Promise<ApiResponse<TestConnectionResult>> =>
     adminClient.post(`/admin/project-repos/${repoId}/test-connection`),
+
+  listSkillAgents: (): Promise<ApiResponse<AgentSkillAgentInfo[]>> =>
+    adminClient.get('/admin/agents'),
+
+  listAgentSkills: (agentKey: string): Promise<ApiResponse<AgentSkill[]>> =>
+    adminClient.get(`/admin/agents/${agentKey}/skills`),
+
+  uploadAgentSkill: (
+    agentKey: string,
+    file: File,
+    overwrite = false,
+    onProgress?: (percent: number) => void
+  ): Promise<ApiResponse<AgentSkill>> => {
+    const form = new FormData()
+    form.append('file', file)
+    return adminClient.post(`/admin/agents/${agentKey}/skills`, form, {
+      params: { overwrite },
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+      onUploadProgress: (e) => {
+        if (!onProgress || !e.total) return
+        onProgress(Math.round((e.loaded / e.total) * 100))
+      },
+    })
+  },
+
+  updateAgentSkill: (
+    agentKey: string,
+    skillId: string,
+    payload: { enabled: boolean }
+  ): Promise<ApiResponse<AgentSkill>> =>
+    adminClient.patch(`/admin/agents/${agentKey}/skills/${skillId}`, payload),
+
+  deleteAgentSkill: (agentKey: string, skillId: string): Promise<void> =>
+    adminClient.delete(`/admin/agents/${agentKey}/skills/${skillId}`),
 }
 
 export default adminApi

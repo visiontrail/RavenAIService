@@ -246,6 +246,25 @@ export interface ProjectRepoPayload {
   enabled?: boolean
 }
 
+// Agent Skills
+export interface AgentSkillAgentInfo {
+  key: string
+  name: string
+  framework: string
+  description?: string | null
+}
+
+export interface AgentSkill {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+  source_filename: string
+  size_bytes: number
+  installed_at?: string | null
+  updated_at?: string | null
+}
+
 // 用户与会话
 export interface UserProfile {
   id: string

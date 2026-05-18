@@ -7,13 +7,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from app.models.database import get_db
 from app.security.admin_auth import ADMIN_TOKEN_HEADER, ADMIN_TOKEN_PREFIX, auth_manager
-from app.services import project_repo_service
+from app.services import project_repo_service, skills_service
 from app.services.prompts_config_service import (
     load_prompts_config,
     update_prompt_entries,
@@ -350,3 +350,157 @@ async def test_project_repo_connection(
         data=result,
         message=result["message"],
     )
+
+
+# ─────────────────── Agent Skills Management ──────────────────────
+
+class AgentInfo(BaseModel):
+    key: str
+    name: str
+    framework: str
+    description: Optional[str] = None
+
+
+class AgentListResponse(BaseModel):
+    success: bool = True
+    data: List[AgentInfo]
+    message: str = "ok"
+
+
+class SkillData(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    enabled: bool = True
+    source_filename: str = ""
+    size_bytes: int = 0
+    installed_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class SkillListResponse(BaseModel):
+    success: bool = True
+    data: List[SkillData]
+    message: str = "ok"
+
+
+class SkillResponse(BaseModel):
+    success: bool = True
+    data: SkillData
+    message: str = "ok"
+
+
+class UpdateSkillRequest(BaseModel):
+    enabled: bool
+
+
+def _ensure_known_agent(agent_key: str) -> None:
+    if agent_key not in skills_service.SUPPORTED_AGENTS:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unknown agent_key: {agent_key}",
+        )
+
+
+@router.get("/agents", response_model=AgentListResponse)
+async def list_skill_agents(
+    _username: str = Depends(require_admin),
+) -> AgentListResponse:
+    """列出支持加载 Skill 的 Agent。"""
+    return AgentListResponse(
+        data=[AgentInfo(**item) for item in skills_service.list_agents()]
+    )
+
+
+@router.get("/agents/{agent_key}/skills", response_model=SkillListResponse)
+async def list_agent_skills(
+    agent_key: str,
+    _username: str = Depends(require_admin),
+) -> SkillListResponse:
+    _ensure_known_agent(agent_key)
+    try:
+        items = skills_service.list_skills(agent_key)
+    except skills_service.UnknownAgentError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return SkillListResponse(data=[SkillData(**item) for item in items])
+
+
+@router.post(
+    "/agents/{agent_key}/skills",
+    response_model=SkillResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_agent_skill(
+    agent_key: str,
+    file: UploadFile = File(..., description="Skill zip 包"),
+    overwrite: bool = Query(default=False),
+    _username: str = Depends(require_admin),
+) -> SkillResponse:
+    """上传 zip 格式的 Skill 包并安装到指定 Agent。"""
+    _ensure_known_agent(agent_key)
+
+    filename = (file.filename or "").strip()
+    if not filename.lower().endswith(".zip"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="只支持上传 .zip 格式的 Skill 包",
+        )
+
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传内容为空")
+
+    try:
+        entry = skills_service.install_skill(
+            agent_key,
+            zip_bytes=payload,
+            source_filename=filename,
+            overwrite=overwrite,
+        )
+    except skills_service.SkillConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except skills_service.SkillValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except skills_service.SkillError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return SkillResponse(data=SkillData(**entry), message="上传成功")
+
+
+@router.patch("/agents/{agent_key}/skills/{skill_id}", response_model=SkillResponse)
+async def update_agent_skill(
+    agent_key: str,
+    skill_id: str,
+    payload: UpdateSkillRequest,
+    _username: str = Depends(require_admin),
+) -> SkillResponse:
+    _ensure_known_agent(agent_key)
+    try:
+        entry = skills_service.set_skill_enabled(
+            agent_key, skill_id, enabled=payload.enabled
+        )
+    except skills_service.SkillNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return SkillResponse(data=SkillData(**entry), message="更新成功")
+
+
+@router.delete(
+    "/agents/{agent_key}/skills/{skill_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_agent_skill(
+    agent_key: str,
+    skill_id: str,
+    _username: str = Depends(require_admin),
+) -> None:
+    _ensure_known_agent(agent_key)
+    try:
+        skills_service.delete_skill(agent_key, skill_id)
+    except skills_service.SkillNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
