@@ -155,6 +155,13 @@ class LogRecord(Base, TimestampMixin):
         comment="元数据JSON字符串"
     )
     
+    # 归档文件路径（用于AI分析，通常与 file_path 相同）
+    archive_path: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="日志归档文件路径（AI分析使用）"
+    )
+
     # 错误信息
     error_message: Mapped[Optional[str]] = mapped_column(
         Text,

@@ -1,5 +1,5 @@
 """
-读取并渲染 claude_agent_log_analysis 提示词，按 log_type 选择变体。
+读取并渲染 claude_agent_log_analysis 通用提示词。
 """
 
 from __future__ import annotations
@@ -9,12 +9,6 @@ from typing import Any, Dict, Optional, Tuple
 import yaml
 
 _PROMPTS_CACHE: Dict[str, Any] = {}
-
-_LOG_TYPE_ALIASES = {
-    "stack": "protocol_stack",
-    "oam_antenna": "generic",
-    "full": "generic",
-}
 
 
 def _load_config() -> Dict[str, Any]:
@@ -29,7 +23,7 @@ def _load_config() -> Dict[str, Any]:
     if os.path.isabs(raw):
         path = Path(raw)
     else:
-        project_root = Path(__file__).resolve().parents[4]
+        project_root = Path(__file__).resolve().parents[3]
         path = (project_root / raw).resolve()
 
     content = path.read_text(encoding="utf-8")
@@ -39,18 +33,14 @@ def _load_config() -> Dict[str, Any]:
 
 
 def get_prompts(log_type: Optional[str] = None) -> Tuple[str, str]:
-    """Return (system_prompt, user_prompt_template) for the given log_type.
+    """Return the generic (system_prompt, user_prompt_template).
 
-    Falls back to 'generic' if the specific variant is unavailable.
+    ``log_type`` is kept for caller compatibility, but prompt selection no
+    longer varies by log type.
     """
     config = _load_config()
     agent_config: Dict[str, Any] = config.get("claude_agent_log_analysis", {})
-
-    # Normalize log_type to a variant key
-    variant_key = (log_type or "generic").lower()
-    variant_key = _LOG_TYPE_ALIASES.get(variant_key, variant_key)
-
-    variant = agent_config.get(variant_key) or agent_config.get("generic") or {}
+    variant = agent_config.get("generic") or {}
 
     system_prompt = variant.get("system_prompt", "")
     user_prompt_template = variant.get("user_prompt_template", "")

@@ -45,11 +45,7 @@ PROMPT_FUNCTION_META: Dict[str, Dict[str, str]] = {
 PROMPT_AGENT_META: Dict[Tuple[str, str], Dict[str, str]] = {
     ("claude_agent_log_analysis", "generic"): {
         "name": "通用日志分析 Agent",
-        "description": "适用于通用日志、OAM 天线日志和整包日志的分析流程",
-    },
-    ("claude_agent_log_analysis", "protocol_stack"): {
-        "name": "协议栈日志分析 Agent",
-        "description": "面向协议栈、信令流程和链路状态问题的专项分析流程",
+        "description": "统一适用于所有日志类型，按 metadata/task 中的代码库信息克隆代码并分析问题",
     },
 }
 

@@ -120,6 +120,7 @@ class LogService(BaseCRUDService[LogRecord]):
                 "original_filename": original_filename,
                 "file_size": file_size,
                 "file_path": str(file_path),
+                "archive_path": str(file_path),
                 "log_type": request.log_type,
                 "status": initial_status,
                 "progress": initial_progress,
@@ -249,12 +250,29 @@ class LogService(BaseCRUDService[LogRecord]):
             for record in log_records:
                 metadata = None
                 if record.metadata_json:
+                    meta_raw: Dict[str, Any] = {}
                     try:
-                        metadata_dict = json.loads(record.metadata_json)
-                        metadata = LogMetadata(**metadata_dict)
-                    except:
+                        meta_raw = json.loads(record.metadata_json) or {}
+                    except Exception:
+                        meta_raw = {}
+                    if meta_raw:
+                        try:
+                            metadata = LogMetadata(**meta_raw)
+                        except Exception as me:
+                            logger.warning(
+                                "get_log_list: LogMetadata 构建失败 record_id=%s: %s",
+                                record.id, me,
+                            )
+                            ef = meta_raw.get("extra_fields")
+                            try:
+                                metadata = LogMetadata(extra_fields=ef if isinstance(ef, dict) else {})
+                            except Exception:
+                                metadata = LogMetadata()
+                    else:
                         metadata = LogMetadata()
-                
+                else:
+                    metadata = LogMetadata()
+
                 log_info = await self._db_to_pydantic(record, metadata)
                 log_infos.append(log_info)
             
@@ -278,34 +296,53 @@ class LogService(BaseCRUDService[LogRecord]):
     async def get_log_detail(self, db: AsyncSession, log_id: str) -> LogFileInfo:
         """
         获取日志详情
-        
+
         Args:
             db: 数据库会话
             log_id: 日志ID
-            
+
         Returns:
             LogFileInfo: 日志详情
         """
         log_record = await self.get_by_id(db, log_id)
-        
+
         if not log_record or log_record.is_deleted:
             raise FileNotFoundError(file_id=log_id)
-        
+
         # 检查文件是否存在
         if not Path(log_record.file_path).exists():
             # 更新状态为失败
             await self.update(db, log_id, status=LogStatus.FAILED, error_message="文件不存在")
             raise FileNotFoundError(file_id=log_id)
-        
+
         # 解析元数据
         metadata = LogMetadata()
         if log_record.metadata_json:
+            metadata_dict: Dict[str, Any] = {}
             try:
                 metadata_dict = json.loads(log_record.metadata_json)
-                metadata = LogMetadata(**metadata_dict)
-            except:
-                pass
-        
+            except json.JSONDecodeError as je:
+                logger.error("get_log_detail: metadata_json 解析失败 log_id=%s: %s", log_id, je)
+
+            if metadata_dict:
+                try:
+                    metadata = LogMetadata(**metadata_dict)
+                except Exception as meta_exc:
+                    # Pydantic 校验失败时记录警告并降级恢复 extra_fields，
+                    # 以保证 ai_analysis_result 等关键字段不丢失
+                    logger.warning(
+                        "get_log_detail: LogMetadata 构建失败 log_id=%s: %s — 尝试仅恢复 extra_fields",
+                        log_id, meta_exc,
+                    )
+                    try:
+                        ef = metadata_dict.get("extra_fields")
+                        metadata = LogMetadata(extra_fields=ef if isinstance(ef, dict) else {})
+                    except Exception as ef_exc:
+                        logger.error(
+                            "get_log_detail: extra_fields 恢复也失败 log_id=%s: %s",
+                            log_id, ef_exc,
+                        )
+
         return await self._db_to_pydantic(log_record, metadata)
 
     async def save_ai_analysis_result(
@@ -1119,8 +1156,28 @@ class LogService(BaseCRUDService[LogRecord]):
         manual_analysis_content: Optional[str] = None
         manual_analysis_updated_at: Optional[datetime] = None
         try:
+            ef = metadata.extra_fields if metadata else {}
+            logger.debug(
+                "_db_to_pydantic: record_id=%s extra_fields_keys=%s has_ai_result=%s",
+                record.id,
+                list(ef.keys()) if isinstance(ef, dict) else type(ef).__name__,
+                isinstance(ef, dict) and "ai_analysis_result" in ef,
+            )
             if metadata and metadata.extra_fields:
                 ai_analysis_result = metadata.extra_fields.get("ai_analysis_result")
+                if ai_analysis_result is not None:
+                    logger.debug(
+                        "_db_to_pydantic: record_id=%s ai_analysis_result found status=%s model=%s",
+                        record.id,
+                        ai_analysis_result.get("status") if isinstance(ai_analysis_result, dict) else type(ai_analysis_result).__name__,
+                        ai_analysis_result.get("model") if isinstance(ai_analysis_result, dict) else "n/a",
+                    )
+                else:
+                    logger.debug(
+                        "_db_to_pydantic: record_id=%s ai_analysis_result is None; extra_fields keys=%s",
+                        record.id,
+                        list(metadata.extra_fields.keys()),
+                    )
                 raw_task = metadata.extra_fields.get("ai_analysis_task")
                 if isinstance(raw_task, dict):
                     ai_analysis_task = raw_task
@@ -1135,7 +1192,8 @@ class LogService(BaseCRUDService[LogRecord]):
                             manual_analysis_updated_at = None
                 elif isinstance(manual_analysis, str):
                     manual_analysis_content = manual_analysis
-        except Exception:
+        except Exception as e:
+            logger.error("_db_to_pydantic: extra_fields 提取异常 record_id=%s: %s", record.id, e, exc_info=True)
             ai_analysis_result = None
 
         metadata_payload = metadata or LogMetadata()

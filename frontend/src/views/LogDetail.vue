@@ -799,6 +799,28 @@ const showReasoningProcess = ref(false)
 const showDetailedOutput = ref(false)
 
 const normalizeAIAnalysisResult = (raw: any) => {
+  // 临时调试：打印后端返回的原始 ai_analysis_result 结构
+  // 用于核对 V2 扁平 schema 字段（model / duration_seconds / summary / raw / ...）
+  // 是否被前端正确读取。验证完后可删除。
+  try {
+    console.log('[AI-Analysis] normalizeAIAnalysisResult input:', {
+      type: typeof raw,
+      isObject: raw && typeof raw === 'object',
+      keys: raw && typeof raw === 'object' ? Object.keys(raw) : null,
+      schema_version: raw?.schema_version,
+      status: raw?.status,
+      model: raw?.model,
+      duration_seconds: raw?.duration_seconds,
+      has_raw_field: typeof raw?.raw === 'string',
+      raw_length: typeof raw?.raw === 'string' ? raw.raw.length : -1,
+      has_summary: !!raw?.summary,
+      has_final_result: !!raw?.final_result,
+      sample: raw,
+    })
+  } catch (e) {
+    console.warn('[AI-Analysis] debug log failed:', e)
+  }
+
   if (!raw) return null
 
   if (typeof raw === 'string') {
@@ -820,33 +842,135 @@ const normalizeAIAnalysisResult = (raw: any) => {
     }
   }
 
-  const rawContent = raw?.final_result?.content ?? raw?.final_report ?? raw?.content ?? ''
-  const content = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent, null, 2)
-  const firstNonEmptyLine = content
-    .split('\n')
-    .map((line: string) => line.trim())
-    .find((line: string) => line.length > 0)
-  const summary =
-    raw?.final_result?.summary ||
-    (firstNonEmptyLine ? firstNonEmptyLine.replace(/^#+\s*/, '').slice(0, 200) : '分析完成')
+  // 兼容 V2/V3 扁平 schema（claude-agent-sdk 返回）与旧嵌套 schema
+  const isV2Flat =
+    raw && typeof raw === 'object' &&
+    (raw.schema_version === 2 ||
+     raw.schema_version === 3 ||
+     'duration_seconds' in raw ||
+     ('raw' in raw && !('final_result' in raw)))
+
+  const QUESTION_TYPE_LABEL: Record<string, string> = {
+    root_cause: '根因分析',
+    qa: '问答',
+    search: '检索',
+    stats: '统计',
+    meta: '元信息',
+    other: '其他',
+  }
+
+  const buildV2Markdown = (r: any): string => {
+    const parts: string[] = []
+    const qType: string = typeof r?.question_type === 'string' ? r.question_type : ''
+    const isRootCause = qType === 'root_cause'
+
+    // 主回答优先 —— V3 新增 answer 字段直接回应用户问题
+    const answer: string = typeof r?.answer === 'string' ? r.answer.trim() : ''
+    if (answer) {
+      const label = QUESTION_TYPE_LABEL[qType] || '回答'
+      parts.push(`## 回答（${label}）\n\n${answer}`)
+    }
+
+    // summary 与 answer 不重复时再展示
+    const summary: string = typeof r?.summary === 'string' ? r.summary.trim() : ''
+    if (summary && summary !== answer) {
+      parts.push(`## 摘要\n\n${summary}`)
+    }
+
+    // 根因假设：只在 root_cause 且数组非空时显示
+    if (isRootCause && Array.isArray(r?.root_cause_hypotheses) && r.root_cause_hypotheses.length) {
+      const items = r.root_cause_hypotheses
+        .map((h: any) => (typeof h === 'string' ? h : (h?.hypothesis || h?.description || JSON.stringify(h))))
+        .map((s: string) => `- ${s}`).join('\n')
+      parts.push(`## 根因假设\n\n${items}`)
+    }
+    // 旧 schema 兼容：没有 question_type 字段时按老行为渲染
+    if (!qType && Array.isArray(r?.root_cause_hypotheses) && r.root_cause_hypotheses.length) {
+      const items = r.root_cause_hypotheses
+        .map((h: any) => (typeof h === 'string' ? h : (h?.hypothesis || h?.description || JSON.stringify(h))))
+        .map((s: string) => `- ${s}`).join('\n')
+      parts.push(`## 根因假设\n\n${items}`)
+    }
+
+    if (Array.isArray(r?.recommended_actions) && r.recommended_actions.length) {
+      const items = r.recommended_actions
+        .map((a: any) => (typeof a === 'string' ? a : (a?.action || a?.description || JSON.stringify(a))))
+        .map((s: string) => `- ${s}`).join('\n')
+      parts.push(`## 建议\n\n${items}`)
+    }
+    if (Array.isArray(r?.related_keywords) && r.related_keywords.length) {
+      parts.push(`## 关键词\n\n${r.related_keywords.map((k: string) => `\`${k}\``).join(' ')}`)
+    }
+    // 兜底：模型原始文本（含 fenced JSON 之外的解释性内容）
+    if (parts.length === 0 && typeof r?.raw === 'string' && r.raw.trim()) {
+      return r.raw
+    }
+    if (typeof r?.raw === 'string' && r.raw.trim()) {
+      parts.push(`## 模型原文\n\n${r.raw}`)
+    }
+    return parts.join('\n\n')
+  }
+
+  let content: string
+  let summary: string
+  let executionTime: number
+  let modelUsed: string
+  let recommendations: string[]
+  let confidence: number
+
+  if (isV2Flat) {
+    content = buildV2Markdown(raw)
+    // V3：优先使用直接回答用户问题的 answer 字段作为概览
+    summary = (raw?.answer && String(raw.answer).trim())
+      || raw?.summary
+      || ''
+    executionTime = Number(raw?.duration_seconds ?? 0)
+    modelUsed = raw?.model || 'unknown'
+    recommendations = Array.isArray(raw?.recommended_actions)
+      ? raw.recommended_actions.map((a: any) =>
+          typeof a === 'string' ? a : (a?.action || a?.description || JSON.stringify(a)))
+      : []
+    confidence = 0
+  } else {
+    const rawContent = raw?.final_result?.content ?? raw?.final_report ?? raw?.content ?? ''
+    content = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent, null, 2)
+    const firstNonEmptyLine = content
+      .split('\n')
+      .map((line: string) => line.trim())
+      .find((line: string) => line.length > 0)
+    summary =
+      raw?.final_result?.summary ||
+      (firstNonEmptyLine ? firstNonEmptyLine.replace(/^#+\s*/, '').slice(0, 200) : '分析完成')
+    executionTime = Number(raw?.metadata?.execution_time ?? 0)
+    modelUsed = raw?.metadata?.model_used || 'unknown'
+    recommendations = Array.isArray(raw?.final_result?.recommendations) ? raw.final_result.recommendations : []
+    confidence = Number(raw?.final_result?.confidence ?? 0)
+  }
+
+  // 状态归一化：V2 的 "ok" 应映射为前端的 "completed"
+  const rawStatus = raw?.status
+  const normalizedStatus =
+    rawStatus === 'ok' ? 'completed' :
+    rawStatus === 'error' ? 'failed' :
+    (rawStatus || 'completed')
 
   return {
     ...raw,
     id: raw?.id || `analysis_${Date.now()}`,
     query: raw?.query || aiAnalysisQuery.value || logStore.currentLog?.issue_description || '',
-    status: raw?.status || 'completed',
+    status: normalizedStatus,
     timestamp: raw?.timestamp || new Date().toISOString(),
     final_result: {
       ...(raw?.final_result || {}),
       content,
       summary,
-      recommendations: Array.isArray(raw?.final_result?.recommendations) ? raw.final_result.recommendations : [],
-      confidence: Number(raw?.final_result?.confidence ?? 0),
+      recommendations,
+      confidence,
     },
     metadata: {
-      execution_time: Number(raw?.metadata?.execution_time ?? 0),
-      model_used: raw?.metadata?.model_used || 'unknown',
-      tokens_used: raw?.metadata?.tokens_used
+      execution_time: executionTime,
+      model_used: modelUsed,
+      tokens_used: raw?.metadata?.tokens_used ?? raw?.token_usage?.output_tokens,
     }
   }
 }

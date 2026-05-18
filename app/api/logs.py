@@ -507,6 +507,7 @@ async def upload_t04_logs(
                         "original_filename": file.filename,
                         "file_size": file_size,
                         "file_path": str(file_path),
+                        "archive_path": str(file_path),
                         "log_type": LogType.STACK if log_type == "stack" else (LogType.FULL if log_type == "full" else LogType.OAM_ANTENNA),
                         "status": LogStatus.PENDING,
                         "progress": 0.0,
@@ -1204,8 +1205,9 @@ async def analyze_log(
         if not file_path.exists():
             raise FileNotFoundError(filename=str(file_path))
 
-        # Pre-validate: archive_path must exist before dispatching to Celery
-        if not getattr(log_record, "archive_path", None):
+        # Pre-validate: archive or file must exist before dispatching to Celery
+        _archive = getattr(log_record, "archive_path", None) or getattr(log_record, "file_path", None)
+        if not _archive:
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -1264,6 +1266,8 @@ async def analyze_log(
     except FileNotFoundError as e:
         logger.warning(f"File not found for AI analysis: {log_id}")
         raise e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error during AI analysis {log_id}: {str(e)}")
         raise LogServiceException(

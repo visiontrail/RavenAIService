@@ -18,7 +18,10 @@ logger = logging.getLogger(__name__)
 _server = None  # lazily created
 
 
-def _build_clone_url(repo_url: str, token: Optional[str]) -> str:
+def build_clone_url(repo_url: str, token: Optional[str]) -> str:
+    """Inject a git token into an HTTPS clone URL. Public — also used by
+    workspace pre-resolution for providers that don't support MCP tools.
+    """
     if not token:
         return repo_url
     try:
@@ -31,6 +34,9 @@ def _build_clone_url(repo_url: str, token: Optional[str]) -> str:
     except Exception:
         pass
     return repo_url
+
+
+_build_clone_url = build_clone_url  # backward-compat alias
 
 
 def _mask_clone_url(url: str) -> str:

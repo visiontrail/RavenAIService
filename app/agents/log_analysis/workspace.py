@@ -152,7 +152,7 @@ def prepare(log_record: Any) -> WorkspaceContext:
     """
     from app.config import settings
 
-    archive_path_str = getattr(log_record, "archive_path", None)
+    archive_path_str = getattr(log_record, "archive_path", None) or getattr(log_record, "file_path", None)
     if not archive_path_str:
         raise MissingArchiveError(
             f"LogRecord id={getattr(log_record, 'id', '?')} has no archive_path"

@@ -65,9 +65,22 @@ def _extract_fenced_json(text: str) -> Optional[Dict[str, Any]]:
 
 
 def _validate_result_schema(data: Dict[str, Any]) -> bool:
+    # `answer` and `question_type` are part of the v3 schema. They are
+    # checked softly (the agent is instructed to emit them, but legacy
+    # responses without them are still accepted so we can fall back to
+    # `summary`).
     required = {"status", "summary", "severity", "root_cause_hypotheses",
                 "recommended_actions", "related_keywords"}
     return required.issubset(data.keys())
+
+
+_VALID_QUESTION_TYPES = {"root_cause", "qa", "search", "stats", "meta", "other"}
+
+
+def _normalize_question_type(value: Any) -> str:
+    if isinstance(value, str) and value.strip().lower() in _VALID_QUESTION_TYPES:
+        return value.strip().lower()
+    return "other"
 
 
 class LogAnalysisAgent:
@@ -206,8 +219,10 @@ class LogAnalysisAgent:
             return {
                 "engine": "claude-agent-sdk",
                 "model": effective_model,
-                "schema_version": 2,
+                "schema_version": 3,
                 "status": "schema_mismatch",
+                "question_type": "other",
+                "answer": "",
                 "summary": "",
                 "severity": "info",
                 "root_cause_hypotheses": [],
@@ -224,8 +239,10 @@ class LogAnalysisAgent:
             return {
                 "engine": "claude-agent-sdk",
                 "model": effective_model,
-                "schema_version": 2,
+                "schema_version": 3,
                 "status": "schema_mismatch",
+                "question_type": "other",
+                "answer": "",
                 "summary": "",
                 "severity": "info",
                 "root_cause_hypotheses": [],
@@ -243,13 +260,24 @@ class LogAnalysisAgent:
         if error_kind:
             status = "error"
 
+        question_type = _normalize_question_type(parsed.get("question_type"))
+        answer = parsed.get("answer", "") or ""
+        summary = parsed.get("summary", "") or ""
+        # Backward-compat fallback: if the model omitted `answer` (older
+        # response shape) but did fill `summary`, expose summary as the
+        # answer so the UI still has a question-facing response.
+        if not answer and summary:
+            answer = summary
+
         return {
             "engine": "claude-agent-sdk",
             "model": effective_model,
-            "schema_version": 2,
+            "schema_version": 3,
             "status": status,
             "error_kind": error_kind,
-            "summary": parsed.get("summary", ""),
+            "question_type": question_type,
+            "answer": answer,
+            "summary": summary,
             "severity": parsed.get("severity", "info"),
             "root_cause_hypotheses": parsed.get("root_cause_hypotheses", []),
             "recommended_actions": parsed.get("recommended_actions", []),
@@ -275,9 +303,11 @@ class LogAnalysisAgent:
             return {
                 "engine": "claude-agent-sdk",
                 "model": "unknown",
-                "schema_version": 2,
+                "schema_version": 3,
                 "status": "error",
                 "error_kind": "timeout",
+                "question_type": "other",
+                "answer": "",
                 "summary": "",
                 "severity": "error",
                 "root_cause_hypotheses": [],
