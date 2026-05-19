@@ -11,8 +11,10 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import time
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
@@ -35,6 +37,37 @@ logger = logging.getLogger(__name__)
 
 _SESSION_KEY_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 _AGENT_PROGRESS_INTERVAL_SECONDS = 15
+_JOB_POLL_INTERVAL_SECONDS = 0.2
+# Keep finished Jobs around for late /result polling and post-disconnect reconnect.
+_JOB_RETENTION_SECONDS = 30 * 60
+
+
+@dataclass
+class AgentJob:
+    """In-process record of a running or recently-finished log-analysis Agent task.
+
+    The Agent runs as a long-lived asyncio task; SSE streams are just views
+    that subscribe to ``events``. Cancellation is best-effort and signaled via
+    ``cancel_event`` (checked between SDK messages inside the Agent loop).
+    """
+
+    session_id: str
+    task_id: str
+    context_meta: Dict[str, Any]
+    question: str
+    user_id: Optional[Any]
+    remember: bool
+    filename: Optional[str]
+    started_at: float
+    events: List[Dict[str, Any]] = field(default_factory=list)
+    done: bool = False
+    cancel_requested: bool = False
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    finished_at: Optional[float] = None
+    result: Optional[Dict[str, Any]] = None
+    answer: Optional[str] = None
+    error: Optional[str] = None
+    task: Optional[asyncio.Task] = None
 
 
 class LogAnalysisChatService:
@@ -43,6 +76,9 @@ class LogAnalysisChatService:
     def __init__(self) -> None:
         self.registry_dir = Path(settings.code_repo_clone_base_dir) / "chat_log_analysis_sessions"
         self.registry_dir.mkdir(parents=True, exist_ok=True)
+        # In-process Job registry. Single-process uvicorn deployment is assumed.
+        # If we move to multi-worker, swap this for a Redis-backed registry.
+        self._jobs: Dict[str, AgentJob] = {}
 
     async def stream(
         self,
@@ -55,24 +91,65 @@ class LogAnalysisChatService:
         db: Optional[AsyncSession],
         user: Optional[User],
     ) -> AsyncIterator[str]:
-        """SSE stream for one log-analysis turn."""
+        """SSE stream for one log-analysis turn.
+
+        Behavior:
+        - If an in-flight Job exists for ``session_id``: subscribe and replay
+          buffered events. A new file upload while a Job is running is rejected.
+        - Else: start a new Job (with file upload, or follow-up against the
+          previously-saved workspace context).
+
+        SSE client disconnects do NOT cancel the underlying Agent Job — the
+        Job runs to completion or until explicit cancel/timeout, and its
+        result is persisted to DB so it can be retrieved later via the
+        ``/result`` endpoint or by reconnecting.
+        """
         effective_session_id = session_id or str(uuid.uuid4())
         question = (message or "").strip()
         uploaded_filename = self._uploaded_filename(file)
 
-        if not question:
-            question = "请分析这个日志包，给出概览、可疑异常和下一步建议。"
+        self._evict_old_jobs()
 
         yield self._sse_event({"event": "session", "session_id": effective_session_id})
 
-        agent_task: Optional[asyncio.Task[Dict[str, Any]]] = None
-        try:
-            logger.info(
-                "log-analysis chat: stream started session_id=%s has_file=%s filename=%s",
-                effective_session_id,
-                bool(uploaded_filename),
-                uploaded_filename or "-",
+        logger.info(
+            "log-analysis chat: stream started session_id=%s has_file=%s filename=%s",
+            effective_session_id,
+            bool(uploaded_filename),
+            uploaded_filename or "-",
+        )
+
+        existing_job = self._jobs.get(effective_session_id)
+
+        # Subscribe path: in-flight Job already exists for this session.
+        if existing_job is not None and not existing_job.done:
+            if uploaded_filename:
+                yield self._sse_event(
+                    {
+                        "event": "error",
+                        "message": "本会话已有正在进行的分析任务，请先取消或等待完成后再上传新日志包。",
+                    }
+                )
+                return
+            yield self._sse_event(
+                {
+                    "event": "log_analysis_status",
+                    "message": "已重新连接到正在运行的分析任务，继续推送已积累的进度...",
+                    "reattached": True,
+                }
             )
+            async for chunk in self._subscribe(existing_job):
+                yield chunk
+            return
+
+        # Re-subscribe path: Job already done and still cached; replay terminal events.
+        if existing_job is not None and existing_job.done and not uploaded_filename and not question:
+            async for chunk in self._subscribe(existing_job):
+                yield chunk
+            return
+
+        # Start a new Job.
+        try:
             if uploaded_filename:
                 yield self._sse_event(
                     {
@@ -83,7 +160,7 @@ class LogAnalysisChatService:
                 ctx, context_meta = await self._create_context_from_upload(
                     db=db,
                     session_id=effective_session_id,
-                    question=question,
+                    question=question or "请分析这个日志包，给出概览、可疑异常和下一步建议。",
                     file=file,
                     user=user,
                 )
@@ -113,6 +190,9 @@ class LogAnalysisChatService:
                     }
                 )
 
+            if not question:
+                question = "请分析这个日志包，给出概览、可疑异常和下一步建议。"
+
             history_hint = await self._build_history_hint(
                 db=db,
                 user=user,
@@ -128,91 +208,216 @@ class LogAnalysisChatService:
                 }
             )
 
+            job = AgentJob(
+                session_id=effective_session_id,
+                task_id=ctx.task_id,
+                context_meta=context_meta,
+                question=question,
+                user_id=getattr(user, "id", None),
+                remember=bool(remember),
+                filename=context_meta.get("filename"),
+                started_at=time.monotonic(),
+            )
+            self._jobs[effective_session_id] = job
+            job.task = asyncio.create_task(self._run_job_async(job, ctx))
+
             logger.info(
-                "log-analysis chat: agent run starting session_id=%s task_id=%s temp_dir=%s",
+                "log-analysis chat: agent job scheduled session_id=%s task_id=%s temp_dir=%s",
                 effective_session_id,
                 ctx.task_id,
                 ctx.temp_dir,
             )
-            started_at = time.monotonic()
-            heartbeat_count = 0
-            agent_task = asyncio.create_task(asyncio.to_thread(LogAnalysisAgent().run_sync, ctx))
-            while not agent_task.done():
-                try:
-                    await asyncio.wait_for(
-                        asyncio.shield(agent_task),
-                        timeout=_AGENT_PROGRESS_INTERVAL_SECONDS,
-                    )
-                except asyncio.TimeoutError:
-                    heartbeat_count += 1
-                    elapsed = int(time.monotonic() - started_at)
-                    logger.info(
-                        "log-analysis chat: agent still running session_id=%s task_id=%s elapsed=%ss heartbeat=%d",
-                        effective_session_id,
-                        ctx.task_id,
-                        elapsed,
-                        heartbeat_count,
-                    )
-                    yield self._sse_event(
-                        {
-                            "event": "log_analysis_status",
-                            "message": f"Log Analysis Agent 已运行 {elapsed}s，仍在分析日志与代码上下文...",
-                            "elapsed_seconds": elapsed,
-                            "heartbeat": heartbeat_count,
-                        }
-                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("log-analysis chat stream failed to start job: %s", exc, exc_info=True)
+            yield self._sse_event({"event": "error", "message": str(exc)})
+            return
 
-            result = agent_task.result()
-            logger.info(
-                "log-analysis chat: agent run completed session_id=%s task_id=%s status=%s error_kind=%s duration=%ss heartbeats=%d",
+        try:
+            async for chunk in self._subscribe(job):
+                yield chunk
+        except asyncio.CancelledError:
+            # SSE was cancelled by client disconnect. The Job keeps running
+            # in the background; the client (or another) can reattach.
+            logger.warning(
+                "log-analysis chat stream cancelled (client disconnect): session_id=%s job still running",
                 effective_session_id,
-                ctx.task_id,
-                result.get("status"),
-                result.get("error_kind"),
-                int(time.monotonic() - started_at),
-                heartbeat_count,
             )
-            answer_text = self._format_agent_result(result, question=question, context_meta=context_meta)
+            raise
 
-            await self._save_analysis_result(db=db, context_meta=context_meta, result=result)
-            self._touch_context(effective_session_id, result=result, answer=answer_text)
+    async def _run_job_async(self, job: AgentJob, ctx: WorkspaceContext) -> None:
+        """Background Agent task. Survives SSE disconnects; persists to DB on completion."""
+        try:
+            result = await asyncio.to_thread(
+                LogAnalysisAgent().run_sync, ctx, job.cancel_event
+            )
+            job.result = result
+            answer_text = self._format_agent_result(
+                result, question=job.question, context_meta=job.context_meta
+            )
+            job.answer = answer_text
 
-            if remember and user and db:
-                await self._persist_exchange(
-                    db=db,
-                    user=user,
-                    session_id=effective_session_id,
-                    question=question,
-                    answer=answer_text,
-                    filename=context_meta.get("filename"),
-                )
+            await self._persist_job_result(job, result, answer_text)
+            self._touch_context(job.session_id, result=result, answer=answer_text)
 
-            yield self._sse_event(
+            job.events.append(
                 {
                     "event": "done",
-                    "session_id": effective_session_id,
+                    "session_id": job.session_id,
                     "answer": answer_text,
                     "model": result.get("model"),
                     "result": result,
                 }
             )
             logger.info(
-                "log-analysis chat: stream done session_id=%s answer_len=%d",
-                effective_session_id,
-                len(answer_text),
+                "log-analysis chat: agent job completed session_id=%s task_id=%s status=%s error_kind=%s duration=%ss",
+                job.session_id,
+                job.task_id,
+                result.get("status"),
+                result.get("error_kind"),
+                int(time.monotonic() - job.started_at),
             )
-        except asyncio.CancelledError:
-            if agent_task and not agent_task.done():
-                agent_task.cancel()
-            logger.warning(
-                "log-analysis chat stream cancelled: session_id=%s filename=%s",
-                effective_session_id,
-                uploaded_filename or "-",
-            )
-            raise
         except Exception as exc:  # noqa: BLE001
-            logger.error("log-analysis chat stream failed: %s", exc, exc_info=True)
-            yield self._sse_event({"event": "error", "message": str(exc)})
+            logger.error(
+                "log-analysis chat: agent job failed session_id=%s: %s",
+                job.session_id,
+                exc,
+                exc_info=True,
+            )
+            job.error = str(exc)
+            job.events.append({"event": "error", "message": str(exc)})
+        finally:
+            job.done = True
+            job.finished_at = time.monotonic()
+
+    async def _persist_job_result(
+        self,
+        job: AgentJob,
+        result: Dict[str, Any],
+        answer_text: str,
+    ) -> None:
+        """Open a fresh DB session and persist analysis result + chat exchange.
+
+        Uses its own session because the original request DB session is already
+        closed by the time this method runs (Job outlives the HTTP request).
+        """
+        from app.models.database import db_manager
+
+        if db_manager.session_factory is None:
+            logger.warning("log-analysis chat: db not initialized; skipping persistence")
+            return
+
+        try:
+            async with db_manager.session_factory() as db:
+                try:
+                    await self._save_analysis_result(
+                        db=db, context_meta=job.context_meta, result=result
+                    )
+                    if job.remember and job.user_id is not None:
+                        await self._persist_exchange(
+                            db=db,
+                            user_id=job.user_id,
+                            session_id=job.session_id,
+                            question=job.question,
+                            answer=answer_text,
+                            filename=job.filename,
+                        )
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
+                    raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "log-analysis chat: failed to persist job result session_id=%s: %s",
+                job.session_id,
+                exc,
+                exc_info=True,
+            )
+
+    async def _subscribe(self, job: AgentJob) -> AsyncIterator[str]:
+        """Yield SSE chunks for this Job. Replays the full event buffer to
+        late subscribers, then polls for new events until the Job is done."""
+        sent = 0
+        last_heartbeat = time.monotonic()
+        while True:
+            while sent < len(job.events):
+                yield self._sse_event(job.events[sent])
+                sent += 1
+            if job.done:
+                return
+            await asyncio.sleep(_JOB_POLL_INTERVAL_SECONDS)
+            now = time.monotonic()
+            if now - last_heartbeat >= _AGENT_PROGRESS_INTERVAL_SECONDS:
+                elapsed = int(now - job.started_at)
+                yield self._sse_event(
+                    {
+                        "event": "log_analysis_status",
+                        "message": f"Log Analysis Agent 已运行 {elapsed}s，仍在分析日志与代码上下文...",
+                        "elapsed_seconds": elapsed,
+                    }
+                )
+                last_heartbeat = now
+
+    def cancel(self, session_id: str, user: Optional[User] = None) -> bool:
+        """Request cancellation of the in-flight Agent Job for ``session_id``.
+
+        Returns True if a cancel signal was sent, False if no in-flight job.
+        Raises PermissionError if the caller is not the Job owner.
+        """
+        job = self._jobs.get(session_id or "")
+        if job is None or job.done:
+            return False
+        if user is not None and job.user_id is not None and getattr(user, "id", None) != job.user_id:
+            raise PermissionError("当前用户无权取消这个分析任务")
+        if job.cancel_requested:
+            return True
+        job.cancel_requested = True
+        job.cancel_event.set()
+        job.events.append(
+            {
+                "event": "log_analysis_status",
+                "message": "已收到取消请求，正在等待 Agent 退出（最多一条 SDK 消息的延迟）...",
+                "cancel_requested": True,
+            }
+        )
+        logger.info("log-analysis chat: cancel requested session_id=%s", session_id)
+        return True
+
+    def get_status(self, session_id: str, user: Optional[User] = None) -> Dict[str, Any]:
+        """Return the current state snapshot of the Job for polling clients."""
+        job = self._jobs.get(session_id or "")
+        if job is None:
+            return {"session_id": session_id, "status": "not_found"}
+        if user is not None and job.user_id is not None and getattr(user, "id", None) != job.user_id:
+            raise PermissionError("当前用户无权查看这个分析任务")
+        now = time.monotonic()
+        elapsed = int((job.finished_at or now) - job.started_at)
+        return {
+            "session_id": session_id,
+            "status": "done" if job.done else "running",
+            "cancel_requested": job.cancel_requested,
+            "started_at": job.started_at,
+            "finished_at": job.finished_at,
+            "elapsed_seconds": elapsed,
+            "filename": job.filename,
+            "events": list(job.events),
+            "result": job.result,
+            "answer": job.answer or "",
+            "error": job.error,
+        }
+
+    def _evict_old_jobs(self) -> None:
+        """Lazy cleanup of Jobs that finished more than _JOB_RETENTION_SECONDS ago."""
+        if not self._jobs:
+            return
+        cutoff = time.monotonic() - _JOB_RETENTION_SECONDS
+        stale = [
+            sid
+            for sid, job in self._jobs.items()
+            if job.done and (job.finished_at or 0) < cutoff
+        ]
+        for sid in stale:
+            self._jobs.pop(sid, None)
+            logger.debug("log-analysis chat: evicted finished job session_id=%s", sid)
 
     async def _create_context_from_upload(
         self,
@@ -378,18 +583,19 @@ class LogAnalysisChatService:
         self,
         *,
         db: AsyncSession,
-        user: User,
+        user_id: Any,
         session_id: str,
         question: str,
         answer: str,
         filename: Optional[str],
     ) -> None:
+        """Persist the user / assistant exchange. Caller owns commit/rollback."""
         user_content = question
         if filename:
             user_content = f"{question}\n\n[日志附件] {filename}"
         session = await chat_history_service.save_exchange(
             db,
-            user_id=user.id,
+            user_id=user_id,
             session_id=session_id,
             user_content=user_content,
             ai_content=answer,
@@ -406,13 +612,12 @@ class LogAnalysisChatService:
                 if title:
                     await chat_history_service.update_session_title(
                         db,
-                        user_id=user.id,
+                        user_id=user_id,
                         session_id=session_id,
                         title=title,
                     )
             except Exception:
                 pass
-        await db.commit()
 
     async def _save_analysis_result(
         self,

@@ -4,8 +4,9 @@ AI 对话相关 API
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.users import get_optional_user
@@ -13,6 +14,10 @@ from app.models.chat import ChatRequest, ChatResponse
 from app.models.database import get_db
 from app.services.ai_chat_service import ai_chat_service
 from app.services.log_analysis_chat_service import log_analysis_chat_service
+
+
+class LogAnalysisCancelRequest(BaseModel):
+    session_id: str
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -110,3 +115,28 @@ async def log_analysis_stream_endpoint(
     except Exception as exc:  # noqa: BLE001
         logger.exception("Log analysis chat stream request failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/log-analysis/cancel", summary="取消进行中的日志分析任务")
+async def log_analysis_cancel_endpoint(
+    payload: LogAnalysisCancelRequest,
+    current_user=Depends(get_optional_user),
+):
+    try:
+        ok = log_analysis_chat_service.cancel(payload.session_id, user=current_user)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if not ok:
+        return {"session_id": payload.session_id, "cancelled": False, "message": "未找到进行中的任务"}
+    return {"session_id": payload.session_id, "cancelled": True}
+
+
+@router.get("/log-analysis/result", summary="查询日志分析任务状态/结果（轮询兜底）")
+async def log_analysis_result_endpoint(
+    session_id: str = Query(..., description="对话会话 ID"),
+    current_user=Depends(get_optional_user),
+):
+    try:
+        return log_analysis_chat_service.get_status(session_id, user=current_user)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc

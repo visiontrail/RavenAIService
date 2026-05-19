@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     anthropic_max_tokens: int = 8192
     anthropic_max_turns: int = 30
     anthropic_permission_mode: str = "acceptEdits"
-    anthropic_request_timeout_seconds: int = 600
+    anthropic_request_timeout_seconds: int = 3600
     ai_analysis_max_extract_bytes: int = 2 * 1024 * 1024 * 1024  # 2 GiB
 
     # Agent Skills 数据目录（Claude Agent SDK Skill 包按 agent 隔离存储）

@@ -81,6 +81,8 @@ const loadingMessages = ref(false)
 const chatHistory = ref<ChatEntry[]>([])
 const sessionId = ref<string | null>(null)
 const isSending = ref(false)
+const activeLogAnalysisSessionId = ref<string | null>(null)
+const cancelInFlight = ref(false)
 
 const isLoggedIn = computed(() => userStore.isAuthenticated)
 const currentUserName = computed(() => userStore.profile?.display_name || userStore.profile?.username || '用户')
@@ -570,6 +572,108 @@ const runPackageAgent = async (content: string, answerId: string) => {
   }
 }
 
+const buildAuthHeaders = (): Record<string, string> => {
+  const headers: Record<string, string> = {}
+  const authToken = userStore.token as unknown as string
+  if (isLoggedIn.value && authToken) headers.Authorization = `Bearer ${authToken}`
+  return headers
+}
+
+const consumeLogAnalysisStream = async (
+  resp: Response,
+  answerId: string,
+): Promise<{ done: boolean }> => {
+  // Reads the SSE body and returns { done: true } if the server emitted a
+  // terminal `done`/`error` event; otherwise { done: false } meaning the
+  // connection ended early and the caller should reconnect or poll.
+  if (!resp.body) throw new Error('响应体为空，无法流式读取')
+
+  const textStream = typeof TextDecoderStream !== 'undefined'
+    ? resp.body.pipeThrough(new TextDecoderStream()) : null
+  const reader = textStream ? textStream.getReader() : null
+  const binaryReader = !textStream ? resp.body.getReader() : null
+  const decoder = !textStream ? new TextDecoder('utf-8') : null
+  let buffer = ''
+  let terminal = false
+
+  const processChunk = (chunk: string) => {
+    buffer += chunk
+    let remaining = buffer.replace(/\r\n/g, '\n')
+    while (true) {
+      const idx = remaining.indexOf('\n\n')
+      if (idx === -1) break
+      const raw = remaining.slice(0, idx)
+      remaining = remaining.slice(idx + 2)
+      const trimmed = raw.trim()
+      if (!trimmed.startsWith('data:')) continue
+      const jsonStr = trimmed.replace(/^data:\s*/, '')
+      if (!jsonStr) continue
+      try {
+        const payload = JSON.parse(jsonStr)
+        applyStreamEvent(payload, answerId)
+        const type = payload?.event || payload?.type
+        if (type === 'done' || type === 'error') terminal = true
+      } catch (err) {
+        console.error('解析流式数据失败', err, jsonStr)
+      }
+    }
+    buffer = remaining
+  }
+
+  if (reader) {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (value) processChunk(value)
+      if (done) break
+    }
+  } else if (binaryReader && decoder) {
+    while (true) {
+      const { value, done } = await binaryReader.read()
+      if (value) processChunk(decoder.decode(value, { stream: !done }))
+      if (done) break
+    }
+  }
+  if (buffer.trim()) processChunk('\n\n')
+  return { done: terminal }
+}
+
+const pollLogAnalysisResult = async (
+  pollSessionId: string,
+  answerId: string,
+): Promise<boolean> => {
+  // Last-resort fallback when SSE keeps failing. Polls `/result` until the
+  // server reports the Job is done, then renders the final events.
+  let renderedCount = 0
+  const headers = buildAuthHeaders()
+  const startedAt = Date.now()
+  const maxMs = 60 * 60 * 1000
+
+  while (Date.now() - startedAt < maxMs) {
+    try {
+      const resp = await fetch(
+        getServiceUrl(`/api/v1/ai-chat/log-analysis/result?session_id=${encodeURIComponent(pollSessionId)}`),
+        { headers },
+      )
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      const snapshot = await resp.json()
+      const events: any[] = Array.isArray(snapshot?.events) ? snapshot.events : []
+      for (let i = renderedCount; i < events.length; i++) {
+        applyStreamEvent(events[i], answerId)
+      }
+      renderedCount = events.length
+      if (snapshot?.status === 'done') return true
+      if (snapshot?.status === 'not_found') {
+        // Job dropped from registry (process restart / retention expired).
+        return false
+      }
+    } catch (err) {
+      console.warn('轮询日志分析结果失败，将重试', err)
+    }
+    await new Promise(resolve => setTimeout(resolve, 3000))
+  }
+  return false
+}
+
 const runLogAnalysisAgent = async (
   content: string,
   answerId: string,
@@ -589,6 +693,7 @@ const runLogAnalysisAgent = async (
     sessionId.value = generateUUID()
     sessionStore.setSelected(sessionId.value)
   }
+  activeLogAnalysisSessionId.value = sessionId.value
 
   const formData = new FormData()
   formData.append('message', query)
@@ -599,44 +704,64 @@ const runLogAnalysisAgent = async (
 
   if (fileForRequest) selectedLogFile.value = null
 
-  const headers: Record<string, string> = {}
-  const authToken = userStore.token as unknown as string
-  if (isLoggedIn.value && authToken) headers.Authorization = `Bearer ${authToken}`
+  const headers = buildAuthHeaders()
 
   try {
-    const resp = await fetch(getServiceUrl('/api/v1/ai-chat/log-analysis/stream'), {
-      method: 'POST',
-      headers,
-      body: formData,
+    let resp: Response
+    try {
+      resp = await fetch(getServiceUrl('/api/v1/ai-chat/log-analysis/stream'), {
+        method: 'POST',
+        headers,
+        body: formData,
+      })
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    } catch (initialError) {
+      // Initial request itself failed (server unreachable, etc.). Restore the
+      // file so the user can retry.
+      if (fileForRequest) selectedLogFile.value = fileForRequest
+      throw initialError
+    }
+
+    let result = await consumeLogAnalysisStream(resp, answerId).catch(err => {
+      console.warn('SSE 流读取中断，将尝试重连', err)
+      return { done: false }
     })
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    if (!resp.body) throw new Error('响应体为空，无法流式读取')
 
-    const textStream = typeof TextDecoderStream !== 'undefined'
-      ? resp.body.pipeThrough(new TextDecoderStream()) : null
-    const reader = textStream ? textStream.getReader() : null
-    const binaryReader = !textStream ? resp.body.getReader() : null
-    const decoder = !textStream ? new TextDecoder('utf-8') : null
-    let buffer = ''
-
-    if (reader) {
-      while (true) {
-        const { value, done } = await reader.read()
-        if (value) { buffer += value; buffer = processSseBuffer(buffer, answerId) }
-        if (done) break
-      }
-    } else if (binaryReader && decoder) {
-      while (true) {
-        const { value, done } = await binaryReader.read()
-        if (value) {
-          const decoded = decoder.decode(value, { stream: !done })
-          buffer += decoded
-          buffer = processSseBuffer(buffer, answerId)
-        }
-        if (done) break
+    // The Agent Job lives on the server independent of this SSE. If the SSE
+    // closed early without a terminal event, reconnect with the same
+    // session_id (no file) to resume; on repeated failure, poll /result.
+    let attempts = 0
+    const maxReconnects = 3
+    while (!result.done && attempts < maxReconnects) {
+      attempts += 1
+      await new Promise(resolve => setTimeout(resolve, 1000 * attempts))
+      try {
+        const reconnectForm = new FormData()
+        reconnectForm.append('message', '')
+        reconnectForm.append('session_id', sessionId.value!)
+        reconnectForm.append('remember', 'false')
+        const r2 = await fetch(getServiceUrl('/api/v1/ai-chat/log-analysis/stream'), {
+          method: 'POST',
+          headers,
+          body: reconnectForm,
+        })
+        if (!r2.ok) throw new Error(`HTTP ${r2.status}`)
+        result = await consumeLogAnalysisStream(r2, answerId)
+      } catch (err) {
+        console.warn(`SSE 重连第 ${attempts} 次失败`, err)
       }
     }
-    if (buffer.trim()) processSseBuffer(buffer + '\n\n', answerId)
+
+    if (!result.done) {
+      // Reconnect exhausted — fall back to polling.
+      const polled = await pollLogAnalysisResult(sessionId.value!, answerId)
+      if (!polled) {
+        const fallback = ensureAnswerMessage(answerId)
+        if (fallback.content === '正在思考...') {
+          fallback.content = '分析任务运行时间过长或被服务端清理，请稍后查询会话历史。'
+        }
+      }
+    }
 
     const answerMessage = ensureAnswerMessage(answerId)
     if (answerMessage.content === '正在思考...') answerMessage.content = '（无回复内容）'
@@ -648,7 +773,32 @@ const runLogAnalysisAgent = async (
     console.error('日志分析调用失败', error)
     if (fileForRequest) selectedLogFile.value = fileForRequest
     targetMessage.content = `日志分析调用失败：${error?.message || String(error)}`
+  } finally {
+    if (activeLogAnalysisSessionId.value === sessionId.value) {
+      activeLogAnalysisSessionId.value = null
+    }
+    cancelInFlight.value = false
   }
+}
+
+const cancelLogAnalysis = async () => {
+  const sid = activeLogAnalysisSessionId.value
+  if (!sid || cancelInFlight.value) return
+  cancelInFlight.value = true
+  try {
+    const resp = await fetch(getServiceUrl('/api/v1/ai-chat/log-analysis/cancel'), {
+      method: 'POST',
+      headers: { ...buildAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sid }),
+    })
+    if (!resp.ok) {
+      console.warn('取消日志分析失败', await resp.text())
+    }
+  } catch (err) {
+    console.warn('取消日志分析请求失败', err)
+  }
+  // cancelInFlight stays true until the agent emits its `done` event;
+  // runLogAnalysisAgent's finally block clears it.
 }
 
 const sendMessage = async () => {
@@ -1051,6 +1201,17 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
             </button>
           </div>
+          <button
+            v-if="activeLogAnalysisSessionId"
+            class="rw-cancel-btn"
+            :disabled="cancelInFlight"
+            type="button"
+            :title="cancelInFlight ? '正在取消...' : '取消当前日志分析'"
+            @click="cancelLogAnalysis"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+            {{ cancelInFlight ? '取消中…' : '取消分析' }}
+          </button>
           <button class="rw-send-btn" :disabled="(!inputMessage.trim() && !selectedLogFile) || isSending" @click="sendMessage">
             <svg v-if="isSending" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="spin"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
             <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 19 5l-3 15-5-7-6-1Z"/></svg>
@@ -1308,6 +1469,23 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
   color: var(--rw-muted); background: none; border: none; cursor: pointer;
 }
 .rw-file-chip button:hover { background: var(--rw-hairline-strong); color: var(--rw-ink); }
+
+.rw-cancel-btn {
+  height: 32px; padding: 0 10px; border-radius: 8px;
+  background: transparent; color: var(--rw-ink);
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: auto;
+  font-size: 12px; font-weight: 500;
+  border: 1px solid var(--rw-hairline-strong, #d4d4d4);
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.rw-cancel-btn:hover:not(:disabled) {
+  background: var(--rw-surface-strong, #f5f5f5);
+  border-color: var(--rw-ink, #171717);
+}
+.rw-cancel-btn:disabled { color: var(--rw-muted); cursor: not-allowed; }
+.rw-cancel-btn + .rw-send-btn { margin-left: 8px; }
 
 .rw-send-btn {
   width: 36px; height: 32px; border-radius: 8px;

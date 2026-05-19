@@ -186,6 +186,30 @@ class TestLogAnalysisAgentRun:
         assert len(result["root_cause_hypotheses"]) == 1
 
     @pytest.mark.asyncio
+    async def test_run_logs_workflow_events(self, workspace_ctx, caplog):
+        from app.agents.log_analysis.agent import LogAnalysisAgent
+
+        fake_sdk = MagicMock()
+        fake_sdk.query = _fake_query_ok
+        fake_sdk.ClaudeAgentOptions = MagicMock
+
+        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), _patch_skills(), \
+             patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
+             patch("app.config.settings", MagicMock(
+                 anthropic_model="deepseek-v4-pro",
+                 anthropic_provider="deepseek",
+                 anthropic_request_timeout_seconds=600,
+             )):
+            with caplog.at_level("INFO"):
+                await LogAnalysisAgent().run(workspace_ctx)
+
+        workflow_logs = [record.message for record in caplog.records if "LogAnalysisAgent workflow" in record.message]
+        assert any("event=run_start" in message for message in workflow_logs)
+        assert any("event=tool_call" in message and "lookup_project_repo" in message for message in workflow_logs)
+        assert any("event=tool_result" in message for message in workflow_logs)
+        assert any("event=run_complete" in message for message in workflow_logs)
+
+    @pytest.mark.asyncio
     async def test_tool_trace_masks_token(self, workspace_ctx):
         from app.agents.log_analysis.agent import LogAnalysisAgent
 
@@ -334,7 +358,7 @@ class TestRunSync:
     def test_run_sync_timeout(self, workspace_ctx):
         from app.agents.log_analysis.agent import LogAnalysisAgent
 
-        async def _slow_run(self, _):
+        async def _slow_run(self, _, cancel_event=None):
             await asyncio.sleep(9999)
 
         with patch.object(LogAnalysisAgent, "run", _slow_run), \
@@ -345,6 +369,78 @@ class TestRunSync:
 
         assert result["status"] == "error"
         assert result["error_kind"] == "timeout"
+
+
+class TestCancellation:
+    @pytest.mark.asyncio
+    async def test_cancel_event_aborts_between_messages(self, workspace_ctx):
+        """Agent should observe cancel_event between SDK messages and return cancelled."""
+        from app.agents.log_analysis.agent import LogAnalysisAgent
+        import threading
+
+        cancel_event = threading.Event()
+
+        async def _fake_query_drip(*args, **kwargs):
+            # First message comes through normally.
+            yield FakeAssistantMessage(
+                tool_uses=[FakeToolUse(name="Read", input={"path": "x"})]
+            )
+            # User cancels between messages.
+            cancel_event.set()
+            yield FakeToolResultMessage(
+                tool_results=[FakeToolResult(tool_use_id="1", content="data")]
+            )
+            yield FakeResultMessage(result=_make_good_result_json())
+
+        fake_sdk = MagicMock()
+        fake_sdk.query = _fake_query_drip
+
+        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), _patch_skills(), \
+             patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
+             patch("app.config.settings", MagicMock(
+                 anthropic_model="deepseek-v4-pro",
+                 anthropic_provider="deepseek",
+                 anthropic_request_timeout_seconds=3600,
+             )):
+            result = await LogAnalysisAgent().run(workspace_ctx, cancel_event=cancel_event)
+
+        assert result["status"] == "cancelled"
+        assert result["error_kind"] == "cancelled"
+        # The first tool_call should have been recorded before cancel was observed.
+        assert any(entry.get("name") == "Read" for entry in result["tool_trace"])
+
+    def test_run_sync_passes_cancel_event(self, workspace_ctx):
+        from app.agents.log_analysis.agent import LogAnalysisAgent
+        import threading
+
+        received: dict = {}
+
+        async def _capture_run(self, ctx, cancel_event=None):
+            received["evt"] = cancel_event
+            return {
+                "engine": "claude-agent-sdk",
+                "model": "fake",
+                "schema_version": 3,
+                "status": "ok",
+                "question_type": "other",
+                "answer": "",
+                "summary": "",
+                "severity": "info",
+                "root_cause_hypotheses": [],
+                "recommended_actions": [],
+                "related_keywords": [],
+                "tool_trace": [],
+                "raw": "",
+                "duration_seconds": 0.0,
+                "token_usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0},
+            }
+
+        evt = threading.Event()
+        with patch.object(LogAnalysisAgent, "run", _capture_run), \
+             patch("app.config.settings", MagicMock(anthropic_request_timeout_seconds=10)):
+            LogAnalysisAgent().run_sync(workspace_ctx, cancel_event=evt)
+
+        assert received["evt"] is evt
 
 
 class TestFastFailCeleryTask:

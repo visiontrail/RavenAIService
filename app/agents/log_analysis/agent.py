@@ -12,12 +12,17 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
 from app.agents.log_analysis.workspace import WorkspaceContext
 
 logger = logging.getLogger(__name__)
+
+
+class AgentCancelled(Exception):
+    """Raised inside the agent loop when an external cancel signal fires."""
 
 # Regex to scrub token-injected URLs from tool traces
 _TOKEN_URL_RE = re.compile(r"https://[^@\s]+@")
@@ -90,10 +95,240 @@ def _strip_confidence_fields(value: Any) -> Any:
     return value
 
 
+_WORKFLOW_LOG_LIMIT = 600
+
+
+def _truncate_for_log(text: str, limit: int = _WORKFLOW_LOG_LIMIT) -> str:
+    normalized = " ".join(str(text or "").split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit] + "..."
+
+
+def _tool_result_to_text(content: Any) -> str:
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text", "")))
+            elif hasattr(item, "text"):
+                parts.append(str(getattr(item, "text", "")))
+        return "".join(parts)
+    if content is None:
+        return ""
+    return str(content)
+
+
+def _accumulate_token_usage(usage: Any, token_usage: Dict[str, int]) -> None:
+    if not usage:
+        return
+    token_usage["input_tokens"] += getattr(usage, "input_tokens", 0) or 0
+    token_usage["output_tokens"] += getattr(usage, "output_tokens", 0) or 0
+    token_usage["cache_read_tokens"] += getattr(usage, "cache_read_input_tokens", 0) or 0
+
+
+def _log_workflow(task_id: str, event: str, **fields: Any) -> None:
+    parts = [f"event={event}"]
+    for key, value in fields.items():
+        if value is None or value == "":
+            continue
+        parts.append(f"{key}={value}")
+    logger.info("LogAnalysisAgent workflow task_id=%s %s", task_id, " ".join(parts))
+
+
+def _record_tool_call(
+    tool_trace: List[Dict[str, str]],
+    *,
+    name: str,
+    tool_input: Any,
+) -> None:
+    tool_trace.append(
+        {
+            "name": name,
+            "input": _mask_input(tool_input),
+            "output_excerpt": "",
+        }
+    )
+
+
+def _record_tool_result(
+    tool_trace: List[Dict[str, str]],
+    *,
+    content: Any,
+    index_from_end: int = 0,
+) -> None:
+    excerpt = _mask_tokens(_tool_result_to_text(content))[:1024]
+    if not tool_trace:
+        return
+    target_index = len(tool_trace) - 1 - index_from_end
+    if 0 <= target_index < len(tool_trace):
+        tool_trace[target_index]["output_excerpt"] = excerpt
+
+
+def _handle_content_block(
+    block: Any,
+    *,
+    task_id: str,
+    tool_trace: List[Dict[str, str]],
+) -> None:
+    thinking = getattr(block, "thinking", None)
+    if thinking:
+        _log_workflow(
+            task_id,
+            "thinking",
+            content=_truncate_for_log(_mask_tokens(str(thinking))),
+        )
+        return
+
+    tool_use_id = getattr(block, "tool_use_id", None)
+    if tool_use_id is not None:
+        content = getattr(block, "content", None)
+        is_error = getattr(block, "is_error", None)
+        tool_name = ""
+        for entry in reversed(tool_trace):
+            if not entry.get("output_excerpt"):
+                tool_name = entry.get("name", "")
+                break
+        _log_workflow(
+            task_id,
+            "tool_result",
+            tool=tool_name or str(tool_use_id),
+            status="error" if is_error else "ok",
+            output=_truncate_for_log(_mask_tokens(_tool_result_to_text(content))),
+        )
+        _record_tool_result(
+            tool_trace,
+            content=content,
+        )
+        return
+
+    name = getattr(block, "name", None)
+    tool_input = getattr(block, "input", None)
+    if name and tool_input is not None:
+        _log_workflow(
+            task_id,
+            "tool_call",
+            tool=str(name),
+            input=_truncate_for_log(_mask_input(tool_input)),
+        )
+        _record_tool_call(tool_trace, name=str(name), tool_input=tool_input)
+        return
+
+    text = getattr(block, "text", None)
+    if text:
+        _log_workflow(
+            task_id,
+            "assistant_text",
+            content=_truncate_for_log(_mask_tokens(str(text))),
+        )
+
+
+def _handle_stream_message(
+    message: Any,
+    *,
+    task_id: str,
+    tool_trace: List[Dict[str, str]],
+    token_usage: Dict[str, int],
+    final_text: Dict[str, str],
+) -> None:
+    content = getattr(message, "content", None)
+    if isinstance(content, list) and content:
+        for block in content:
+            _handle_content_block(block, task_id=task_id, tool_trace=tool_trace)
+        _accumulate_token_usage(getattr(message, "usage", None), token_usage)
+        return
+
+    if hasattr(message, "tool_uses") and message.tool_uses:
+        for tool_use in message.tool_uses or []:
+            name = getattr(tool_use, "name", "")
+            tool_input = getattr(tool_use, "input", {})
+            _log_workflow(
+                task_id,
+                "tool_call",
+                tool=str(name),
+                input=_truncate_for_log(_mask_input(tool_input)),
+            )
+            _record_tool_call(tool_trace, name=str(name), tool_input=tool_input)
+
+    if hasattr(message, "usage"):
+        _accumulate_token_usage(message.usage, token_usage)
+
+    if hasattr(message, "tool_results") and message.tool_results:
+        total = len(message.tool_results)
+        for i, tool_result in enumerate(message.tool_results or []):
+            content_text = _tool_result_to_text(getattr(tool_result, "content", None))
+            tool_name = tool_trace[-(total - i)]["name"] if tool_trace and (total - i) <= len(tool_trace) else ""
+            is_error = getattr(tool_result, "is_error", None)
+            excerpt = _mask_tokens(content_text)[:1024]
+            _log_workflow(
+                task_id,
+                "tool_result",
+                tool=tool_name,
+                status="error" if is_error else "ok",
+                output=_truncate_for_log(excerpt),
+            )
+            if tool_trace:
+                target_index = len(tool_trace) - (total - i)
+                if 0 <= target_index < len(tool_trace):
+                    tool_trace[target_index]["output_excerpt"] = excerpt
+
+    data = getattr(message, "data", None)
+    subtype = getattr(message, "subtype", None)
+    if isinstance(data, dict) and subtype:
+        summary = data.get("summary") or data.get("description") or data.get("message")
+        if summary:
+            _log_workflow(task_id, "system", subtype=str(subtype), detail=_truncate_for_log(str(summary)))
+        else:
+            _log_workflow(task_id, "system", subtype=str(subtype))
+
+    raw_result = getattr(message, "result", None)
+    if isinstance(raw_result, str) and raw_result:
+        final_text["text"] = raw_result
+        _log_workflow(
+            task_id,
+            "result",
+            turns=getattr(message, "num_turns", None),
+            stop_reason=getattr(message, "stop_reason", None),
+            excerpt=_truncate_for_log(_mask_tokens(raw_result)),
+        )
+
+
+def _cancelled_result(
+    *,
+    model: str,
+    duration: float,
+    tool_trace: List[Dict[str, str]],
+    token_usage: Dict[str, int],
+    raw: str = "Agent cancelled by user",
+) -> Dict[str, Any]:
+    return {
+        "engine": "claude-agent-sdk",
+        "model": model,
+        "schema_version": 3,
+        "status": "cancelled",
+        "error_kind": "cancelled",
+        "question_type": "other",
+        "answer": "本轮分析已被用户取消。",
+        "summary": "本轮分析已被用户取消。",
+        "severity": "info",
+        "root_cause_hypotheses": [],
+        "recommended_actions": [],
+        "related_keywords": [],
+        "tool_trace": tool_trace,
+        "raw": raw,
+        "duration_seconds": round(duration, 2),
+        "token_usage": token_usage,
+    }
+
+
 class LogAnalysisAgent:
     """Wraps Claude Agent SDK query() loop for log analysis tasks."""
 
-    async def run(self, ctx: WorkspaceContext) -> Dict[str, Any]:
+    async def run(
+        self,
+        ctx: WorkspaceContext,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
         """Run the agent loop and return the structured result dict."""
         from app.agents.anthropic_client import PROVIDER_PROFILES, build_options
         from app.agents.log_analysis.prompts import get_prompts, render_user_prompt
@@ -187,56 +422,55 @@ class LogAnalysisAgent:
             "output_tokens": 0,
             "cache_read_tokens": 0,
         }
-        final_text: str = ""
+        final_text_holder: Dict[str, str] = {"text": ""}
         start = time.monotonic()
+
+        _log_workflow(ctx.task_id, "run_start", model=effective_model)
 
         try:
             async for message in query(prompt=user_prompt, options=options):
-                if hasattr(message, "tool_uses"):
-                    # AssistantMessage with tool use blocks
-                    for tool_use in (message.tool_uses or []):
-                        trace_entry = {
-                            "name": getattr(tool_use, "name", ""),
-                            "input": _mask_input(getattr(tool_use, "input", {})),
-                            "output_excerpt": "",
-                        }
-                        tool_trace.append(trace_entry)
+                if cancel_event is not None and cancel_event.is_set():
+                    _log_workflow(ctx.task_id, "cancelled", reason="cancel_event_set")
+                    raise AgentCancelled()
+                _handle_stream_message(
+                    message,
+                    task_id=ctx.task_id,
+                    tool_trace=tool_trace,
+                    token_usage=token_usage,
+                    final_text=final_text_holder,
+                )
 
-                if hasattr(message, "usage"):
-                    usage = message.usage
-                    if usage:
-                        token_usage["input_tokens"] += getattr(usage, "input_tokens", 0) or 0
-                        token_usage["output_tokens"] += getattr(usage, "output_tokens", 0) or 0
-                        token_usage["cache_read_tokens"] += getattr(usage, "cache_read_input_tokens", 0) or 0
-
-                # ToolResultMessage — capture output excerpts
-                if hasattr(message, "tool_results"):
-                    for i, tool_result in enumerate(message.tool_results or []):
-                        content_text = ""
-                        content = getattr(tool_result, "content", None)
-                        if isinstance(content, list):
-                            for item in content:
-                                if isinstance(item, dict) and item.get("type") == "text":
-                                    content_text += item.get("text", "")
-                                elif hasattr(item, "text"):
-                                    content_text += getattr(item, "text", "")
-                        elif isinstance(content, str):
-                            content_text = content
-                        excerpt = _mask_tokens(content_text)[:1024]
-                        # Associate with the corresponding trace entry
-                        if i < len(tool_trace):
-                            tool_trace[-(len(message.tool_results) - i)]["output_excerpt"] = excerpt
-
-                # ResultMessage — the final output
-                if hasattr(message, "result"):
-                    raw_result = getattr(message, "result", "")
-                    if isinstance(raw_result, str):
-                        final_text = raw_result
-
+        except AgentCancelled:
+            duration = time.monotonic() - start
+            _log_workflow(
+                ctx.task_id,
+                "run_complete",
+                status="cancelled",
+                tool_calls=len(tool_trace),
+                duration_s=round(duration, 2),
+                tokens_in=token_usage["input_tokens"],
+                tokens_out=token_usage["output_tokens"],
+            )
+            return _cancelled_result(
+                model=effective_model,
+                duration=duration,
+                tool_trace=tool_trace,
+                token_usage=token_usage,
+            )
         except asyncio.TimeoutError:
             raise
 
+        final_text = final_text_holder["text"]
         duration = time.monotonic() - start
+        _log_workflow(
+            ctx.task_id,
+            "run_complete",
+            status="finished",
+            tool_calls=len(tool_trace),
+            duration_s=round(duration, 2),
+            tokens_in=token_usage["input_tokens"],
+            tokens_out=token_usage["output_tokens"],
+        )
 
         parsed = _extract_fenced_json(final_text)
 
@@ -316,7 +550,11 @@ class LogAnalysisAgent:
             "token_usage": token_usage,
         }
 
-    def run_sync(self, ctx: WorkspaceContext) -> Dict[str, Any]:
+    def run_sync(
+        self,
+        ctx: WorkspaceContext,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
         """Synchronous wrapper for Celery tasks. Applies request timeout."""
         from app.config import settings
 
@@ -324,7 +562,10 @@ class LogAnalysisAgent:
 
         try:
             return asyncio.run(
-                asyncio.wait_for(self.run(ctx), timeout=float(timeout))
+                asyncio.wait_for(
+                    self.run(ctx, cancel_event=cancel_event),
+                    timeout=float(timeout),
+                )
             )
         except asyncio.TimeoutError:
             logger.error("LogAnalysisAgent: timed out after %ds", timeout)
