@@ -22,10 +22,9 @@ import type {
   RavenSearchStatus,
   RavenUploadMetadata,
 } from '@/types'
+import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'
 
 const router = useRouter()
-
-const activeTab = ref('list')
 
 const filters = reactive({
   search: '',
@@ -47,6 +46,9 @@ const pagination = reactive({
 })
 
 const loadingList = ref(false)
+
+const uploadDialogVisible = ref(false)
+const searchDialogVisible = ref(false)
 
 const uploadZoneActive = ref(false)
 const uploadFiles = ref<File[]>([])
@@ -147,16 +149,16 @@ const packageTypeText = (type?: string) => {
   return map[type || ''] || type || '未知类型'
 }
 
-const packageTypeTag = (type?: string) => {
+const packageTypePillClass = (type?: string) => {
   const map: Record<string, string> = {
-    'lingxi-10': 'primary',
-    'lingxi-07a': 'success',
-    'ka-tx': 'danger',
-    'ka-rx': 'warning',
-    config: 'info',
-    'lingxi-06-thrid': 'warning',
+    'lingxi-10': 'rw-pill-info',
+    'lingxi-07a': 'rw-pill-success',
+    'ka-tx': 'rw-pill-danger',
+    'ka-rx': 'rw-pill-warning',
+    config: 'rw-pill-neutral',
+    'lingxi-06-thrid': 'rw-pill-warning',
   }
-  return map[type || ''] || 'info'
+  return map[type || ''] || 'rw-pill-neutral'
 }
 
 const fetchPackages = async () => {
@@ -187,10 +189,6 @@ const fetchPackages = async () => {
   } finally {
     loadingList.value = false
   }
-}
-
-const refreshAll = async () => {
-  await Promise.all([fetchPackages(), checkSearchStatus()])
 }
 
 const handlePageChange = (page: number) => {
@@ -327,8 +325,8 @@ const startUpload = async () => {
     uploadStatus.value = '上传完成'
     ElMessage.success('上传完成，列表正在刷新')
     clearUpload()
+    uploadDialogVisible.value = false
     await fetchPackages()
-    activeTab.value = 'list'
   } catch (error: any) {
     if (error?.code === 'ERR_CANCELED') {
       ElMessage.info('上传已取消')
@@ -387,10 +385,10 @@ const searchDetailDescription = computed(() =>
 const recommendedIdSet = computed(() => new Set(searchResult.value?.recommendedPackageIds || []))
 
 const sortedRelevantPackages = computed<RavenPackage[]>(() => {
-  const packages = searchResult.value?.relevantPackages || []
-  if (!recommendedIdSet.value.size) return packages
-  const recommended = packages.filter((pkg) => recommendedIdSet.value.has(pkg.id))
-  const others = packages.filter((pkg) => !recommendedIdSet.value.has(pkg.id))
+  const list = searchResult.value?.relevantPackages || []
+  if (!recommendedIdSet.value.size) return list
+  const recommended = list.filter((pkg) => recommendedIdSet.value.has(pkg.id))
+  const others = list.filter((pkg) => !recommendedIdSet.value.has(pkg.id))
   return [...recommended, ...others]
 })
 
@@ -479,6 +477,22 @@ const loadSuggestions = async () => {
   }
 }
 
+const triggerSuggestion = (item: string) => {
+  searchQuery.value = item
+  performSearch()
+}
+
+const openUploadDialog = () => {
+  uploadDialogVisible.value = true
+}
+
+const openSearchDialog = () => {
+  searchDialogVisible.value = true
+  if (!searchStatus.value) checkSearchStatus()
+}
+
+const topbarMeta = computed(() => `${pagination.totalItems || packages.value.length} 个包`)
+
 onMounted(() => {
   fetchPackages()
   checkSearchStatus()
@@ -486,32 +500,181 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="space-y-6 raven-page">
-    <div class="flex flex-wrap justify-between items-start gap-4 desktop-only">
-      <div>
-        <p class="text-sm text-gray-500">重构包列表</p>
-        <h1 class="text-2xl font-bold text-gray-900">升级包与分发中心</h1>
-      </div>
-      <div class="flex items-center gap-2">
-        <el-button @click="refreshAll" :loading="loadingList || statusLoading">
-          <el-icon class="mr-1"><Refresh /></el-icon>
-          刷新
-        </el-button>
-      </div>
-    </div>
+  <div class="rw-page">
+    <WorkbenchTopbar title="重构包列表" :meta="topbarMeta">
+      <template #actions>
+        <button class="rw-btn-secondary" @click="openSearchDialog">
+          <el-icon><MagicStick /></el-icon>
+          智能搜索
+        </button>
+        <button class="rw-btn-primary" @click="openUploadDialog">
+          <el-icon><UploadFilled /></el-icon>
+          上传新包
+        </button>
+      </template>
+    </WorkbenchTopbar>
 
-    <div class="mobile-only mobile-list-shell">
-      <el-card class="mobile-list-head">
-        <div class="mobile-list-title-row">
-          <div>
-            <p class="text-sm text-gray-500">重构包列表</p>
-            <h1 class="text-xl font-bold text-gray-900">升级包</h1>
+    <div class="rw-page-scroll">
+      <section class="rw-card rw-filter-card desktop-only">
+        <div class="rw-filter-row">
+          <el-input
+            v-model="filters.search"
+            placeholder="按名称、版本或描述搜索"
+            clearable
+            class="rw-filter-search"
+            @change="fetchPackages"
+            @clear="fetchPackages"
+          >
+            <template #prefix>
+              <el-icon><Search /></el-icon>
+            </template>
+          </el-input>
+          <el-select
+            v-model="filters.type"
+            placeholder="包类型"
+            clearable
+            class="rw-filter-control"
+            @change="fetchPackages"
+          >
+            <el-option label="LingXi-10" value="lingxi-10" />
+            <el-option label="LingXi-07A" value="lingxi-07a" />
+            <el-option label="KaTx" value="ka-tx" />
+            <el-option label="KaRx" value="ka-rx" />
+            <el-option label="配置包" value="config" />
+            <el-option label="LingXi-06-TRD" value="lingxi-06-thrid" />
+          </el-select>
+          <el-input
+            v-model="filters.version"
+            placeholder="版本号"
+            clearable
+            class="rw-filter-control rw-filter-narrow"
+            @change="fetchPackages"
+            @clear="fetchPackages"
+          />
+          <el-input
+            v-model="filters.tags"
+            placeholder="标签包含"
+            clearable
+            class="rw-filter-control"
+            @change="fetchPackages"
+            @clear="fetchPackages"
+          />
+          <el-select
+            v-model="filters.isPatch"
+            placeholder="补丁/正式"
+            clearable
+            class="rw-filter-control rw-filter-narrow"
+            @change="fetchPackages"
+          >
+            <el-option label="正式包" value="false" />
+            <el-option label="补丁包" value="true" />
+          </el-select>
+          <div class="rw-filter-actions">
+            <button class="rw-btn-primary" @click="fetchPackages">
+              <el-icon><Search /></el-icon>
+              搜索
+            </button>
+            <button class="rw-btn-secondary" @click="resetFilters">重置</button>
           </div>
-          <el-button @click="fetchPackages" :loading="loadingList">
-            <el-icon><Refresh /></el-icon>
-          </el-button>
         </div>
-        <div class="mobile-list-search-row">
+      </section>
+
+      <section class="rw-card rw-list-card desktop-only">
+        <div class="rw-table-wrap">
+          <el-table
+            :data="packages"
+            v-loading="loadingList"
+            class="rw-table"
+            :row-class-name="() => 'rw-row'"
+            @row-click="openPackageDetail"
+          >
+            <el-table-column prop="name" label="名称 / 版本" min-width="340">
+              <template #default="{ row }">
+                <div class="rw-name-cell">
+                  <div class="rw-name-head">
+                    <span class="rw-pkg-name" :title="row.name">{{ row.name }}</span>
+                    <span class="rw-pill" :class="packageTypePillClass(row.packageType)">
+                      {{ packageTypeText(row.packageType) }}
+                    </span>
+                    <span class="rw-pill rw-pill-neutral rw-pill-mono">v{{ row.version || '未知' }}</span>
+                    <span class="rw-pill" :class="isPatchPackage(row) ? 'rw-pill-warning' : 'rw-pill-success'">
+                      {{ humanizePatch(row) }}
+                    </span>
+                  </div>
+                  <p class="rw-pkg-desc" :title="row.metadata?.description">
+                    {{ row.metadata?.description || '暂无描述' }}
+                  </p>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="标签" min-width="160">
+              <template #default="{ row }">
+                <div class="rw-pill-group">
+                  <span
+                    v-for="tag in normalizeTags(row.metadata?.tags)"
+                    :key="tag"
+                    class="rw-pill rw-pill-neutral"
+                  >
+                    {{ tag }}
+                  </span>
+                  <span v-if="!normalizeTags(row.metadata?.tags).length" class="rw-cell-empty">—</span>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="组件" min-width="200">
+              <template #default="{ row }">
+                <div class="rw-pill-group">
+                  <span
+                    v-for="comp in normalizeComponents(row.metadata?.components)"
+                    :key="`${comp.name}-${comp.version || 'na'}`"
+                    class="rw-pill rw-pill-info"
+                  >
+                    {{ comp.name }}<span v-if="comp.version" class="rw-pill-sub"> · {{ comp.version }}</span>
+                  </span>
+                  <span v-if="!normalizeComponents(row.metadata?.components).length" class="rw-cell-empty">—</span>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="大小" prop="size" width="110">
+              <template #default="{ row }">
+                <span class="rw-cell-mono">{{ formatFileSize(row.size) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="创建时间" prop="createdAt" width="170">
+              <template #default="{ row }">
+                <span class="rw-cell-muted">{{ formatDateTime(row.createdAt) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="200" fixed="right">
+              <template #default="{ row }">
+                <div class="rw-row-actions" @click.stop>
+                  <button class="rw-btn-ghost" @click="openPackageDetail(row.id)">详情</button>
+                  <button class="rw-btn-ghost" @click="downloadPackage(row)">下载</button>
+                  <button class="rw-btn-ghost rw-btn-ghost-danger" @click="deletePackage(row)">删除</button>
+                </div>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <div class="rw-empty">暂无重构包</div>
+            </template>
+          </el-table>
+        </div>
+
+        <div class="rw-pagination-row">
+          <span class="rw-pagination-meta">共 {{ pagination.totalItems }} 个包</span>
+          <el-pagination
+            background
+            layout="prev, pager, next, jumper"
+            :current-page="pagination.currentPage"
+            :total="pagination.totalItems"
+            :page-size="pagination.itemsPerPage"
+            @current-change="handlePageChange"
+          />
+        </div>
+      </section>
+
+      <div class="mobile-only rw-mobile-shell">
+        <section class="rw-card rw-mobile-filter">
           <el-input
             v-model="filters.search"
             placeholder="按名称、版本或描述搜索"
@@ -523,208 +686,44 @@ onMounted(() => {
               <el-icon><Search /></el-icon>
             </template>
           </el-input>
-          <el-button @click="mobileListFilterVisible = true">筛选</el-button>
-        </div>
-      </el-card>
+          <button class="rw-btn-secondary" @click="mobileListFilterVisible = true">筛选</button>
+        </section>
 
-      <el-card v-loading="loadingList">
-        <div class="mobile-list-summary">共 {{ pagination.totalItems }} 个包</div>
-        <div v-if="packages.length" class="mobile-package-list">
-          <article v-for="pkg in packages" :key="pkg.id" class="mobile-package-card">
-            <h2 class="mobile-package-name" :title="pkg.name">{{ pkg.name }}</h2>
-            <div class="mobile-package-tags">
-              <el-tag size="small" effect="plain" :type="packageTypeTag(pkg.packageType)">
-                {{ packageTypeText(pkg.packageType) }}
-              </el-tag>
-              <el-tag size="small" effect="plain" type="info">v{{ pkg.version || '未知' }}</el-tag>
-              <el-tag size="small" effect="plain" :type="isPatchPackage(pkg) ? 'warning' : 'success'">
-                {{ humanizePatch(pkg) }}
-              </el-tag>
-            </div>
-            <p class="mobile-package-desc">{{ pkg.metadata?.description || '暂无描述' }}</p>
-            <div class="mobile-package-meta">
-              <span>{{ formatFileSize(pkg.size) }}</span>
-              <span>{{ formatDateTime(pkg.createdAt) }}</span>
-            </div>
-            <div class="mobile-package-actions">
-              <el-button type="primary" plain @click="openPackageDetail(pkg.id)">详情</el-button>
-              <el-button type="success" plain @click="downloadPackage(pkg)">下载</el-button>
-            </div>
-          </article>
-        </div>
-        <el-empty v-else description="暂无重构包" />
-        <div class="pagination-wrapper mt-4">
-          <el-pagination
-            background
-            layout="prev, pager, next"
-            :current-page="pagination.currentPage"
-            :total="pagination.totalItems"
-            :page-size="pagination.itemsPerPage"
-            @current-change="handlePageChange"
-          />
-        </div>
-      </el-card>
-    </div>
-
-    <el-tabs v-model="activeTab" class="raven-tabs desktop-only">
-      <el-tab-pane label="包列表" name="list">
-        <section class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-4">
-          <div class="raven-filter-row flex flex-wrap md:flex-nowrap items-center gap-3 w-full">
-            <el-input
-              v-model="filters.search"
-              placeholder="按名称、版本或描述搜索"
-              clearable
-              class="raven-filter-control raven-filter-search"
-              @change="fetchPackages"
-              @clear="fetchPackages"
+        <section class="rw-card rw-mobile-list" v-loading="loadingList">
+          <div class="rw-mobile-summary">共 {{ pagination.totalItems }} 个包</div>
+          <div v-if="packages.length" class="rw-mobile-card-list">
+            <article
+              v-for="pkg in packages"
+              :key="pkg.id"
+              class="rw-mobile-card"
+              @click="openPackageDetail(pkg.id)"
             >
-              <template #prefix>
-                <el-icon><Search /></el-icon>
-              </template>
-            </el-input>
-            <el-select
-              v-model="filters.type"
-              placeholder="包类型"
-              clearable
-              class="raven-filter-control raven-filter-type"
-              @change="fetchPackages"
-            >
-              <el-option label="LingXi-10" value="lingxi-10" />
-              <el-option label="LingXi-07A" value="lingxi-07a" />
-              <el-option label="KaTx" value="ka-tx" />
-              <el-option label="KaRx" value="ka-rx" />
-              <el-option label="配置包" value="config" />
-              <el-option label="LingXi-06-TRD" value="lingxi-06-thrid" />
-            </el-select>
-            <el-input
-              v-model="filters.version"
-              placeholder="版本号"
-              clearable
-              class="raven-filter-control raven-filter-version"
-              @change="fetchPackages"
-              @clear="fetchPackages"
-            />
-            <el-input
-              v-model="filters.tags"
-              placeholder="标签包含"
-              clearable
-              class="raven-filter-control raven-filter-tags"
-              @change="fetchPackages"
-              @clear="fetchPackages"
-            />
-            <el-select
-              v-model="filters.isPatch"
-              placeholder="补丁/正式"
-              clearable
-              class="raven-filter-control raven-filter-patch"
-              @change="fetchPackages"
-            >
-              <el-option label="正式包" value="false" />
-              <el-option label="补丁包" value="true" />
-            </el-select>
-            <div class="raven-filter-actions flex gap-2 flex-shrink-0">
-              <el-button type="primary" @click="fetchPackages">
-                <el-icon class="mr-1"><Search /></el-icon>
-                搜索
-              </el-button>
-              <el-button @click="resetFilters">
-                <el-icon class="mr-1"><CircleClose /></el-icon>
-                重置
-              </el-button>
-            </div>
+              <h2 class="rw-mobile-name" :title="pkg.name">{{ pkg.name }}</h2>
+              <div class="rw-pill-group">
+                <span class="rw-pill" :class="packageTypePillClass(pkg.packageType)">
+                  {{ packageTypeText(pkg.packageType) }}
+                </span>
+                <span class="rw-pill rw-pill-neutral rw-pill-mono">v{{ pkg.version || '未知' }}</span>
+                <span class="rw-pill" :class="isPatchPackage(pkg) ? 'rw-pill-warning' : 'rw-pill-success'">
+                  {{ humanizePatch(pkg) }}
+                </span>
+              </div>
+              <p class="rw-mobile-desc">{{ pkg.metadata?.description || '暂无描述' }}</p>
+              <div class="rw-mobile-meta">
+                <span>{{ formatFileSize(pkg.size) }}</span>
+                <span>{{ formatDateTime(pkg.createdAt) }}</span>
+              </div>
+              <div class="rw-mobile-actions" @click.stop>
+                <button class="rw-btn-secondary" @click="openPackageDetail(pkg.id)">详情</button>
+                <button class="rw-btn-primary" @click="downloadPackage(pkg)">下载</button>
+              </div>
+            </article>
           </div>
-
-          <div class="table-scroll-wrapper">
-            <el-table
-              :data="packages"
-              v-loading="loadingList"
-              border
-              class="w-full"
-              :row-class-name="() => 'cursor-pointer'"
-              @row-click="openPackageDetail"
-            >
-            <el-table-column prop="name" label="名称 / 版本" min-width="340">
-              <template #default="{ row }">
-                <div class="flex items-start gap-2">
-                  <div class="flex-1 min-w-0">
-                    <div class="flex items-center gap-2 min-w-0">
-                      <span class="font-medium text-gray-900 package-name" :title="row.name">
-                        {{ row.name }}
-                      </span>
-                      <el-tag size="small" effect="plain" :type="packageTypeTag(row.packageType)">
-                        {{ packageTypeText(row.packageType) }}
-                      </el-tag>
-                      <el-tag size="small" effect="plain" type="info">v{{ row.version || '未知' }}</el-tag>
-                      <el-tag size="small" effect="plain" :type="isPatchPackage(row) ? 'warning' : 'success'">
-                        {{ humanizePatch(row) }}
-                      </el-tag>
-                    </div>
-                    <p class="text-xs text-gray-500 mt-1 truncate" :title="row.metadata?.description">
-                      {{ row.metadata?.description || '暂无描述' }}
-                    </p>
-                  </div>
-                </div>
-              </template>
-            </el-table-column>
-            <el-table-column label="标签" min-width="140">
-              <template #default="{ row }">
-                <div class="flex flex-wrap gap-1">
-                  <el-tag
-                    v-for="tag in normalizeTags(row.metadata?.tags)"
-                    :key="tag"
-                    size="small"
-                    effect="plain"
-                    type="info"
-                  >
-                    {{ tag }}
-                  </el-tag>
-                </div>
-              </template>
-            </el-table-column>
-            <el-table-column label="组件" min-width="180">
-              <template #default="{ row }">
-                <div class="flex flex-wrap gap-1">
-                  <el-tag
-                    v-for="comp in normalizeComponents(row.metadata?.components)"
-                    :key="`${comp.name}-${comp.version || 'na'}`"
-                    size="small"
-                    effect="plain"
-                    type="success"
-                  >
-                    {{ comp.name }} <span v-if="comp.version">· {{ comp.version }}</span>
-                  </el-tag>
-                </div>
-              </template>
-            </el-table-column>
-            <el-table-column label="大小" prop="size" width="120">
-              <template #default="{ row }">
-                {{ formatFileSize(row.size) }}
-              </template>
-            </el-table-column>
-            <el-table-column label="创建时间" prop="createdAt" width="180">
-              <template #default="{ row }">
-                <span class="text-gray-600">{{ formatDateTime(row.createdAt) }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="200" fixed="right">
-              <template #default="{ row }">
-                <div class="flex items-center gap-2">
-                  <el-button size="small" text type="primary" @click.stop="openPackageDetail(row.id)">
-                    详情
-                  </el-button>
-                  <el-button size="small" text type="success" @click.stop="downloadPackage(row)">下载</el-button>
-                  <el-button size="small" text type="danger" @click.stop="deletePackage(row)">删除</el-button>
-                </div>
-              </template>
-            </el-table-column>
-            </el-table>
-          </div>
-
-          <div class="raven-pagination-row flex justify-between items-center text-sm text-gray-500 mt-2">
-            <span>共 {{ pagination.totalItems }} 个包</span>
+          <div v-else class="rw-empty">暂无重构包</div>
+          <div class="rw-pagination-row">
             <el-pagination
               background
-              layout="prev, pager, next, jumper"
+              layout="prev, pager, next"
               :current-page="pagination.currentPage"
               :total="pagination.totalItems"
               :page-size="pagination.itemsPerPage"
@@ -732,293 +731,11 @@ onMounted(() => {
             />
           </div>
         </section>
-
-      </el-tab-pane>
-
-      <el-tab-pane label="上传包" name="upload">
-        <section class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-4">
-          <div
-            class="upload-zone rounded-lg border-2 border-dashed border-gray-200 p-6 text-center transition hover:border-blue-400"
-            :class="{ 'border-blue-500 bg-blue-50': uploadZoneActive }"
-            @dragover.prevent="uploadZoneActive = true"
-            @dragleave.prevent="uploadZoneActive = false"
-            @drop="handleDrop"
-          >
-            <input
-              type="file"
-              multiple
-              accept=".tgz,.tar.gz"
-              class="hidden"
-              id="raven-upload-input"
-              @change="handleFileInput"
-            />
-            <el-icon class="text-4xl text-gray-400 mb-2"><UploadFilled /></el-icon>
-            <p class="text-gray-700 font-medium mb-1">拖拽文件到此处，或</p>
-            <el-button type="primary" plain size="small" @click="() => (document.getElementById('raven-upload-input') as HTMLInputElement)?.click()">
-              选择文件
-            </el-button>
-            <p class="text-gray-400 text-sm mt-2">支持 .tgz/.tar.gz，单次可选多个文件</p>
-          </div>
-
-          <div v-if="uploadFiles.length" class="bg-gray-50 border border-dashed border-gray-200 p-4 rounded-lg space-y-3">
-            <div class="flex justify-between items-center">
-              <p class="text-sm text-gray-600">已选择 {{ uploadFiles.length }} 个文件</p>
-              <el-button link type="primary" size="small" @click="uploadFiles = []">清空</el-button>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              <el-tag
-                v-for="file in uploadFiles"
-                :key="file.name + file.size"
-                closable
-                @close="removeFile(file)"
-                effect="plain"
-              >
-                {{ file.name }}
-              </el-tag>
-            </div>
-          </div>
-
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <el-card shadow="never" header="元数据">
-              <div class="space-y-4">
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <el-select v-model="uploadMeta.packageType" placeholder="包类型">
-                    <el-option label="LingXi-10" value="lingxi-10" />
-                    <el-option label="LingXi-07A" value="lingxi-07a" />
-                    <el-option label="KaTx" value="ka-tx" />
-                    <el-option label="KaRx" value="ka-rx" />
-                    <el-option label="配置包" value="config" />
-                    <el-option label="LingXi-06-TRD" value="lingxi-06-thrid" />
-                  </el-select>
-                  <el-input v-model="uploadMeta.version" placeholder="版本号，例如 1.0.0" />
-                  <el-select v-model="uploadMeta.isPatch" placeholder="包类型">
-                    <el-option label="正式包" :value="false" />
-                    <el-option label="补丁包" :value="true" />
-                  </el-select>
-                </div>
-
-                <el-input
-                  v-model="uploadMeta.description"
-                  type="textarea"
-                  :rows="3"
-                  placeholder="为团队添加一句描述，支持 Markdown"
-                />
-
-                <div class="space-y-2">
-                  <p class="text-sm text-gray-600">标签</p>
-                  <div class="flex flex-wrap gap-2">
-                    <el-tag
-                      v-for="tag in uploadMeta.tags"
-                      :key="tag"
-                      closable
-                      @close="removeTag(tag)"
-                      effect="plain"
-                      type="info"
-                    >
-                      {{ tag }}
-                    </el-tag>
-                    <el-input
-                      v-model="tagDraft"
-                      size="small"
-                      placeholder="输入后回车添加"
-                      class="tag-draft-input"
-                      @keyup.enter="addTag"
-                      @blur="addTag"
-                    />
-                  </div>
-                </div>
-
-                <div class="space-y-2">
-                  <p class="text-sm text-gray-600">组件</p>
-                  <div class="flex flex-wrap gap-2">
-                    <el-tag
-                      v-for="comp in uploadMeta.components"
-                      :key="`${comp.name}-${comp.version || 'na'}`"
-                      closable
-                      @close="removeComponent(comp)"
-                      effect="plain"
-                      type="success"
-                    >
-                      {{ comp.name }} <span v-if="comp.version">· {{ comp.version }}</span>
-                    </el-tag>
-                  </div>
-                  <div class="flex gap-2">
-                    <el-input v-model="componentDraft.name" size="small" placeholder="组件名" />
-                    <el-input v-model="componentDraft.version" size="small" placeholder="版本（可选）" />
-                    <el-button size="small" @click="addComponent">添加</el-button>
-                  </div>
-                </div>
-              </div>
-            </el-card>
-
-            <el-card shadow="never" header="上传进度">
-              <div class="flex flex-col gap-3">
-                <el-progress :percentage="uploadProgress" :indeterminate="uploading && uploadProgress === 0" />
-                <p class="text-sm text-gray-600 h-5">{{ uploadStatus }}</p>
-                <div class="flex gap-2">
-                  <el-button type="primary" :loading="uploading" :disabled="!uploadFiles.length" @click="startUpload">
-                    <el-icon class="mr-1"><UploadFilled /></el-icon>
-                    {{ uploading ? '上传中' : '开始上传' }}
-                  </el-button>
-                  <el-button v-if="uploading" @click="cancelUpload">取消</el-button>
-                  <el-button @click="clearUpload" :disabled="uploading">重置</el-button>
-                </div>
-                <p class="text-xs text-gray-400">
-                  上传过程中会自动重建向量索引，保持智能搜索可用
-                </p>
-              </div>
-            </el-card>
-          </div>
-        </section>
-      </el-tab-pane>
-
-      <el-tab-pane label="智能搜索" name="search">
-        <section class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-4">
-          <div class="flex flex-wrap items-center gap-2">
-            <el-input
-              v-model="searchQuery"
-              placeholder="用自然语言描述需求，例如：需要最新的 LingXi-10 正式包"
-              clearable
-              class="flex-1 min-w-[240px]"
-              @keyup.enter="performSearch"
-              @change="loadSuggestions"
-            >
-              <template #prefix>
-                <el-icon><MagicStick /></el-icon>
-              </template>
-            </el-input>
-            <el-button type="primary" :loading="searchLoading" @click="performSearch">
-              <el-icon class="mr-1"><Search /></el-icon>
-              智能搜索
-            </el-button>
-            <el-button :loading="statusLoading" @click="checkSearchStatus">检查状态</el-button>
-            <el-button type="warning" plain :loading="rebuildLoading" @click="rebuildIndex">
-              重建索引
-            </el-button>
-          </div>
-
-          <div class="flex flex-wrap gap-2">
-            <el-tag
-              v-for="item in searchSuggestions"
-              :key="item"
-              effect="plain"
-              class="cursor-pointer hover:bg-blue-50"
-              @click="searchQuery = item; performSearch()"
-            >
-              {{ item }}
-            </el-tag>
-          </div>
-
-          <div class="flex items-center gap-2 text-sm text-gray-600">
-            <el-tag size="small" :type="searchStatus?.initialized ? 'success' : 'info'" effect="plain">
-              {{ searchStatus?.initialized ? '向量索引已准备' : '待初始化' }}
-            </el-tag>
-            <el-tag v-if="searchStatus?.rebuilding" size="small" type="warning" effect="plain">
-              正在重建索引
-            </el-tag>
-            <span v-if="searchStatus?.totalPackages" class="text-gray-500">
-              已索引 {{ searchStatus.totalPackages }} 个包
-            </span>
-          </div>
-
-          <div v-if="searchResult" class="space-y-4">
-            <el-card shadow="never" class="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100">
-              <template #header>
-                <div class="flex items-center justify-between">
-                  <div class="flex items-center gap-2">
-                    <el-icon><StarFilled /></el-icon>
-                    <span class="font-semibold text-gray-800">AI 回答</span>
-                  </div>
-                  <span class="text-gray-500 text-sm">根据描述生成，不保证完全准确</span>
-                </div>
-              </template>
-              <div class="markdown-content" v-html="renderedAnswer" />
-            </el-card>
-
-            <el-card shadow="never">
-              <template #header>
-                <div class="flex items-center justify-between">
-                  <span class="font-semibold text-gray-800">匹配包</span>
-                  <span class="text-gray-500 text-sm">
-                    命中 {{ searchResult.relevantPackages.length }} / {{ searchResult.searchResultsCount || searchResult.relevantPackages.length }}
-                  </span>
-                </div>
-              </template>
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div
-                  v-for="pkg in sortedRelevantPackages"
-                  :key="pkg.id"
-                  class="package-card border border-gray-100 rounded-lg p-3 hover:border-blue-200 transition"
-                  :class="{ 'recommended-card': isRecommendedPackage(pkg) }"
-                >
-                  <div class="flex justify-between items-start gap-2">
-                    <div>
-                      <div class="flex items-center gap-2">
-                        <span class="font-medium text-gray-900">{{ pkg.name }}</span>
-                        <el-tag size="small" effect="plain" :type="packageTypeTag(pkg.packageType)">
-                          {{ packageTypeText(pkg.packageType) }}
-                        </el-tag>
-                        <el-tag size="small" effect="plain" type="info">
-                          v{{ pkg.version || '未知' }}
-                        </el-tag>
-                      </div>
-                      <p
-                        class="text-xs text-gray-500 mt-1 overflow-hidden text-ellipsis"
-                        style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;"
-                      >
-                        {{ pkg.metadata?.description || '暂无描述' }}
-                      </p>
-                    </div>
-                    <div class="flex flex-col items-end gap-1">
-                      <el-tag
-                        v-if="isRecommendedPackage(pkg)"
-                        size="small"
-                        type="warning"
-                        effect="dark"
-                        class="ai-recommend-badge"
-                      >
-                        <el-icon class="mr-1"><StarFilled /></el-icon>
-                        AI 推荐
-                      </el-tag>
-                      <el-tag
-                        v-if="(pkg as any).relevanceScore"
-                        size="small"
-                        :type="isRecommendedPackage(pkg) ? 'warning' : 'success'"
-                        effect="plain"
-                      >
-                        {{ ((pkg as any).relevanceScore * 100).toFixed(0) }}%
-                      </el-tag>
-                    </div>
-                  </div>
-                  <div class="flex flex-wrap gap-1 mt-2">
-                    <el-tag
-                      v-for="tag in normalizeTags(pkg.metadata?.tags)"
-                      :key="tag"
-                      size="small"
-                      effect="plain"
-                      type="info"
-                    >
-                      {{ tag }}
-                    </el-tag>
-                  </div>
-                  <div class="flex gap-2 mt-3">
-                    <el-button size="small" type="primary" plain @click="openSearchPackageDetail(pkg)">详情</el-button>
-                    <el-button size="small" type="success" plain @click="downloadPackage(pkg)">下载</el-button>
-                  </div>
-                </div>
-              </div>
-            </el-card>
-          </div>
-
-          <div v-else class="text-center text-gray-400 text-sm py-6">
-            输入需求并执行智能搜索，结果会显示在这里
-          </div>
-        </section>
-      </el-tab-pane>
-    </el-tabs>
+      </div>
+    </div>
 
     <el-drawer v-model="mobileListFilterVisible" title="筛选重构包" direction="btt" size="65%">
-      <div class="mobile-filter-drawer">
+      <div class="rw-mobile-filter-drawer">
         <el-select v-model="filters.type" placeholder="包类型" clearable>
           <el-option label="LingXi-10" value="lingxi-10" />
           <el-option label="LingXi-07A" value="lingxi-07a" />
@@ -1032,105 +749,385 @@ onMounted(() => {
           <el-option label="正式包" value="false" />
           <el-option label="补丁包" value="true" />
         </el-select>
-        <div class="mobile-filter-actions">
-          <el-button @click="resetFilters">重置</el-button>
-          <el-button type="primary" @click="fetchPackages(); mobileListFilterVisible = false">应用</el-button>
+        <div class="rw-mobile-filter-actions">
+          <button class="rw-btn-secondary" @click="resetFilters">重置</button>
+          <button class="rw-btn-primary" @click="fetchPackages(); mobileListFilterVisible = false">应用</button>
         </div>
       </div>
     </el-drawer>
+
+    <el-dialog
+      v-model="uploadDialogVisible"
+      width="780px"
+      destroy-on-close
+      :close-on-click-modal="false"
+      class="rw-dialog"
+      title="上传重构包"
+    >
+      <div class="rw-upload-body">
+        <div
+          class="rw-upload-zone"
+          :class="{ 'is-active': uploadZoneActive }"
+          @dragover.prevent="uploadZoneActive = true"
+          @dragleave.prevent="uploadZoneActive = false"
+          @drop="handleDrop"
+        >
+          <input
+            type="file"
+            multiple
+            accept=".tgz,.tar.gz"
+            class="rw-upload-input"
+            id="raven-upload-input"
+            @change="handleFileInput"
+          />
+          <el-icon class="rw-upload-icon"><UploadFilled /></el-icon>
+          <p class="rw-upload-hint">拖拽文件到此处，或</p>
+          <button
+            class="rw-btn-secondary"
+            @click="() => (document.getElementById('raven-upload-input') as HTMLInputElement)?.click()"
+          >
+            选择文件
+          </button>
+          <p class="rw-upload-sub">支持 .tgz / .tar.gz，单次可选多个文件</p>
+        </div>
+
+        <div v-if="uploadFiles.length" class="rw-upload-files">
+          <div class="rw-upload-files-head">
+            <span>已选择 {{ uploadFiles.length }} 个文件</span>
+            <button class="rw-btn-ghost" @click="uploadFiles = []">清空</button>
+          </div>
+          <div class="rw-pill-group">
+            <span
+              v-for="file in uploadFiles"
+              :key="file.name + file.size"
+              class="rw-pill rw-pill-neutral rw-pill-removable"
+            >
+              {{ file.name }}
+              <button class="rw-pill-close" @click="removeFile(file)" aria-label="移除文件">×</button>
+            </span>
+          </div>
+        </div>
+
+        <div class="rw-upload-grid">
+          <div class="rw-subcard">
+            <h4 class="rw-subcard-title">元数据</h4>
+            <div class="rw-form-grid">
+              <el-select v-model="uploadMeta.packageType" placeholder="包类型">
+                <el-option label="LingXi-10" value="lingxi-10" />
+                <el-option label="LingXi-07A" value="lingxi-07a" />
+                <el-option label="KaTx" value="ka-tx" />
+                <el-option label="KaRx" value="ka-rx" />
+                <el-option label="配置包" value="config" />
+                <el-option label="LingXi-06-TRD" value="lingxi-06-thrid" />
+              </el-select>
+              <el-input v-model="uploadMeta.version" placeholder="版本号，例如 1.0.0" />
+              <el-select v-model="uploadMeta.isPatch" placeholder="正式 / 补丁">
+                <el-option label="正式包" :value="false" />
+                <el-option label="补丁包" :value="true" />
+              </el-select>
+            </div>
+
+            <el-input
+              v-model="uploadMeta.description"
+              type="textarea"
+              :rows="3"
+              placeholder="为团队添加一句描述，支持 Markdown"
+            />
+
+            <div class="rw-field">
+              <p class="rw-field-label">标签</p>
+              <div class="rw-pill-group">
+                <span
+                  v-for="tag in uploadMeta.tags"
+                  :key="tag"
+                  class="rw-pill rw-pill-neutral rw-pill-removable"
+                >
+                  {{ tag }}
+                  <button class="rw-pill-close" @click="removeTag(tag)" aria-label="移除标签">×</button>
+                </span>
+                <el-input
+                  v-model="tagDraft"
+                  size="small"
+                  placeholder="输入后回车添加"
+                  class="rw-tag-input"
+                  @keyup.enter="addTag"
+                  @blur="addTag"
+                />
+              </div>
+            </div>
+
+            <div class="rw-field">
+              <p class="rw-field-label">组件</p>
+              <div class="rw-pill-group">
+                <span
+                  v-for="comp in uploadMeta.components"
+                  :key="`${comp.name}-${comp.version || 'na'}`"
+                  class="rw-pill rw-pill-info rw-pill-removable"
+                >
+                  {{ comp.name }}<span v-if="comp.version" class="rw-pill-sub"> · {{ comp.version }}</span>
+                  <button class="rw-pill-close" @click="removeComponent(comp)" aria-label="移除组件">×</button>
+                </span>
+              </div>
+              <div class="rw-component-input">
+                <el-input v-model="componentDraft.name" size="small" placeholder="组件名" />
+                <el-input v-model="componentDraft.version" size="small" placeholder="版本（可选）" />
+                <button class="rw-btn-secondary" @click="addComponent">添加</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="rw-subcard">
+            <h4 class="rw-subcard-title">上传进度</h4>
+            <el-progress :percentage="uploadProgress" :indeterminate="uploading && uploadProgress === 0" />
+            <p class="rw-progress-status">{{ uploadStatus || '尚未开始' }}</p>
+            <div class="rw-upload-actions">
+              <button
+                class="rw-btn-primary"
+                :disabled="!uploadFiles.length || uploading"
+                @click="startUpload"
+              >
+                <el-icon><UploadFilled /></el-icon>
+                {{ uploading ? '上传中' : '开始上传' }}
+              </button>
+              <button v-if="uploading" class="rw-btn-secondary" @click="cancelUpload">取消</button>
+              <button class="rw-btn-ghost" :disabled="uploading" @click="clearUpload">重置</button>
+            </div>
+            <p class="rw-progress-hint">
+              上传过程中会自动重建向量索引，保持智能搜索可用
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="rw-dialog-footer">
+          <button class="rw-btn-ghost" @click="uploadDialogVisible = false">关闭</button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="searchDialogVisible"
+      width="880px"
+      destroy-on-close
+      :close-on-click-modal="false"
+      class="rw-dialog"
+      title="智能搜索"
+    >
+      <div class="rw-search-body">
+        <div class="rw-search-bar">
+          <el-input
+            v-model="searchQuery"
+            placeholder="用自然语言描述需求，例如：需要最新的 LingXi-10 正式包"
+            clearable
+            class="rw-search-input"
+            @keyup.enter="performSearch"
+            @change="loadSuggestions"
+          >
+            <template #prefix>
+              <el-icon><MagicStick /></el-icon>
+            </template>
+          </el-input>
+          <button class="rw-btn-primary" :disabled="searchLoading" @click="performSearch">
+            <el-icon><Search /></el-icon>
+            {{ searchLoading ? '搜索中' : '智能搜索' }}
+          </button>
+        </div>
+
+        <div class="rw-search-tools">
+          <button class="rw-btn-ghost" :disabled="statusLoading" @click="checkSearchStatus">
+            {{ statusLoading ? '检查中…' : '检查状态' }}
+          </button>
+          <button class="rw-btn-ghost" :disabled="rebuildLoading" @click="rebuildIndex">
+            {{ rebuildLoading ? '重建中…' : '重建索引' }}
+          </button>
+          <span class="rw-pill" :class="searchStatus?.initialized ? 'rw-pill-success' : 'rw-pill-neutral'">
+            {{ searchStatus?.initialized ? '向量索引已准备' : '待初始化' }}
+          </span>
+          <span v-if="searchStatus?.rebuilding" class="rw-pill rw-pill-warning">正在重建索引</span>
+          <span v-if="searchStatus?.totalPackages" class="rw-search-stat">
+            已索引 {{ searchStatus.totalPackages }} 个包
+          </span>
+        </div>
+
+        <div class="rw-suggestion-row">
+          <span
+            v-for="item in searchSuggestions"
+            :key="item"
+            class="rw-suggestion-chip"
+            @click="triggerSuggestion(item)"
+          >
+            {{ item }}
+          </span>
+        </div>
+
+        <div v-if="searchResult" class="rw-search-results">
+          <div class="rw-card rw-answer-card">
+            <div class="rw-answer-head">
+              <span class="rw-pill rw-pill-ai">
+                <el-icon><StarFilled /></el-icon>
+                AI 回答
+              </span>
+              <span class="rw-answer-disclaimer">根据描述生成，不保证完全准确</span>
+            </div>
+            <div class="rw-markdown" v-html="renderedAnswer" />
+          </div>
+
+          <div class="rw-card rw-match-card">
+            <div class="rw-match-head">
+              <span class="rw-match-title">匹配包</span>
+              <span class="rw-match-meta">
+                命中 {{ searchResult.relevantPackages.length }} /
+                {{ searchResult.searchResultsCount || searchResult.relevantPackages.length }}
+              </span>
+            </div>
+            <div class="rw-match-grid">
+              <div
+                v-for="pkg in sortedRelevantPackages"
+                :key="pkg.id"
+                class="rw-match-item"
+                :class="{ 'is-recommended': isRecommendedPackage(pkg) }"
+              >
+                <div class="rw-match-item-head">
+                  <div class="rw-match-item-meta">
+                    <div class="rw-match-item-title">
+                      <span class="rw-pkg-name">{{ pkg.name }}</span>
+                      <span class="rw-pill" :class="packageTypePillClass(pkg.packageType)">
+                        {{ packageTypeText(pkg.packageType) }}
+                      </span>
+                      <span class="rw-pill rw-pill-neutral rw-pill-mono">v{{ pkg.version || '未知' }}</span>
+                    </div>
+                    <p class="rw-match-item-desc">
+                      {{ pkg.metadata?.description || '暂无描述' }}
+                    </p>
+                  </div>
+                  <div class="rw-match-item-tags">
+                    <span v-if="isRecommendedPackage(pkg)" class="rw-pill rw-pill-ai">
+                      <el-icon><StarFilled /></el-icon>
+                      AI 推荐
+                    </span>
+                    <span
+                      v-if="(pkg as any).relevanceScore"
+                      class="rw-pill"
+                      :class="isRecommendedPackage(pkg) ? 'rw-pill-warning' : 'rw-pill-success'"
+                    >
+                      {{ ((pkg as any).relevanceScore * 100).toFixed(0) }}%
+                    </span>
+                  </div>
+                </div>
+                <div class="rw-pill-group">
+                  <span
+                    v-for="tag in normalizeTags(pkg.metadata?.tags)"
+                    :key="tag"
+                    class="rw-pill rw-pill-neutral"
+                  >
+                    {{ tag }}
+                  </span>
+                </div>
+                <div class="rw-match-item-actions">
+                  <button class="rw-btn-secondary" @click="openSearchPackageDetail(pkg)">详情</button>
+                  <button class="rw-btn-primary" @click="downloadPackage(pkg)">下载</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-else class="rw-search-empty">输入需求并执行智能搜索，结果会显示在这里</div>
+      </div>
+
+      <template #footer>
+        <div class="rw-dialog-footer">
+          <button class="rw-btn-ghost" @click="searchDialogVisible = false">关闭</button>
+        </div>
+      </template>
+    </el-dialog>
 
     <el-dialog
       v-model="searchDetailVisible"
       width="780px"
       destroy-on-close
       :close-on-click-modal="false"
-      class="raven-detail-dialog"
+      class="rw-dialog"
+      title="包详情"
     >
-      <template #header>
-        <div class="flex items-center gap-2">
-          <el-icon><Box /></el-icon>
-          <span class="font-semibold text-gray-800">包详情</span>
-        </div>
-      </template>
-
-      <div v-loading="searchDetailLoading" class="space-y-4">
-        <div class="flex flex-wrap items-center gap-2">
-          <h2 class="text-xl font-bold text-gray-900">
+      <div v-loading="searchDetailLoading" class="rw-detail-body">
+        <div class="rw-detail-head">
+          <h2 class="rw-detail-title">
             {{ searchDetailPackage?.name || '加载中...' }}
           </h2>
-          <el-tag v-if="searchDetailPackage" size="small" effect="plain" type="info">
-            v{{ searchDetailPackage.version || '未知' }}
-          </el-tag>
-          <el-tag v-if="searchDetailPackage" size="small" :type="packageTypeTag(searchDetailPackage.packageType)">
-            {{ packageTypeText(searchDetailPackage.packageType) }}
-          </el-tag>
-          <el-tag
-            v-if="searchDetailPackage"
-            size="small"
-            effect="plain"
-            :type="isPatchPackage(searchDetailPackage) ? 'warning' : 'success'"
-          >
-            {{ humanizePatch(searchDetailPackage) }}
-          </el-tag>
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-600">
-          <div>创建时间：{{ searchDetailPackage ? formatDateTime(searchDetailPackage.createdAt) : '-' }}</div>
-          <div>大小：{{ searchDetailPackage ? formatFileSize(searchDetailPackage.size) : '-' }}</div>
-        </div>
-
-        <div class="space-y-2">
-          <h3 class="text-sm font-semibold text-gray-800">描述</h3>
-          <div class="markdown-content text-sm text-gray-700" v-html="searchDetailDescription" />
-        </div>
-
-        <div v-if="normalizeTags(searchDetailPackage?.metadata?.tags).length" class="space-y-2">
-          <h3 class="text-sm font-semibold text-gray-800">标签</h3>
-          <div class="flex flex-wrap gap-1">
-            <el-tag
-              v-for="tag in normalizeTags(searchDetailPackage?.metadata?.tags)"
-              :key="tag"
-              size="small"
-              effect="plain"
-              type="info"
+          <div class="rw-pill-group">
+            <span v-if="searchDetailPackage" class="rw-pill rw-pill-neutral rw-pill-mono">
+              v{{ searchDetailPackage.version || '未知' }}
+            </span>
+            <span v-if="searchDetailPackage" class="rw-pill" :class="packageTypePillClass(searchDetailPackage.packageType)">
+              {{ packageTypeText(searchDetailPackage.packageType) }}
+            </span>
+            <span
+              v-if="searchDetailPackage"
+              class="rw-pill"
+              :class="isPatchPackage(searchDetailPackage) ? 'rw-pill-warning' : 'rw-pill-success'"
             >
-              {{ tag }}
-            </el-tag>
+              {{ humanizePatch(searchDetailPackage) }}
+            </span>
           </div>
         </div>
 
-        <div v-if="normalizeComponents(searchDetailPackage?.metadata?.components).length" class="space-y-2">
-          <h3 class="text-sm font-semibold text-gray-800">组件</h3>
-          <div class="flex flex-wrap gap-1">
-            <el-tag
+        <div class="rw-detail-meta">
+          <div>
+            <span class="rw-detail-label">创建时间</span>
+            <span class="rw-detail-value">{{ searchDetailPackage ? formatDateTime(searchDetailPackage.createdAt) : '-' }}</span>
+          </div>
+          <div>
+            <span class="rw-detail-label">大小</span>
+            <span class="rw-detail-value">{{ searchDetailPackage ? formatFileSize(searchDetailPackage.size) : '-' }}</span>
+          </div>
+        </div>
+
+        <div class="rw-field">
+          <p class="rw-field-label">描述</p>
+          <div class="rw-markdown rw-detail-desc" v-html="searchDetailDescription" />
+        </div>
+
+        <div v-if="normalizeTags(searchDetailPackage?.metadata?.tags).length" class="rw-field">
+          <p class="rw-field-label">标签</p>
+          <div class="rw-pill-group">
+            <span
+              v-for="tag in normalizeTags(searchDetailPackage?.metadata?.tags)"
+              :key="tag"
+              class="rw-pill rw-pill-neutral"
+            >
+              {{ tag }}
+            </span>
+          </div>
+        </div>
+
+        <div v-if="normalizeComponents(searchDetailPackage?.metadata?.components).length" class="rw-field">
+          <p class="rw-field-label">组件</p>
+          <div class="rw-pill-group">
+            <span
               v-for="comp in normalizeComponents(searchDetailPackage?.metadata?.components)"
               :key="`${comp.name}-${comp.version || 'na'}`"
-              size="small"
-              effect="plain"
-              type="success"
+              class="rw-pill rw-pill-info"
             >
-              {{ comp.name }} <span v-if="comp.version">· {{ comp.version }}</span>
-            </el-tag>
+              {{ comp.name }}<span v-if="comp.version" class="rw-pill-sub"> · {{ comp.version }}</span>
+            </span>
           </div>
         </div>
       </div>
 
       <template #footer>
-        <div class="flex items-center justify-between">
-          <div class="text-xs text-gray-500">
-            仅在智能搜索中以弹窗展示，其他入口依然跳转详情页
-          </div>
-          <div class="flex gap-2">
-            <el-button
+        <div class="rw-dialog-footer rw-dialog-footer-split">
+          <span class="rw-detail-footnote">仅在智能搜索中以弹窗展示，其他入口依然跳转详情页</span>
+          <div class="rw-dialog-footer-actions">
+            <button
               v-if="searchDetailPackage"
-              type="success"
-              plain
-              size="small"
+              class="rw-btn-secondary"
               @click="downloadPackage(searchDetailPackage)"
             >
               下载
-            </el-button>
-            <el-button type="primary" size="small" @click="searchDetailVisible = false">关闭</el-button>
+            </button>
+            <button class="rw-btn-primary" @click="searchDetailVisible = false">关闭</button>
           </div>
         </div>
       </template>
@@ -1139,263 +1136,761 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.stat-card {
-  border: 1px solid #f1f5f9;
+.rw-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--rw-canvas, #fff);
+  font-family: var(--rw-sans, Inter, system-ui, sans-serif);
+  color: var(--rw-ink, #171717);
 }
 
-.mobile-only {
-  display: none !important;
+.rw-page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 28px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
 }
 
-.upload-zone {
-  transition: all 0.25s ease;
+.mobile-only { display: none; }
+
+.rw-card {
+  background: var(--rw-canvas, #fff);
+  border: 1px solid var(--rw-hairline-strong, #dcdee0);
+  border-radius: 12px;
+  padding: 20px;
 }
 
-.raven-filter-row {
-  gap: 0.75rem;
+.rw-filter-card { padding: 16px 20px; }
+
+.rw-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
 }
 
-.raven-filter-control {
+.rw-filter-search {
+  flex: 1 1 240px;
+  min-width: 220px;
+}
+
+.rw-filter-control { width: 160px; flex-shrink: 0; }
+.rw-filter-narrow { width: 130px; }
+
+.rw-filter-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
   flex-shrink: 0;
 }
 
-.raven-filter-search {
-  width: 280px;
-  min-width: 260px;
-  flex: 1 1 auto;
+/* Buttons */
+.rw-btn-primary {
+  height: 32px;
+  padding: 0 14px;
+  background: var(--rw-primary, #000);
+  color: var(--rw-on-primary, #fff);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  transition: background 0.15s ease;
+  white-space: nowrap;
+}
+.rw-btn-primary:hover:not(:disabled) { background: var(--rw-primary-active, #1a1a1a); }
+.rw-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.rw-btn-secondary {
+  height: 32px;
+  padding: 0 14px;
+  background: var(--rw-canvas, #fff);
+  color: var(--rw-ink, #171717);
+  border: 1px solid var(--rw-hairline-strong, #dcdee0);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  transition: background 0.15s ease;
+  white-space: nowrap;
+}
+.rw-btn-secondary:hover:not(:disabled) { background: var(--rw-surface-strong, #f0f0f3); }
+.rw-btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.rw-btn-danger {
+  height: 32px;
+  padding: 0 14px;
+  background: var(--rw-danger, #c0382b);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
 }
 
-.raven-filter-type,
-.raven-filter-tags {
-  width: 170px;
+.rw-btn-ghost {
+  background: none;
+  color: var(--rw-body, #60646c);
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: none;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.rw-btn-ghost:hover:not(:disabled) {
+  background: var(--rw-surface-strong, #f0f0f3);
+  color: var(--rw-ink, #171717);
+}
+.rw-btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+.rw-btn-ghost-danger { color: var(--rw-danger, #c0382b); }
+.rw-btn-ghost-danger:hover:not(:disabled) {
+  background: rgba(192, 56, 43, 0.08);
+  color: var(--rw-danger, #c0382b);
 }
 
-.raven-filter-version,
-.raven-filter-patch {
-  width: 140px;
+.rw-icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--rw-body, #60646c);
+}
+.rw-icon-btn:hover { background: var(--rw-surface-strong, #f0f0f3); }
+
+/* Pills */
+.rw-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.rw-pill-neutral { background: var(--rw-surface-strong, #f0f0f3); color: var(--rw-body, #60646c); }
+.rw-pill-success { background: rgba(22, 163, 74, 0.12); color: #15803d; }
+.rw-pill-info { background: var(--rw-surface-strong, #f0f0f3); color: var(--rw-ink, #171717); }
+.rw-pill-warning { background: rgba(171, 100, 0, 0.10); color: #ab6400; }
+.rw-pill-danger { background: rgba(192, 56, 43, 0.10); color: #c0382b; }
+.rw-pill-preview { background: rgba(129, 69, 181, 0.10); color: #8145b5; }
+.rw-pill-ai {
+  background: var(--rw-surface-dark, #171717);
+  color: var(--rw-on-primary, #fff);
+}
+.rw-pill-mono { font-family: var(--rw-mono, JetBrains Mono, monospace); font-weight: 500; }
+.rw-pill-sub { font-weight: 500; opacity: 0.8; }
+
+.rw-pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
 }
 
-.tag-draft-input {
-  width: 160px;
+.rw-pill-removable { padding-right: 4px; }
+.rw-pill-close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  margin-left: 2px;
+  opacity: 0.6;
 }
+.rw-pill-close:hover { opacity: 1; }
 
-.raven-pagination-row {
-  gap: 0.75rem;
+/* Element Plus input overrides */
+:deep(.el-input__wrapper),
+:deep(.el-select .el-select__wrapper),
+:deep(.el-textarea__inner) {
+  background: var(--rw-canvas, #fff) !important;
+  border: 1px solid var(--rw-hairline-strong, #dcdee0) !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+  min-height: 36px;
+  font-family: inherit;
 }
+:deep(.el-input__wrapper.is-focus),
+:deep(.el-input__wrapper:hover),
+:deep(.el-select .el-select__wrapper.is-focused),
+:deep(.el-select .el-select__wrapper:hover),
+:deep(.el-textarea__inner:focus) {
+  border-color: var(--rw-ink, #171717) !important;
+  box-shadow: none !important;
+}
+:deep(.el-input__inner)::placeholder,
+:deep(.el-textarea__inner)::placeholder {
+  color: var(--rw-muted, #999);
+}
+:deep(.el-input__inner) { color: var(--rw-ink, #171717); }
 
-.package-name {
-  display: inline-block;
-  max-width: 100%;
+/* Table */
+.rw-list-card { padding: 0; }
+.rw-table-wrap { width: 100%; overflow-x: auto; }
+
+:deep(.el-table) {
+  --el-table-border-color: var(--rw-hairline, #f0f0f3);
+  --el-table-header-bg-color: var(--rw-canvas, #fff);
+  --el-table-row-hover-bg-color: var(--rw-hairline-soft, #f5f5f7);
+  background: transparent;
+  color: var(--rw-ink, #171717);
+  font-family: inherit;
+}
+:deep(.el-table th.el-table__cell) {
+  background: var(--rw-canvas, #fff);
+  border-bottom: 1px solid var(--rw-hairline-strong, #dcdee0);
+  padding: 12px 14px;
+}
+:deep(.el-table th.el-table__cell .cell) {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--rw-muted, #999);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  padding: 0;
+}
+:deep(.el-table td.el-table__cell) {
+  border-bottom: 1px solid var(--rw-hairline, #f0f0f3);
+  padding: 14px;
+  font-size: 13px;
+}
+:deep(.el-table td.el-table__cell .cell) { padding: 0; }
+:deep(.el-table--enable-row-hover .el-table__body tr:hover > td.el-table__cell) {
+  background: var(--rw-hairline-soft, #f5f5f7);
+}
+:deep(.el-table .rw-row) { cursor: pointer; }
+:deep(.el-table::before),
+:deep(.el-table--border::after) { display: none; }
+
+.rw-name-cell { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.rw-name-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.rw-pkg-name {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--rw-ink, #171717);
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rw-pkg-desc {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--rw-body, #60646c);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.markdown-content :deep(img) {
-  max-width: 100%;
+.rw-cell-empty { color: var(--rw-muted-soft, #cccccc); font-size: 12px; }
+.rw-cell-mono { font-family: var(--rw-mono, JetBrains Mono, monospace); font-size: 12px; color: var(--rw-body, #60646c); }
+.rw-cell-muted { color: var(--rw-body, #60646c); font-size: 12.5px; }
+
+.rw-row-actions { display: flex; align-items: center; gap: 4px; }
+
+.rw-pagination-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--rw-hairline, #f0f0f3);
+  font-size: 13px;
+  color: var(--rw-body, #60646c);
+}
+.rw-pagination-meta { font-size: 12.5px; color: var(--rw-muted, #999); }
+
+:deep(.el-pagination) {
+  font-size: 13px;
+  color: var(--rw-body, #60646c);
+  --el-pagination-bg-color: var(--rw-canvas, #fff);
+}
+:deep(.el-pagination .btn-prev),
+:deep(.el-pagination .btn-next),
+:deep(.el-pagination .el-pager li) {
+  background: var(--rw-canvas, #fff) !important;
+  border: 1px solid var(--rw-hairline-strong, #dcdee0);
+  border-radius: 6px;
+  color: var(--rw-ink, #171717);
+  min-width: 30px;
+  height: 30px;
+  margin: 0 2px;
+  font-weight: 500;
+}
+:deep(.el-pagination .el-pager li.is-active) {
+  background: var(--rw-ink, #171717) !important;
+  color: var(--rw-on-primary, #fff) !important;
+  border-color: var(--rw-ink, #171717);
+}
+:deep(.el-pagination .el-pagination__jump) { color: var(--rw-body, #60646c); }
+
+.rw-empty {
+  text-align: center;
+  color: var(--rw-muted, #999);
+  font-size: 13px;
+  padding: 48px 0;
 }
 
-.package-card {
-  position: relative;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+/* Dialog */
+:deep(.rw-dialog) {
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
+  padding: 0;
+}
+:deep(.rw-dialog .el-dialog__header) {
+  padding: 22px 22px 0;
+  margin: 0;
+}
+:deep(.rw-dialog .el-dialog__title) {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--rw-ink, #171717);
+}
+:deep(.rw-dialog .el-dialog__headerbtn) {
+  top: 18px;
+  right: 18px;
+}
+:deep(.rw-dialog .el-dialog__body) {
+  padding: 18px 22px;
+  color: var(--rw-ink, #171717);
+}
+:deep(.rw-dialog .el-dialog__footer) {
+  padding: 12px 22px 22px;
 }
 
-.package-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 28px -14px rgba(37, 99, 235, 0.2);
+.rw-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
+.rw-dialog-footer-split { justify-content: space-between; align-items: center; }
+.rw-dialog-footer-actions { display: flex; gap: 8px; }
 
-.recommended-card {
-  border-color: #f59e0b;
-  background: linear-gradient(135deg, rgba(251, 191, 36, 0.12), rgba(255, 255, 255, 0.94));
-  box-shadow: 0 18px 38px -18px rgba(251, 191, 36, 0.65);
-}
-
-.ai-recommend-badge {
-  background: linear-gradient(90deg, #f59e0b, #f97316);
-  color: #fff;
-  border: none;
-  box-shadow: 0 8px 18px -12px rgba(249, 115, 22, 0.9);
-}
-
-.raven-detail-dialog :deep(.el-dialog__body) {
-  padding-top: 8px;
-}
-
-.mobile-list-shell {
+/* Upload dialog */
+.rw-upload-body {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 16px;
 }
 
-.mobile-list-head :deep(.el-card__body) {
+.rw-upload-zone {
+  border: 1.5px dashed var(--rw-hairline-strong, #dcdee0);
+  border-radius: 12px;
+  padding: 28px 16px;
+  text-align: center;
+  background: var(--rw-canvas-soft, #fafafa);
+  transition: border-color 0.2s ease, background 0.2s ease;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  align-items: center;
+  gap: 8px;
+}
+.rw-upload-zone.is-active {
+  border-color: var(--rw-ink, #171717);
+  background: var(--rw-hairline-soft, #f5f5f7);
+}
+.rw-upload-input { display: none; }
+.rw-upload-icon { font-size: 28px; color: var(--rw-muted, #999); }
+.rw-upload-hint { margin: 0; font-size: 13.5px; color: var(--rw-ink, #171717); font-weight: 500; }
+.rw-upload-sub { margin: 4px 0 0; font-size: 12px; color: var(--rw-muted, #999); }
+
+.rw-upload-files {
+  background: var(--rw-canvas-soft, #fafafa);
+  border: 1px solid var(--rw-hairline, #f0f0f3);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rw-upload-files-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12.5px;
+  color: var(--rw-body, #60646c);
 }
 
-.mobile-list-title-row {
+.rw-upload-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+@media (max-width: 820px) {
+  .rw-upload-grid { grid-template-columns: 1fr; }
+}
+
+.rw-subcard {
+  border: 1px solid var(--rw-hairline-strong, #dcdee0);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rw-subcard-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rw-ink, #171717);
+  letter-spacing: 0.2px;
+}
+
+.rw-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.rw-form-grid > :last-child:nth-child(odd) { grid-column: span 2; }
+
+.rw-field { display: flex; flex-direction: column; gap: 8px; }
+.rw-field-label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rw-muted, #999);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.rw-tag-input { width: 180px; }
+.rw-component-input {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.rw-component-input :deep(.el-input) { flex: 1; }
+
+.rw-progress-status {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--rw-body, #60646c);
+  min-height: 18px;
+}
+.rw-progress-hint {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--rw-muted, #999);
+}
+.rw-upload-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+:deep(.el-progress-bar__outer) {
+  background: var(--rw-surface-strong, #f0f0f3) !important;
+}
+:deep(.el-progress-bar__inner) {
+  background: var(--rw-ink, #171717) !important;
+}
+:deep(.el-progress__text) { color: var(--rw-body, #60646c) !important; font-size: 12px !important; }
+
+/* Search dialog */
+.rw-search-body { display: flex; flex-direction: column; gap: 14px; }
+
+.rw-search-bar { display: flex; gap: 8px; align-items: center; }
+.rw-search-input { flex: 1; }
+
+.rw-search-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--rw-body, #60646c);
+}
+.rw-search-stat { font-size: 12px; color: var(--rw-muted, #999); }
+
+.rw-suggestion-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rw-suggestion-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--rw-surface-strong, #f0f0f3);
+  color: var(--rw-body, #60646c);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.rw-suggestion-chip:hover {
+  background: var(--rw-surface-dark, #171717);
+  color: var(--rw-on-primary, #fff);
+}
+
+.rw-search-empty {
+  text-align: center;
+  color: var(--rw-muted, #999);
+  font-size: 13px;
+  padding: 40px 0;
+}
+
+.rw-search-results { display: flex; flex-direction: column; gap: 14px; }
+
+.rw-answer-card { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.rw-answer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.rw-answer-disclaimer { font-size: 11.5px; color: var(--rw-muted, #999); }
+
+.rw-markdown {
+  font-size: 13.5px;
+  color: var(--rw-ink, #171717);
+  line-height: 1.6;
+}
+.rw-markdown :deep(img) { max-width: 100%; }
+.rw-markdown :deep(p) { margin: 0 0 8px; }
+.rw-markdown :deep(p:last-child) { margin-bottom: 0; }
+.rw-markdown :deep(pre) {
+  background: var(--rw-surface-dark, #171717);
+  color: var(--rw-on-primary, #fff);
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-family: var(--rw-mono, JetBrains Mono, monospace);
+  font-size: 12.5px;
+  overflow: auto;
+}
+.rw-markdown :deep(code) {
+  font-family: var(--rw-mono, JetBrains Mono, monospace);
+  font-size: 12px;
+  background: var(--rw-surface-strong, #f0f0f3);
+  color: var(--rw-ink, #171717);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.rw-markdown :deep(pre code) {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: 12.5px;
+}
+
+.rw-match-card { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.rw-match-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.rw-match-title { font-size: 13px; font-weight: 600; color: var(--rw-ink, #171717); }
+.rw-match-meta { font-size: 12px; color: var(--rw-muted, #999); }
+
+.rw-match-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+@media (max-width: 820px) {
+  .rw-match-grid { grid-template-columns: 1fr; }
+}
+
+.rw-match-item {
+  border: 1px solid var(--rw-hairline-strong, #dcdee0);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--rw-canvas, #fff);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.rw-match-item:hover {
+  border-color: var(--rw-ink, #171717);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+}
+.rw-match-item.is-recommended {
+  border-color: var(--rw-ink, #171717);
+  background: var(--rw-canvas, #fff);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+.rw-match-item-head {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 0.75rem;
+  gap: 8px;
 }
+.rw-match-item-meta { min-width: 0; flex: 1; }
+.rw-match-item-title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.rw-match-item-desc {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--rw-body, #60646c);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.rw-match-item-tags { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+.rw-match-item-actions { display: flex; gap: 8px; }
 
-.mobile-list-search-row {
+/* Detail dialog */
+.rw-detail-body { display: flex; flex-direction: column; gap: 16px; }
+.rw-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.rw-detail-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--rw-ink, #171717);
+}
+.rw-detail-meta {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 0.5rem;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--rw-body, #60646c);
 }
-
-.mobile-list-summary {
-  font-size: 0.875rem;
-  color: #6b7280;
-  margin-bottom: 0.75rem;
+.rw-detail-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--rw-muted, #999);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-right: 6px;
 }
+.rw-detail-value { font-family: var(--rw-mono, JetBrains Mono, monospace); font-size: 12px; color: var(--rw-ink, #171717); }
+.rw-detail-desc { font-size: 13px; color: var(--rw-body, #60646c); }
+.rw-detail-footnote { font-size: 11.5px; color: var(--rw-muted, #999); }
 
-.mobile-package-list {
+/* Drawer */
+.rw-mobile-filter-drawer {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 10px;
+  padding: 4px 4px 0;
+}
+.rw-mobile-filter-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
 }
 
-.mobile-package-card {
-  border: 1px solid #e5e7eb;
-  border-radius: 0.75rem;
-  padding: 0.75rem;
-  background: #fff;
-}
-
-.mobile-package-name {
-  margin: 0;
-  font-size: 1rem;
+:deep(.el-drawer__header) {
+  margin-bottom: 12px;
+  padding: 18px 20px 0;
+  color: var(--rw-ink, #171717);
   font-weight: 600;
-  color: #111827;
+  font-size: 15px;
+}
+:deep(.el-drawer__body) { padding: 0 20px 20px; }
+
+/* Mobile shell */
+.rw-mobile-shell { display: flex; flex-direction: column; gap: 14px; }
+.rw-mobile-filter {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 14px 16px;
+}
+.rw-mobile-list { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.rw-mobile-list .rw-pagination-row { padding: 12px 0 0; border-top: 1px solid var(--rw-hairline, #f0f0f3); }
+.rw-mobile-summary { font-size: 12.5px; color: var(--rw-muted, #999); }
+
+.rw-mobile-card-list { display: flex; flex-direction: column; gap: 10px; }
+.rw-mobile-card {
+  border: 1px solid var(--rw-hairline-strong, #dcdee0);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--rw-canvas, #fff);
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+.rw-mobile-card:hover { border-color: var(--rw-ink, #171717); }
+.rw-mobile-name {
+  margin: 0 0 8px;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--rw-ink, #171717);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.mobile-package-tags {
-  margin-top: 0.5rem;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-}
-
-.mobile-package-desc {
-  margin-top: 0.5rem;
-  margin-bottom: 0;
-  color: #4b5563;
-  font-size: 0.8125rem;
+.rw-mobile-desc {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--rw-body, #60646c);
   display: -webkit-box;
-  overflow: hidden;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  overflow: hidden;
 }
-
-.mobile-package-meta {
-  margin-top: 0.5rem;
+.rw-mobile-meta {
+  margin-top: 8px;
   display: flex;
   justify-content: space-between;
-  gap: 0.75rem;
-  color: #6b7280;
-  font-size: 0.8125rem;
+  font-size: 12px;
+  color: var(--rw-muted, #999);
+  font-family: var(--rw-mono, JetBrains Mono, monospace);
 }
-
-.mobile-package-actions {
-  margin-top: 0.75rem;
+.rw-mobile-actions {
+  margin-top: 10px;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
+  gap: 8px;
 }
+.rw-mobile-actions .rw-btn-primary,
+.rw-mobile-actions .rw-btn-secondary { width: 100%; justify-content: center; }
 
-.mobile-filter-drawer {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.mobile-filter-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
+@media (max-width: 900px) {
+  .rw-page-scroll { padding: 16px; gap: 16px; }
 }
 
 @media (max-width: 768px) {
-  .desktop-only {
-    display: none !important;
-  }
-
-  .mobile-only {
-    display: block !important;
-  }
-
-  .mobile-only.mobile-list-shell {
-    display: flex !important;
-  }
-
-  .raven-page {
-    gap: 1rem;
-  }
-
-  .raven-filter-row {
-    align-items: stretch;
-  }
-
-  .raven-filter-control,
-  .raven-filter-search,
-  .raven-filter-type,
-  .raven-filter-version,
-  .raven-filter-tags,
-  .raven-filter-patch {
-    width: 100%;
-    min-width: 0;
-    flex: 1 1 100%;
-  }
-
-  .raven-filter-actions {
-    width: 100%;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .raven-filter-actions :deep(.el-button) {
-    width: 100%;
-    margin: 0;
-  }
-
-  .tag-draft-input {
-    width: 100%;
-  }
-
-  .raven-pagination-row {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .table-scroll-wrapper {
-    width: 100%;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .table-scroll-wrapper :deep(.el-table) {
-    min-width: 1080px;
-  }
-
-  .raven-tabs :deep(.el-tabs__nav-wrap) {
-    overflow-x: auto;
-  }
-
-  .raven-tabs :deep(.el-tabs__nav-wrap::-webkit-scrollbar) {
-    display: none;
-  }
-
-  .raven-detail-dialog :deep(.el-dialog) {
-    width: calc(100vw - 20px) !important;
-    max-width: calc(100vw - 20px) !important;
-    margin: 10px auto !important;
-  }
+  .desktop-only { display: none !important; }
+  .mobile-only { display: block; }
+  .mobile-only.rw-mobile-shell { display: flex; }
 }
 </style>

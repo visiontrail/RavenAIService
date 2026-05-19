@@ -1,30 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, nextTick, reactive, ref, watch } from 'vue'
-import {
-  Menu,
-  Plus,
-  MessageSquare,
-  HelpCircle,
-  Send,
-  Mic,
-  Image as ImageIcon,
-  List,
-  Box,
-  LogOut,
-  ExternalLink,
-  X,
-  LogIn,
-  RefreshCw,
-  Trash2,
-  Loader2
-} from 'lucide-vue-next'
+import { computed, onMounted, onUnmounted, nextTick, ref, watch } from 'vue'
 import { deviceLinkApi } from '@/api/deviceLink'
 import { intelligentSearchPackages, ravenBaseUrl } from '@/api/raven'
 import { userApi } from '@/api/user'
-import type { DeviceInfo, RavenPackage, RavenSearchResult, ChatMessageRecord, ChatSessionSummary } from '@/types'
+import type { DeviceInfo, RavenPackage, RavenSearchResult, ChatMessageRecord } from '@/types'
 import { renderMarkdown } from '@/utils/markdownRenderer'
 import { useUserStore } from '@/stores/user'
 import { useAppStore } from '@/stores/app'
+import { useChatSessionStore } from '@/stores/chatSession'
 
 type MentionOption =
   | { type: 'agent'; id: string; name: string; description?: string; agentType: 'package-manager' }
@@ -40,6 +23,7 @@ const packageAgentOption: MentionOption = {
 
 const userStore = useUserStore()
 const appStore = useAppStore()
+const sessionStore = useChatSessionStore()
 
 type ChatRole = 'user' | 'ai' | 'system'
 type ChatEntry = {
@@ -49,7 +33,6 @@ type ChatEntry = {
   kind?: 'plan' | 'device_action' | 'answer' | 'user'
 }
 
-// 生成兼容的 UUID
 const generateUUID = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
@@ -61,103 +44,75 @@ const generateUUID = (): string => {
   })
 }
 
-const sidebarOpen = ref(true)
 const inputMessage = ref('')
-const showUserMenu = ref(false)
 const chatContainerRef = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const inputAreaRef = ref<HTMLElement | null>(null)
 const mentionDropdownRef = ref<HTMLElement | null>(null)
-const userMenuRef = ref<HTMLElement | null>(null)
-const userButtonRef = ref<HTMLElement | null>(null)
+const topMoreMenuRef = ref<HTMLElement | null>(null)
+const topMoreBtnRef = ref<HTMLElement | null>(null)
+
 const devices = ref<DeviceInfo[]>([])
 const isLoadingDevices = ref(false)
+
 const mentionVisible = ref(false)
 const mentionKeyword = ref('')
 const mentionSelectedIndex = ref(0)
 const mentionOptionRefs = ref<(HTMLElement | null)[]>([])
 const mentionStart = ref<number | null>(null)
+
 const targetDeviceId = ref<string | null>(null)
 const targetDeviceName = ref<string | null>(null)
 const targetAgent = ref<{ id: string; name: string; agentType: 'package-manager' } | null>(null)
-const chatSessions = ref<ChatSessionSummary[]>([])
-const selectedSessionId = ref<string | null>(null)
-const loadingSessions = ref(false)
-const loadingMessages = ref(false)
-const showLoginModal = ref(false)
-const loginForm = reactive({
-  username: '',
-  password: '',
-})
-const isLoggingIn = ref(false)
 
-// Handle click outside to close menu
+const showTopMoreMenu = ref(false)
+
+const loadingMessages = ref(false)
+const chatHistory = ref<ChatEntry[]>([])
+const sessionId = ref<string | null>(null)
+const isSending = ref(false)
+
+const isLoggedIn = computed(() => userStore.isAuthenticated)
+const currentUserName = computed(() => userStore.profile?.display_name || userStore.profile?.username || '用户')
+
+const isWelcomeMode = computed(() => chatHistory.value.length === 0 && !loadingMessages.value)
+
 const handleClickOutside = (event: MouseEvent) => {
-  if (showUserMenu.value &&
-      userMenuRef.value &&
-      userButtonRef.value &&
-      !userMenuRef.value.contains(event.target as Node) && 
-      !userButtonRef.value.contains(event.target as Node)) {
-    showUserMenu.value = false
+  const target = event.target as Node
+
+  if (showTopMoreMenu.value && topMoreMenuRef.value && topMoreBtnRef.value &&
+      !topMoreMenuRef.value.contains(target) && !topMoreBtnRef.value.contains(target)) {
+    showTopMoreMenu.value = false
   }
 
-  if (
-    mentionVisible.value &&
-    mentionDropdownRef.value &&
-    inputAreaRef.value &&
-    !mentionDropdownRef.value.contains(event.target as Node) &&
-    !inputAreaRef.value.contains(event.target as Node)
-  ) {
+  if (mentionVisible.value && mentionDropdownRef.value && inputAreaRef.value &&
+      !mentionDropdownRef.value.contains(target) && !inputAreaRef.value.contains(target)) {
     mentionVisible.value = false
     mentionKeyword.value = ''
     mentionStart.value = null
   }
 }
 
-const handleViewportForSidebar = () => {
-  if (window.innerWidth <= 768) {
-    sidebarOpen.value = false
+const handleKey = (e: KeyboardEvent) => {
+  if (e.key === 'Escape') {
+    showTopMoreMenu.value = false
   }
-}
-
-const shouldDismissMobileKeyboard = () => {
-  const isTouchDevice = window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0
-  return isTouchDevice && window.innerWidth <= 1024
-}
-
-const dismissMobileKeyboard = () => {
-  if (!shouldDismissMobileKeyboard()) return
-  textareaRef.value?.blur()
 }
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
-  handleViewportForSidebar()
-  window.addEventListener('resize', handleViewportForSidebar, { passive: true })
+  document.addEventListener('keydown', handleKey)
   fetchDevices()
-  bootstrapUser()
+  // If sidebar previously selected a session, load its messages now that the panel is mounted.
+  if (sessionStore.selectedSessionId && isLoggedIn.value) {
+    loadMessages(sessionStore.selectedSessionId)
+  }
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
-  window.removeEventListener('resize', handleViewportForSidebar)
+  document.removeEventListener('keydown', handleKey)
 })
-
-const chatHistory = ref<ChatEntry[]>([])
-const sessionId = ref<string | null>(null)
-const isSending = ref(false)
-const isLoggedIn = computed(() => userStore.isAuthenticated)
-const currentUserName = computed(() => userStore.profile?.display_name || userStore.profile?.username || '用户')
-const currentUserEmail = computed(() => userStore.profile?.email || '')
-const userInitial = computed(() => (currentUserName.value || 'U').slice(0, 1).toUpperCase())
-
-const toggleSidebar = () => {
-  sidebarOpen.value = !sidebarOpen.value
-}
-
-const toggleUserMenu = () => {
-  showUserMenu.value = !showUserMenu.value
-}
 
 const scrollToBottom = async () => {
   await nextTick()
@@ -166,22 +121,24 @@ const scrollToBottom = async () => {
   }
 }
 
-// Watch for chat history changes to scroll to bottom
-watch(chatHistory, () => {
-  scrollToBottom()
-}, { deep: true })
+watch(chatHistory, () => { scrollToBottom() }, { deep: true })
+
+watch(() => sessionStore.selectSessionToken, () => {
+  const id = sessionStore.selectedSessionId
+  if (id && isLoggedIn.value) loadMessages(id)
+})
+
+watch(() => sessionStore.newChatToken, () => {
+  resetPanel()
+})
 
 watch(isLoggedIn, (loggedIn) => {
-  if (loggedIn) {
-    loadSessions()
-  } else {
-    chatSessions.value = []
-    selectedSessionId.value = null
+  if (!loggedIn) {
+    chatHistory.value = []
     sessionId.value = null
   }
 })
 
-// Construct 8085 URLs dynamically based on current hostname
 const getServiceUrl = (path: string) => {
   const hostname = window.location.hostname
   return `http://${hostname}:8085${path}`
@@ -199,34 +156,11 @@ const fetchDevices = async () => {
   }
 }
 
-const loadSessions = async () => {
-  if (!isLoggedIn.value) return
-  loadingSessions.value = true
-  try {
-    const resp = await userApi.listSessions()
-    if (resp?.success && resp.data) {
-      chatSessions.value = resp.data
-    } else {
-      chatSessions.value = []
-    }
-  } catch (error) {
-    console.error('加载会话失败', error)
-    chatSessions.value = []
-    appStore.showNotification({
-      title: '同步会话失败',
-      type: 'error',
-    })
-  } finally {
-    loadingSessions.value = false
-  }
-}
-
 const loadMessages = async (id: string) => {
   if (!isLoggedIn.value) return
   loadingMessages.value = true
   chatHistory.value = []
   sessionId.value = id
-  selectedSessionId.value = id
   try {
     const resp = await userApi.fetchMessages(id)
     if (resp?.success && Array.isArray(resp.data)) {
@@ -239,107 +173,46 @@ const loadMessages = async (id: string) => {
     }
   } catch (error) {
     console.error('加载会话消息失败', error)
-    appStore.showNotification({
-      title: '加载消息失败',
-      type: 'error',
-    })
+    appStore.showNotification({ title: '加载消息失败', type: 'error' })
   } finally {
     loadingMessages.value = false
   }
 }
 
-const handleSelectSession = async (session: ChatSessionSummary) => {
-  await loadMessages(session.id)
+const resetPanel = () => {
+  sessionId.value = null
+  chatHistory.value = []
+  inputMessage.value = ''
+  resetMentionState()
+  nextTick(() => textareaRef.value?.focus())
 }
 
-const startNewChat = () => {
-  selectedSessionId.value = null
-  sessionId.value = null
+const clearCurrentMessages = () => {
+  showTopMoreMenu.value = false
+  if (!chatHistory.value.length) return
+  if (!window.confirm('确定要清空当前消息吗？')) return
   chatHistory.value = []
 }
 
-const handleUserLogin = async () => {
-  if (!loginForm.username || !loginForm.password) {
-    appStore.showNotification({
-      title: '请输入用户名和密码',
-      type: 'warning',
-    })
-    return
-  }
-  isLoggingIn.value = true
-  try {
-    const resp = await userApi.login(loginForm.username.trim(), loginForm.password)
-    if (!resp?.success || !resp.data) {
-      throw new Error(resp?.message || '登录失败')
-    }
-    userStore.setToken(resp.data.token)
-    userStore.setProfile(resp.data.user)
-    appStore.showNotification({
-      title: '登录成功',
-      type: 'success',
-    })
-    showLoginModal.value = false
-    loginForm.username = ''
-    loginForm.password = ''
-    await loadSessions()
-  } catch (error: any) {
-    appStore.showNotification({
-      title: '登录失败',
-      message: error?.message || '请检查账号密码',
-      type: 'error',
-    })
-  } finally {
-    isLoggingIn.value = false
-  }
-}
-
-const handleUserLogout = () => {
-  userStore.clear()
-  chatSessions.value = []
-  selectedSessionId.value = null
-  sessionId.value = null
-  chatHistory.value = []
-  showUserMenu.value = false
-}
-
-const deleteSession = async (id: string) => {
+const deleteCurrentSession = async () => {
+  showTopMoreMenu.value = false
+  const id = sessionStore.selectedSessionId
+  if (!id) return
   const confirmed = window.confirm('确定要删除该对话吗？此操作不可恢复。')
   if (!confirmed) return
   try {
-    const resp = await userApi.deleteSession(id)
-    if (resp?.success && Array.isArray(resp.data)) {
-      chatSessions.value = resp.data
-      if (selectedSessionId.value === id) {
-        startNewChat()
-      }
-      appStore.showNotification({
-        title: '会话已删除',
-        type: 'success',
-      })
-    }
+    await sessionStore.removeSession(id)
+    appStore.showNotification({ title: '会话已删除', type: 'success' })
   } catch (error) {
     console.error('删除会话失败', error)
-    appStore.showNotification({
-      title: '删除失败',
-      type: 'error',
-    })
-  }
-}
-
-async function bootstrapUser() {
-  await userStore.bootstrap()
-  if (isLoggedIn.value) {
-    await loadSessions()
+    appStore.showNotification({ title: '删除失败', type: 'error' })
   }
 }
 
 const mentionOptions = computed<MentionOption[]>(() => {
   const deviceOptions: MentionOption[] = devices.value
     .slice()
-    .sort((a, b) => {
-      if (a.status === b.status) return 0
-      return a.status === 'online' ? -1 : 1
-    })
+    .sort((a, b) => (a.status === b.status ? 0 : a.status === 'online' ? -1 : 1))
     .map((device) => ({
       type: 'device',
       id: device.id,
@@ -347,7 +220,6 @@ const mentionOptions = computed<MentionOption[]>(() => {
       status: device.status,
       device,
     }))
-
   return [packageAgentOption, ...deviceOptions]
 })
 
@@ -355,28 +227,18 @@ const filteredMentionOptions = computed(() => {
   const keyword = mentionKeyword.value.trim().toLowerCase()
   const list = mentionOptions.value
   if (!keyword) return list
-  return list.filter((option) => {
-    const text = `${option.name} ${option.id}`.toLowerCase()
-    return text.includes(keyword)
-  })
+  return list.filter((option) => `${option.name} ${option.id}`.toLowerCase().includes(keyword))
 })
 
 watch(filteredMentionOptions, (list) => {
-  if (mentionSelectedIndex.value >= list.length) {
-    mentionSelectedIndex.value = 0
-  }
+  if (mentionSelectedIndex.value >= list.length) mentionSelectedIndex.value = 0
   mentionOptionRefs.value = []
 })
 
 watch(mentionSelectedIndex, (idx) => {
   const el = mentionOptionRefs.value[idx]
-  if (el?.scrollIntoView) {
-    el.scrollIntoView({ block: 'nearest' })
-  }
+  if (el?.scrollIntoView) el.scrollIntoView({ block: 'nearest' })
 })
-
-const deviceStatusDotClass = (status: DeviceInfo['status']) =>
-  status === 'online' ? 'bg-green-500' : 'bg-gray-300'
 
 const targetAgentName = computed(() => targetAgent.value?.name || null)
 const isPackageAgentSelected = computed(() => targetAgent.value?.agentType === 'package-manager')
@@ -389,23 +251,7 @@ const resetMentionState = () => {
 }
 
 const renderAiMessage = (content: string) =>
-  renderMarkdown(content || '', {
-    wrapperClass: 'markdown-content text-gray-900'
-  })
-
-const formatTime = (value?: string | null) => {
-  if (!value) return ''
-  try {
-    return new Date(value).toLocaleString('zh-CN', {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-  } catch {
-    return value
-  }
-}
+  renderMarkdown(content || '', { wrapperClass: 'markdown-content text-ink' })
 
 const packageTypeText = (type?: string) => {
   const map: Record<string, string> = {
@@ -425,11 +271,7 @@ const buildRebuildPrompt = (downloadLink: string) =>
 const buildPackageLinks = (pkg: RavenPackage) => {
   const detailLink = `${ravenBaseUrl}/package/${encodeURIComponent(pkg.id)}`
   const downloadLink = `${ravenBaseUrl}/api/download/${encodeURIComponent(pkg.id)}`
-  return {
-    detailLink,
-    downloadLink,
-    prompt: buildRebuildPrompt(downloadLink),
-  }
+  return { detailLink, downloadLink, prompt: buildRebuildPrompt(downloadLink) }
 }
 
 const formatPackageAgentAnswer = (result: RavenSearchResult, rawQuery: string) => {
@@ -437,19 +279,13 @@ const formatPackageAgentAnswer = (result: RavenSearchResult, rawQuery: string) =
   const packages = result.relevantPackages || []
   const recommendedIdSet = new Set(result.recommendedPackageIds || [])
   const recommendedPackages = packages.filter((pkg) => recommendedIdSet.has(pkg.id))
-  const lines: string[] = [
-    `**重构包配置管理员** 已为你执行智能搜索：\`${query}\``
-  ]
+  const lines: string[] = [`**重构包配置管理员** 已为你执行智能搜索：\`${query}\``]
 
   const pushPackageLines = (pkg: RavenPackage, isRecommended = false) => {
     const links = buildPackageLinks(pkg)
     const recommendedLabel = isRecommended ? ' ⭐ AI 推荐' : ''
-    lines.push(
-      `## ${pkg.name || pkg.id}${recommendedLabel} （${packageTypeText(pkg.packageType)} · v${pkg.version || '未知'}）`
-    )
-    if (pkg.metadata?.description) {
-      lines.push(`- 描述：${pkg.metadata.description}`)
-    }
+    lines.push(`## ${pkg.name || pkg.id}${recommendedLabel} （${packageTypeText(pkg.packageType)} · v${pkg.version || '未知'}）`)
+    if (pkg.metadata?.description) lines.push(`- 描述：${pkg.metadata.description}`)
     lines.push(
       `- 详情链接：[${links.detailLink}](${links.detailLink})`,
       `- 下载链接：[${links.downloadLink}](${links.downloadLink})`,
@@ -458,18 +294,13 @@ const formatPackageAgentAnswer = (result: RavenSearchResult, rawQuery: string) =
     )
   }
 
-  if (result.answer) {
-    lines.push('', result.answer)
-  }
-
+  if (result.answer) lines.push('', result.answer)
   if (recommendedPackages.length > 0) {
     lines.push('', `# Raven AI 推荐的重构包（${recommendedPackages.length} 个）：`)
     recommendedPackages.forEach((pkg) => pushPackageLines(pkg, true))
   } else {
-    const hasPackages = packages.length > 0
-    lines.push('', hasPackages ? '暂无 AI 推荐的重构包。' : '未找到匹配的重构包。')
+    lines.push('', packages.length > 0 ? '暂无 AI 推荐的重构包。' : '未找到匹配的重构包。')
   }
-
   return lines.join('\n')
 }
 
@@ -478,14 +309,10 @@ const updateMentionState = (event?: Event) => {
   const target = (event?.target as HTMLTextAreaElement | null) || textareaRef.value
   const cursor = target?.selectionStart ?? value.length
   const lastAt = value.lastIndexOf('@', cursor - 1)
-  if (lastAt === -1) {
-    resetMentionState()
-    return
-  }
+  if (lastAt === -1) { resetMentionState(); return }
   const afterAt = value.slice(lastAt + 1, cursor)
   if (afterAt.includes(' ') || afterAt.includes('\n') || afterAt.includes('\t')) {
-    resetMentionState()
-    return
+    resetMentionState(); return
   }
   mentionVisible.value = true
   mentionKeyword.value = afterAt
@@ -503,16 +330,11 @@ const applyMentionSelection = (option: MentionOption) => {
     targetDeviceName.value = option.name
     targetAgent.value = null
   } else {
-    targetAgent.value = {
-      id: option.id,
-      name: option.name,
-      agentType: option.agentType
-    }
+    targetAgent.value = { id: option.id, name: option.name, agentType: option.agentType }
     targetDeviceId.value = null
     targetDeviceName.value = null
   }
 
-  // Replace the mention keyword with the selected device name for clarity
   const value = inputMessage.value
   const cursor = textareaRef.value?.selectionStart ?? value.length
   if (mentionStart.value !== null) {
@@ -528,26 +350,17 @@ const applyMentionSelection = (option: MentionOption) => {
     const insertion = `@${option.name} `
     inputMessage.value = value ? `${value} ${insertion}` : insertion
   }
-
   resetMentionState()
 }
 
-const clearTargetDevice = () => {
-  targetDeviceId.value = null
-  targetDeviceName.value = null
-}
-
-const clearTargetAgent = () => {
-  targetAgent.value = null
-}
+const clearTargetDevice = () => { targetDeviceId.value = null; targetDeviceName.value = null }
+const clearTargetAgent = () => { targetAgent.value = null }
 
 const findMessageIndex = (id: string) => chatHistory.value.findIndex((msg) => msg.id === id)
 
 const ensureAnswerMessage = (answerId: string): ChatEntry => {
   const idx = findMessageIndex(answerId)
-  if (idx !== -1) {
-    return chatHistory.value[idx]
-  }
+  if (idx !== -1) return chatHistory.value[idx]
   const fallback: ChatEntry = { id: answerId, role: 'ai', content: '正在思考...', kind: 'answer' }
   chatHistory.value.push(fallback)
   return fallback
@@ -555,17 +368,12 @@ const ensureAnswerMessage = (answerId: string): ChatEntry => {
 
 const insertBeforeAnswer = (answerId: string, entry: ChatEntry) => {
   const idx = findMessageIndex(answerId)
-  if (idx === -1) {
-    chatHistory.value.push(entry)
-  } else {
-    chatHistory.value.splice(idx, 0, entry)
-  }
+  if (idx === -1) chatHistory.value.push(entry)
+  else chatHistory.value.splice(idx, 0, entry)
 }
 
 const formatPlanMessage = (steps: any[]) => {
-  if (!Array.isArray(steps) || steps.length === 0) {
-    return '未生成计划。'
-  }
+  if (!Array.isArray(steps) || steps.length === 0) return '未生成计划。'
   const lines: string[] = ['**计划步骤**']
   steps.forEach((step, index) => {
     const id = step?.id || `S${index + 1}`
@@ -585,21 +393,12 @@ const formatDeviceActionMessage = (payload: any) => {
   const goal = payload?.step_goal ? `：${payload.step_goal}` : ''
   const lines: string[] = [`**设备动作 ${label}${goal}**`]
   const answerText =
-    typeof payload?.answer === 'string'
-      ? payload.answer
-      : payload?.answer
-        ? String(payload.answer)
-        : ''
-  if (answerText) {
-    lines.push(answerText)
-  } else if (payload?.raw) {
-    lines.push(String(payload.raw))
-  } else {
-    lines.push('无返回内容')
-  }
-  if (payload?.topic_id) {
-    lines.push(`- 话题ID: ${payload.topic_id}`)
-  }
+    typeof payload?.answer === 'string' ? payload.answer
+      : payload?.answer ? String(payload.answer) : ''
+  if (answerText) lines.push(answerText)
+  else if (payload?.raw) lines.push(String(payload.raw))
+  else lines.push('无返回内容')
+  if (payload?.topic_id) lines.push(`- 话题ID: ${payload.topic_id}`)
   return lines.join('\n')
 }
 
@@ -607,41 +406,29 @@ const applyStreamEvent = (payload: any, answerId: string) => {
   const type = payload?.event || payload?.type
   if (payload?.session_id) {
     sessionId.value = payload.session_id
-    selectedSessionId.value = payload.session_id
+    sessionStore.setSelected(payload.session_id)
   }
-
   if (type === 'plan') {
-    const content = formatPlanMessage(payload?.plan)
-    insertBeforeAnswer(answerId, { id: generateUUID(), role: 'ai', content, kind: 'plan' })
+    insertBeforeAnswer(answerId, { id: generateUUID(), role: 'ai', content: formatPlanMessage(payload?.plan), kind: 'plan' })
     return
   }
-
   if (type === 'device_action') {
-    const content = formatDeviceActionMessage(payload)
-    insertBeforeAnswer(answerId, { id: generateUUID(), role: 'ai', content, kind: 'device_action' })
+    insertBeforeAnswer(answerId, { id: generateUUID(), role: 'ai', content: formatDeviceActionMessage(payload), kind: 'device_action' })
     return
   }
-
   if (type === 'session') return
-
   const targetMessage = ensureAnswerMessage(answerId)
-
   if (type === 'chunk' && typeof payload?.content === 'string') {
     const chunk = payload.content
     if (targetMessage.content === '正在思考...') {
       const trimmedChunk = chunk.trimStart()
-      if (trimmedChunk) {
-        targetMessage.content = trimmedChunk
-      }
+      if (trimmedChunk) targetMessage.content = trimmedChunk
     } else {
       targetMessage.content += chunk
     }
   } else if (type === 'done') {
-    if (typeof payload?.answer === 'string' && payload.answer) {
-      targetMessage.content = payload.answer.trimStart()
-    } else if (!targetMessage.content || targetMessage.content === '正在思考...') {
-      targetMessage.content = '（无回复内容）'
-    }
+    if (typeof payload?.answer === 'string' && payload.answer) targetMessage.content = payload.answer.trimStart()
+    else if (!targetMessage.content || targetMessage.content === '正在思考...') targetMessage.content = '（无回复内容）'
   } else if (type === 'error') {
     targetMessage.content = `调用后端失败：${payload?.message || '未知错误'}`
   }
@@ -658,12 +445,8 @@ const processSseBuffer = (buffer: string, answerId: string) => {
     if (!trimmed.startsWith('data:')) continue
     const jsonStr = trimmed.replace(/^data:\s*/, '')
     if (!jsonStr) continue
-    try {
-      const payload = JSON.parse(jsonStr)
-      applyStreamEvent(payload, answerId)
-    } catch (err) {
-      console.error('解析流式数据失败', err, jsonStr)
-    }
+    try { applyStreamEvent(JSON.parse(jsonStr), answerId) }
+    catch (err) { console.error('解析流式数据失败', err, jsonStr) }
   }
   return remaining
 }
@@ -672,14 +455,12 @@ const handleKeydown = (event: KeyboardEvent) => {
   if (mentionVisible.value && filteredMentionOptions.value.length > 0) {
     if (event.key === 'ArrowDown') {
       event.preventDefault()
-      mentionSelectedIndex.value =
-        (mentionSelectedIndex.value + 1) % filteredMentionOptions.value.length
+      mentionSelectedIndex.value = (mentionSelectedIndex.value + 1) % filteredMentionOptions.value.length
       return
     }
     if (event.key === 'ArrowUp') {
       event.preventDefault()
-      mentionSelectedIndex.value =
-        (mentionSelectedIndex.value - 1 + filteredMentionOptions.value.length) % filteredMentionOptions.value.length
+      mentionSelectedIndex.value = (mentionSelectedIndex.value - 1 + filteredMentionOptions.value.length) % filteredMentionOptions.value.length
       return
     }
     if (event.key === 'Enter' || event.key === 'Tab') {
@@ -689,26 +470,16 @@ const handleKeydown = (event: KeyboardEvent) => {
       return
     }
   }
-
-  if (event.key === 'Escape' && mentionVisible.value) {
-    resetMentionState()
-    return
-  }
-
+  if (event.key === 'Escape' && mentionVisible.value) { resetMentionState(); return }
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
-    const willSend = !isSending.value && inputMessage.value.trim().length > 0
     sendMessage()
-    if (willSend) dismissMobileKeyboard()
   }
 }
 
-const handleInput = (event: Event) => {
-  updateMentionState(event)
-}
+const handleInput = (event: Event) => updateMentionState(event)
 
-const extractPackageQuery = (content: string) =>
-  content.replace(/@重构包配置管理员/g, '').trim()
+const extractPackageQuery = (content: string) => content.replace(/@重构包配置管理员/g, '').trim()
 
 const runPackageAgent = async (content: string, answerId: string) => {
   const query = extractPackageQuery(content)
@@ -717,35 +488,21 @@ const runPackageAgent = async (content: string, answerId: string) => {
     targetMessage.content = '请描述需要查找的重构包需求，例如型号、版本或用途。'
     return
   }
-
   try {
     const { data } = await intelligentSearchPackages(query, 6)
-    if (!data?.success || !data.data) {
-      throw new Error(data?.message || '智能搜索失败')
-    }
+    if (!data?.success || !data.data) throw new Error(data?.message || '智能搜索失败')
     const aiContent = formatPackageAgentAnswer(data.data, query)
     targetMessage.content = aiContent
-
-    // 已登录用户：保存到数据库
     if (isLoggedIn.value) {
-      // 如果没有 sessionId，创建一个新的
       if (!sessionId.value) {
         sessionId.value = generateUUID()
-        selectedSessionId.value = sessionId.value
+        sessionStore.setSelected(sessionId.value)
       }
-
       try {
-        await userApi.saveMessages(
-          sessionId.value,
-          content,
-          aiContent,
-          content.slice(0, 60)
-        )
-        // 保存成功后刷新会话列表
-        await loadSessions()
+        await userApi.saveMessages(sessionId.value, content, aiContent, content.slice(0, 60))
+        await sessionStore.load()
       } catch (error: any) {
         console.warn('保存重构包配置管理员对话失败', error)
-        // 不影响用户体验，静默失败
       }
     }
   } catch (error: any) {
@@ -762,7 +519,6 @@ const sendMessage = async () => {
   const shouldUsePackageAgent =
     isPackageAgentSelected.value || content.includes(`@${packageAgentOption.name}`)
 
-  // 如果用户手动输入了 @重构包配置管理员，则自动选中该助手并清空设备目标
   if (shouldUsePackageAgent && !isPackageAgentSelected.value) {
     targetAgent.value = {
       id: packageAgentOption.id,
@@ -773,32 +529,15 @@ const sendMessage = async () => {
     targetDeviceName.value = null
   }
 
-  // 记录用户消息
-  const userMessage: ChatEntry = {
-    id: generateUUID(),
-    role: 'user',
-    content,
-    kind: 'user',
-  }
+  const userMessage: ChatEntry = { id: generateUUID(), role: 'user', content, kind: 'user' }
   chatHistory.value.push(userMessage)
 
-  // 构造历史（不含当前用户消息，因为会通过message字段单独发送）
-  // 只发送之前的对话历史
   const historyPayload = isLoggedIn.value
     ? []
-    : chatHistory.value.slice(0, -1).map(msg => ({
-        role: msg.role,
-        content: msg.content
-      }))
+    : chatHistory.value.slice(0, -1).map(msg => ({ role: msg.role, content: msg.content }))
 
-  // 占位回复
   const answerMessageId = generateUUID()
-  chatHistory.value.push({
-    id: answerMessageId,
-    role: 'ai',
-    content: '正在思考...',
-    kind: 'answer',
-  })
+  chatHistory.value.push({ id: answerMessageId, role: 'ai', content: '正在思考...', kind: 'answer' })
 
   inputMessage.value = ''
   resetMentionState()
@@ -818,708 +557,678 @@ const sendMessage = async () => {
       target_device_id: targetDeviceId.value || undefined,
       target_device_name: targetDeviceName.value || undefined
     }
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
-    }
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     const authToken = userStore.token as unknown as string
-    if (isLoggedIn.value && authToken) {
-      headers.Authorization = `Bearer ${authToken}`
-    }
+    if (isLoggedIn.value && authToken) headers.Authorization = `Bearer ${authToken}`
 
     const resp = await fetch(getServiceUrl('/api/v1/ai-chat/chat/stream'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload)
+      method: 'POST', headers, body: JSON.stringify(payload)
     })
-
-    if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}`)
-    }
-
-    if (!resp.body) {
-      throw new Error('响应体为空，无法流式读取')
-    }
-
-    console.log('[SSE] resp.body 存在，开始流式读取')
-    console.log('[SSE] TextDecoderStream 支持:', typeof TextDecoderStream !== 'undefined')
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    if (!resp.body) throw new Error('响应体为空，无法流式读取')
 
     const textStream = resp.body && typeof TextDecoderStream !== 'undefined'
-      ? resp.body.pipeThrough(new TextDecoderStream())
-      : null
-
-    const reader = textStream
-      ? textStream.getReader()
-      : null
+      ? resp.body.pipeThrough(new TextDecoderStream()) : null
+    const reader = textStream ? textStream.getReader() : null
     const binaryReader = !textStream && resp.body ? resp.body.getReader() : null
     const decoder = !textStream ? new TextDecoder('utf-8') : null
     let buffer = ''
 
-    console.log('[SSE] reader:', !!reader, 'binaryReader:', !!binaryReader)
-
     if (reader) {
-      console.log('[SSE] 使用 TextDecoderStream reader')
       while (true) {
         const { value, done } = await reader.read()
-        console.log('[SSE] read result - done:', done, 'value length:', value?.length)
-        if (value) {
-          console.log('[SSE] 收到数据:', value.substring(0, 200))
-          buffer += value
-          buffer = processSseBuffer(buffer, answerMessageId)
-        }
+        if (value) { buffer += value; buffer = processSseBuffer(buffer, answerMessageId) }
         if (done) break
       }
     } else if (binaryReader && decoder) {
-      console.log('[SSE] 使用 binary reader')
       while (true) {
         const { value, done } = await binaryReader.read()
-        console.log('[SSE] read result - done:', done, 'value:', value?.length)
         if (value) {
           const decoded = decoder.decode(value, { stream: !done })
-          console.log('[SSE] 解码后数据:', decoded.substring(0, 200))
           buffer += decoded
           buffer = processSseBuffer(buffer, answerMessageId)
         }
         if (done) break
       }
-    } else {
-      console.error('[SSE] 没有可用的 reader!')
     }
-
-    console.log('[SSE] 循环结束，剩余 buffer:', buffer)
-
-    if (buffer.trim()) {
-      processSseBuffer(buffer + '\n\n', answerMessageId)
-    }
+    if (buffer.trim()) processSseBuffer(buffer + '\n\n', answerMessageId)
 
     const answerMessage = ensureAnswerMessage(answerMessageId)
-    if (answerMessage.content === '正在思考...') {
-      answerMessage.content = '（无回复内容）'
-    }
+    if (answerMessage.content === '正在思考...') answerMessage.content = '（无回复内容）'
 
     if (isLoggedIn.value) {
-      try {
-        await loadSessions()
-      } catch (error) {
-        console.warn('刷新会话列表失败', error)
-      }
+      try { await sessionStore.load() } catch (error) { console.warn('刷新会话列表失败', error) }
     }
   } catch (error: any) {
-    console.error('===== 请求失败 =====')
-    console.error('错误信息:', error)
+    console.error('请求失败', error)
     ensureAnswerMessage(answerMessageId).content = `调用后端失败：${error?.message || String(error)}`
   } finally {
     isSending.value = false
-    console.log('===== 请求结束 =====')
   }
 }
+
+const welcomeGreeting = computed(() => {
+  const h = new Date().getHours()
+  if (h < 6) return '凌晨好'
+  if (h < 11) return '早上好'
+  if (h < 13) return '中午好'
+  if (h < 18) return '下午好'
+  return '晚上好'
+})
+
+const capabilityCards = [
+  { icon: 'box', label: '检索重构包',
+    desc: '按版本、组件或修复内容找到正确的基带包，并对比 changelog。',
+    prompt: '帮我找一下 V3.2.1 之后修过 LDPC 译码器的基带包。' },
+  { icon: 'device', label: '自然语言控设备',
+    desc: '说人话即可下发参数；下发前会展示差异并请你确认。',
+    prompt: '把 SAT-Node-07 切到 LDPC 闭环回环模式，码率 1/2。' },
+  { icon: 'logs', label: '智能日志分析',
+    desc: '粘贴或上传日志，自动定位异常并给出回流建议。',
+    prompt: '分析一下这段失锁告警日志，看看根因和相关提交。' },
+]
+
+const onPickCapability = (prompt: string) => {
+  inputMessage.value = prompt
+  nextTick(() => textareaRef.value?.focus())
+}
+
+const currentChatTitle = computed(() => {
+  if (sessionStore.currentTitle) return sessionStore.currentTitle
+  if (isWelcomeMode.value) return '新对话'
+  return '当前对话'
+})
+
+const sessionMessageCount = computed(() => chatHistory.value.length)
 </script>
 
 <template>
-  <div class="flex h-full bg-white text-gray-900 font-sans overflow-hidden ai-chat-page">
-    <!-- Sidebar -->
-    <div
-      class="ai-sidebar"
-      :class="[
-        'flex flex-col bg-[#F0F4F9] transition-all duration-300 ease-in-out',
-        sidebarOpen ? 'w-64 is-mobile-open' : 'w-16 is-mobile-closed'
-      ]"
-    >
-      <div class="p-4 flex items-center justify-between">
-        <button @click="toggleSidebar" class="p-2 hover:bg-gray-200 rounded-full text-gray-500 hover:text-gray-900 transition-colors">
-          <Menu class="w-5 h-5" />
-        </button>
+  <div class="rw-chat-panel">
+    <!-- Topbar -->
+    <header class="rw-topbar">
+      <div class="rw-topbar-left">
+        <span class="rw-crumb">{{ currentChatTitle }}</span>
+        <span v-if="!isWelcomeMode" class="rw-crumb-meta">· {{ sessionMessageCount }} 条消息</span>
       </div>
-
-      <div class="px-3 py-2">
-        <button 
-          class="flex items-center gap-3 w-full p-3 rounded-full bg-[#DDE3EA] hover:bg-gray-200 text-gray-700 hover:text-gray-900 transition-colors border border-transparent hover:border-gray-300"
-          :class="{ 'justify-center': !sidebarOpen }"
-          @click="startNewChat"
-          :title="sidebarOpen ? '' : '新对话'"
-          :aria-label="sidebarOpen ? undefined : '新对话'"
-        >
-          <Plus class="w-4 h-4 text-gray-500" />
-          <span v-if="sidebarOpen" class="text-sm font-medium">新对话</span>
+      <div class="rw-topbar-right">
+        <button class="rw-model-pill" type="button">
+          <span class="rw-model-dot"></span>
+          Raven-Sat <span class="mono">1.2</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
         </button>
-      </div>
-
-      <div class="flex-1 overflow-y-auto mt-4 px-3 space-y-3">
-        <div
-          v-if="!isLoggedIn && sidebarOpen"
-          class="bg-white rounded-xl border border-gray-200 p-3 shadow-sm"
-        >
-          <div class="flex items-center justify-between gap-2">
-            <div class="text-sm font-medium text-gray-900">登录可同步历史对话</div>
-            <button
-              class="text-xs text-blue-600 hover:text-blue-700 font-semibold"
-              @click="showLoginModal = true"
-            >
-              立即登录
-            </button>
-          </div>
-          <p class="text-xs text-gray-500 mt-2">
-            登录后，最近对话会自动保存并可在任意设备查看
-          </p>
-        </div>
-
-        <div>
-          <div
-            v-if="sidebarOpen"
-            class="mb-2 px-3 text-xs font-medium text-gray-500 flex items-center justify-between"
+        <div class="rw-top-more-wrap">
+          <button
+            ref="topMoreBtnRef"
+            class="rw-top-action"
+            @click="showTopMoreMenu = !showTopMoreMenu"
+            aria-haspopup="menu"
+            :aria-expanded="showTopMoreMenu"
           >
-            <span>最近对话</span>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/></svg>
+          </button>
+          <div
+            v-if="showTopMoreMenu"
+            ref="topMoreMenuRef"
+            class="rw-top-menu"
+            role="menu"
+          >
+            <div class="rw-top-menu-group">对话</div>
+            <button class="rw-menu-item" @click="showTopMoreMenu = false">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16zM14 6l4 4"/></svg>
+              重命名对话 <span class="rw-kbd-right">F2</span>
+            </button>
+            <button class="rw-menu-item" @click="showTopMoreMenu = false">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M9 8h6l2 6H7zM12 14v8"/></svg>
+              固定到顶部
+            </button>
+
+            <div class="rw-menu-divider"/>
+            <div class="rw-top-menu-group">导出</div>
+            <button class="rw-menu-item" @click="showTopMoreMenu = false">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 14h2M9 17h6"/></svg>
+              生成测试报告 <span class="rw-kbd-right">PDF</span>
+            </button>
+            <button class="rw-menu-item" @click="showTopMoreMenu = false">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M16 6l-4-4-4 4M12 2v14"/></svg>
+              分享对话
+            </button>
+            <button class="rw-menu-item" @click="showTopMoreMenu = false">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 15v-6l3 3 3-3v6M17 9v6M14 12l3 3 3-3"/></svg>
+              导出 Markdown
+            </button>
+
+            <div class="rw-menu-divider"/>
+            <button class="rw-menu-item" @click="clearCurrentMessages">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
+              清空消息
+            </button>
             <button
-              v-if="isLoggedIn"
-              class="text-[11px] text-blue-600 hover:text-blue-700"
-              @click="loadSessions"
-              :disabled="loadingSessions"
+              v-if="sessionStore.selectedSessionId"
+              class="rw-menu-item is-danger"
+              @click="deleteCurrentSession"
             >
-              {{ loadingSessions ? '刷新中…' : '刷新' }}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>
+              删除对话
             </button>
-          </div>
-          <div v-else-if="isLoggedIn" class="mb-2 px-1 flex justify-center">
-            <button
-              class="p-2 rounded-full hover:bg-gray-200 text-gray-500 hover:text-gray-900 transition-colors"
-              @click="loadSessions"
-              :disabled="loadingSessions"
-              :title="loadingSessions ? '刷新中…' : '刷新会话'"
-              :aria-label="loadingSessions ? '刷新中' : '刷新会话'"
-            >
-              <RefreshCw class="w-4 h-4" :class="{ 'animate-spin': loadingSessions }" />
-            </button>
-          </div>
-
-          <div class="space-y-1">
-            <template v-if="isLoggedIn">
-              <div v-if="loadingSessions && sidebarOpen" class="text-xs text-gray-500 px-3 py-2">会话加载中...</div>
-              <div v-else-if="!chatSessions.length && sidebarOpen" class="text-xs text-gray-500 px-3 py-2">
-                暂无会话，开始新的对话吧
-              </div>
-              <button 
-                v-for="session in chatSessions" 
-                :key="session.id"
-                class="flex items-center gap-3 w-full p-2 rounded-full hover:bg-gray-200 text-gray-700 hover:text-gray-900 transition-colors group text-left"
-                :class="[
-                  { 'justify-center': !sidebarOpen },
-                  selectedSessionId === session.id ? 'bg-white shadow-sm border border-gray-200' : ''
-                ]"
-                @click="handleSelectSession(session)"
-                :title="sidebarOpen ? '' : (session.title || '未命名对话')"
-                :aria-label="sidebarOpen ? undefined : (session.title || '未命名对话')"
-              >
-                <MessageSquare class="w-4 h-4 text-gray-500" />
-                <div v-if="sidebarOpen" class="flex-1 min-w-0">
-                  <div class="text-sm truncate font-medium text-gray-900">{{ session.title || '未命名对话' }}</div>
-                  <div class="flex items-center justify-between text-[11px] text-gray-500">
-                    <span>消息 {{ session.message_count }}</span>
-                    <span>{{ formatTime(session.last_message_at) }}</span>
-                  </div>
-                </div>
-                <button
-                  v-if="sidebarOpen"
-                  class="ml-auto opacity-0 group-hover:opacity-100 p-1 hover:text-gray-900 text-gray-500"
-                  @click.stop="deleteSession(session.id)"
-                  title="删除对话"
-                >
-                  <Trash2 class="w-3 h-3" />
-                </button>
-              </button>
-            </template>
-            <template v-else>
-              <div v-if="sidebarOpen" class="text-xs text-gray-500 px-3 py-2">登录后查看和管理历史对话</div>
-              <button
-                v-else
-                class="w-full flex items-center justify-center p-2 rounded-full hover:bg-gray-200 text-gray-500 hover:text-gray-900 transition-colors"
-                @click="showLoginModal = true"
-                title="登录后查看历史对话"
-                aria-label="登录后查看历史对话"
-              >
-                <LogIn class="w-4 h-4" />
-              </button>
-            </template>
           </div>
         </div>
       </div>
+    </header>
 
-      <div class="p-3 mt-auto relative">
-        <!-- User Menu Dropdown -->
-        <div ref="userMenuRef" v-if="showUserMenu && sidebarOpen" class="absolute bottom-full left-3 w-56 mb-2 bg-[#F0F4F9] rounded-xl shadow-xl overflow-hidden border border-gray-200 z-50">
-          <div class="py-1">
-            <button class="flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-gray-200 transition-colors w-full text-left">
-              <HelpCircle class="w-4 h-4 text-gray-500" />
-              <span>帮助</span>
-            </button>
-            <div class="h-px bg-gray-200 my-1"></div>
-            <a :href="getServiceUrl('/')" class="flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-gray-200 transition-colors">
-              <List class="w-4 h-4 text-gray-500" />
-              <span>日志列表</span>
-            </a>
-            <a :href="getServiceUrl('/raven-manager')" class="flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-gray-200 transition-colors">
-              <Box class="w-4 h-4 text-gray-500" />
-              <span>Raven 包管理</span>
-            </a>
-            <div class="h-px bg-gray-200 my-1"></div>
-             <button
-               class="flex items-center gap-3 px-4 py-3 text-sm text-gray-500 hover:bg-gray-200 transition-colors w-full text-left"
-               @click="isLoggedIn ? handleUserLogout() : (showLoginModal = true)"
-             >
-              <component :is="isLoggedIn ? LogOut : LogIn" class="w-4 h-4" />
-              <span>{{ isLoggedIn ? '退出登录' : '立即登录' }}</span>
-            </button>
-          </div>
+    <!-- Scroll body -->
+    <div ref="chatContainerRef" class="rw-scroll">
+      <!-- Welcome -->
+      <div v-if="isWelcomeMode" class="rw-welcome">
+        <div class="rw-welcome-badge">
+          <span class="rw-dot-success"></span>
+          Raven-Sat 1.2 · 已连接 {{ devices.filter(d => d.status === 'online').length }} / {{ devices.length || 0 }} 设备
         </div>
-
-        <!-- User Profile / Activity -->
-        <div 
-          ref="userButtonRef"
-          @click="toggleUserMenu"
-          class="mt-2 flex items-center gap-3 p-2 rounded-full hover:bg-gray-200 cursor-pointer relative" 
-          :class="{ 'justify-center': !sidebarOpen, 'bg-gray-200': showUserMenu }"
-          :title="sidebarOpen ? '' : `${currentUserName}${isLoggedIn ? '' : '（未登录）'}`"
-          :aria-label="sidebarOpen ? undefined : `${currentUserName}${isLoggedIn ? '' : '（未登录）'}`"
-        >
-           <div class="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-purple-600 flex items-center justify-center text-xs font-bold text-white">
-             {{ userInitial }}
-           </div>
-           <div v-if="sidebarOpen" class="text-xs text-gray-700">
-             <div class="font-semibold text-gray-900">{{ currentUserName }}</div>
-             <div class="text-[10px] text-gray-500">
-               <span v-if="isLoggedIn">{{ currentUserEmail || '已登录' }}</span>
-               <span v-else class="text-blue-600">未登录 · 点击登录</span>
-             </div>
-           </div>
+        <h1 class="rw-welcome-title">
+          {{ welcomeGreeting }}，{{ currentUserName }}。<br/>今天想做哪件事？
+        </h1>
+        <div class="rw-welcome-sub">
+          RavenAI 把代码提交、版本包、设备控制和测试日志串成一个闭环。在下方说出你的需求，或选一个常用入口开始。
         </div>
-      </div>
-    </div>
-
-    <div
-      v-if="sidebarOpen"
-      class="ai-sidebar-backdrop md:hidden"
-      @click="sidebarOpen = false"
-    ></div>
-
-    <!-- Main Content -->
-    <div class="flex-1 flex flex-col h-full relative ai-main">
-      <!-- Top Bar -->
-      <div class="h-16 flex items-center justify-between px-6 ai-topbar">
-        <button
-          v-if="!sidebarOpen"
-          class="md:hidden inline-flex items-center justify-center p-2 rounded-full bg-[#F0F4F9] text-gray-600 hover:text-gray-900"
-          @click="sidebarOpen = true"
-          aria-label="打开侧边栏"
-          type="button"
-        >
-          <Menu class="w-5 h-5" />
-        </button>
-        <div class="flex items-center gap-3 ai-topbar-main-group">
-          <div class="flex items-center gap-2">
-            <span class="text-xl font-medium bg-gradient-to-r from-blue-400 via-purple-400 to-red-400 bg-clip-text text-transparent">Raven AI</span>
-          </div>
-          <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#F0F4F9] text-xs text-gray-700 ai-topbar-target">
-            <span class="font-medium text-gray-800">当前目标</span>
-            <template v-if="targetAgentName">
-              <span
-                class="px-2 py-0.5 rounded-full bg-white border border-blue-200 text-blue-700 font-semibold flex items-center gap-1"
-              >
-                <Box class="w-3.5 h-3.5" />
-                {{ targetAgentName }}
-              </span>
-              <button
-                class="p-1 rounded-full hover:bg-gray-200 text-gray-500"
-                @click="clearTargetAgent"
-                title="清除已选助手"
-                type="button"
-              >
-                <X class="w-3.5 h-3.5" />
-              </button>
-            </template>
-            <template v-else-if="targetDeviceName">
-              <span
-                class="px-2 py-0.5 rounded-full bg-white border border-gray-200 text-gray-900 font-semibold"
-              >
-                {{ targetDeviceName }}
-              </span>
-              <button
-                class="p-1 rounded-full hover:bg-gray-200 text-gray-500"
-                @click="clearTargetDevice"
-                title="清除已选设备"
-                type="button"
-              >
-                <X class="w-3.5 h-3.5" />
-              </button>
-            </template>
-            <span v-else class="text-gray-500">未选择</span>
-          </div>
-        </div>
-        <div class="flex items-center gap-4 ai-topbar-platform-link-wrap">
-            <a 
-              :href="getServiceUrl('/')" 
-              class="flex items-center gap-2 px-4 py-2 rounded-full bg-black text-white text-sm font-medium hover:bg-gray-800 transition-colors shadow-sm ai-topbar-platform-link"
-            >
-                <span>返回平台</span>
-                <ExternalLink class="w-3.5 h-3.5" />
-            </a>
-        </div>
-      </div>
-
-      <!-- Chat Area -->
-      <div ref="chatContainerRef" class="flex-1 overflow-y-auto px-4 md:px-20 py-6 scrollbar-hide scroll-smooth ai-chat-scroll">
-        <div class="max-w-3xl mx-auto space-y-8">
-          
-          <template v-if="chatHistory.length === 0 && !loadingMessages">
-            <div class="mt-8 sm:mt-20">
-              <h1 class="text-3xl sm:text-5xl font-medium bg-gradient-to-r from-blue-500 via-purple-500 to-red-500 bg-clip-text text-transparent w-fit mb-2">你好，{{ currentUserName }}</h1>
-              <h2 class="text-3xl sm:text-5xl font-medium text-[#444746] mb-8 sm:mb-12">今天有什么我可以帮你的吗？</h2>
+        <div class="rw-cap-grid">
+          <div
+            v-for="(c, i) in capabilityCards"
+            :key="i"
+            class="rw-cap-card"
+            @click="onPickCapability(c.prompt)"
+          >
+            <div class="rw-cap-label">
+              <svg v-if="c.icon === 'logs'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h16"/><circle cx="18" cy="12" r="1.4"/></svg>
+              <svg v-else-if="c.icon === 'device'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="11" rx="1.5"/><path d="M8 21h8M12 17v4"/><circle cx="7" cy="11" r="0.4" fill="currentColor"/></svg>
+              <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>
+              {{ c.label }}
             </div>
-          </template>
+            <div class="rw-cap-desc">{{ c.desc }}</div>
+          </div>
+        </div>
+      </div>
 
-          <template v-else-if="loadingMessages">
-            <div class="text-center text-gray-500 text-sm mt-12">正在加载历史对话...</div>
-          </template>
+      <!-- Loading -->
+      <div v-else-if="loadingMessages" class="rw-loading">正在加载历史对话…</div>
 
+      <!-- Thread -->
+      <div v-else class="rw-thread">
+        <div
+          v-for="msg in chatHistory"
+          :key="msg.id"
+          :class="['rw-msg', msg.role === 'user' ? 'is-user' : 'is-ai']"
+        >
+          <template v-if="msg.role === 'user'">
+            <div class="rw-user-bubble">{{ msg.content }}</div>
+            <div class="rw-user-meta-line">{{ currentUserName }}</div>
+          </template>
           <template v-else>
-             <div 
-               v-for="(msg, idx) in chatHistory" 
-               :key="msg.id || idx" 
-               class="flex group w-full"
-               :class="msg.role === 'user' ? 'justify-end gap-4' : 'justify-start gap-0 md:justify-start md:gap-1'"
-             >
-               <!-- AI Avatar (Left side only) -->
-               <div 
-                 v-if="msg.role === 'ai'"
-                 class="hidden md:flex w-8 h-8 rounded-full flex-shrink-0 items-center justify-center mt-1"
-               >
-                 <div class="w-6 h-6 rounded-full bg-gradient-to-tr from-blue-500 via-purple-500 to-red-500 animate-pulse-slow"></div>
-               </div>
-
-               <!-- Message Content Bubble -->
-               <div 
-                 class="max-w-[80%] rounded-2xl px-5 py-3 text-base leading-relaxed"
-                 :class="[
-                   msg.role === 'user' 
-                     ? 'bg-[#F0F4F9] text-gray-900 rounded-tr-sm whitespace-pre-wrap' 
-                     : 'bg-transparent text-gray-900 px-0'
-                 ]"
-               >
-                 <template v-if="msg.content === '正在思考...'">
-                   <span class="thinking-text">正在思考...</span>
-                 </template>
-                 <template v-else-if="msg.role === 'ai'">
-                   <div v-html="renderAiMessage(msg.content)"></div>
-                 </template>
-                 <template v-else>
-                   {{ msg.content }}
-                 </template>
-               </div>
-             </div>
-          </template>
-
-        </div>
-      </div>
-
-      <!-- Input Area -->
-      <div class="p-4 md:pb-6">
-        <div
-          ref="inputAreaRef"
-          class="max-w-3xl mx-auto bg-[#F0F4F9] rounded-3xl p-2 md:p-3 relative group focus-within:bg-gray-100 transition-colors"
-        >
-          <div
-            v-if="mentionVisible"
-            ref="mentionDropdownRef"
-            class="absolute left-0 right-0 bottom-full mb-3 bg-white border border-gray-200 rounded-2xl shadow-xl overflow-y-auto max-h-64 z-30"
-          >
-            <div class="px-4 py-3 text-sm text-gray-600 border-b border-gray-100 flex items-center justify-between">
-              <span>选择目标（设备或重构包配置管理员）</span>
-              <span class="text-xs text-gray-400">输入 @ 或名称进行过滤</span>
+            <div class="rw-ai-avatar" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 14 19 6"/>
+                <path d="M5 14a7 7 0 0 0 9.5 5"/>
+                <circle cx="6" cy="18" r="1.5" fill="currentColor" stroke="none"/>
+              </svg>
             </div>
-            <div v-if="isLoadingDevices" class="px-4 py-3 text-sm text-gray-500">设备列表加载中...</div>
-            <div v-if="!filteredMentionOptions.length" class="px-4 py-3 text-sm text-gray-500">暂无匹配的目标</div>
-            <template v-else>
-              <button
-                v-for="(option, idx) in filteredMentionOptions"
-                :key="`${option.type}-${option.id}`"
-                type="button"
-                class="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors"
-                :class="{ 'bg-gray-100': idx === mentionSelectedIndex }"
-                :ref="(el) => setMentionOptionRef(el, idx)"
-                @mousedown.prevent="applyMentionSelection(option)"
-                @mouseenter="mentionSelectedIndex = idx"
-              >
-                <template v-if="option.type === 'device'">
-                  <span
-                    class="w-2 h-2 rounded-full"
-                    :class="deviceStatusDotClass(option.status)"
-                  ></span>
-                  <div class="flex-1 min-w-0">
-                    <div class="flex items-center gap-2">
-                      <span class="font-medium text-gray-900 truncate">{{ option.name }}</span>
-                      <span class="text-[11px] text-gray-500 uppercase">{{ option.status === 'online' ? '在线' : '离线' }}</span>
-                    </div>
-                    <div class="text-xs text-gray-500 truncate">ID: {{ option.id }}</div>
-                  </div>
-                  <div v-if="option.device.models?.length" class="text-[11px] text-gray-500 truncate max-w-[120px] text-right">
-                    {{ option.device.models.slice(0, 2).join(', ') }}<span v-if="option.device.models.length > 2"> ...</span>
-                  </div>
-                </template>
-                <template v-else>
-                  <div class="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center">
-                    <Box class="w-4 h-4" />
-                  </div>
-                  <div class="flex-1 min-w-0">
-                    <div class="font-medium text-gray-900">{{ option.name }}</div>
-                    <div class="text-xs text-gray-500 truncate">
-                      {{ option.description || '智能搜索重构包，返回详情、下载与提示词' }}
-                    </div>
-                  </div>
-                </template>
-              </button>
-            </template>
-          </div>
-          <div
-            v-if="targetDeviceName || targetAgentName"
-            class="flex items-center gap-2 mb-2 px-3 py-2 rounded-2xl bg-white border border-gray-200 text-sm text-gray-700"
-          >
-            <span class="text-gray-500">当前目标</span>
-            <span class="font-semibold text-gray-900 flex items-center gap-1">
-              <template v-if="targetAgentName">
-                <Box class="w-4 h-4 text-blue-600" />
-                {{ targetAgentName }}
+            <div class="rw-ai-body">
+              <div class="rw-ai-name">RAVENAI</div>
+              <template v-if="msg.content === '正在思考...'">
+                <div class="rw-thinking">正在思考…</div>
               </template>
               <template v-else>
-                {{ targetDeviceName }}
+                <div class="rw-ai-text" v-html="renderAiMessage(msg.content)"></div>
               </template>
-            </span>
-            <button
-              class="ml-auto p-1 rounded-full hover:bg-gray-100 text-gray-500"
-              type="button"
-              @click="targetAgentName ? clearTargetAgent() : clearTargetDevice()"
-            >
-              <X class="w-4 h-4" />
-            </button>
-          </div>
-          <div class="flex items-end gap-2">
-            <button class="p-2 rounded-full hover:bg-gray-200 text-gray-500 hover:text-gray-900 transition-colors">
-              <ImageIcon class="w-5 h-5" />
-            </button>
-            
-            <textarea 
-              v-model="inputMessage"
-              ref="textareaRef"
-              @keydown="handleKeydown"
-              @input="handleInput"
-              placeholder="在这里输入指令"
-              class="flex-1 bg-transparent border-0 focus:ring-0 text-gray-900 resize-none max-h-32 py-2 scrollbar-hide placeholder-gray-500"
-              rows="1"
-              style="min-height: 44px;"
-            ></textarea>
-            
-            <button class="p-2 rounded-full hover:bg-gray-200 text-gray-500 hover:text-gray-900 transition-colors" v-if="!inputMessage">
-              <Mic class="w-5 h-5" />
-            </button>
-            
-            <button 
-              @click="sendMessage"
-              class="p-2 rounded-full transition-colors"
-              :class="inputMessage ? 'bg-black text-white hover:bg-gray-800' : 'text-gray-400 hover:text-gray-600'"
-            >
-              <Send class="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-        <div class="text-center text-xs text-gray-500 mt-2">
-          Raven AI 可能会犯错。请核对重要信息 · 输入 @ 选择设备或重构包配置管理员。
+            </div>
+          </template>
         </div>
       </div>
     </div>
 
-    <!-- Login Modal -->
-    <div
-      v-if="showLoginModal"
-      class="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 px-4"
-    >
-      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-5 border border-gray-100">
-        <div class="flex items-start justify-between">
-          <div>
-            <h3 class="text-lg font-semibold text-gray-900">登录账户</h3>
-            <p class="text-xs text-gray-500 mt-1">登录可同步历史对话</p>
+    <!-- Composer -->
+    <div class="rw-composer-wrap">
+      <div
+        ref="inputAreaRef"
+        class="rw-composer"
+      >
+        <!-- Mention dropdown -->
+        <div
+          v-if="mentionVisible"
+          ref="mentionDropdownRef"
+          class="rw-mention"
+        >
+          <div class="rw-mention-head">
+            <span>选择目标（设备或重构包配置管理员）</span>
+            <span class="rw-mention-hint">输入 @ 或名称过滤</span>
           </div>
+          <div v-if="isLoadingDevices" class="rw-mention-empty">设备列表加载中…</div>
+          <div v-else-if="!filteredMentionOptions.length" class="rw-mention-empty">暂无匹配的目标</div>
+          <template v-else>
+            <button
+              v-for="(option, idx) in filteredMentionOptions"
+              :key="`${option.type}-${option.id}`"
+              type="button"
+              class="rw-mention-row"
+              :class="{ active: idx === mentionSelectedIndex }"
+              :ref="(el) => setMentionOptionRef(el, idx)"
+              @mousedown.prevent="applyMentionSelection(option)"
+              @mouseenter="mentionSelectedIndex = idx"
+            >
+              <template v-if="option.type === 'device'">
+                <span class="rw-status-dot" :class="option.status === 'online' ? 'online' : 'offline'"></span>
+                <div class="rw-mention-meta">
+                  <div class="rw-mention-title">
+                    {{ option.name }}
+                    <span class="rw-mention-tag">{{ option.status === 'online' ? '在线' : '离线' }}</span>
+                  </div>
+                  <div class="rw-mention-sub">ID: {{ option.id }}</div>
+                </div>
+              </template>
+              <template v-else>
+                <span class="rw-mention-agent-ico">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>
+                </span>
+                <div class="rw-mention-meta">
+                  <div class="rw-mention-title">{{ option.name }}</div>
+                  <div class="rw-mention-sub">{{ option.description || '智能搜索重构包' }}</div>
+                </div>
+              </template>
+            </button>
+          </template>
+        </div>
+
+        <!-- Target chip -->
+        <div v-if="targetAgentName || targetDeviceName" class="rw-target-chip">
+          <span class="rw-target-label">当前目标</span>
+          <span class="rw-target-value">
+            <template v-if="targetAgentName">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>
+              {{ targetAgentName }}
+            </template>
+            <template v-else>{{ targetDeviceName }}</template>
+          </span>
           <button
-            class="text-gray-500 hover:text-gray-700 rounded-full p-1"
-            @click="showLoginModal = false"
-            aria-label="关闭登录"
+            class="rw-target-clear"
+            type="button"
+            @click="targetAgentName ? clearTargetAgent() : clearTargetDevice()"
+            aria-label="清除目标"
           >
-            <X class="w-4 h-4" />
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
           </button>
         </div>
 
-        <form class="space-y-4" @submit.prevent="handleUserLogin">
-          <label class="block text-sm text-gray-700">
-            <span class="text-xs text-gray-600">用户名</span>
-            <input
-              v-model="loginForm.username"
-              type="text"
-              class="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none"
-              placeholder="输入用户名"
-              autocomplete="username"
-            />
-          </label>
-          <label class="block text-sm text-gray-700">
-            <span class="text-xs text-gray-600">密码</span>
-            <input
-              v-model="loginForm.password"
-              type="password"
-              class="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none"
-              placeholder="输入密码"
-              autocomplete="current-password"
-            />
-          </label>
-          <div class="flex items-center gap-3">
-            <button
-              type="submit"
-              class="px-4 py-2 bg-black text-white rounded-lg text-sm font-semibold hover:bg-gray-800 transition disabled:opacity-60 flex items-center gap-2"
-              :disabled="isLoggingIn"
-            >
-              <Loader2 v-if="isLoggingIn" class="w-4 h-4 animate-spin" />
-              <span>{{ isLoggingIn ? '登录中…' : '立即登录' }}</span>
-            </button>
-            <button
-              type="button"
-              class="px-4 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50"
-              @click="showLoginModal = false"
-            >
-              取消
-            </button>
-          </div>
-        </form>
+        <textarea
+          v-model="inputMessage"
+          ref="textareaRef"
+          class="rw-textarea"
+          placeholder="给 RavenAI 说点什么，或粘贴一段日志…（输入 @ 选择设备或重构包配置管理员）"
+          rows="2"
+          @keydown="handleKeydown"
+          @input="handleInput"
+        ></textarea>
+
+        <div class="rw-composer-row">
+          <button class="rw-mini-btn" title="附加文件/日志" aria-label="附加文件">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11.5-9.5 9.5a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5L9.5 18.5a2 2 0 0 1-3-3L15 7"/></svg>
+          </button>
+          <button
+            class="rw-tool-chip"
+            :class="{ active: isPackageAgentSelected }"
+            @click="isPackageAgentSelected
+              ? clearTargetAgent()
+              : (targetAgent = { id: packageAgentOption.id, name: packageAgentOption.name, agentType: 'package-manager' }, targetDeviceId = null, targetDeviceName = null)"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>
+            检索重构包
+          </button>
+          <button class="rw-send-btn" :disabled="!inputMessage.trim() || isSending" @click="sendMessage">
+            <svg v-if="isSending" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="spin"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+            <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 19 5l-3 15-5-7-6-1Z"/></svg>
+          </button>
+        </div>
       </div>
+      <div class="rw-composer-hint">RavenAI 可能会出错。涉及在线设备的下发操作均需你二次确认。</div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.scrollbar-hide::-webkit-scrollbar {
-    display: none;
+.rw-chat-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--rw-canvas, #ffffff);
+  color: var(--rw-ink, #171717);
 }
-.scrollbar-hide {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+
+.mono { font-family: var(--rw-mono); font-weight: 500; }
+.spin { animation: rw-spin 1s linear infinite; }
+@keyframes rw-spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+
+/* Topbar */
+.rw-topbar {
+  height: 56px; flex-shrink: 0;
+  border-bottom: 1px solid var(--rw-hairline);
+  display: flex; align-items: center;
+  padding: 0 28px; gap: 14px;
+  background: var(--rw-canvas);
 }
-.animate-pulse-slow {
-  animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+.rw-topbar-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.rw-crumb { font-size: 14.5px; font-weight: 600; color: var(--rw-ink); letter-spacing: -0.1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rw-crumb-meta { font-size: 12px; color: var(--rw-muted); font-family: var(--rw-mono); flex-shrink: 0; }
+.rw-topbar-right { display: flex; align-items: center; gap: 8px; }
+.rw-model-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--rw-surface-strong); color: var(--rw-ink);
+  height: 28px; padding: 0 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 500;
 }
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: .7;
-  }
+.rw-model-pill:hover { background: var(--rw-hairline-strong); }
+.rw-model-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--rw-success); }
+.rw-top-action {
+  height: 30px; padding: 0 8px;
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--rw-hairline-strong);
+  background: var(--rw-canvas);
+  border-radius: 8px;
+  font-size: 13px; font-weight: 500; color: var(--rw-ink);
 }
-.thinking-text {
+.rw-top-action:hover { background: var(--rw-surface-strong); }
+.rw-top-more-wrap { position: relative; }
+.rw-top-menu {
+  position: absolute; top: calc(100% + 6px); right: 0;
+  width: 240px; background: var(--rw-canvas);
+  border: 1px solid var(--rw-hairline-strong); border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.12), 0 2px 6px rgba(0,0,0,.04);
+  z-index: 30;
+}
+.rw-top-menu-group {
+  padding: 6px 10px 2px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.6px;
+  text-transform: uppercase; color: var(--rw-muted);
+}
+.rw-menu-item {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; height: 30px; padding: 0 10px;
+  border-radius: 5px; font-size: 12.5px; font-weight: 500;
+  color: var(--rw-ink); cursor: pointer; background: none; border: none;
+  text-align: left;
+}
+.rw-menu-item:hover { background: var(--rw-surface-strong); }
+.rw-menu-item.is-danger { color: var(--rw-danger); }
+.rw-menu-item.is-danger:hover { background: rgba(192,56,43,.06); }
+.rw-menu-divider { height: 1px; background: var(--rw-hairline); margin: 4px 6px; }
+.rw-kbd-right { margin-left: auto; font-family: var(--rw-mono); font-size: 11px; color: var(--rw-muted); }
+
+/* Scroll area */
+.rw-scroll { flex: 1; min-height: 0; overflow: auto; padding: 32px 0 24px; }
+
+/* Welcome */
+.rw-welcome {
+  height: 100%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 22px;
+  padding: 0 32px; text-align: center;
+}
+.rw-welcome-badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--rw-surface-strong);
+  padding: 5px 12px; border-radius: 999px;
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.8px; text-transform: uppercase;
+  color: var(--rw-ink);
+}
+.rw-dot-success { width: 6px; height: 6px; border-radius: 999px; background: var(--rw-success); }
+.rw-welcome-title {
+  font-size: 40px; font-weight: 600; letter-spacing: -1.2px;
+  line-height: 1.1; color: var(--rw-ink); max-width: 680px;
+  margin: 0;
+}
+.rw-welcome-sub {
+  font-size: 15.5px; color: var(--rw-body);
+  max-width: 540px; line-height: 1.55; font-weight: 400;
+}
+.rw-cap-grid {
+  margin-top: 8px;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px; width: 100%; max-width: 720px;
+}
+.rw-cap-card {
+  border: 1px solid var(--rw-hairline-strong);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--rw-canvas);
+  text-align: left;
+  display: flex; flex-direction: column; gap: 6px;
+  cursor: pointer; transition: all .15s;
+}
+.rw-cap-card:hover {
+  border-color: var(--rw-ink);
+  box-shadow: 0 4px 12px rgba(0,0,0,.04);
+}
+.rw-cap-label { font-size: 13px; font-weight: 600; color: var(--rw-ink); display: inline-flex; align-items: center; gap: 8px; }
+.rw-cap-desc { font-size: 12.5px; color: var(--rw-body); line-height: 1.5; }
+
+/* Loading */
+.rw-loading { text-align: center; color: var(--rw-muted); font-size: 13px; padding-top: 48px; }
+
+/* Thread */
+.rw-thread {
+  max-width: 820px; margin: 0 auto;
+  padding: 0 32px;
+  display: flex; flex-direction: column; gap: 28px;
+}
+.rw-msg.is-user { display: flex; flex-direction: column; align-items: flex-end; }
+.rw-user-bubble {
+  background: var(--rw-surface-strong); color: var(--rw-ink);
+  padding: 12px 16px; border-radius: 12px;
+  font-size: 14.5px; line-height: 1.55;
+  max-width: 85%; white-space: pre-wrap;
+  word-break: break-word;
+}
+.rw-user-meta-line { font-size: 11px; color: var(--rw-muted); margin-top: 6px; font-weight: 500; }
+.rw-msg.is-ai { display: flex; gap: 14px; align-items: flex-start; }
+.rw-ai-avatar {
+  width: 28px; height: 28px; border-radius: 8px;
+  background: var(--rw-surface-dark); color: var(--rw-on-primary);
+  display: grid; place-items: center;
+  flex-shrink: 0; margin-top: 2px;
+}
+.rw-ai-body { flex: 1; min-width: 0; }
+.rw-ai-name {
+  font-size: 12.5px; color: var(--rw-muted); font-weight: 600;
+  margin-bottom: 6px; letter-spacing: 0.2px; text-transform: uppercase;
+}
+.rw-ai-text { font-size: 14.5px; color: var(--rw-ink); line-height: 1.62; }
+.rw-thinking {
   display: inline-block;
   background: linear-gradient(90deg, #9ca3af 0%, #e5e7eb 50%, #9ca3af 100%);
   background-size: 200% 100%;
-  background-repeat: no-repeat;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: thinking-shimmer 1.6s ease-in-out infinite;
-  font-weight: 600;
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent; font-weight: 600;
+  animation: rw-shimmer 1.6s ease-in-out infinite;
 }
-@keyframes thinking-shimmer {
-  0% {
-    background-position: 200% 0;
-  }
-  100% {
-    background-position: -200% 0;
-  }
+@keyframes rw-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* Markdown content adjustments */
+.rw-ai-text :deep(p) { margin: 0 0 10px; }
+.rw-ai-text :deep(p:last-child) { margin-bottom: 0; }
+.rw-ai-text :deep(code) {
+  font-family: var(--rw-mono); font-size: 12.5px;
+  background: var(--rw-surface-strong); color: var(--rw-ink);
+  padding: 1px 6px; border-radius: 4px;
+}
+.rw-ai-text :deep(pre) {
+  background: var(--rw-surface-dark); color: #fff;
+  padding: 14px; border-radius: 8px;
+  font-family: var(--rw-mono); font-size: 12.5px; line-height: 1.55;
+  overflow: auto; margin: 10px 0;
+}
+.rw-ai-text :deep(pre code) {
+  background: transparent; color: inherit; padding: 0; border-radius: 0;
+  font-size: inherit;
+}
+.rw-ai-text :deep(h1),
+.rw-ai-text :deep(h2),
+.rw-ai-text :deep(h3) {
+  color: var(--rw-ink); font-weight: 600; letter-spacing: -0.2px;
+  margin: 16px 0 8px;
+}
+.rw-ai-text :deep(h1) { font-size: 18px; }
+.rw-ai-text :deep(h2) { font-size: 16px; }
+.rw-ai-text :deep(h3) { font-size: 14.5px; }
+.rw-ai-text :deep(ul),
+.rw-ai-text :deep(ol) { padding-left: 22px; margin: 8px 0; }
+.rw-ai-text :deep(li) { margin: 4px 0; }
+.rw-ai-text :deep(a) { color: #0d74ce; text-decoration: none; }
+.rw-ai-text :deep(a:hover) { text-decoration: underline; }
+
+/* Composer */
+.rw-composer-wrap { flex-shrink: 0; padding: 12px 32px 24px; background: var(--rw-canvas); }
+.rw-composer {
+  max-width: 820px; margin: 0 auto;
+  border: 1px solid var(--rw-hairline-strong);
+  border-radius: 14px;
+  background: var(--rw-canvas);
+  box-shadow: 0 1px 2px rgba(0,0,0,.02), 0 6px 22px rgba(0,0,0,.05);
+  padding: 12px 14px 10px;
+  display: flex; flex-direction: column; gap: 8px;
+  position: relative;
+}
+.rw-composer:focus-within { border-color: var(--rw-ink); }
+.rw-textarea {
+  width: 100%; min-height: 50px;
+  border: none; outline: none; resize: none;
+  font-size: 14.5px; line-height: 1.55;
+  font-family: var(--rw-sans);
+  background: transparent; color: var(--rw-ink);
+}
+.rw-textarea::placeholder { color: var(--rw-muted); }
+
+.rw-composer-row { display: flex; align-items: center; gap: 6px; }
+.rw-mini-btn {
+  width: 30px; height: 30px; border-radius: 6px;
+  display: grid; place-items: center;
+  color: var(--rw-body); transition: background .12s, color .12s;
+  background: none; border: none; cursor: pointer;
+}
+.rw-mini-btn:hover { background: var(--rw-surface-strong); color: var(--rw-ink); }
+.rw-tool-chip {
+  height: 28px; padding: 0 11px;
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--rw-hairline-strong);
+  background: var(--rw-canvas); color: var(--rw-ink);
+  border-radius: 999px; font-size: 12.5px; font-weight: 500;
+  cursor: pointer; transition: all .15s;
+}
+.rw-tool-chip:hover { border-color: var(--rw-ink); }
+.rw-tool-chip.active { background: var(--rw-ink); color: var(--rw-on-primary); border-color: var(--rw-ink); }
+
+.rw-send-btn {
+  width: 36px; height: 32px; border-radius: 8px;
+  background: var(--rw-primary); color: var(--rw-on-primary);
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-left: auto;
+  transition: background .15s;
+  border: none; cursor: pointer;
+}
+.rw-send-btn:hover:not(:disabled) { background: var(--rw-primary-active); }
+.rw-send-btn:disabled {
+  background: var(--rw-surface-strong); color: var(--rw-muted);
+  cursor: not-allowed;
 }
 
-.ai-chat-page,
-.ai-main {
-  overscroll-behavior: none;
+.rw-composer-hint {
+  max-width: 820px; margin: 8px auto 0;
+  font-size: 11.5px; color: var(--rw-muted);
+  text-align: center; font-family: var(--rw-mono);
 }
 
-.ai-chat-scroll {
-  overscroll-behavior-y: contain;
-  -webkit-overflow-scrolling: touch;
+/* Mention */
+.rw-mention {
+  position: absolute; left: 14px; right: 14px;
+  bottom: calc(100% + 6px);
+  background: var(--rw-canvas);
+  border: 1px solid var(--rw-hairline-strong);
+  border-radius: 12px;
+  max-height: 260px; overflow: auto;
+  box-shadow: 0 12px 32px rgba(0,0,0,.12), 0 2px 6px rgba(0,0,0,.04);
+  z-index: 30;
 }
+.rw-mention-head {
+  padding: 10px 14px; border-bottom: 1px solid var(--rw-hairline);
+  font-size: 12.5px; color: var(--rw-body);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.rw-mention-hint { font-size: 11px; color: var(--rw-muted); }
+.rw-mention-empty { padding: 12px 14px; font-size: 12.5px; color: var(--rw-muted); }
+.rw-mention-row {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--rw-hairline-soft);
+  background: none; border-left: none; border-right: none; border-top: none;
+  cursor: pointer;
+}
+.rw-mention-row:last-child { border-bottom: none; }
+.rw-mention-row:hover, .rw-mention-row.active { background: var(--rw-hairline-soft); }
+.rw-status-dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; }
+.rw-status-dot.online { background: var(--rw-success); }
+.rw-status-dot.offline { background: var(--rw-muted-soft); }
+.rw-mention-agent-ico {
+  width: 28px; height: 28px; border-radius: 8px;
+  background: var(--rw-surface-strong); color: var(--rw-ink);
+  display: grid; place-items: center; flex-shrink: 0;
+}
+.rw-mention-meta { flex: 1; min-width: 0; }
+.rw-mention-title {
+  font-size: 13.5px; font-weight: 600; color: var(--rw-ink);
+  display: flex; align-items: center; gap: 6px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rw-mention-tag {
+  font-family: var(--rw-mono); font-size: 10.5px;
+  text-transform: uppercase; color: var(--rw-muted);
+  font-weight: 500;
+}
+.rw-mention-sub { font-size: 12px; color: var(--rw-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-@media (max-width: 768px) {
-  .ai-chat-page {
-    position: relative;
-  }
+/* Target chip */
+.rw-target-chip {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: 999px;
+  background: var(--rw-surface-strong);
+  font-size: 12.5px; align-self: flex-start;
+}
+.rw-target-label { color: var(--rw-muted); font-family: var(--rw-mono); font-size: 11.5px; }
+.rw-target-value {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-weight: 600; color: var(--rw-ink);
+}
+.rw-target-clear {
+  width: 20px; height: 20px; border-radius: 999px;
+  display: grid; place-items: center; color: var(--rw-body);
+  background: none; border: none; cursor: pointer;
+}
+.rw-target-clear:hover { background: var(--rw-hairline-strong); }
 
-  .ai-sidebar-backdrop {
-    position: absolute;
-    inset: 0;
-    background: rgba(15, 23, 42, 0.35);
-    z-index: 30;
-  }
+/* Scrollbar */
+.rw-scroll::-webkit-scrollbar,
+.rw-mention::-webkit-scrollbar { width: 10px; height: 10px; }
+.rw-scroll::-webkit-scrollbar-track,
+.rw-mention::-webkit-scrollbar-track { background: transparent; }
+.rw-scroll::-webkit-scrollbar-thumb,
+.rw-mention::-webkit-scrollbar-thumb {
+  background: #e6e6ea; border-radius: 999px; border: 2px solid var(--rw-canvas);
+}
+.rw-scroll::-webkit-scrollbar-thumb:hover,
+.rw-mention::-webkit-scrollbar-thumb:hover { background: var(--rw-muted-soft); }
 
-  .ai-sidebar {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    z-index: 40;
-    border-right: 1px solid #e5e7eb;
-    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
-    transition: transform 0.3s ease, width 0.3s ease;
-  }
-
-  .ai-sidebar.is-mobile-open {
-    transform: translateX(0);
-    pointer-events: auto;
-  }
-
-  .ai-sidebar.is-mobile-closed {
-    transform: translateX(-100%);
-    pointer-events: none;
-  }
-
-  .ai-sidebar.w-16 {
-    width: 3.5rem !important;
-  }
-
-  .ai-sidebar.w-64 {
-    width: min(82vw, 320px) !important;
-  }
-
-  .ai-main {
-    width: 100%;
-  }
-
-  .ai-topbar {
-    min-height: 3.5rem;
-    padding: 0.75rem;
-    gap: 0.5rem;
-    align-items: center;
-    flex-direction: row;
-    flex-wrap: nowrap;
-  }
-
-  .ai-topbar-main-group {
-    min-width: 0;
-    flex: 1 1 auto;
-    flex-wrap: nowrap;
-    overflow: hidden;
-  }
-
-  .ai-topbar-target {
-    min-width: 0;
-    overflow: hidden;
-  }
-
-  .ai-topbar-platform-link-wrap {
-    flex: 0 0 auto;
-  }
-
-  .ai-topbar-platform-link {
-    white-space: nowrap;
-    padding: 0.45rem 0.7rem;
-    font-size: 0.75rem;
-  }
+/* Responsive */
+@media (max-width: 900px) {
+  .rw-thread, .rw-composer { padding-left: 16px; padding-right: 16px; }
+  .rw-composer-wrap { padding-left: 16px; padding-right: 16px; }
+  .rw-topbar { padding: 0 16px; }
+  .rw-cap-grid { grid-template-columns: 1fr; max-width: 480px; }
+  .rw-welcome-title { font-size: 32px; letter-spacing: -0.8px; }
 }
 </style>

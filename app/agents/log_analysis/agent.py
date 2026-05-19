@@ -19,13 +19,6 @@ from app.agents.log_analysis.workspace import WorkspaceContext
 
 logger = logging.getLogger(__name__)
 
-# Bash command whitelist prefixes
-_BASH_ALLOWLIST = frozenset([
-    "git", "grep", "rg", "tar", "zcat", "gunzip",
-    "find", "cat", "head", "tail", "wc", "jq", "ls",
-    "awk", "sed",
-])
-
 # Regex to scrub token-injected URLs from tool traces
 _TOKEN_URL_RE = re.compile(r"https://[^@\s]+@")
 PROJECT_REPO_MCP_TOOL = "mcp__project_repo__lookup_project_repo"
@@ -170,7 +163,7 @@ class LogAnalysisAgent:
             system_prompt=system_prompt,
             allowed_tools=allowed_tools,
             cwd=ctx.temp_dir,
-            permission_mode="acceptEdits",
+            permission_mode="bypassPermissions",
             mcp_servers=mcp_servers,
             setting_sources=setting_sources,
         )

@@ -17,9 +17,9 @@
         <!-- 导航菜单 -->
         <div class="flex items-center space-x-1 navbar-menu">
           <router-link
-            to="/"
+            to="/logs"
             class="nav-link"
-            :class="{ 'nav-link-active': $route.name === 'LogList' }"
+            :class="{ 'nav-link-active': $route.name === 'Logs' }"
           >
             <el-icon class="mr-2">
               <List />

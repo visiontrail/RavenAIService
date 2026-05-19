@@ -4,27 +4,48 @@ import type { RouteLocationNormalized, RouteRecordRaw } from 'vue-router'
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
-    name: 'LogList',
-    component: () => import('../views/LogList.vue'),
-    meta: {
-      title: '日志列表',
-    },
-  },
-  {
-    path: '/logs',
-    name: 'Logs',
-    component: () => import('../views/LogList.vue'),
-    meta: {
-      title: '日志列表',
-    },
-  },
-  {
-    path: '/devices',
-    name: 'DeviceList',
-    component: () => import('../views/DeviceList.vue'),
-    meta: {
-      title: '设备列表',
-    },
+    component: () => import('../layouts/WorkbenchLayout.vue'),
+    children: [
+      {
+        path: '',
+        name: 'Home',
+        component: () => import('../views/AIChat.vue'),
+        meta: { title: 'RavenAI 工作台' },
+      },
+      {
+        path: 'ai-chat',
+        name: 'AIChat',
+        component: () => import('../views/AIChat.vue'),
+        meta: { title: 'Raven AI Chat' },
+      },
+      {
+        path: 'logs',
+        name: 'Logs',
+        alias: ['/log-list'],
+        component: () => import('../views/LogList.vue'),
+        meta: { title: '日志列表' },
+      },
+      {
+        path: 'log/:id',
+        name: 'LogDetail',
+        component: () => import('../views/LogDetail.vue'),
+        meta: { title: '日志详情' },
+        props: true,
+      },
+      {
+        path: 'devices',
+        name: 'DeviceList',
+        component: () => import('../views/DeviceList.vue'),
+        meta: { title: '设备列表' },
+      },
+      {
+        path: 'raven-manager',
+        alias: ['/raven', '/raven/'],
+        name: 'RavenManager',
+        component: () => import('../views/RavenManager.vue'),
+        meta: { title: '重构包列表' },
+      },
+    ],
   },
   {
     path: '/devices/:id',
@@ -44,24 +65,6 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
-    path: '/log/:id',
-    name: 'LogDetail',
-    component: () => import('../views/LogDetail.vue'),
-    meta: {
-      title: '日志详情',
-    },
-    props: true,
-  },
-  {
-    path: '/raven-manager',
-    alias: ['/raven', '/raven/'],
-    name: 'RavenManager',
-    component: () => import('../views/RavenManager.vue'),
-    meta: {
-      title: '重构包列表',
-    },
-  },
-  {
     path: '/raven/package/:id',
     alias: ['/package/:id'],
     name: 'RavenPackageDetail',
@@ -70,14 +73,6 @@ const routes: RouteRecordRaw[] = [
       title: '包详情',
     },
     props: true,
-  },
-  {
-    path: '/ai-chat',
-    name: 'AIChat',
-    component: () => import('../views/AIChat.vue'),
-    meta: {
-      title: 'Raven AI Chat',
-    },
   },
   {
     path: '/download',
@@ -188,11 +183,9 @@ const normalizePort = (value?: unknown) => {
 }
 
 const shouldRedirectToRaven = (to: RouteLocationNormalized, from: RouteLocationNormalized) => {
-  // 仅在首次访问根路径（默认日志列表）时尝试重定向
+  // 仅在首次访问根路径时尝试重定向到 Raven 管理（保留兼容旧端口部署的行为）
   if (from?.name) return false
-  // 如果访问 /logs 路径，不进行重定向
-  if (to.path === '/logs' || to.name === 'Logs') return false
-  if (to.name !== 'LogList' && to.path !== '/') return false
+  if (to.path !== '/' && to.name !== 'Home') return false
   if (typeof window === 'undefined') return false
 
   const configuredPort =

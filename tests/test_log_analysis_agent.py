@@ -296,6 +296,39 @@ class TestLogAnalysisAgentRun:
         assert kwargs["mcp_servers"] is None
         assert "mcp__project_repo__lookup_project_repo" not in kwargs["allowed_tools"]
 
+    @pytest.mark.asyncio
+    async def test_bash_tool_is_unrestricted_for_temp_workspace(self, workspace_ctx):
+        from app.agents.log_analysis.agent import LogAnalysisAgent
+
+        fake_sdk = MagicMock()
+        fake_sdk.query = _fake_query_schema_mismatch
+
+        with _patch_build_options() as mock_build_options, \
+             _patch_mcp_server(), _patch_prompts(), _patch_skills(), \
+             patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
+             patch("app.config.settings", MagicMock(
+                 anthropic_model="deepseek-v4-pro",
+                 anthropic_provider="deepseek",
+                 anthropic_request_timeout_seconds=600,
+             )):
+            await LogAnalysisAgent().run(workspace_ctx)
+
+        kwargs = mock_build_options.call_args.kwargs
+        assert kwargs["permission_mode"] == "bypassPermissions"
+        assert "Bash" in kwargs["allowed_tools"]
+        assert not any(tool.startswith("Bash(") for tool in kwargs["allowed_tools"])
+        assert "hooks" not in kwargs
+
+
+class TestRuntimeTooling:
+    def test_dockerfile_installs_agent_cli_tools(self):
+        from pathlib import Path
+
+        dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+        for package in ("git", "ripgrep", "jq"):
+            assert package in dockerfile
+
 
 class TestRunSync:
     def test_run_sync_timeout(self, workspace_ctx):

@@ -1,232 +1,140 @@
 <template>
-  <div class="log-detail-page min-h-screen bg-gray-50">
-    <!-- 导航栏 -->
-    <header class="bg-white shadow-sm border-b border-gray-200">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div class="flex items-center justify-between h-16">
-          <!-- 返回按钮和Logo -->
-          <div class="flex items-center space-x-4">
-            <el-button 
-              @click="$router.back()" 
-              type="text" 
-              class="text-gray-600 hover:text-gray-900"
-            >
-              <el-icon class="mr-2" size="18">
-                <ArrowLeft />
-              </el-icon>
-              返回列表
-            </el-button>
-            <div class="h-8 w-px bg-gray-300"></div>
-            <div class="flex items-center space-x-2">
-              <img
-                :src="ravenLogo"
-                alt="Raven Logo"
-                class="h-9 w-9 rounded-xl shadow-sm ring-1 ring-gray-200 object-contain"
-              />
-              <span class="hidden sm:inline text-lg font-semibold text-gray-900">Raven智能测试平台</span>
-            </div>
-          </div>
-        </div>
+  <div class="rw-page log-detail-page">
+    <header class="rw-topbar">
+      <div class="rw-topbar-left">
+        <button class="back-btn" @click="$router.back()" title="返回">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+        <span class="rw-crumb">日志详情</span>
+        <span v-if="logStore.currentLog" class="rw-crumb-meta">· {{ logStore.currentLog.filename }}</span>
+      </div>
+      <div class="rw-topbar-right">
+        <button class="rw-btn-secondary" @click="handleCopyLink">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          <span>复制链接</span>
+        </button>
+        <button class="rw-btn-primary" :disabled="downloadLoading || !logStore.currentLog" @click="handleDownload">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+          <span>{{ downloadLoading ? '下载中…' : '下载' }}</span>
+        </button>
       </div>
     </header>
 
-    <!-- 主要内容区域 -->
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div v-if="logStore.loading" class="loading-container">
+    <div class="rw-page-scroll">
+      <div v-if="logStore.loading" class="rw-card">
         <el-skeleton :rows="8" animated />
       </div>
 
-      <div v-else-if="logStore.currentLog" class="space-y-6">
-        <!-- 日志标题区域 -->
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
-            <div class="flex-1">
-              <div class="flex items-center space-x-3 mb-2">
-                <h1 class="text-2xl font-bold text-gray-900 truncate">
-                  {{ logStore.currentLog.filename }}
-                </h1>
-                <el-tag 
-                  :type="getLogTypeTagType(logStore.currentLog.log_type)"
-                  size="large"
-                  class="ml-2"
-                >
-                  {{ getLogTypeLabel(logStore.currentLog.log_type) }}
-                </el-tag>
+      <template v-else-if="logStore.currentLog">
+        <!-- 标题卡 -->
+        <section class="rw-card title-card">
+          <div class="title-row">
+            <div class="title-left">
+              <h1 class="title-name">{{ logStore.currentLog.filename }}</h1>
+              <div class="title-meta">
+                <span class="title-id">ID: {{ logStore.currentLog.id }}</span>
               </div>
-              <p class="text-sm text-gray-500">
-                文件ID: {{ logStore.currentLog.id }}
-              </p>
             </div>
-            <!-- 状态指示器 -->
-            <div class="flex items-center space-x-2">
-              <el-tag 
-                :type="getStatusTagType(logStore.currentLog.status)"
-                size="large"
-                :effect="logStore.currentLog.status === 'processing' ? 'plain' : 'dark'"
-              >
-                <el-icon v-if="logStore.currentLog.status === 'processing'" class="mr-1">
-                  <Loading />
-                </el-icon>
+            <div class="title-tags">
+              <span :class="['rw-pill', logTypePill(logStore.currentLog.log_type)]">
+                {{ getLogTypeLabel(logStore.currentLog.log_type) }}
+              </span>
+              <span :class="['rw-pill', statusPill(logStore.currentLog.status)]">
+                <span v-if="logStore.currentLog.status === 'processing'" class="rw-pill-dot"></span>
                 {{ getStatusLabel(logStore.currentLog.status) }}
-              </el-tag>
+              </span>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- 基本信息卡片 -->
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <div class="flex items-center space-x-2 mb-6">
-            <el-icon class="text-blue-600" size="20">
-              <InfoFilled />
-            </el-icon>
-            <h2 class="text-lg font-semibold text-gray-900">基本信息</h2>
+        <!-- 基本信息 -->
+        <section class="rw-card">
+          <div class="card-head">
+            <h2 class="card-title">基本信息</h2>
           </div>
-          
-          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <!-- 文件名 -->
-            <div class="space-y-2">
-              <label class="text-sm font-medium text-gray-500">文件名</label>
-              <div class="text-sm text-gray-900 font-mono bg-gray-50 p-2 rounded border">
-                {{ logStore.currentLog.filename }}
-              </div>
+          <div class="info-grid">
+            <div class="info-item">
+              <label>文件名</label>
+              <div class="info-value mono">{{ logStore.currentLog.filename }}</div>
             </div>
-
-            <!-- 原始文件名 -->
-            <div class="space-y-2" v-if="logStore.currentLog.original_filename">
-              <label class="text-sm font-medium text-gray-500">原始文件名</label>
-              <div class="text-sm text-gray-900 bg-gray-50 p-2 rounded border">
-                {{ logStore.currentLog.original_filename }}
-              </div>
+            <div class="info-item" v-if="logStore.currentLog.original_filename">
+              <label>原始文件名</label>
+              <div class="info-value">{{ logStore.currentLog.original_filename }}</div>
             </div>
-
-            <!-- 文件大小 -->
-            <div class="space-y-2">
-              <label class="text-sm font-medium text-gray-500">文件大小</label>
-              <div class="text-sm text-gray-900 font-semibold">
-                {{ formatFileSize(logStore.currentLog.file_size) }}
-              </div>
+            <div class="info-item">
+              <label>文件大小</label>
+              <div class="info-value strong">{{ formatFileSize(logStore.currentLog.file_size) }}</div>
             </div>
-
-            <!-- 创建时间 -->
-            <div class="space-y-2">
-              <label class="text-sm font-medium text-gray-500">创建时间</label>
-              <div class="text-sm text-gray-900">
-                {{ formatDateTime(logStore.currentLog.created_at) }}
-              </div>
+            <div class="info-item">
+              <label>创建时间</label>
+              <div class="info-value mono">{{ formatDateTime(logStore.currentLog.created_at) }}</div>
             </div>
-
-            <!-- 更新时间 -->
-            <!-- <div class="space-y-2">
-              <label class="text-sm font-medium text-gray-500">更新时间</label>
-              <div class="text-sm text-gray-900">
-                {{ formatDateTime(logStore.currentLog.updated_at) }}
-              </div>
-            </div> -->
-
-            <!-- 处理状态 -->
-            <div class="space-y-2">
-              <label class="text-sm font-medium text-gray-500">处理状态</label>
+            <div class="info-item">
+              <label>处理状态</label>
               <div>
-                <el-tag 
-                  :type="getStatusTagType(logStore.currentLog.status)"
-                  size="default"
-                >
-                  <el-icon v-if="logStore.currentLog.status === 'processing'" class="mr-1">
-                    <Loading />
-                  </el-icon>
+                <span :class="['rw-pill', statusPill(logStore.currentLog.status)]">
                   {{ getStatusLabel(logStore.currentLog.status) }}
-                </el-tag>
+                </span>
               </div>
             </div>
-
-            <!-- 协议栈日志处理进度 -->
-            <div class="space-y-2 md:col-span-2 lg:col-span-3" v-if="(logStore.currentLog.log_type === 'stack' || logStore.currentLog.log_type === 'full') && logStore.currentLog.status === 'processing'">
-              <label class="text-sm font-medium text-gray-500">处理进度</label>
-              <div class="space-y-2">
-                <el-progress 
-                  :percentage="logStore.currentLog.progress || 0" 
-                  :status="logStore.currentLog.progress === 100 ? 'success' : undefined"
-                  :stroke-width="8"
-                />
-                <div class="text-xs text-gray-500">
-                  {{ logStore.currentLog.progress || 0 }}% 完成
-                </div>
-              </div>
+            <div class="info-item">
+              <label>下载次数</label>
+              <div class="info-value strong">{{ logStore.currentLog.download_count }}</div>
             </div>
 
-            <!-- 下载次数 -->
-            <div class="space-y-2">
-              <label class="text-sm font-medium text-gray-500">下载次数</label>
-              <div class="text-sm text-gray-900 font-semibold">
-                {{ logStore.currentLog.download_count }}
-              </div>
-            </div>
-            <!-- 文件校验和 -->
-            <div class="space-y-2 md:col-span-2" v-if="logStore.currentLog.checksum">
-              <label class="text-sm font-medium text-gray-500">文件校验和 (SHA256)</label>
-              <div class="text-xs text-gray-900 font-mono bg-gray-50 p-3 rounded border break-all leading-relaxed">
-                {{ logStore.currentLog.checksum }}
-              </div>
+            <div
+              class="info-item col-span-all"
+              v-if="(logStore.currentLog.log_type === 'stack' || logStore.currentLog.log_type === 'full') && logStore.currentLog.status === 'processing'"
+            >
+              <label>处理进度</label>
+              <el-progress
+                :percentage="logStore.currentLog.progress || 0"
+                :status="logStore.currentLog.progress === 100 ? 'success' : undefined"
+                :stroke-width="8"
+              />
+              <div class="info-hint">{{ logStore.currentLog.progress || 0 }}% 完成</div>
             </div>
 
-            <!-- 任务ID -->
-            <div class="space-y-2" v-if="logStore.currentLog.task_id">
-              <label class="text-sm font-medium text-gray-500">任务ID</label>
-              <div class="text-sm text-gray-900 font-mono bg-gray-50 p-2 rounded border">
-                {{ logStore.currentLog.task_id }}
-              </div>
+            <div class="info-item col-span-all" v-if="logStore.currentLog.checksum">
+              <label>文件校验和 (SHA256)</label>
+              <div class="code-box">{{ logStore.currentLog.checksum }}</div>
             </div>
 
-            <!-- 重试次数 -->
-            <div class="space-y-2" v-if="logStore.currentLog.retry_count !== undefined && logStore.currentLog.retry_count > 0">
-              <label class="text-sm font-medium text-gray-500">重试次数</label>
-              <div class="text-sm text-gray-900 font-semibold">
-                {{ logStore.currentLog.retry_count }}
-              </div>
+            <div class="info-item" v-if="logStore.currentLog.task_id">
+              <label>任务 ID</label>
+              <div class="code-box">{{ logStore.currentLog.task_id }}</div>
             </div>
 
-            <!-- 处理开始时间 -->
-            <!-- <div class="space-y-2" v-if="logStore.currentLog.processing_started_at">
-              <label class="text-sm font-medium text-gray-500">处理开始时间</label>
-              <div class="text-sm text-gray-900">
-                {{ formatDateTime(logStore.currentLog.processing_started_at) }}
-              </div>
-            </div> -->
-
-            <!-- 处理完成时间 -->
-            <!-- <div class="space-y-2" v-if="logStore.currentLog.processed_at">
-              <label class="text-sm font-medium text-gray-500">处理完成时间</label>
-              <div class="text-sm text-gray-900">
-                {{ formatDateTime(logStore.currentLog.processed_at) }}
-              </div>
-            </div> -->
+            <div class="info-item" v-if="logStore.currentLog.retry_count !== undefined && logStore.currentLog.retry_count > 0">
+              <label>重试次数</label>
+              <div class="info-value strong">{{ logStore.currentLog.retry_count }}</div>
+            </div>
 
             <!-- 问题描述 -->
-            <div class="space-y-2 md:col-span-2 lg:col-span-3">
-              <div class="flex items-center justify-between">
-                <label class="text-sm font-medium text-gray-500">问题描述</label>
-                <div class="flex items-center space-x-2">
-                  <el-button 
-                    v-if="issueDescriptionEditing" 
-                    size="small" 
-                    @click="cancelIssueDescriptionEdit"
-                  >
-                    取消
-                  </el-button>
-                  <el-button 
-                    type="primary" 
-                    size="small" 
-                    :loading="issueDescriptionSaving" 
+            <div class="info-item col-span-all">
+              <div class="info-item-head">
+                <label>问题描述</label>
+                <div class="info-item-actions">
+                  <button v-if="issueDescriptionEditing" class="rw-btn-secondary rw-btn-xs" @click="cancelIssueDescriptionEdit">取消</button>
+                  <button
+                    class="rw-btn-primary rw-btn-xs"
+                    :disabled="issueDescriptionSaving"
                     @click="issueDescriptionEditing ? handleSaveIssueDescription() : startEditIssueDescription()"
                   >
-                    <el-icon class="mr-1" size="14">
-                      <EditPen />
-                    </el-icon>
                     {{ issueDescriptionEditing ? '保存' : (logStore.currentLog?.issue_description ? '编辑' : '添加') }}
-                  </el-button>
+                  </button>
                 </div>
               </div>
-              <div v-if="issueDescriptionEditing" class="space-y-2">
+              <div v-if="issueDescriptionEditing" class="issue-edit">
                 <el-input
                   v-model="issueDescriptionDraft"
                   type="textarea"
@@ -235,184 +143,105 @@
                   show-word-limit
                   placeholder="描述日志涉及的问题，便于AI分析和人工排查"
                 />
-                <div class="text-xs text-gray-400">留空后保存可清除问题描述</div>
+                <div class="info-hint">留空后保存可清除问题描述</div>
               </div>
               <div v-else>
-                <div 
-                  v-if="logStore.currentLog.issue_description"
-                  class="text-sm text-gray-900 bg-blue-50 p-3 rounded border border-blue-200"
-                >
-                  {{ logStore.currentLog.issue_description }}
-                </div>
-                <div 
-                  v-else
-                  class="text-sm text-gray-400 bg-gray-50 p-3 rounded border border-dashed border-gray-200"
-                >
-                  暂无问题描述
-                </div>
+                <div v-if="logStore.currentLog.issue_description" class="info-block highlight">{{ logStore.currentLog.issue_description }}</div>
+                <div v-else class="info-block dashed">暂无问题描述</div>
               </div>
             </div>
 
             <!-- 错误信息 -->
-            <div class="space-y-2 md:col-span-2 lg:col-span-3" v-if="logStore.currentLog.error_message">
-              <label class="text-sm font-medium text-gray-500">错误信息</label>
-              <div class="text-sm text-red-700 bg-red-50 p-3 rounded border border-red-200">
-                {{ logStore.currentLog.error_message }}
-              </div>
+            <div class="info-item col-span-all" v-if="logStore.currentLog.error_message">
+              <label>错误信息</label>
+              <div class="info-block error">{{ logStore.currentLog.error_message }}</div>
             </div>
 
-            <!-- 元数据信息 -->
-            <div class="space-y-2 md:col-span-2 lg:col-span-3" v-if="logStore.currentLog.metadata && hasMetadata(logStore.currentLog.metadata)">
-              <label class="text-sm font-medium text-gray-500">元数据信息</label>
-              <div class="bg-gray-50 p-3 rounded border">
-                <!-- 日志来源 -->
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div v-if="logStore.currentLog.metadata.source" class="space-y-1">
-                    <label class="text-xs font-medium text-gray-400">日志来源</label>
-                    <div class="text-sm text-gray-900">{{ logStore.currentLog.metadata.source }}</div>
+            <!-- 元数据 -->
+            <div class="info-item col-span-all" v-if="logStore.currentLog.metadata && hasMetadata(logStore.currentLog.metadata)">
+              <label>元数据信息</label>
+              <div class="meta-block">
+                <div class="meta-grid">
+                  <div v-if="logStore.currentLog.metadata.source" class="meta-item">
+                    <span class="meta-label">日志来源</span>
+                    <span class="meta-value">{{ logStore.currentLog.metadata.source }}</span>
                   </div>
-                  
-                  <!-- 环境信息 -->
-                  <div v-if="logStore.currentLog.metadata.environment" class="space-y-1">
-                    <label class="text-xs font-medium text-gray-400">环境信息</label>
-                    <div class="text-sm text-gray-900">{{ logStore.currentLog.metadata.environment }}</div>
+                  <div v-if="logStore.currentLog.metadata.environment" class="meta-item">
+                    <span class="meta-label">环境信息</span>
+                    <span class="meta-value">{{ logStore.currentLog.metadata.environment }}</span>
                   </div>
-                  
-                  <!-- 服务名称 -->
-                  <div v-if="logStore.currentLog.metadata.service_name" class="space-y-1">
-                    <label class="text-xs font-medium text-gray-400">研发分析</label>
-                    <div class="text-sm text-gray-900">{{ logStore.currentLog.metadata.service_name }}</div>
+                  <div v-if="logStore.currentLog.metadata.service_name" class="meta-item">
+                    <span class="meta-label">研发分析</span>
+                    <span class="meta-value">{{ logStore.currentLog.metadata.service_name }}</span>
                   </div>
-                  
-                  <!-- 版本信息 -->
-                  <div v-if="logStore.currentLog.metadata.version_info || logStore.currentLog.metadata.version" class="space-y-1 md:col-span-2">
-                    <label class="text-xs font-medium text-gray-400">版本信息</label>
-                    
-                    <!-- 如果有详细的版本信息 -->
-                    <div v-if="logStore.currentLog.metadata.version_info && logStore.currentLog.metadata.version_info.raw_content" class="version-info-container">
+                  <div
+                    v-if="logStore.currentLog.metadata.version_info || logStore.currentLog.metadata.version"
+                    class="meta-item col-span-2"
+                  >
+                    <span class="meta-label">版本信息</span>
+                    <div
+                      v-if="logStore.currentLog.metadata.version_info && logStore.currentLog.metadata.version_info.raw_content"
+                      class="version-info"
+                    >
                       <el-collapse v-model="activeVersionCollapse" class="version-collapse">
-                        <el-collapse-item title="GNB系统组件版本详情" name="version-details">
+                        <el-collapse-item name="version-details">
                           <template #title>
-                            <div class="flex items-center space-x-2">
-                              <el-icon class="text-blue-600">
-                                <InfoFilled />
-                              </el-icon>
-                              <span class="font-medium">GNB系统组件版本详情</span>
-                              <el-tag size="small" type="info">{{ getVersionBoardCount(logStore.currentLog.metadata.version_info.raw_content) }}个板卡</el-tag>
+                            <div class="version-title">
+                              <span class="version-title-text">GNB 系统组件版本详情</span>
+                              <span class="rw-pill rw-pill-info">{{ getVersionBoardCount(logStore.currentLog.metadata.version_info.raw_content) }} 个板卡</span>
                             </div>
                           </template>
-                          
                           <div class="version-content">
-                            <div v-for="(board, index) in parseVersionInfo(logStore.currentLog.metadata.version_info.raw_content)" :key="index" class="board-info mb-6 last:mb-0">
-                              <!-- 板卡标题 -->
-                              <div class="board-header flex items-center justify-between p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border border-blue-200 mb-3">
-                                <div class="flex items-center space-x-3">
-                                  <el-icon class="text-blue-600" size="20">
-                                    <Cpu />
-                                  </el-icon>
-                                  <div>
-                                    <h4 class="font-semibold text-gray-900">{{ board.title }}</h4>
-                                    <p class="text-sm text-gray-600">Slot ID: {{ board.slotId }} | CPU ID: {{ board.cpuId }}</p>
-                                  </div>
+                            <div
+                              v-for="(board, index) in parseVersionInfo(logStore.currentLog.metadata.version_info.raw_content)"
+                              :key="index"
+                              class="board-info"
+                            >
+                              <div class="board-header">
+                                <div class="board-header-left">
+                                  <h4>{{ board.title }}</h4>
+                                  <p>Slot ID: {{ board.slotId }} · CPU ID: {{ board.cpuId }}</p>
                                 </div>
-                                <el-tag :type="board.type === 'main' ? 'success' : 'info'" size="small">
+                                <span :class="['rw-pill', board.type === 'main' ? 'rw-pill-success' : 'rw-pill-info']">
                                   {{ board.type === 'main' ? '主控板' : '子板' }}
-                                </el-tag>
+                                </span>
                               </div>
-                              
-                              <!-- 版本详情 -->
-                              <div class="board-details grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <!-- OAM版本 -->
-                                <div v-if="board.oamVersion" class="version-section bg-white p-4 rounded-lg border border-gray-200">
-                                  <div class="flex items-center space-x-2 mb-3">
-                                    <el-icon class="text-green-600" size="16">
-                                      <Setting />
-                                    </el-icon>
-                                    <h5 class="font-medium text-gray-900">OAM版本</h5>
-                                  </div>
-                                  <div class="space-y-2 text-sm">
-                                    <div class="flex justify-between">
-                                      <span class="text-gray-600">版本号:</span>
-                                      <span class="font-mono text-gray-900">{{ board.oamVersion.version }}</span>
-                                    </div>
-                                    <div class="flex justify-between">
-                                      <span class="text-gray-600">Git版本:</span>
-                                      <span class="font-mono text-gray-900">{{ board.oamVersion.gitVersion }}</span>
-                                    </div>
-                                    <div class="flex justify-between">
-                                      <span class="text-gray-600">分支:</span>
-                                      <span class="font-mono text-gray-900">{{ board.oamVersion.branch }}</span>
-                                    </div>
-                                    <div class="flex justify-between">
-                                      <span class="text-gray-600">构建时间:</span>
-                                      <span class="font-mono text-gray-900">{{ board.oamVersion.buildTime }}</span>
-                                    </div>
+                              <div class="board-details">
+                                <div v-if="board.oamVersion" class="version-section">
+                                  <h5>OAM 版本</h5>
+                                  <div class="kv-list">
+                                    <div class="kv"><span>版本号</span><span class="mono">{{ board.oamVersion.version }}</span></div>
+                                    <div class="kv"><span>Git 版本</span><span class="mono">{{ board.oamVersion.gitVersion }}</span></div>
+                                    <div class="kv"><span>分支</span><span class="mono">{{ board.oamVersion.branch }}</span></div>
+                                    <div class="kv"><span>构建时间</span><span class="mono">{{ board.oamVersion.buildTime }}</span></div>
                                   </div>
                                 </div>
-                                
-                                <!-- 协议栈版本 -->
-                                <div v-if="board.protocolVersion" class="version-section bg-white p-4 rounded-lg border border-gray-200">
-                                  <div class="flex items-center space-x-2 mb-3">
-                                    <el-icon class="text-purple-600" size="16">
-                                      <Connection />
-                                    </el-icon>
-                                    <h5 class="font-medium text-gray-900">协议栈版本</h5>
-                                  </div>
-                                  <div class="space-y-2 text-sm">
-                                    <div v-if="board.protocolVersion.cucp" class="flex justify-between">
-                                      <span class="text-gray-600">CUCP版本:</span>
-                                      <span class="font-mono text-gray-900">{{ board.protocolVersion.cucp }}</span>
-                                    </div>
-                                    <div v-if="board.protocolVersion.cuup" class="flex justify-between">
-                                      <span class="text-gray-600">CUUP版本:</span>
-                                      <span class="font-mono text-gray-900">{{ board.protocolVersion.cuup }}</span>
-                                    </div>
-                                    <div v-if="board.protocolVersion.du" class="flex justify-between">
-                                      <span class="text-gray-600">DU版本:</span>
-                                      <span class="font-mono text-gray-900">{{ board.protocolVersion.du }}</span>
-                                    </div>
-                                    <div v-if="board.protocolVersion.extra && board.protocolVersion.extra.length" class="space-y-1">
-                                      <div v-for="(item, idx) in board.protocolVersion.extra" :key="idx" class="flex justify-between">
-                                        <span class="text-gray-600">{{ item.key }}:</span>
-                                        <span class="font-mono text-gray-900">{{ item.value }}</span>
+                                <div v-if="board.protocolVersion" class="version-section">
+                                  <h5>协议栈版本</h5>
+                                  <div class="kv-list">
+                                    <div v-if="board.protocolVersion.cucp" class="kv"><span>CUCP 版本</span><span class="mono">{{ board.protocolVersion.cucp }}</span></div>
+                                    <div v-if="board.protocolVersion.cuup" class="kv"><span>CUUP 版本</span><span class="mono">{{ board.protocolVersion.cuup }}</span></div>
+                                    <div v-if="board.protocolVersion.du" class="kv"><span>DU 版本</span><span class="mono">{{ board.protocolVersion.du }}</span></div>
+                                    <template v-if="board.protocolVersion.extra && board.protocolVersion.extra.length">
+                                      <div v-for="(item, idx) in board.protocolVersion.extra" :key="idx" class="kv">
+                                        <span>{{ item.key }}</span><span class="mono">{{ item.value }}</span>
                                       </div>
-                                    </div>
-                                    <div v-if="board.protocolVersion.status" class="flex justify-between">
-                                      <span class="text-gray-600">状态:</span>
-                                      <el-tag size="small" :type="board.protocolVersion.status === 'Not applicable for this SOM type' ? 'info' : 'success'">
+                                    </template>
+                                    <div v-if="board.protocolVersion.status" class="kv">
+                                      <span>状态</span>
+                                      <span :class="['rw-pill', board.protocolVersion.status === 'Not applicable for this SOM type' ? 'rw-pill-info' : 'rw-pill-success']">
                                         {{ board.protocolVersion.status }}
-                                      </el-tag>
+                                      </span>
                                     </div>
                                   </div>
                                 </div>
-                                
-                                <!-- FPGA版本 -->
-                                <div v-if="board.fpgaVersion" class="version-section bg-white p-4 rounded-lg border border-gray-200">
-                                  <div class="flex items-center space-x-2 mb-3">
-                                    <el-icon class="text-orange-600" size="16">
-                                      <Cpu />
-                                    </el-icon>
-                                    <h5 class="font-medium text-gray-900">FPGA版本</h5>
-                                  </div>
-                                  <div class="text-sm">
-                                    <el-tag size="small" type="warning">{{ board.fpgaVersion }}</el-tag>
-                                  </div>
+                                <div v-if="board.fpgaVersion" class="version-section">
+                                  <h5>FPGA 版本</h5>
+                                  <span class="rw-pill rw-pill-warning">{{ board.fpgaVersion }}</span>
                                 </div>
-                                
-                                <!-- 组件数量 -->
-                                <div v-if="board.componentCount" class="version-section bg-white p-4 rounded-lg border border-gray-200">
-                                  <div class="flex items-center space-x-2 mb-3">
-                                    <el-icon class="text-blue-600" size="16">
-                                      <Grid />
-                                    </el-icon>
-                                    <h5 class="font-medium text-gray-900">组件信息</h5>
-                                  </div>
-                                  <div class="text-sm">
-                                    <div class="flex justify-between">
-                                      <span class="text-gray-600">组件数量:</span>
-                                      <span class="font-semibold text-blue-600">{{ board.componentCount }}</span>
-                                    </div>
-                                  </div>
+                                <div v-if="board.componentCount" class="version-section">
+                                  <h5>组件信息</h5>
+                                  <div class="kv"><span>组件数量</span><span class="mono strong">{{ board.componentCount }}</span></div>
                                 </div>
                               </div>
                             </div>
@@ -420,134 +249,66 @@
                         </el-collapse-item>
                       </el-collapse>
                     </div>
-                    
-                    <!-- 如果只有简单版本号 -->
-                    <div v-else-if="logStore.currentLog.metadata.version" class="text-sm text-gray-900 font-mono bg-gray-50 p-2 rounded border">
-                      {{ logStore.currentLog.metadata.version }}
-                    </div>
+                    <div v-else-if="logStore.currentLog.metadata.version" class="code-box">{{ logStore.currentLog.metadata.version }}</div>
                   </div>
                 </div>
-                
-                <!-- 标签列表 -->
-                <div v-if="logStore.currentLog.metadata.tags && logStore.currentLog.metadata.tags.length > 0" class="mt-3 space-y-1">
-                  <label class="text-xs font-medium text-gray-400">标签</label>
-                  <div class="flex flex-wrap gap-1">
-                    <el-tag 
-                      v-for="tag in logStore.currentLog.metadata.tags" 
-                      :key="tag" 
-                      size="small" 
-                      type="info"
-                    >
-                      {{ tag }}
-                    </el-tag>
+                <div v-if="logStore.currentLog.metadata.tags && logStore.currentLog.metadata.tags.length > 0" class="meta-tags">
+                  <span class="meta-label">标签</span>
+                  <div class="tag-list">
+                    <span class="rw-pill rw-pill-info" v-for="tag in logStore.currentLog.metadata.tags" :key="tag">{{ tag }}</span>
                   </div>
                 </div>
-                
-                <!-- 额外字段 -->
-                <!-- <div v-if="logStore.currentLog.metadata.extra_fields && Object.keys(logStore.currentLog.metadata.extra_fields).length > 0" class="mt-3 space-y-1">
-                  <label class="text-xs font-medium text-gray-400">额外字段</label>
-                  <div class="text-xs text-gray-700 font-mono bg-white p-2 rounded border">
-                    {{ JSON.stringify(logStore.currentLog.metadata.extra_fields, null, 2) }}
-                  </div>
-                </div> -->
               </div>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- AI分析结果区域 -->
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <div class="flex items-center justify-between mb-6">
-            <div class="flex items-center space-x-2">
-              <el-icon class="text-purple-600" size="20">
-                <MagicStick />
-              </el-icon>
-              <h2 class="text-lg font-semibold text-gray-900">AI分析（结果将自动保存，刷新或再次访问时可直接查看）</h2>
-              <el-tag v-if="aiAnalysisResult" :type="aiAnalysisResult.status === 'completed' ? 'success' : 'warning'" size="small">
-                {{ aiAnalysisResult.status === 'completed' ? '已完成' : '部分完成' }}
-              </el-tag>
+        <!-- AI 分析 -->
+        <section class="rw-card">
+          <div class="card-head">
+            <h2 class="card-title">AI 分析</h2>
+            <span class="card-subtitle">结果将自动保存，刷新或再次访问时可直接查看</span>
+            <span
+              v-if="aiAnalysisResult"
+              :class="['rw-pill', aiAnalysisResult.status === 'completed' ? 'rw-pill-success' : 'rw-pill-warning']"
+            >
+              {{ aiAnalysisResult.status === 'completed' ? '已完成' : '部分完成' }}
+            </span>
+          </div>
+
+          <div v-if="!aiAnalysisLoading && !aiAnalysisResult" class="analysis-input">
+            <p class="analysis-hint">
+              {{ logStore.currentLog.issue_description
+                ? '已自动填入问题描述，您可以直接分析或修改查询内容'
+                : '请输入您想要分析的问题，AI 将为您提供详细的分析结果' }}
+            </p>
+            <el-input
+              v-model="aiAnalysisQuery"
+              type="textarea"
+              :rows="3"
+              :placeholder="logStore.currentLog.issue_description
+                ? '已自动填入问题描述，您可以修改或直接开始分析...'
+                : '例如：分析所有错误日志、查找天线异常、统计告警信息等...'"
+            />
+            <div class="analysis-actions">
+              <button class="rw-btn-primary" @click="handleAIAnalysisSubmit">开始分析</button>
+              <button class="rw-btn-secondary" @click="aiAnalysisQuery = ''">清空</button>
             </div>
           </div>
-          
-          <!-- AI分析输入区域 -->
-          <div v-if="!aiAnalysisLoading && !aiAnalysisResult" class="space-y-4">
-            <div class="bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg p-6 border border-purple-200">
-              <div class="flex items-start space-x-3 mb-4">
-                <el-icon class="text-purple-600 mt-1" size="24">
-                  <MagicStick />
-                </el-icon>
-                <div>
-                  <h3 class="text-base font-semibold text-gray-900 mb-2">智能日志分析</h3>
-                  <p class="text-sm text-gray-600">
-                    {{ logStore.currentLog.issue_description 
-                      ? '已自动填入问题描述，您可以直接分析或修改查询内容' 
-                      : '请输入您想要分析的问题，AI将为您提供详细的分析结果' }}
-                  </p>
-                </div>
-              </div>
-              
-              <el-input
-                v-model="aiAnalysisQuery"
-                type="textarea"
-                :rows="3"
-                :placeholder="logStore.currentLog.issue_description 
-                  ? '已自动填入问题描述，您可以修改或直接开始分析...' 
-                  : '例如：分析所有错误日志、查找天线异常、统计告警信息等...'"
-                class="mb-4"
-              />
-              
-              <div class="flex items-center space-x-3">
-                <el-button 
-                  type="primary" 
-                  @click="handleAIAnalysisSubmit"
-                  size="large"
-                >
-                  <el-icon class="mr-2">
-                    <MagicStick />
-                  </el-icon>
-                  开始分析
-                </el-button>
-                
-                <el-button @click="aiAnalysisQuery = ''" size="large">
-                  清空
-                </el-button>
-              </div>
-            </div>
-            
-            <!-- 示例查询 -->
-            <!-- <div class="bg-gray-50 rounded-lg p-4 border border-gray-200">
-              <p class="text-sm font-medium text-gray-700 mb-2">示例查询：</p>
-              <div class="flex flex-wrap gap-2">
-                <el-tag 
-                  v-for="example in exampleQueries" 
-                  :key="example" 
-                  class="cursor-pointer hover:bg-purple-100 transition-colors"
-                  @click="aiAnalysisQuery = example"
-                  size="small"
-                >
-                  {{ example }}
-                </el-tag>
-              </div>
-            </div> -->
-          </div>
-          
-          <!-- AI分析加载中 -->
-          <div v-if="aiAnalysisLoading" class="space-y-4">
-            <div class="flex items-center justify-center py-8">
-              <el-icon class="is-loading text-purple-600 mr-3" size="32">
-                <Loading />
-              </el-icon>
-              <span class="text-lg text-gray-700">AI正在分析日志，请稍候...</span>
+
+          <div v-if="aiAnalysisLoading" class="analysis-loading">
+            <div class="loading-row">
+              <span class="loader-dot"></span>
+              <span>AI 正在分析日志，请稍候…</span>
             </div>
             <el-progress :percentage="aiAnalysisProgress" :stroke-width="8" />
-            <div class="text-center text-xs text-gray-500">
+            <div class="loading-meta">
               当前状态：{{ aiAnalysisStatus || '运行中' }}
-              <span v-if="aiAnalysisTaskId" class="ml-2">任务ID: {{ aiAnalysisTaskId }}</span>
+              <span v-if="aiAnalysisTaskId" class="loading-task">任务ID: {{ aiAnalysisTaskId }}</span>
             </div>
           </div>
-          
-          <!-- AI分析结果 -->
-          <AIAnalysisResult 
+
+          <AIAnalysisResult
             v-if="aiAnalysisResult"
             :result="aiAnalysisResult"
             @restart="resetAIAnalysis"
@@ -555,124 +316,58 @@
             @download="downloadAnalysisResult"
             @share="shareAnalysisResult"
           />
-        </div>
+        </section>
 
-        <!-- 人工分析结果展示 -->
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
-            <div class="flex items-center space-x-2">
-              <el-icon class="text-amber-600" size="20">
-                <EditPen />
-              </el-icon>
-              <h2 class="text-lg font-semibold text-gray-900">人工分析</h2>
-            </div>
-            <div class="flex items-center space-x-3 text-xs text-gray-500">
-              <span v-if="logStore.currentLog?.manual_analysis_updated_at">
+        <!-- 人工分析 -->
+        <section class="rw-card">
+          <div class="card-head">
+            <h2 class="card-title">人工分析</h2>
+            <div class="card-head-right">
+              <span v-if="logStore.currentLog?.manual_analysis_updated_at" class="card-subtitle">
                 最近更新：{{ formatDateTime(logStore.currentLog.manual_analysis_updated_at) }}
               </span>
-              <el-button 
-                type="primary" 
-                plain 
-                size="small" 
-                @click="openManualAnalysisDialog"
-              >
-                <el-icon class="mr-1" size="14">
-                  <EditPen />
-                </el-icon>
+              <button class="rw-btn-secondary rw-btn-xs" @click="openManualAnalysisDialog">
                 {{ logStore.currentLog?.manual_analysis ? '编辑' : '添加' }}人工分析
-              </el-button>
+              </button>
             </div>
           </div>
-
-          <div 
-            v-if="logStore.currentLog?.manual_analysis" 
+          <div
+            v-if="logStore.currentLog?.manual_analysis"
             class="manual-analysis-body"
             v-html="renderedManualAnalysis"
           />
-          <el-empty v-else description="暂无人工分析内容">
-            <el-button type="primary" @click="openManualAnalysisDialog">
-              添加人工分析
-            </el-button>
-          </el-empty>
-        </div>
-
-        <!-- 操作按钮组 -->
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <div class="flex items-center space-x-2 mb-6">
-            <el-icon class="text-green-600" size="20">
-              <Operation />
-            </el-icon>
-            <h2 class="text-lg font-semibold text-gray-900">操作</h2>
+          <div v-else class="manual-empty">
+            <p>暂无人工分析内容</p>
+            <button class="rw-btn-primary rw-btn-xs" @click="openManualAnalysisDialog">添加人工分析</button>
           </div>
-          
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <!-- 下载按钮 -->
-            <el-button 
-              type="primary" 
-              @click="handleDownload"
-              :loading="downloadLoading"
-              class="w-full"
-            >
-              <el-icon class="mr-2">
-                <Download />
-              </el-icon>
-              下载文件
-            </el-button>
+        </section>
 
-            <!-- 删除按钮 -->
-            <el-button 
-              type="danger" 
-              @click="handleDelete"
-              :loading="deleteLoading"
-              class="w-full"
-            >
-              <el-icon class="mr-2">
-                <Delete />
-              </el-icon>
-              删除文件
-            </el-button>
-
-            <!-- 人工分析按钮 -->
-            <el-button 
-              type="success" 
-              @click="openManualAnalysisDialog"
-              class="w-full"
-            >
-              <el-icon class="mr-2">
-                <EditPen />
-              </el-icon>
-              人工分析
-            </el-button>
-
-            <!-- 复制链接按钮 -->
-            <el-button 
-              type="info" 
-              @click="handleCopyLink"
-              class="w-full"
-            >
-              <el-icon class="mr-2">
-                <CopyDocument />
-              </el-icon>
-              复制链接
-            </el-button>
+        <!-- 操作 -->
+        <section class="rw-card">
+          <div class="card-head">
+            <h2 class="card-title">操作</h2>
           </div>
-        </div>
-      </div>
-      <!-- 文件不存在（必须与 v-if/v-else-if 同级且紧随其后） -->
+          <div class="actions-grid">
+            <button class="rw-btn-primary" :disabled="downloadLoading" @click="handleDownload">
+              {{ downloadLoading ? '下载中…' : '下载文件' }}
+            </button>
+            <button class="rw-btn-secondary" @click="openManualAnalysisDialog">人工分析</button>
+            <button class="rw-btn-secondary" @click="handleCopyLink">复制链接</button>
+            <button class="rw-btn-danger" :disabled="deleteLoading" @click="handleDelete">
+              {{ deleteLoading ? '删除中…' : '删除文件' }}
+            </button>
+          </div>
+        </section>
+      </template>
+
       <div v-else class="not-found">
-        <el-result
-          icon="warning"
-          title="文件不存在"
-          sub-title="请检查文件ID是否正确，或文件可能已被删除"
-        >
+        <el-result icon="warning" title="文件不存在" sub-title="请检查文件ID是否正确，或文件可能已被删除">
           <template #extra>
-            <el-button type="primary" @click="$router.push('/')">
-              返回列表
-            </el-button>
+            <button class="rw-btn-primary" @click="$router.push('/logs')">返回列表</button>
           </template>
         </el-result>
       </div>
-    </main>
+    </div>
 
     <!-- 人工分析录入弹窗 -->
     <el-dialog
@@ -687,25 +382,22 @@
         :model="manualAnalysisForm"
         :rules="manualAnalysisRules"
         label-position="top"
-        class="space-y-3"
       >
-        <el-form-item label="分析结果（支持Markdown）" prop="content">
+        <el-form-item label="分析结果（支持 Markdown）" prop="content">
           <el-input
             v-model="manualAnalysisForm.content"
             type="textarea"
             :autosize="{ minRows: 6, maxRows: 14 }"
             maxlength="5000"
             show-word-limit
-            placeholder="记录对日志的人工分析结论、影响范围与处理建议，支持Markdown格式。"
+            placeholder="记录对日志的人工分析结论、影响范围与处理建议，支持 Markdown 格式。"
           />
         </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button @click="manualAnalysisDialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="manualAnalysisSaving" @click="handleSaveManualAnalysis">
-            保存
-          </el-button>
+          <button class="rw-btn-secondary" @click="manualAnalysisDialogVisible = false">取消</button>
+          <button class="rw-btn-primary" :disabled="manualAnalysisSaving" @click="handleSaveManualAnalysis">保存</button>
         </span>
       </template>
     </el-dialog>
@@ -726,25 +418,6 @@ import {
 import { logApi } from '../api'
 import AIAnalysisResult from '../components/AIAnalysisResult.vue'
 import { renderMarkdown } from '../utils/markdownRenderer'
-import {
-  ArrowLeft,
-  Download,
-  Delete,
-  Operation,
-  List,
-  InfoFilled,
-  MagicStick,
-  EditPen,
-  CopyDocument,
-  Loading,
-  Cpu,
-  Setting,
-  Connection,
-  Grid,
-  ArrowDown,
-  Refresh,
-} from '@element-plus/icons-vue'
-import ravenLogo from '@/assets/raven-logo.png'
 
 interface Props {
   id: string
@@ -998,17 +671,17 @@ const renderedManualAnalysis = computed(() => {
   return renderMarkdown(content, { wrapperClass: 'markdown-content', cleanXml: true })
 })
 
-// 获取日志类型标签类型
-const getLogTypeTagType = (logType?: string) => {
+// 日志类型对应的 pill 样式
+const logTypePill = (logType?: string) => {
   switch (logType) {
     case 'stack':
-      return 'primary'
+      return 'rw-pill-success'
     case 'oam_antenna':
-      return 'success'
+      return 'rw-pill-info'
     case 'full':
-      return 'warning'
+      return 'rw-pill-warning'
     default:
-      return 'info'
+      return 'rw-pill-neutral'
   }
 }
 
@@ -1026,19 +699,19 @@ const getLogTypeLabel = (logType?: string) => {
   }
 }
 
-// 获取状态标签类型
-const getStatusTagType = (status: string) => {
+// 状态对应的 pill 样式
+const statusPill = (status?: string) => {
   switch (status) {
     case 'completed':
-      return 'success'
+      return 'rw-pill-success'
     case 'processing':
-      return 'warning'
+      return 'rw-pill-warning'
     case 'failed':
-      return 'danger'
+      return 'rw-pill-danger'
     case 'pending':
-      return 'info'
+      return 'rw-pill-info'
     default:
-      return 'info'
+      return 'rw-pill-neutral'
   }
 }
 
@@ -1232,7 +905,7 @@ const handleDelete = async () => {
     deleteLoading.value = true
     await logStore.deleteLog(logStore.currentLog.id)
     ElMessage.success(`文件 ${logStore.currentLog.filename} 已删除`)
-    router.push('/')
+    router.push('/logs')
   } catch (error) {
     if (error !== 'cancel') {
       ElMessage.error('文件删除失败，请稍后重试')
@@ -1755,172 +1428,666 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-@reference "tailwindcss";
+.rw-page {
+  --rw-canvas: #ffffff;
+  --rw-canvas-soft: #fafafa;
+  --rw-surface-card: #ffffff;
+  --rw-surface-strong: #f0f0f3;
+  --rw-surface-dark: #171717;
+  --rw-ink: #171717;
+  --rw-body: #60646c;
+  --rw-muted: #999999;
+  --rw-muted-soft: #cccccc;
+  --rw-hairline: #f0f0f3;
+  --rw-hairline-soft: #f5f5f7;
+  --rw-hairline-strong: #dcdee0;
+  --rw-primary: #000000;
+  --rw-primary-active: #1a1a1a;
+  --rw-on-primary: #ffffff;
+  --rw-success: #16a34a;
+  --rw-danger: #c0382b;
+  --rw-link: #0d74ce;
+  --rw-sans: 'Inter', -apple-system, system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --rw-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 
-.log-detail {
-  @apply min-h-screen bg-gray-50;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--rw-canvas);
+  color: var(--rw-ink);
+  font-family: var(--rw-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-.detail-header {
-  @apply bg-white border-b border-gray-200 px-6 py-4;
+.rw-page *,
+.rw-page *::before,
+.rw-page *::after { box-sizing: border-box; }
+
+.rw-page button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
 }
 
-.header-content {
-  @apply max-w-7xl mx-auto flex items-center justify-between;
+/* Topbar */
+.rw-topbar {
+  height: 56px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--rw-hairline);
+  display: flex;
+  align-items: center;
+  padding: 0 28px;
+  gap: 14px;
+  background: var(--rw-canvas);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.rw-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.rw-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.rw-crumb {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--rw-ink);
+  letter-spacing: -0.1px;
+  flex-shrink: 0;
+}
+.rw-crumb-meta {
+  font-size: 12px;
+  color: var(--rw-muted);
+  font-family: var(--rw-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
-.back-button {
-  @apply flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors;
+.back-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid var(--rw-hairline-strong);
+  background: var(--rw-canvas);
+  color: var(--rw-ink);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease;
+}
+.back-btn:hover { background: var(--rw-surface-strong); }
+
+/* Buttons */
+.rw-btn-primary,
+.rw-btn-secondary,
+.rw-btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--rw-sans);
+  cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+  white-space: nowrap;
+  border: none;
+  line-height: 1;
+}
+.rw-btn-primary { background: var(--rw-primary); color: var(--rw-on-primary); }
+.rw-btn-primary:hover:not(:disabled) { background: var(--rw-primary-active); }
+.rw-btn-secondary {
+  background: var(--rw-canvas);
+  color: var(--rw-ink);
+  border: 1px solid var(--rw-hairline-strong);
+}
+.rw-btn-secondary:hover:not(:disabled) { background: var(--rw-surface-strong); }
+.rw-btn-danger { background: var(--rw-danger); color: #fff; }
+.rw-btn-danger:hover:not(:disabled) { background: #a02f24; }
+.rw-btn-primary:disabled,
+.rw-btn-secondary:disabled,
+.rw-btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.rw-btn-xs {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 6px;
 }
 
-.header-title {
-  @apply text-xl font-semibold text-gray-900;
+/* Pills */
+.rw-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  line-height: 1;
+}
+.rw-pill-success { background: rgba(22, 163, 74, 0.12); color: #15803d; }
+.rw-pill-info { background: var(--rw-surface-strong); color: var(--rw-ink); }
+.rw-pill-warning { background: rgba(171, 100, 0, 0.10); color: #ab6400; }
+.rw-pill-danger { background: rgba(192, 56, 43, 0.10); color: #c0382b; }
+.rw-pill-neutral { background: var(--rw-surface-strong); color: var(--rw-body); }
+.rw-pill-preview { background: rgba(129, 69, 181, 0.10); color: #8145b5; }
+.rw-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: rw-pulse 1.2s ease-in-out infinite;
+}
+@keyframes rw-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
 }
 
-.detail-main {
-  @apply max-w-7xl mx-auto px-6 py-8;
+/* Page scroll */
+.rw-page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 28px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
 }
 
-.title-section {
-  @apply mb-8;
+.rw-card {
+  background: var(--rw-surface-card);
+  border: 1px solid var(--rw-hairline-strong);
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
 }
 
-.log-title {
-  @apply text-3xl font-bold text-gray-900 mb-4;
+/* Title card */
+.title-card { padding: 20px 24px; }
+.title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.title-left { flex: 1; min-width: 0; }
+.title-name {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  color: var(--rw-ink);
+  margin: 0;
+  word-break: break-all;
+  line-height: 1.3;
+}
+.title-meta { margin-top: 6px; }
+.title-id {
+  font-family: var(--rw-mono);
+  font-size: 12px;
+  color: var(--rw-muted);
+}
+.title-tags { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Card head */
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--rw-ink);
+  letter-spacing: -0.1px;
+  margin: 0;
+}
+.card-subtitle {
+  font-size: 12px;
+  color: var(--rw-muted);
+}
+.card-head-right {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
-.log-meta {
-  @apply flex flex-wrap items-center gap-4;
-}
-
-.content-grid {
-  @apply grid grid-cols-1 lg:grid-cols-3 gap-8;
-}
-
-.main-content {
-  @apply lg:col-span-2 space-y-6;
-}
-
-.sidebar {
-  @apply space-y-6;
-}
-
+/* Info grid */
 .info-grid {
-  @apply grid grid-cols-1 sm:grid-cols-2 gap-4;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px 22px;
+}
+.info-item { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.info-item > label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  color: var(--rw-muted);
+  text-transform: uppercase;
+}
+.info-value { font-size: 13.5px; color: var(--rw-ink); word-break: break-word; }
+.info-value.strong { font-weight: 600; }
+.info-value.mono {
+  font-family: var(--rw-mono);
+  font-size: 12.5px;
+  color: var(--rw-body);
+}
+.info-hint { font-size: 11.5px; color: var(--rw-muted); }
+.info-item.col-span-all { grid-column: 1 / -1; }
+.info-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.info-item-actions { display: flex; gap: 6px; }
+
+.code-box {
+  background: var(--rw-canvas-soft);
+  border: 1px solid var(--rw-hairline);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: var(--rw-mono);
+  font-size: 12px;
+  color: var(--rw-body);
+  word-break: break-all;
+  line-height: 1.5;
 }
 
-.info-item {
-  @apply space-y-1;
+.info-block {
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--rw-ink);
+}
+.info-block.highlight {
+  background: var(--rw-canvas-soft);
+  border: 1px solid var(--rw-hairline);
+}
+.info-block.dashed {
+  background: var(--rw-canvas-soft);
+  border: 1px dashed var(--rw-hairline-strong);
+  color: var(--rw-muted);
+}
+.info-block.error {
+  background: rgba(192, 56, 43, 0.06);
+  border: 1px solid rgba(192, 56, 43, 0.20);
+  color: #c0382b;
 }
 
-.info-label {
-  @apply text-sm font-medium text-gray-500;
+.issue-edit { display: flex; flex-direction: column; gap: 6px; }
+
+/* Meta block */
+.meta-block {
+  border: 1px solid var(--rw-hairline);
+  background: var(--rw-canvas-soft);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 22px;
+}
+.meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.meta-item.col-span-2 { grid-column: 1 / -1; }
+.meta-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--rw-muted);
+  text-transform: uppercase;
+}
+.meta-value { font-size: 13px; color: var(--rw-ink); }
+.meta-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.meta-tags .tag-list { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Version collapse */
+.version-info { margin-top: 4px; }
+.version-collapse {
+  border: 1px solid var(--rw-hairline-strong);
+  border-radius: 10px;
+  background: var(--rw-canvas);
+  overflow: hidden;
+}
+.version-collapse :deep(.el-collapse) { border: none; }
+.version-collapse :deep(.el-collapse-item__header) {
+  padding: 0 14px;
+  background: var(--rw-canvas);
+  border-bottom: 1px solid var(--rw-hairline);
+  font-weight: 600;
+  color: var(--rw-ink);
+  font-size: 13.5px;
+  height: 44px;
+}
+.version-collapse :deep(.el-collapse-item__wrap) {
+  background: var(--rw-canvas-soft);
+  border-bottom: none;
+}
+.version-collapse :deep(.el-collapse-item__content) {
+  padding: 16px;
+  color: var(--rw-ink);
+}
+.version-collapse :deep(.el-collapse-item:last-child .el-collapse-item__header.is-active) {
+  border-bottom: 1px solid var(--rw-hairline);
+}
+.version-title { display: flex; align-items: center; gap: 8px; }
+.version-title-text { font-size: 13.5px; }
+
+.version-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.board-info {
+  background: var(--rw-canvas);
+  border: 1px solid var(--rw-hairline);
+  border-radius: 10px;
+  padding: 14px;
+}
+.board-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.board-header-left h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--rw-ink);
+  margin: 0 0 2px;
+  letter-spacing: -0.1px;
+}
+.board-header-left p {
+  font-size: 12px;
+  color: var(--rw-body);
+  margin: 0;
+  font-family: var(--rw-mono);
+}
+.board-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.version-section {
+  padding: 12px;
+  border: 1px solid var(--rw-hairline);
+  border-radius: 8px;
+  background: var(--rw-canvas-soft);
+}
+.version-section h5 {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--rw-ink);
+  margin: 0 0 8px;
+  letter-spacing: 0.1px;
+}
+.kv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12.5px;
+  align-items: center;
+}
+.kv > span:first-child { color: var(--rw-body); }
+.kv > span:last-child { color: var(--rw-ink); }
+.kv .mono {
+  font-family: var(--rw-mono);
+  font-size: 12px;
+}
+.kv .mono.strong { font-weight: 600; }
+
+/* AI analysis card */
+.analysis-input { display: flex; flex-direction: column; gap: 12px; }
+.analysis-hint { font-size: 13px; color: var(--rw-body); margin: 0; }
+.analysis-actions { display: flex; gap: 8px; }
+
+.analysis-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 0;
+}
+.loading-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--rw-body);
+}
+.loader-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--rw-ink);
+  animation: rw-pulse 1.1s ease-in-out infinite;
+}
+.loading-meta {
+  font-size: 12px;
+  color: var(--rw-muted);
+  font-family: var(--rw-mono);
+}
+.loading-task { margin-left: 12px; }
+
+/* Manual analysis */
+.manual-analysis-body {
+  font-size: 14px;
+  color: var(--rw-ink);
+  line-height: 1.65;
+}
+.manual-analysis-body :deep(h1),
+.manual-analysis-body :deep(h2),
+.manual-analysis-body :deep(h3),
+.manual-analysis-body :deep(h4) {
+  color: var(--rw-ink);
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  margin-top: 1.2em;
+  margin-bottom: 0.6em;
+}
+.manual-analysis-body :deep(p) { margin: 0.6em 0; }
+.manual-analysis-body :deep(code) {
+  font-family: var(--rw-mono);
+  background: var(--rw-canvas-soft);
+  border: 1px solid var(--rw-hairline);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 12.5px;
+}
+.manual-analysis-body :deep(pre) {
+  background: var(--rw-surface-dark);
+  color: var(--rw-on-primary);
+  padding: 14px 16px;
+  border-radius: 10px;
+  overflow-x: auto;
+  font-family: var(--rw-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.manual-analysis-body :deep(pre code) {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+.manual-analysis-body :deep(a) { color: var(--rw-link); }
+.manual-analysis-body :deep(ul),
+.manual-analysis-body :deep(ol) { padding-left: 1.4em; }
+
+.manual-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 28px 0;
+}
+.manual-empty p {
+  font-size: 13px;
+  color: var(--rw-muted);
+  margin: 0;
 }
 
-.info-value {
-  @apply text-base text-gray-900;
+/* Actions grid */
+.actions-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
 }
-
-.info-relative {
-  @apply text-xs text-gray-400;
-}
-
-.action-buttons {
-  @apply flex flex-wrap gap-3;
-}
-
-.ai-analysis {
-  @apply bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg p-6;
-}
-
-.ai-placeholder {
-  @apply text-center py-8;
-}
-
-.ai-icon {
-  @apply text-4xl mb-4;
+.actions-grid > button {
+  width: 100%;
+  height: 40px;
 }
 
 .not-found {
-  @apply flex items-center justify-center min-h-96;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+}
+.not-found :deep(.el-result__title) { color: var(--rw-ink); }
+.not-found :deep(.el-result__subtitle) { color: var(--rw-muted); }
+
+.dialog-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
-/* 响应式设计 */
+/* Element Plus overrides */
+.rw-page :deep(.el-input__wrapper),
+.rw-page :deep(.el-textarea__inner) {
+  background: var(--rw-canvas) !important;
+  border: 1px solid var(--rw-hairline-strong) !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+.rw-page :deep(.el-textarea__inner) {
+  padding: 10px 12px;
+  font-family: var(--rw-sans);
+  font-size: 13.5px;
+  color: var(--rw-ink);
+  line-height: 1.55;
+}
+.rw-page :deep(.el-textarea__inner:focus),
+.rw-page :deep(.el-input__wrapper.is-focus) {
+  border-color: var(--rw-ink) !important;
+  box-shadow: none !important;
+}
+.rw-page :deep(.el-input__inner) {
+  color: var(--rw-ink);
+  font-family: var(--rw-sans);
+  font-size: 13.5px;
+}
+.rw-page :deep(.el-input__inner::placeholder),
+.rw-page :deep(.el-textarea__inner::placeholder) { color: var(--rw-muted); }
+
+.rw-page :deep(.el-progress-bar__outer) { background: var(--rw-hairline) !important; }
+.rw-page :deep(.el-progress-bar__inner) { background: var(--rw-ink) !important; }
+.rw-page :deep(.el-progress--success .el-progress-bar__inner) { background: var(--rw-success) !important; }
+.rw-page :deep(.el-progress__text) { color: var(--rw-body) !important; font-size: 12px !important; }
+
+.rw-page :deep(.el-skeleton__item) { background: var(--rw-surface-strong); }
+
+/* Dialog */
+:deep(.el-dialog) {
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--rw-hairline-strong);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
+}
+:deep(.el-dialog__header) {
+  padding: 16px 20px;
+  margin: 0;
+  border-bottom: 1px solid var(--rw-hairline);
+}
+:deep(.el-dialog__title) {
+  color: #171717;
+  font-weight: 600;
+  font-size: 15px;
+}
+:deep(.el-dialog__body) {
+  padding: 20px;
+  color: #171717;
+}
+:deep(.el-dialog__footer) {
+  padding: 12px 20px;
+  border-top: 1px solid #f0f0f3;
+}
+:deep(.el-form-item__label) {
+  color: #60646c;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .info-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .meta-grid { grid-template-columns: 1fr; }
+  .actions-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 768px) {
-  .detail-header {
-    @apply px-4 py-3;
-  }
-  
-  .detail-main {
-    @apply px-4 py-6;
-  }
-  
-  .log-title {
-    @apply text-2xl;
-  }
-  
-  .content-grid {
-    @apply grid-cols-1;
-  }
-  
-  .action-buttons {
-    @apply flex-col;
-  }
-  
-  .action-buttons .el-button {
-    @apply w-full;
-  }
-}
-
-/* 版本信息样式 */
-.version-info-container {
-  @apply mt-2;
-}
-
-.version-collapse {
-  @apply border border-gray-200 rounded-lg overflow-hidden;
-}
-
-.version-collapse :deep(.el-collapse-item__header) {
-  @apply bg-gray-50 px-4 py-3 border-b border-gray-200;
-}
-
-.version-collapse :deep(.el-collapse-item__content) {
-  @apply p-4 bg-white;
-}
-
-.board-info {
-  @apply border border-gray-100 rounded-lg p-4 bg-gray-50;
-}
-
-.board-header {
-  @apply shadow-sm;
-}
-
-.version-section {
-  @apply shadow-sm hover:shadow-md transition-shadow duration-200;
-}
-
-.version-section h5 {
-  @apply text-sm;
-}
-
-/* 响应式版本信息 */
-@media (max-width: 768px) {
-  .board-details {
-    @apply grid-cols-1;
-  }
-  
-  .version-section {
-    @apply p-3;
-  }
-  
-  .board-header {
-    @apply flex-col items-start space-y-2;
-  }
-  
-  .board-header > div:first-child {
-    @apply space-x-2;
-  }
+  .rw-topbar { padding: 0 16px; }
+  .rw-page-scroll { padding: 16px 16px 32px; gap: 14px; }
+  .rw-card { padding: 18px; }
+  .info-grid { grid-template-columns: 1fr; gap: 14px; }
+  .board-details { grid-template-columns: 1fr; }
+  .actions-grid { grid-template-columns: 1fr; }
+  .title-name { font-size: 18px; }
+  .card-head-right { width: 100%; }
 }
 </style>

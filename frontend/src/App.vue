@@ -11,31 +11,42 @@ import AIOrb from './components/AIOrb.vue'
 const appStore = useAppStore()
 const route = useRoute()
 
-// 判断是否是 AI Chat 路由
-const isChatRoute = computed(() => route.name === 'AIChat' || route.path === '/ai-chat')
+// Workbench routes share the WorkbenchLayout (sidebar + main pane).
+const workbenchRouteNames = new Set(['Home', 'AIChat', 'Logs', 'LogDetail', 'DeviceList', 'RavenManager'])
+const isWorkbenchRoute = computed(() => {
+  const name = (route.name as string) || ''
+  if (workbenchRouteNames.has(name)) return true
+  // path aliases for legacy entry points
+  return (
+    route.path === '/' ||
+    route.path === '/ai-chat' ||
+    route.path === '/logs' ||
+    route.path.startsWith('/log/') ||
+    route.path === '/log-list' ||
+    route.path === '/devices' ||
+    route.path === '/raven-manager' ||
+    route.path === '/raven' ||
+    route.path === '/raven/'
+  )
+})
 
 const isAdminRoute = computed(() => route.path.startsWith('/admin'))
 
 // 判断是否应该显示 AI Orb
 const showAIOrb = computed(() => {
-  // 在 AI Chat 和后台管理页面都不显示 Orb
-  return !isChatRoute.value && !isAdminRoute.value
+  // 工作台与后台管理页面都不显示 Orb
+  return !isWorkbenchRoute.value && !isAdminRoute.value
 })
 
 // 判断是否应该显示导航栏
 const shouldShowNavbar = computed(() => {
   if (typeof window === 'undefined') return true
-  
+
   const configuredPort = (window as any).__RAVEN_SERVER_PORT__
   const currentPort = window.location.port
-  
+
   // 兼容历史独立包服务端口；统一后端部署默认不再设置该值
   if (configuredPort && currentPort === String(configuredPort)) {
-    return false
-  }
-  
-  // 如果访问路径是 /logs，也不显示 NavBar
-  if (route.path === '/logs') {
     return false
   }
 
@@ -44,18 +55,18 @@ const shouldShowNavbar = computed(() => {
     return false
   }
 
-  // 如果是 AI Chat 页面，不显示 NavBar
-  if (route.name === 'AIChat' || route.path === '/ai-chat') {
+  // 工作台壳已包含左侧导航，不再叠加平台顶部栏
+  if (isWorkbenchRoute.value) {
     return false
   }
-  
+
   return true
 })
 
-const shouldShowFooter = computed(() => !isChatRoute.value && !isAdminRoute.value)
+const shouldShowFooter = computed(() => !isWorkbenchRoute.value && !isAdminRoute.value)
 
 const mainClass = computed(() => {
-  if (isChatRoute.value) return 'w-full'
+  if (isWorkbenchRoute.value) return 'w-full'
   if (isAdminRoute.value) return 'w-full mobile-safe-bottom'
   return 'container mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6 mobile-safe-bottom'
 })
@@ -79,10 +90,10 @@ const isMobileViewport = () => {
   return window.matchMedia('(max-width: 768px)').matches
 }
 
-const shouldLockChatPage = () => isChatRoute.value && !isMobileViewport()
+const shouldLockChatPage = () => isWorkbenchRoute.value && !isMobileViewport()
 
 const chatMainStyle = computed(() => {
-  if (!isChatRoute.value) return undefined
+  if (!isWorkbenchRoute.value) return undefined
   if (isMobileViewport()) {
     return { height: '100dvh', minHeight: '100dvh' }
   }
@@ -136,9 +147,9 @@ onMounted(() => {
   applyChatPageLock(shouldLockChatPage())
 })
 
-watch(isChatRoute, (isChat) => {
-  applyChatPageLock(isChat && !isMobileViewport())
-  if (isChat) updateChatViewportHeight()
+watch(isWorkbenchRoute, (isWb) => {
+  applyChatPageLock(isWb && !isMobileViewport())
+  if (isWb) updateChatViewportHeight()
 })
 
 onUnmounted(() => {

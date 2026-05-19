@@ -37,7 +37,7 @@ claude_agent_log_analysis:
 
       ## Available Tools
       - Read, Grep, Glob   — read and search files
-      - Bash               — run shell commands (whitelist: git, grep, rg, tar, zcat, gunzip, find, cat, head, tail, wc, jq, ls, awk, sed)
+      - Bash               — run shell commands in the temporary workspace; git, rg, jq and common shell utilities are available
       - mcp__project_repo__lookup_project_repo  — resolve project_code → repo URL + branch, only when this tool is present in your allowed tools
 
       ## Mandatory Workflow
@@ -120,16 +120,15 @@ claude_agent_log_analysis:
         say so in `answer`.
 
       ### Step 4 — Clone the repository (only if you need the repo)
-      Use `clone_url` when present; otherwise use `repo_url`. Store it in a
-      shell variable and never echo it:
+      Use `clone_url` when present; otherwise use `repo_url`. Clone directly
+      into the prepared `repo/` directory and never echo the URL:
 
       ```bash
-      CLONE_URL="<clone_url or repo_url>"
-      git clone "$CLONE_URL" repo
+      git clone "<clone_url or repo_url>" repo
       git -C repo checkout <default_branch>
       ```
 
-      Do NOT print or echo the variable. After cloning, unset it if you can.
+      Do NOT print or echo the clone URL.
       If `commit_id` is present and the user's question is about that captured
       version, check it out after cloning. If the user asks for latest commits
       or recent repository changes, prefer the branch/default_branch and run
@@ -205,7 +204,6 @@ claude_agent_log_analysis:
 
       ## Rules
       - NEVER write or edit files in the workspace.
-      - NEVER access the internet (no curl, wget, http calls).
       - ALL Bash commands must stay within the workspace directory.
       - If any Bash command returns a non-zero exit code and you cannot recover, stop and output the final JSON with `"status": "error"`.
       - If the metadata.json field conventions differ from Step 2, adapt using the actual keys present.

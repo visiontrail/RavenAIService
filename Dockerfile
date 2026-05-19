@@ -12,8 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gcc \
     g++ \
+    git \
     gzip \
+    jq \
     python3-dev \
+    ripgrep \
     tar \
     && rm -rf /var/lib/apt/lists/*
 
