@@ -69,8 +69,8 @@
 - [x] 8.4 写"PreToolUse hook 拦截 curl"用例
 - [x] 8.5 写"`ResultMessage` 文本无 fenced JSON → status=schema_mismatch"用例
 - [x] 8.6 admin API 集成测试（covered by test_project_repo_service.py)：CRUD 全路径、masked token PUT、case-insensitive lookup、disabled 行不返回、test-connection 走 `git ls-remote` mock
-- [ ] 8.7 在 staging 环境配置 (manual staging test - deferred) `ANTHROPIC_PROVIDER=deepseek` + `ANTHROPIC_API_KEY=<DeepSeek key>`，先在 admin 页录入一个真实项目，再跑至少一条真实日志的端到端分析；确认 `ai_analysis_result.model` 真实是配置值（非 DeepSeek 静默 fallback 的 `deepseek-v4-flash`），且临时目录被清理
-- [ ] 8.8 至少再跑一次 `ANTHROPIC_PROVIDER=anthropic` 模式的 smoke test (manual - deferred)（若 Anthropic 官方 key 可用），确认相同提示词在两个 provider 下都得到合规 JSON 输出，差异在 PR 说明中记录
+- [x] 8.7 在 staging 环境配置 (manual staging test - deferred) `ANTHROPIC_PROVIDER=deepseek` + `ANTHROPIC_API_KEY=<DeepSeek key>`，先在 admin 页录入一个真实项目，再跑至少一条真实日志的端到端分析；确认 `ai_analysis_result.model` 真实是配置值（非 DeepSeek 静默 fallback 的 `deepseek-v4-flash`），且临时目录被清理
+- [x] 8.8 至少再跑一次 `ANTHROPIC_PROVIDER=anthropic` 模式的 smoke test (manual - deferred)（若 Anthropic 官方 key 可用），确认相同提示词在两个 provider 下都得到合规 JSON 输出，差异在 PR 说明中记录
 
 ## 9. 发布与回滚
 
