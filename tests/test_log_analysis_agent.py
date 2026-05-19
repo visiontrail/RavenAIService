@@ -47,7 +47,7 @@ def _make_good_result_json() -> str:
         "summary": "Found issue in module X",
         "severity": "error",
         "root_cause_hypotheses": [
-            {"hypothesis": "Null pointer in handler", "evidence": ["repo:src/main.c:42"], "confidence": 0.9}
+            {"hypothesis": "Null pointer in handler", "evidence": ["repo:src/main.c:42"]}
         ],
         "recommended_actions": ["Fix null check"],
         "related_keywords": ["null", "handler"],

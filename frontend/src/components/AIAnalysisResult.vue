@@ -37,10 +37,6 @@
           </div>
         </div>
 
-        <div class="confidence-badge" v-if="result.final_result?.confidence !== undefined">
-          <span class="confidence-label">置信度</span>
-          <span class="confidence-value">{{ Math.round((result.final_result?.confidence || 0) * 100) }}%</span>
-        </div>
       </div>
 
       <div class="markdown-panel" v-html="renderedMarkdown"></div>
@@ -315,18 +311,6 @@ const downloadResult = () => {
 
 .query-text {
   @apply truncate;
-}
-
-.confidence-badge {
-  @apply rounded-lg bg-blue-50 px-3 py-1 text-right;
-}
-
-.confidence-label {
-  @apply block text-xs text-blue-700;
-}
-
-.confidence-value {
-  @apply text-sm font-semibold text-blue-800;
 }
 
 .markdown-panel {

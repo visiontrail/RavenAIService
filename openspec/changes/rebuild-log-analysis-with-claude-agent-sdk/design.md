@@ -112,7 +112,7 @@ class ProviderProfile:
 **选择**：在系统提示词最后一段强制要求：
 > When you have completed the investigation, output ONLY a fenced JSON code block matching this schema, with no trailing prose:
 > ```json
-> {"summary": "...","severity":"info|warn|error|critical","root_cause_hypotheses":[{"hypothesis":"...","evidence":["repo:path:line","log:path:line"],"confidence":0.0}],"recommended_actions":["..."],"related_keywords":["..."]}
+> {"summary": "...","severity":"info|warn|error|critical","root_cause_hypotheses":[{"hypothesis":"...","evidence":["repo:path:line","log:path:line"]}],"recommended_actions":["..."],"related_keywords":["..."]}
 > ```
 Python 端用 `ResultMessage`（SDK 提供）拿最终文本，正则匹配第一段 fenced JSON 解析；解析失败则把 raw text 直接写入 `ai_analysis_result.raw`，并在 `LogRecord.ai_analysis_result.status = "schema_mismatch"`。
 

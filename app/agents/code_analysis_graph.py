@@ -457,7 +457,6 @@ class CodeAnalysisGraph:
                 "content": final_report,
                 "summary": summary,
                 "recommendations": recommendations,
-                "confidence": 0.9 if raw_root_cause else 0.6,
             },
             "metadata": {
                 "execution_time": round(float(execution_time), 3),

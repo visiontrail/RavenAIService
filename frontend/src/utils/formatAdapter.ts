@@ -22,7 +22,6 @@ export interface AIAnalysisResult {
     content: string
     summary: string
     recommendations: string[]
-    confidence: number
   }
   metadata: {
     execution_time: number
@@ -249,8 +248,7 @@ export class FormatAdapter {
       final_result: {
         content: this.processMarkdown(content),
         summary: this.extractSummary(content),
-        recommendations: this.extractRecommendations(content),
-        confidence: 0.8
+        recommendations: this.extractRecommendations(content)
       },
       metadata: {
         execution_time: data.execution_time || 0,
@@ -322,8 +320,7 @@ export class FormatAdapter {
       final_result: {
         content: this.processMarkdown(finalContent),
         summary: this.extractSummary(finalContent),
-        recommendations: this.extractRecommendations(finalContent),
-        confidence: 0.85
+        recommendations: this.extractRecommendations(finalContent)
       },
       metadata: {
         execution_time: data.execution_time || 0,
@@ -354,8 +351,7 @@ export class FormatAdapter {
       final_result: {
         content: this.processMarkdown(content),
         summary: this.extractSummary(content),
-        recommendations: this.extractRecommendations(content),
-        confidence: 0.7
+        recommendations: this.extractRecommendations(content)
       },
       metadata: {
         execution_time: 0,
@@ -386,8 +382,7 @@ export class FormatAdapter {
       final_result: {
         content: `\`\`\`json\n${content}\n\`\`\``,
         summary: '已处理原始数据',
-        recommendations: ['请检查数据格式', '考虑使用标准化输出'],
-        confidence: 0.5
+        recommendations: ['请检查数据格式', '考虑使用标准化输出']
       },
       metadata: {
         execution_time: 0,
@@ -417,8 +412,7 @@ export class FormatAdapter {
       final_result: {
         content: `**错误信息:** ${error.message}\n\n**原始数据:**\n\`\`\`json\n${JSON.stringify(rawData, null, 2)}\n\`\`\``,
         summary: '分析过程中出现错误',
-        recommendations: ['检查输入数据格式', '联系技术支持'],
-        confidence: 0
+        recommendations: ['检查输入数据格式', '联系技术支持']
       },
       metadata: {
         execution_time: 0,

@@ -505,8 +505,7 @@ const normalizeAIAnalysisResult = (raw: any) => {
       final_result: {
         content: raw,
         summary: '',
-        recommendations: [],
-        confidence: 0
+        recommendations: []
       },
       metadata: {
         execution_time: 0,
@@ -589,7 +588,6 @@ const normalizeAIAnalysisResult = (raw: any) => {
   let executionTime: number
   let modelUsed: string
   let recommendations: string[]
-  let confidence: number
 
   if (isV2Flat) {
     content = buildV2Markdown(raw)
@@ -603,7 +601,6 @@ const normalizeAIAnalysisResult = (raw: any) => {
       ? raw.recommended_actions.map((a: any) =>
           typeof a === 'string' ? a : (a?.action || a?.description || JSON.stringify(a)))
       : []
-    confidence = 0
   } else {
     const rawContent = raw?.final_result?.content ?? raw?.final_report ?? raw?.content ?? ''
     content = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent, null, 2)
@@ -617,7 +614,6 @@ const normalizeAIAnalysisResult = (raw: any) => {
     executionTime = Number(raw?.metadata?.execution_time ?? 0)
     modelUsed = raw?.metadata?.model_used || 'unknown'
     recommendations = Array.isArray(raw?.final_result?.recommendations) ? raw.final_result.recommendations : []
-    confidence = Number(raw?.final_result?.confidence ?? 0)
   }
 
   // 状态归一化：V2 的 "ok" 应映射为前端的 "completed"
@@ -638,7 +634,6 @@ const normalizeAIAnalysisResult = (raw: any) => {
       content,
       summary,
       recommendations,
-      confidence,
     },
     metadata: {
       execution_time: executionTime,
@@ -1238,9 +1233,6 @@ ${aiAnalysisResult.value.final_result.content}
 
 ### 推荐建议
 ${aiAnalysisResult.value.final_result.recommendations.map(rec => `- ${rec}`).join('\n')}
-
-### 置信度
-${aiAnalysisResult.value.final_result.confidence}%
 `
     
     const blob = new Blob([content], { type: 'text/markdown' })
@@ -1534,9 +1526,9 @@ onUnmounted(() => {
 .back-btn:hover { background: var(--rw-surface-strong); }
 
 /* Buttons */
-.rw-btn-primary,
-.rw-btn-secondary,
-.rw-btn-danger {
+.rw-page .rw-btn-primary,
+.rw-page .rw-btn-secondary,
+.rw-page .rw-btn-danger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1553,23 +1545,23 @@ onUnmounted(() => {
   border: none;
   line-height: 1;
 }
-.rw-btn-primary { background: var(--rw-primary); color: var(--rw-on-primary); }
-.rw-btn-primary:hover:not(:disabled) { background: var(--rw-primary-active); }
-.rw-btn-secondary {
+.rw-page .rw-btn-primary { background: var(--rw-primary); color: var(--rw-on-primary); }
+.rw-page .rw-btn-primary:hover:not(:disabled) { background: var(--rw-primary-active); }
+.rw-page .rw-btn-secondary {
   background: var(--rw-canvas);
   color: var(--rw-ink);
   border: 1px solid var(--rw-hairline-strong);
 }
-.rw-btn-secondary:hover:not(:disabled) { background: var(--rw-surface-strong); }
-.rw-btn-danger { background: var(--rw-danger); color: #fff; }
-.rw-btn-danger:hover:not(:disabled) { background: #a02f24; }
-.rw-btn-primary:disabled,
-.rw-btn-secondary:disabled,
-.rw-btn-danger:disabled {
+.rw-page .rw-btn-secondary:hover:not(:disabled) { background: var(--rw-surface-strong); }
+.rw-page .rw-btn-danger { background: var(--rw-danger); color: #fff; }
+.rw-page .rw-btn-danger:hover:not(:disabled) { background: #a02f24; }
+.rw-page .rw-btn-primary:disabled,
+.rw-page .rw-btn-secondary:disabled,
+.rw-page .rw-btn-danger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.rw-btn-xs {
+.rw-page .rw-btn-xs {
   height: 28px;
   padding: 0 10px;
   font-size: 12px;

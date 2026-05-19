@@ -77,6 +77,19 @@ def _normalize_question_type(value: Any) -> str:
     return "other"
 
 
+def _strip_confidence_fields(value: Any) -> Any:
+    """Remove confidence scores from model output before persisting or returning it."""
+    if isinstance(value, list):
+        return [_strip_confidence_fields(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _strip_confidence_fields(item)
+            for key, item in value.items()
+            if key != "confidence"
+        }
+    return value
+
+
 class LogAnalysisAgent:
     """Wraps Claude Agent SDK query() loop for log analysis tasks."""
 
@@ -292,7 +305,9 @@ class LogAnalysisAgent:
             "answer": answer,
             "summary": summary,
             "severity": parsed.get("severity", "info"),
-            "root_cause_hypotheses": parsed.get("root_cause_hypotheses", []),
+            "root_cause_hypotheses": _strip_confidence_fields(
+                parsed.get("root_cause_hypotheses", [])
+            ),
             "recommended_actions": parsed.get("recommended_actions", []),
             "related_keywords": parsed.get("related_keywords", []),
             "tool_trace": tool_trace,
