@@ -4,10 +4,12 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   Cpu,
   FileArchive,
+  LogOut,
+  Menu,
+  PanelLeftClose,
   Power,
   RefreshCw,
   Trash2,
-  Upload,
 } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
@@ -284,7 +286,8 @@ onMounted(() => bootstrap())
             :title="navVisible ? '隐藏侧边栏' : '显示侧边栏'"
             aria-label="切换侧边栏"
           >
-            {{ navVisible ? '☰' : '▤' }}
+            <PanelLeftClose v-if="navVisible" :size="18" />
+            <Menu v-else :size="18" />
           </button>
           <div>
             <h1 class="admin-title">后台管理</h1>
@@ -297,7 +300,10 @@ onMounted(() => bootstrap())
               ? `${enabledCount} 启用 / ${disabledCount} 停用`
               : '未登录' }}
           </span>
-          <button v-if="isAuthenticated" class="admin-logout-btn" @click="handleLogout">退出</button>
+          <button v-if="isAuthenticated" class="admin-logout-btn" @click="handleLogout">
+            <LogOut :size="14" />
+            <span>退出</span>
+          </button>
         </div>
       </div>
     </header>

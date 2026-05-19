@@ -6,6 +6,7 @@ import { useUserStore } from '@/stores/user'
 import { useChatSessionStore } from '@/stores/chatSession'
 import { userApi } from '@/api/user'
 import type { ChatSessionSummary } from '@/types'
+import brandIcon from '@/assets/icon.png'
 
 const route = useRoute()
 const router = useRouter()
@@ -198,13 +199,7 @@ const handleUserLogout = () => {
       <!-- Brand -->
       <div class="rw-brand">
         <div class="rw-brand-left">
-          <div class="rw-brand-mark" aria-hidden="true">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M5 14 19 6"/>
-              <path d="M5 14a7 7 0 0 0 9.5 5"/>
-              <circle cx="6" cy="18" r="1.5" fill="currentColor" stroke="none"/>
-            </svg>
-          </div>
+          <img :src="brandIcon" alt="" class="rw-brand-mark" aria-hidden="true" />
           <div>
             <div class="rw-brand-name">RavenAI</div>
             <div class="rw-brand-sub">BASEBAND · WORKBENCH</div>
@@ -512,8 +507,7 @@ const handleUserLogout = () => {
 .rw-brand-left { display: flex; align-items: center; gap: 9px; }
 .rw-brand-mark {
   width: 26px; height: 26px; border-radius: 6px;
-  background: var(--rw-surface-dark); color: var(--rw-on-primary);
-  display: grid; place-items: center; flex-shrink: 0;
+  object-fit: contain; flex-shrink: 0;
 }
 .rw-brand-name { font-size: 14px; font-weight: 600; letter-spacing: -0.1px; line-height: 1; }
 .rw-brand-sub {
@@ -679,20 +673,21 @@ const handleUserLogout = () => {
 }
 .rw-user-menu-name { font-size: 13.5px; font-weight: 600; color: var(--rw-ink); line-height: 1.2; }
 .rw-user-menu-mail { font-size: 11.5px; color: var(--rw-muted); margin-top: 3px; line-height: 1.2; font-family: var(--rw-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rw-user-menu-item {
-  display: flex; align-items: center; gap: 10px;
-  height: 32px; padding: 0 10px;
-  border-radius: 6px; font-size: 13px; color: var(--rw-ink); font-weight: 500;
-  cursor: pointer; width: 100%; text-align: left;
-}
-.rw-user-menu-item:hover { background: var(--rw-surface-strong); }
-.rw-menu-leading { color: var(--rw-body); flex-shrink: 0; }
-.rw-kbd-right { margin-left: auto; font-family: var(--rw-mono); font-size: 11px; color: var(--rw-muted); }
-.rw-menu-section {
+.rw-menu-section,
+.raven-workbench button.rw-user-menu-item {
   display: flex; align-items: center; gap: 10px;
   padding: 6px 10px; height: 32px;
-  font-size: 13px; color: var(--rw-ink); font-weight: 500;
+  border-radius: 6px; font-size: 13px; color: var(--rw-ink); font-weight: 500;
 }
+.rw-menu-section {
+  cursor: default;
+}
+.raven-workbench button.rw-user-menu-item {
+  cursor: pointer; width: 100%; text-align: left;
+}
+.raven-workbench button.rw-user-menu-item:hover { background: var(--rw-surface-strong); }
+.rw-menu-leading { color: var(--rw-body); flex-shrink: 0; }
+.rw-kbd-right { margin-left: auto; font-family: var(--rw-mono); font-size: 11px; color: var(--rw-muted); }
 .rw-lang-pill {
   display: inline-flex; margin-left: auto;
   background: var(--rw-surface-strong); border-radius: 6px;

@@ -2,7 +2,9 @@
 AI 对话相关 API
 """
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +12,7 @@ from app.api.users import get_optional_user
 from app.models.chat import ChatRequest, ChatResponse
 from app.models.database import get_db
 from app.services.ai_chat_service import ai_chat_service
+from app.services.log_analysis_chat_service import log_analysis_chat_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -61,4 +64,35 @@ async def chat_stream_endpoint(
         return StreamingResponse(generator, media_type="text/event-stream")
     except Exception as exc:  # noqa: BLE001
         logger.exception("AI chat stream request failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/log-analysis/stream", summary="主对话日志分析（流式）")
+async def log_analysis_stream_endpoint(
+    message: str = Form("", description="用户问题"),
+    session_id: Optional[str] = Form(None, description="对话会话ID"),
+    history: Optional[str] = Form(None, description="前端传入的历史消息 JSON"),
+    remember: bool = Form(True, description="是否保存到会话历史"),
+    file: Optional[UploadFile] = File(None, description="可选日志包附件"),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
+    logger.info("=" * 80)
+    logger.info("接收到主对话日志分析请求")
+    logger.info("message: %s...", message[:100])
+    logger.info("session_id: %s, has_file=%s", session_id, bool(file and file.filename))
+    logger.info("=" * 80)
+    try:
+        generator = log_analysis_chat_service.stream(
+            message=message,
+            session_id=session_id,
+            history_json=history,
+            file=file,
+            remember=remember,
+            db=db,
+            user=current_user,
+        )
+        return StreamingResponse(generator, media_type="text/event-stream")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Log analysis chat stream request failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { LogOut, Menu, PanelLeftClose, RefreshCw, Upload } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { releasesAdminApi } from '@/api/releases'
 import { useAppStore } from '@/stores/app'
@@ -243,7 +244,8 @@ onMounted(() => bootstrap())
             @click="toggleNavVisibility"
             :title="navVisible ? '隐藏侧边栏' : '显示侧边栏'"
           >
-            {{ navVisible ? '☰' : '▤' }}
+            <PanelLeftClose v-if="navVisible" :size="18" />
+            <Menu v-else :size="18" />
           </button>
           <div>
             <h1 class="admin-title">后台管理</h1>
@@ -254,7 +256,10 @@ onMounted(() => bootstrap())
           <span class="px-3 py-1 text-xs font-semibold rounded-full bg-slate-700 text-slate-100">
             {{ isAuthenticated ? `共 ${releases.length} 个版本` : '未登录' }}
           </span>
-          <button v-if="isAuthenticated" class="admin-logout-btn" @click="handleLogout">退出</button>
+          <button v-if="isAuthenticated" class="admin-logout-btn" @click="handleLogout">
+            <LogOut :size="14" />
+            <span>退出</span>
+          </button>
         </div>
       </div>
     </header>
@@ -338,13 +343,15 @@ onMounted(() => bootstrap())
                 :disabled="loadingReleases"
                 @click="fetchReleases"
               >
+                <RefreshCw :size="15" />
                 {{ loadingReleases ? '同步中…' : '刷新' }}
               </button>
               <button
                 class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition"
                 @click="openUploadDialog"
               >
-                + 上传 Release
+                <Upload :size="15" />
+                <span>上传 Release</span>
               </button>
             </div>
           </div>

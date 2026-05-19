@@ -25,6 +25,518 @@ body {
   box-sizing: border-box;
 }
 
+/* Admin console theme aligned with DESIGN.md */
+.admin-console {
+  --admin-topbar-height: 64px;
+  --admin-sidebar-width: 276px;
+  --admin-primary: #000000;
+  --admin-primary-active: #1a1a1a;
+  --admin-ink: #171717;
+  --admin-body: #60646c;
+  --admin-muted: #999999;
+  --admin-link: #0d74ce;
+  --admin-hairline: #f0f0f3;
+  --admin-hairline-strong: #dcdee0;
+  --admin-canvas: #ffffff;
+  --admin-canvas-soft: #fafafa;
+  --admin-surface: #ffffff;
+  --admin-surface-strong: #f5f5f7;
+  --admin-dark: #171717;
+  --admin-on-dark: #ffffff;
+  --admin-on-dark-soft: #b0b4ba;
+  --admin-success: #16a34a;
+  --admin-warning: #ab6400;
+  --admin-error: #dc2626;
+  --admin-font: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --admin-code-font: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.admin-console.admin-console {
+  min-height: 100vh;
+  color: var(--admin-ink);
+  font-family: var(--admin-font);
+  background:
+    radial-gradient(900px 360px at 50% -120px, rgba(207, 231, 255, 0.9), rgba(207, 231, 255, 0) 72%),
+    linear-gradient(180deg, var(--admin-canvas) 0%, var(--admin-canvas) 62%, var(--admin-canvas-soft) 100%);
+}
+
+.admin-console.admin-console button,
+.admin-console.admin-console input,
+.admin-console.admin-console textarea,
+.admin-console.admin-console select {
+  font-family: inherit;
+}
+
+.admin-console.admin-console code,
+.admin-console.admin-console .font-mono {
+  font-family: var(--admin-code-font);
+}
+
+.admin-console.admin-console .admin-topbar {
+  height: var(--admin-topbar-height);
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom: 1px solid var(--admin-hairline);
+  backdrop-filter: saturate(180%) blur(16px);
+  box-shadow: none;
+}
+
+.admin-console.admin-console .admin-topbar-inner {
+  padding: 0 24px;
+}
+
+.admin-console.admin-console .admin-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--admin-hairline-strong);
+  border-radius: 8px;
+  color: var(--admin-ink);
+  background: var(--admin-surface);
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.admin-console.admin-console .admin-icon-btn:hover:not(:disabled) {
+  border-color: var(--admin-ink);
+  background: var(--admin-surface-strong);
+}
+
+.admin-console.admin-console .admin-icon-btn:disabled {
+  color: var(--admin-muted);
+  background: var(--admin-canvas-soft);
+  opacity: 0.65;
+}
+
+.admin-console.admin-console .admin-title {
+  color: var(--admin-ink);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.admin-console.admin-console .admin-subtitle {
+  margin-top: 2px;
+  color: var(--admin-body);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.admin-console.admin-console .admin-topbar-right > span {
+  border: 1px solid var(--admin-hairline);
+  color: var(--admin-body);
+  background: var(--admin-surface-strong);
+  letter-spacing: 0;
+}
+
+.admin-console.admin-console .admin-logout-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  border: 1px solid var(--admin-hairline-strong);
+  border-radius: 8px;
+  color: var(--admin-ink);
+  background: var(--admin-surface);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 8px 14px;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+
+.admin-console.admin-console .admin-logout-btn:hover {
+  border-color: var(--admin-ink);
+  background: var(--admin-surface-strong);
+}
+
+.admin-console.admin-console .admin-sidebar {
+  width: var(--admin-sidebar-width);
+  background: rgba(255, 255, 255, 0.9);
+  border-right: 1px solid var(--admin-hairline);
+  padding: calc(var(--admin-topbar-height) + 18px) 16px 20px;
+  backdrop-filter: saturate(180%) blur(14px);
+  box-shadow: none;
+}
+
+.admin-console.admin-console .admin-side-nav-item {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--admin-body);
+  background: transparent;
+  padding: 12px;
+  transition: color 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+}
+
+.admin-console.admin-console .admin-side-nav-item:hover {
+  color: var(--admin-ink);
+  background: var(--admin-canvas-soft);
+  border-color: var(--admin-hairline);
+}
+
+.admin-console.admin-console .admin-side-nav-item.is-active {
+  color: var(--admin-on-dark);
+  background: var(--admin-primary);
+  border-color: var(--admin-primary);
+}
+
+.admin-console.admin-console .admin-side-nav-item p {
+  color: var(--admin-muted);
+}
+
+.admin-console.admin-console .admin-side-nav-item.is-active p {
+  color: var(--admin-on-dark-soft);
+}
+
+.admin-console.admin-console .admin-main {
+  min-height: 100vh;
+  padding: calc(var(--admin-topbar-height) + 24px) 24px 32px calc(var(--admin-sidebar-width) + 24px);
+}
+
+.admin-console.admin-console .admin-main.is-sidebar-hidden {
+  padding-left: 24px;
+}
+
+.admin-console.admin-console .admin-main > section {
+  width: min(100%, 1320px);
+  margin-inline: auto;
+}
+
+.admin-console.admin-console .admin-login-wrap {
+  max-width: 980px;
+  margin-top: 48px;
+}
+
+.admin-console.admin-console .admin-sidebar-backdrop {
+  background: rgba(23, 23, 23, 0.28);
+  backdrop-filter: blur(2px);
+}
+
+.admin-console.admin-console .bg-white,
+.admin-console.admin-console .bg-slate-50 {
+  background-color: var(--admin-surface);
+}
+
+.admin-console.admin-console .rounded-2xl,
+.admin-console.admin-console .rounded-xl,
+.admin-console.admin-console .rounded-lg {
+  border-radius: 12px;
+}
+
+.admin-console.admin-console button.rounded-lg,
+.admin-console.admin-console button.rounded-xl,
+.admin-console.admin-console button.rounded-2xl {
+  border-radius: 8px;
+}
+
+.admin-console.admin-console .shadow-sm {
+  box-shadow: none;
+}
+
+.admin-console.admin-console .border-slate-200,
+.admin-console.admin-console .border-slate-100,
+.admin-console.admin-console .border-slate-50 {
+  border-color: var(--admin-hairline);
+}
+
+.admin-console.admin-console .text-slate-900 {
+  color: var(--admin-ink);
+}
+
+.admin-console.admin-console .text-slate-700,
+.admin-console.admin-console .text-slate-600 {
+  color: var(--admin-body);
+}
+
+.admin-console.admin-console .text-slate-500,
+.admin-console.admin-console .text-slate-400 {
+  color: var(--admin-muted);
+}
+
+.admin-console.admin-console h2 {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.admin-console.admin-console h3 {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+.admin-console.admin-console label span,
+.admin-console.admin-console th {
+  letter-spacing: 0;
+}
+
+.admin-console.admin-console input[type="text"],
+.admin-console.admin-console input[type="password"],
+.admin-console.admin-console input[type="email"],
+.admin-console.admin-console input[type="url"],
+.admin-console.admin-console textarea,
+.admin-console.admin-console select {
+  min-height: 40px;
+  border-color: var(--admin-hairline-strong);
+  border-radius: 8px;
+  color: var(--admin-ink);
+  background-color: var(--admin-surface);
+  box-shadow: none;
+}
+
+.admin-console.admin-console input:focus,
+.admin-console.admin-console textarea:focus,
+.admin-console.admin-console select:focus {
+  border-color: var(--admin-primary);
+  outline: 2px solid rgba(23, 23, 23, 0.08);
+  outline-offset: 0;
+  box-shadow: none;
+}
+
+.admin-console.admin-console input[type="checkbox"] {
+  accent-color: var(--admin-primary);
+}
+
+.admin-console.admin-console .bg-cyan-600,
+.admin-console.admin-console .admin-command-btn.primary,
+.admin-console.admin-console button[class*="bg-cyan-600"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--admin-on-dark);
+  background-color: var(--admin-primary);
+  border-color: var(--admin-primary);
+}
+
+.admin-console.admin-console button:has(svg) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.admin-console.admin-console .bg-cyan-600:hover,
+.admin-console.admin-console .admin-command-btn.primary:hover:not(:disabled),
+.admin-console.admin-console button[class*="bg-cyan-600"]:hover {
+  background-color: var(--admin-primary-active);
+  border-color: var(--admin-primary-active);
+}
+
+.admin-console.admin-console .text-cyan-700,
+.admin-console.admin-console .text-cyan-600,
+.admin-console.admin-console a {
+  color: var(--admin-link);
+}
+
+.admin-console.admin-console .border-cyan-200,
+.admin-console.admin-console .border-cyan-100,
+.admin-console.admin-console .border-cyan-500,
+.admin-console.admin-console .border-cyan-400 {
+  border-color: var(--admin-hairline-strong);
+}
+
+.admin-console.admin-console .bg-cyan-50,
+.admin-console.admin-console .hover\:bg-cyan-50:hover,
+.admin-console.admin-console .hover\:bg-cyan-50\/40:hover {
+  background-color: var(--admin-surface-strong);
+}
+
+.admin-console.admin-console .admin-command-btn,
+.admin-console.admin-console .admin-action-btn,
+.admin-console.admin-console .admin-close-btn {
+  border-color: var(--admin-hairline-strong);
+  border-radius: 8px;
+  color: var(--admin-ink);
+  background: var(--admin-surface);
+  box-shadow: none;
+}
+
+.admin-console.admin-console .admin-command-btn {
+  min-height: 40px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.admin-console.admin-console .admin-command-btn:hover:not(:disabled),
+.admin-console.admin-console .admin-action-btn:hover:not(:disabled),
+.admin-console.admin-console .admin-close-btn:hover:not(:disabled) {
+  border-color: var(--admin-ink);
+  color: var(--admin-ink);
+  background: var(--admin-surface-strong);
+}
+
+.admin-console.admin-console .admin-command-btn.warning {
+  color: var(--admin-warning);
+  background: #fffaf0;
+  border-color: #f0d6ad;
+}
+
+.admin-console.admin-console .admin-action-btn.danger:hover:not(:disabled),
+.admin-console.admin-console .text-rose-700,
+.admin-console.admin-console .text-rose-600 {
+  color: var(--admin-error);
+}
+
+.admin-console.admin-console .admin-modal-backdrop {
+  background: rgba(23, 23, 23, 0.34);
+  backdrop-filter: blur(8px);
+}
+
+.admin-console.admin-console .admin-modal-card {
+  border: 1px solid var(--admin-hairline-strong);
+  border-radius: 16px;
+  background: var(--admin-surface);
+  box-shadow: 0 24px 64px rgba(23, 23, 23, 0.18);
+}
+
+.admin-console.admin-console table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.admin-console.admin-console thead tr {
+  border-color: var(--admin-hairline);
+  background: var(--admin-canvas-soft);
+}
+
+.admin-console.admin-console th {
+  color: var(--admin-body);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.admin-console.admin-console td {
+  color: var(--admin-body);
+  border-color: var(--admin-hairline);
+}
+
+.admin-console.admin-console tbody tr {
+  transition: background 0.16s ease;
+}
+
+.admin-console.admin-console tbody tr:hover {
+  background: var(--admin-canvas-soft);
+}
+
+.admin-console.admin-console .platform-header {
+  background: var(--admin-canvas-soft);
+}
+
+.admin-console.admin-console .drop-zone {
+  border-color: var(--admin-hairline-strong);
+  background: var(--admin-canvas-soft);
+}
+
+.admin-console.admin-console .drop-zone:hover {
+  border-color: var(--admin-primary);
+  background: var(--admin-surface);
+}
+
+.admin-console.admin-console .prompt-header-panel,
+.admin-console.admin-console .prompt-list-panel,
+.admin-console.admin-console .prompt-editor-panel {
+  border-color: var(--admin-hairline);
+  border-radius: 12px;
+  background: var(--admin-surface);
+  box-shadow: none;
+}
+
+.admin-console.admin-console .prompt-meta-strip span,
+.admin-console.admin-console .prompt-empty,
+.admin-console.admin-console .prompt-agent-item {
+  border-color: var(--admin-hairline);
+  border-radius: 8px;
+  background: var(--admin-canvas-soft);
+}
+
+.admin-console.admin-console .prompt-agent-item:hover,
+.admin-console.admin-console .prompt-agent-item.is-active {
+  border-color: var(--admin-primary);
+  background: var(--admin-surface);
+}
+
+.admin-console.admin-console .prompt-list-title span:last-child {
+  color: var(--admin-ink);
+  background: var(--admin-surface-strong);
+  border-color: var(--admin-hairline);
+}
+
+.admin-console.admin-console .prompt-agent-name,
+.admin-console.admin-console .prompt-function-name,
+.admin-console.admin-console .prompt-editor-head h3 {
+  color: var(--admin-ink);
+}
+
+.admin-console.admin-console .prompt-agent-foot,
+.admin-console.admin-console .prompt-breadcrumb {
+  color: var(--admin-link);
+}
+
+.admin-console.admin-console .prompt-editor-head,
+.admin-console.admin-console .prompt-editor-footer {
+  border-color: #2a2a2a;
+  background: var(--admin-dark);
+}
+
+.admin-console.admin-console .prompt-editor-head h3,
+.admin-console.admin-console .prompt-editor-head p,
+.admin-console.admin-console .prompt-breadcrumb,
+.admin-console.admin-console .prompt-editor-footer,
+.admin-console.admin-console .prompt-editor-footer span {
+  color: var(--admin-on-dark-soft);
+}
+
+.admin-console.admin-console .prompt-editor-head h3 {
+  color: var(--admin-on-dark);
+}
+
+.admin-console.admin-console .prompt-textarea {
+  color: var(--admin-on-dark);
+  background: var(--admin-dark);
+  font-family: var(--admin-code-font);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.admin-console.admin-console .prompt-textarea:disabled {
+  background: #1a1a1a;
+}
+
+.admin-console.admin-console .prompt-dirty-badge.is-clean {
+  color: var(--admin-success);
+  background: rgba(22, 163, 74, 0.12);
+}
+
+.admin-console.admin-console .prompt-dirty-badge.is-dirty {
+  color: #f6c177;
+  background: rgba(171, 100, 0, 0.18);
+}
+
+@media (max-width: 768px) {
+  .admin-console.admin-console {
+    --admin-sidebar-width: min(84vw, 320px);
+  }
+
+  .admin-console.admin-console .admin-topbar-inner {
+    padding: 0 14px;
+  }
+
+  .admin-console.admin-console .admin-main,
+  .admin-console.admin-console .admin-main.is-sidebar-hidden {
+    padding: calc(var(--admin-topbar-height) + 16px) 12px 18px;
+  }
+
+  .admin-console.admin-console .admin-sidebar {
+    box-shadow: 20px 0 56px rgba(23, 23, 23, 0.18);
+  }
+}
+
 @supports (padding: max(0px)) {
   .mobile-safe-bottom {
     padding-bottom: max(0.75rem, env(safe-area-inset-bottom));

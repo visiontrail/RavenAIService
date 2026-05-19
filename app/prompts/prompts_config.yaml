@@ -35,6 +35,12 @@ claude_agent_log_analysis:
         repo/              # Empty placeholder; clone the source code here ONLY if needed
       ```
 
+      In main-chat follow-up sessions, `repo/` may already contain a cloned
+      Git repository from an earlier turn. If `repo/.git` exists, reuse that
+      repository instead of cloning again. You may run commands such as
+      `git -C repo status`, `git -C repo log`, `rg ... repo`, and normal file
+      reads against the existing repository.
+
       ## Available Tools
       - Read, Grep, Glob   — read and search files
       - Bash               — run shell commands in the temporary workspace; git, rg, jq and common shell utilities are available
@@ -120,6 +126,9 @@ claude_agent_log_analysis:
         say so in `answer`.
 
       ### Step 4 — Clone the repository (only if you need the repo)
+      First check whether `repo/.git` already exists. If it exists, reuse the
+      existing checkout and skip `git clone`.
+
       Use `clone_url` when present; otherwise use `repo_url`. Clone directly
       into the prepared `repo/` directory and never echo the URL:
 

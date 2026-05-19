@@ -10,7 +10,7 @@ import { useAppStore } from '@/stores/app'
 import { useChatSessionStore } from '@/stores/chatSession'
 
 type MentionOption =
-  | { type: 'agent'; id: string; name: string; description?: string; agentType: 'package-manager' }
+  | { type: 'agent'; id: string; name: string; description?: string; agentType: 'package-manager' | 'log-analysis' }
   | { type: 'device'; id: string; name: string; status: DeviceInfo['status']; device: DeviceInfo }
 
 const packageAgentOption: MentionOption = {
@@ -19,6 +19,14 @@ const packageAgentOption: MentionOption = {
   name: '重构包配置管理员',
   agentType: 'package-manager',
   description: '调用重构包智能搜索，返回详情、下载链接与重构提示词'
+}
+
+const logAnalysisAgentOption: MentionOption = {
+  type: 'agent',
+  id: 'log-analysis',
+  name: '日志分析',
+  agentType: 'log-analysis',
+  description: '上传日志包并调用 Log Analysis Agent，保留工作区支持追问'
 }
 
 const userStore = useUserStore()
@@ -51,6 +59,7 @@ const inputAreaRef = ref<HTMLElement | null>(null)
 const mentionDropdownRef = ref<HTMLElement | null>(null)
 const topMoreMenuRef = ref<HTMLElement | null>(null)
 const topMoreBtnRef = ref<HTMLElement | null>(null)
+const logFileInputRef = ref<HTMLInputElement | null>(null)
 
 const devices = ref<DeviceInfo[]>([])
 const isLoadingDevices = ref(false)
@@ -63,7 +72,8 @@ const mentionStart = ref<number | null>(null)
 
 const targetDeviceId = ref<string | null>(null)
 const targetDeviceName = ref<string | null>(null)
-const targetAgent = ref<{ id: string; name: string; agentType: 'package-manager' } | null>(null)
+const targetAgent = ref<{ id: string; name: string; agentType: 'package-manager' | 'log-analysis' } | null>(null)
+const selectedLogFile = ref<File | null>(null)
 
 const showTopMoreMenu = ref(false)
 
@@ -220,7 +230,7 @@ const mentionOptions = computed<MentionOption[]>(() => {
       status: device.status,
       device,
     }))
-  return [packageAgentOption, ...deviceOptions]
+  return [packageAgentOption, logAnalysisAgentOption, ...deviceOptions]
 })
 
 const filteredMentionOptions = computed(() => {
@@ -242,12 +252,21 @@ watch(mentionSelectedIndex, (idx) => {
 
 const targetAgentName = computed(() => targetAgent.value?.name || null)
 const isPackageAgentSelected = computed(() => targetAgent.value?.agentType === 'package-manager')
+const isLogAnalysisAgentSelected = computed(() =>
+  targetAgent.value?.agentType === 'log-analysis' || !!selectedLogFile.value
+)
 
 const resetMentionState = () => {
   mentionVisible.value = false
   mentionKeyword.value = ''
   mentionSelectedIndex.value = 0
   mentionStart.value = null
+}
+
+const setTargetAgent = (option: MentionOption & { type: 'agent' }) => {
+  targetAgent.value = { id: option.id, name: option.name, agentType: option.agentType }
+  targetDeviceId.value = null
+  targetDeviceName.value = null
 }
 
 const renderAiMessage = (content: string) =>
@@ -330,9 +349,7 @@ const applyMentionSelection = (option: MentionOption) => {
     targetDeviceName.value = option.name
     targetAgent.value = null
   } else {
-    targetAgent.value = { id: option.id, name: option.name, agentType: option.agentType }
-    targetDeviceId.value = null
-    targetDeviceName.value = null
+    setTargetAgent(option)
   }
 
   const value = inputMessage.value
@@ -355,6 +372,40 @@ const applyMentionSelection = (option: MentionOption) => {
 
 const clearTargetDevice = () => { targetDeviceId.value = null; targetDeviceName.value = null }
 const clearTargetAgent = () => { targetAgent.value = null }
+const clearSelectedLogFile = () => { selectedLogFile.value = null }
+
+const triggerLogFilePicker = () => {
+  if (isSending.value) return
+  setTargetAgent(logAnalysisAgentOption)
+  logFileInputRef.value?.click()
+}
+
+const handleLogFileChange = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] || null
+  if (file) {
+    selectedLogFile.value = file
+    setTargetAgent(logAnalysisAgentOption)
+  }
+  input.value = ''
+}
+
+const togglePackageAgent = () => {
+  if (isPackageAgentSelected.value) {
+    clearTargetAgent()
+    return
+  }
+  selectedLogFile.value = null
+  setTargetAgent(packageAgentOption)
+}
+
+const toggleLogAnalysisAgent = () => {
+  if (targetAgent.value?.agentType === 'log-analysis' && !selectedLogFile.value) {
+    clearTargetAgent()
+    return
+  }
+  setTargetAgent(logAnalysisAgentOption)
+}
 
 const findMessageIndex = (id: string) => chatHistory.value.findIndex((msg) => msg.id === id)
 
@@ -416,6 +467,13 @@ const applyStreamEvent = (payload: any, answerId: string) => {
     insertBeforeAnswer(answerId, { id: generateUUID(), role: 'ai', content: formatDeviceActionMessage(payload), kind: 'device_action' })
     return
   }
+  if (type === 'log_analysis_status') {
+    const targetMessage = ensureAnswerMessage(answerId)
+    const statusText = payload?.message || 'Log Analysis Agent 正在处理...'
+    targetMessage.content = `**日志分析 Agent**\n\n${statusText}`
+    return
+  }
+  if (type === 'log_analysis_context') return
   if (type === 'session') return
   const targetMessage = ensureAnswerMessage(answerId)
   if (type === 'chunk' && typeof payload?.content === 'string') {
@@ -480,6 +538,7 @@ const handleKeydown = (event: KeyboardEvent) => {
 const handleInput = (event: Event) => updateMentionState(event)
 
 const extractPackageQuery = (content: string) => content.replace(/@重构包配置管理员/g, '').trim()
+const extractLogAnalysisQuery = (content: string) => content.replace(/@日志分析/g, '').trim()
 
 const runPackageAgent = async (content: string, answerId: string) => {
   const query = extractPackageQuery(content)
@@ -511,25 +570,113 @@ const runPackageAgent = async (content: string, answerId: string) => {
   }
 }
 
+const runLogAnalysisAgent = async (
+  content: string,
+  answerId: string,
+  historyPayload: { role: string; content: string }[],
+  fileForRequest: File | null,
+) => {
+  const query = extractLogAnalysisQuery(content) || (fileForRequest
+    ? '请分析这个日志包，给出概览、可疑异常和下一步建议。'
+    : '')
+  const targetMessage = ensureAnswerMessage(answerId)
+  if (!query && !fileForRequest) {
+    targetMessage.content = '请先上传日志包，或基于当前日志分析上下文输入一个追问。'
+    return
+  }
+
+  if (!sessionId.value) {
+    sessionId.value = generateUUID()
+    sessionStore.setSelected(sessionId.value)
+  }
+
+  const formData = new FormData()
+  formData.append('message', query)
+  formData.append('session_id', sessionId.value)
+  formData.append('remember', 'true')
+  formData.append('history', JSON.stringify(historyPayload))
+  if (fileForRequest) formData.append('file', fileForRequest)
+
+  if (fileForRequest) selectedLogFile.value = null
+
+  const headers: Record<string, string> = {}
+  const authToken = userStore.token as unknown as string
+  if (isLoggedIn.value && authToken) headers.Authorization = `Bearer ${authToken}`
+
+  try {
+    const resp = await fetch(getServiceUrl('/api/v1/ai-chat/log-analysis/stream'), {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    if (!resp.body) throw new Error('响应体为空，无法流式读取')
+
+    const textStream = typeof TextDecoderStream !== 'undefined'
+      ? resp.body.pipeThrough(new TextDecoderStream()) : null
+    const reader = textStream ? textStream.getReader() : null
+    const binaryReader = !textStream ? resp.body.getReader() : null
+    const decoder = !textStream ? new TextDecoder('utf-8') : null
+    let buffer = ''
+
+    if (reader) {
+      while (true) {
+        const { value, done } = await reader.read()
+        if (value) { buffer += value; buffer = processSseBuffer(buffer, answerId) }
+        if (done) break
+      }
+    } else if (binaryReader && decoder) {
+      while (true) {
+        const { value, done } = await binaryReader.read()
+        if (value) {
+          const decoded = decoder.decode(value, { stream: !done })
+          buffer += decoded
+          buffer = processSseBuffer(buffer, answerId)
+        }
+        if (done) break
+      }
+    }
+    if (buffer.trim()) processSseBuffer(buffer + '\n\n', answerId)
+
+    const answerMessage = ensureAnswerMessage(answerId)
+    if (answerMessage.content === '正在思考...') answerMessage.content = '（无回复内容）'
+
+    if (isLoggedIn.value) {
+      try { await sessionStore.load() } catch (error) { console.warn('刷新会话列表失败', error) }
+    }
+  } catch (error: any) {
+    console.error('日志分析调用失败', error)
+    if (fileForRequest) selectedLogFile.value = fileForRequest
+    targetMessage.content = `日志分析调用失败：${error?.message || String(error)}`
+  }
+}
+
 const sendMessage = async () => {
   if (isSending.value) return
   const content = inputMessage.value.trim()
-  if (!content) return
+  const fileForRequest = selectedLogFile.value
+  if (!content && !fileForRequest) return
+
+  const shouldUseLogAnalysisAgent =
+    isLogAnalysisAgentSelected.value || content.includes(`@${logAnalysisAgentOption.name}`) || !!fileForRequest
 
   const shouldUsePackageAgent =
-    isPackageAgentSelected.value || content.includes(`@${packageAgentOption.name}`)
+    !shouldUseLogAnalysisAgent &&
+    (isPackageAgentSelected.value || content.includes(`@${packageAgentOption.name}`))
 
-  if (shouldUsePackageAgent && !isPackageAgentSelected.value) {
-    targetAgent.value = {
-      id: packageAgentOption.id,
-      name: packageAgentOption.name,
-      agentType: packageAgentOption.agentType,
-    }
-    targetDeviceId.value = null
-    targetDeviceName.value = null
+  if (shouldUseLogAnalysisAgent && targetAgent.value?.agentType !== 'log-analysis') {
+    setTargetAgent(logAnalysisAgentOption)
   }
 
-  const userMessage: ChatEntry = { id: generateUUID(), role: 'user', content, kind: 'user' }
+  if (shouldUsePackageAgent && !isPackageAgentSelected.value) {
+    setTargetAgent(packageAgentOption)
+  }
+
+  const outgoingContent = content || '请分析这个日志包。'
+  const userDisplayContent = fileForRequest
+    ? `${outgoingContent}\n\n附件：${fileForRequest.name}`
+    : outgoingContent
+  const userMessage: ChatEntry = { id: generateUUID(), role: 'user', content: userDisplayContent, kind: 'user' }
   chatHistory.value.push(userMessage)
 
   const historyPayload = isLoggedIn.value
@@ -544,13 +691,18 @@ const sendMessage = async () => {
   isSending.value = true
 
   try {
+    if (shouldUseLogAnalysisAgent) {
+      await runLogAnalysisAgent(outgoingContent, answerMessageId, historyPayload, fileForRequest)
+      return
+    }
+
     if (shouldUsePackageAgent) {
-      await runPackageAgent(content, answerMessageId)
+      await runPackageAgent(outgoingContent, answerMessageId)
       return
     }
 
     const payload = {
-      message: content,
+      message: outgoingContent,
       session_id: sessionId.value || undefined,
       history: historyPayload,
       remember: true,
@@ -630,6 +782,7 @@ const capabilityCards = [
 
 const onPickCapability = (prompt: string) => {
   inputMessage.value = prompt
+  if (prompt.includes('日志')) setTargetAgent(logAnalysisAgentOption)
   nextTick(() => textareaRef.value?.focus())
 }
 
@@ -796,7 +949,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
           class="rw-mention"
         >
           <div class="rw-mention-head">
-            <span>选择目标（设备或重构包配置管理员）</span>
+            <span>选择目标（设备、重构包或日志分析）</span>
             <span class="rw-mention-hint">输入 @ 或名称过滤</span>
           </div>
           <div v-if="isLoadingDevices" class="rw-mention-empty">设备列表加载中…</div>
@@ -859,27 +1012,46 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
           v-model="inputMessage"
           ref="textareaRef"
           class="rw-textarea"
-          placeholder="给 RavenAI 说点什么，或粘贴一段日志…（输入 @ 选择设备或重构包配置管理员）"
+          placeholder="给 RavenAI 说点什么，或粘贴一段日志…（输入 @ 选择设备、重构包或日志分析）"
           rows="2"
           @keydown="handleKeydown"
           @input="handleInput"
         ></textarea>
 
         <div class="rw-composer-row">
-          <button class="rw-mini-btn" title="附加文件/日志" aria-label="附加文件">
+          <button class="rw-mini-btn" title="附加日志包" aria-label="附加日志包" @click="triggerLogFilePicker">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11.5-9.5 9.5a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5L9.5 18.5a2 2 0 0 1-3-3L15 7"/></svg>
           </button>
+          <input
+            ref="logFileInputRef"
+            class="rw-file-input"
+            type="file"
+            accept=".zip,.tar,.tgz,.gz,.tar.gz,.tar.bz2,.bz2"
+            @change="handleLogFileChange"
+          />
           <button
             class="rw-tool-chip"
             :class="{ active: isPackageAgentSelected }"
-            @click="isPackageAgentSelected
-              ? clearTargetAgent()
-              : (targetAgent = { id: packageAgentOption.id, name: packageAgentOption.name, agentType: 'package-manager' }, targetDeviceId = null, targetDeviceName = null)"
+            @click="togglePackageAgent"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>
             检索重构包
           </button>
-          <button class="rw-send-btn" :disabled="!inputMessage.trim() || isSending" @click="sendMessage">
+          <button
+            class="rw-tool-chip"
+            :class="{ active: isLogAnalysisAgentSelected }"
+            @click="toggleLogAnalysisAgent"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h16"/><circle cx="18" cy="12" r="1.4"/></svg>
+            日志分析
+          </button>
+          <div v-if="selectedLogFile" class="rw-file-chip">
+            <span>{{ selectedLogFile.name }}</span>
+            <button type="button" aria-label="移除附件" @click="clearSelectedLogFile">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+            </button>
+          </div>
+          <button class="rw-send-btn" :disabled="(!inputMessage.trim() && !selectedLogFile) || isSending" @click="sendMessage">
             <svg v-if="isSending" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="spin"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
             <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 19 5l-3 15-5-7-6-1Z"/></svg>
           </button>
@@ -1112,6 +1284,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
   background: none; border: none; cursor: pointer;
 }
 .rw-mini-btn:hover { background: var(--rw-surface-strong); color: var(--rw-ink); }
+.rw-file-input { display: none; }
 .rw-tool-chip {
   height: 28px; padding: 0 11px;
   display: inline-flex; align-items: center; gap: 6px;
@@ -1122,6 +1295,19 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
 }
 .rw-tool-chip:hover { border-color: var(--rw-ink); }
 .rw-tool-chip.active { background: var(--rw-ink); color: var(--rw-on-primary); border-color: var(--rw-ink); }
+.rw-file-chip {
+  min-width: 0; max-width: 260px; height: 28px; padding: 0 8px 0 10px;
+  display: inline-flex; align-items: center; gap: 7px;
+  border-radius: 999px; background: var(--rw-surface-strong);
+  color: var(--rw-ink); font-size: 12px; font-weight: 500;
+}
+.rw-file-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rw-file-chip button {
+  width: 18px; height: 18px; border-radius: 999px;
+  display: grid; place-items: center; flex-shrink: 0;
+  color: var(--rw-muted); background: none; border: none; cursor: pointer;
+}
+.rw-file-chip button:hover { background: var(--rw-hairline-strong); color: var(--rw-ink); }
 
 .rw-send-btn {
   width: 36px; height: 32px; border-radius: 8px;

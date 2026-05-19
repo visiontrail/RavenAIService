@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { LogOut, Menu, PanelLeftClose } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
@@ -345,7 +346,8 @@ onMounted(() => {
             :title="navVisible ? '隐藏侧边栏' : '显示侧边栏'"
             aria-label="切换侧边栏"
           >
-            {{ navVisible ? '☰' : '▤' }}
+            <PanelLeftClose v-if="navVisible" :size="18" />
+            <Menu v-else :size="18" />
           </button>
           <div>
             <h1 class="admin-title">后台管理</h1>
@@ -361,7 +363,8 @@ onMounted(() => {
             class="admin-logout-btn"
             @click="handleLogout"
           >
-            退出
+            <LogOut :size="14" />
+            <span>退出</span>
           </button>
         </div>
       </div>
