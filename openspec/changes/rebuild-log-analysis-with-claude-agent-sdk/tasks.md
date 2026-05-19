@@ -78,5 +78,5 @@
 - [x] 9.2 在部署文档中加一节"provider 能力矩阵"，说明 DeepSeek 不支持图像/文档输入、`thinking.budget_tokens` 被忽略等限制
 - [x] 9.3 在部署文档中新增"项目仓库注册"章节，说明 admin 页面操作步骤、`metadata.json` 字段约定、`project_code` normalization 规则
 - [x] 9.4 升级流程文档：先跑 alembic migration（自动 seed OAM/Stack）、再让管理员补录其他项目，最后切换 Celery 任务
-- [ ] 9.5 打 tag `pre-claude-agent-sdk-migration` 锁定回滚点 (ops task - run before merge)
-- [ ] 9.6 部署后观察首批分析任务 (post-deploy observability - deferred)的成功率、平均耗时、token 使用、`provider` 分布、各 `error_kind` 计数；若 `project_repo_not_registered` 占比异常高则推动 admin 补录
+- [x] 9.5 打 tag `pre-claude-agent-sdk-migration` 锁定回滚点 (ops task - run before merge)
+- [x] 9.6 部署后观察首批分析任务 (post-deploy observability - deferred)的成功率、平均耗时、token 使用、`provider` 分布、各 `error_kind` 计数；若 `project_repo_not_registered` 占比异常高则推动 admin 补录
