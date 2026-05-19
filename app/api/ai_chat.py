@@ -61,7 +61,14 @@ async def chat_stream_endpoint(
     logger.info("=" * 80)
     try:
         generator = ai_chat_service.chat_stream(request, db=db, user=current_user)
-        return StreamingResponse(generator, media_type="text/event-stream")
+        return StreamingResponse(
+            generator,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("AI chat stream request failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -92,7 +99,14 @@ async def log_analysis_stream_endpoint(
             db=db,
             user=current_user,
         )
-        return StreamingResponse(generator, media_type="text/event-stream")
+        return StreamingResponse(
+            generator,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Log analysis chat stream request failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc

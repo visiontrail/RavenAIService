@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 _SESSION_KEY_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
+_AGENT_PROGRESS_INTERVAL_SECONDS = 15
 
 
 class LogAnalysisChatService:
@@ -63,7 +65,14 @@ class LogAnalysisChatService:
 
         yield self._sse_event({"event": "session", "session_id": effective_session_id})
 
+        agent_task: Optional[asyncio.Task[Dict[str, Any]]] = None
         try:
+            logger.info(
+                "log-analysis chat: stream started session_id=%s has_file=%s filename=%s",
+                effective_session_id,
+                bool(uploaded_filename),
+                uploaded_filename or "-",
+            )
             if uploaded_filename:
                 yield self._sse_event(
                     {
@@ -119,7 +128,50 @@ class LogAnalysisChatService:
                 }
             )
 
-            result = await asyncio.to_thread(LogAnalysisAgent().run_sync, ctx)
+            logger.info(
+                "log-analysis chat: agent run starting session_id=%s task_id=%s temp_dir=%s",
+                effective_session_id,
+                ctx.task_id,
+                ctx.temp_dir,
+            )
+            started_at = time.monotonic()
+            heartbeat_count = 0
+            agent_task = asyncio.create_task(asyncio.to_thread(LogAnalysisAgent().run_sync, ctx))
+            while not agent_task.done():
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(agent_task),
+                        timeout=_AGENT_PROGRESS_INTERVAL_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    heartbeat_count += 1
+                    elapsed = int(time.monotonic() - started_at)
+                    logger.info(
+                        "log-analysis chat: agent still running session_id=%s task_id=%s elapsed=%ss heartbeat=%d",
+                        effective_session_id,
+                        ctx.task_id,
+                        elapsed,
+                        heartbeat_count,
+                    )
+                    yield self._sse_event(
+                        {
+                            "event": "log_analysis_status",
+                            "message": f"Log Analysis Agent 已运行 {elapsed}s，仍在分析日志与代码上下文...",
+                            "elapsed_seconds": elapsed,
+                            "heartbeat": heartbeat_count,
+                        }
+                    )
+
+            result = agent_task.result()
+            logger.info(
+                "log-analysis chat: agent run completed session_id=%s task_id=%s status=%s error_kind=%s duration=%ss heartbeats=%d",
+                effective_session_id,
+                ctx.task_id,
+                result.get("status"),
+                result.get("error_kind"),
+                int(time.monotonic() - started_at),
+                heartbeat_count,
+            )
             answer_text = self._format_agent_result(result, question=question, context_meta=context_meta)
 
             await self._save_analysis_result(db=db, context_meta=context_meta, result=result)
@@ -144,6 +196,20 @@ class LogAnalysisChatService:
                     "result": result,
                 }
             )
+            logger.info(
+                "log-analysis chat: stream done session_id=%s answer_len=%d",
+                effective_session_id,
+                len(answer_text),
+            )
+        except asyncio.CancelledError:
+            if agent_task and not agent_task.done():
+                agent_task.cancel()
+            logger.warning(
+                "log-analysis chat stream cancelled: session_id=%s filename=%s",
+                effective_session_id,
+                uploaded_filename or "-",
+            )
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.error("log-analysis chat stream failed: %s", exc, exc_info=True)
             yield self._sse_event({"event": "error", "message": str(exc)})

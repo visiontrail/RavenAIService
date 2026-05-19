@@ -187,7 +187,8 @@ def create_app() -> FastAPI:
     # 注意: 流式响应端点必须排除，因为 BaseHTTPMiddleware 会缓冲整个响应体
     app.add_middleware(RequestLoggingMiddleware, exclude_paths=[
         "/health", "/docs", "/redoc", "/openapi.json",
-        "/api/v1/ai-chat/chat/stream"  # 流式响应端点
+        "/api/v1/ai-chat/chat/stream",
+        "/api/v1/ai-chat/log-analysis/stream",
     ])
     app.add_middleware(FileSizeLimitMiddleware, max_file_size=settings.max_file_size)
     

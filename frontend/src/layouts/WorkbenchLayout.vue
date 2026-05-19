@@ -446,8 +446,9 @@ const handleUserLogout = () => {
   --rw-hairline: #f0f0f3;
   --rw-hairline-soft: #f5f5f7;
   --rw-hairline-strong: #dcdee0;
-  --rw-primary: #000000;
-  --rw-primary-active: #1a1a1a;
+  --rw-primary: #171717;
+  --rw-primary-hover: #2e2e2e;
+  --rw-primary-active: #404040;
   --rw-on-primary: #ffffff;
   --rw-success: #16a34a;
   --rw-danger: #c0382b;
@@ -523,16 +524,23 @@ const handleUserLogout = () => {
 }
 .rw-icon-btn:hover { background: var(--rw-surface-strong); color: var(--rw-ink); }
 
-.rw-new-btn {
+.raven-workbench button.rw-new-btn {
   margin: 4px 12px 10px; height: 36px;
   background: var(--rw-primary); color: var(--rw-on-primary);
   border-radius: 8px;
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 12px;
   font-size: 13.5px; font-weight: 500;
-  transition: background .15s;
+  transition: background .15s, color .15s;
 }
-.rw-new-btn:hover { background: var(--rw-primary-active); }
+.raven-workbench button.rw-new-btn:hover {
+  background: var(--rw-primary-hover);
+  color: var(--rw-on-primary);
+}
+.raven-workbench button.rw-new-btn:active {
+  background: var(--rw-primary-active);
+  color: var(--rw-on-primary);
+}
 .rw-new-btn-left { display: inline-flex; align-items: center; gap: 8px; }
 .rw-kbd {
   font-family: var(--rw-mono); font-size: 11px;
@@ -758,12 +766,20 @@ const handleUserLogout = () => {
 }
 .rw-input:focus { border-color: var(--rw-ink); }
 .rw-modal-actions { display: flex; gap: 10px; padding-top: 4px; }
-.rw-btn-primary {
+.raven-workbench button.rw-btn-primary {
   height: 36px; padding: 0 16px;
   background: var(--rw-primary); color: var(--rw-on-primary);
   border-radius: 8px; font-size: 13.5px; font-weight: 500;
+  transition: background .15s, color .15s;
 }
-.rw-btn-primary:hover:not(:disabled) { background: var(--rw-primary-active); }
+.raven-workbench button.rw-btn-primary:hover:not(:disabled) {
+  background: var(--rw-primary-hover);
+  color: var(--rw-on-primary);
+}
+.raven-workbench button.rw-btn-primary:active:not(:disabled) {
+  background: var(--rw-primary-active);
+  color: var(--rw-on-primary);
+}
 .rw-btn-primary:disabled { opacity: .6; cursor: default; }
 .rw-btn-ghost {
   height: 36px; padding: 0 14px;
