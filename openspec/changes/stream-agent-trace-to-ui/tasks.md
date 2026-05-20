@@ -45,12 +45,12 @@
 ## 6. 向后兼容与回滚
 
 - [ ] 6.1 验证旧前端（不识别 `agent_trace`）仍能正常解析 `done` / `error` / `log_analysis_status`：用 `curl` 模拟订阅，肉眼检查
-- [ ] 6.2 验证 `LogRecord.ai_analysis_result.tool_trace` 仍然非空且结构与旧版本一致（写一个 snapshot 测试）
-- [ ] 6.3 文档：在 `docs/` 下补一篇 `docs/agent_trace_protocol.md`（schema 表 + 事件序列示例 + 两条 SSE 通道说明）
+- [x] 6.2 验证 `LogRecord.ai_analysis_result.tool_trace` 仍然非空且结构与旧版本一致（写一个 snapshot 测试）
+- [x] 6.3 文档：在 `docs/` 下补一篇 `docs/agent_trace_protocol.md`（schema 表 + 事件序列示例 + 两条 SSE 通道说明）
 
 ## 7. 监控与上线
 
 - [ ] 7.1 新增 metric `ai_analysis_trace_events_emitted_total{kind}`（counter）与 `ai_analysis_trace_redis_bytes`（gauge）；接入现有 Prometheus 暴露面
 - [ ] 7.2 Loadtest：本地用 fake agent emitter 模拟一次 1500 事件的 trace，分别走 chat 与 log detail 两条通道，统计端到端 P99 延迟（目标 ≤ 500ms）
-- [ ] 7.3 Runbook：在 `docs/runbook/` 增加 trace 通道排错条目（Redis 不可用、SSE 早断、事件丢失三种症状的定位步骤）
+- [x] 7.3 Runbook：在 `docs/runbook/` 增加 trace 通道排错条目（Redis 不可用、SSE 早断、事件丢失三种症状的定位步骤）
 - [ ] 7.4 灰度：先把后端字段写入与 Redis 缓冲合入，再合前端组件；分两次发布
