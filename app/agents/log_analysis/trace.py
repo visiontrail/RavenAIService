@@ -257,7 +257,21 @@ def safe_emit(
 
     Failure of a single emit MUST NOT bring down the agent loop. We log
     once at warning level so operators can still diagnose problems.
+
+    Also bumps the ``ai_analysis_trace_events_emitted_total`` Prometheus
+    counter — this is the single chokepoint through which every emitted
+    event passes, regardless of transport (chat in-process buffer vs.
+    Celery Redis buffer).
     """
+    # Record the kind even if no emitter is wired — it's still a tracked
+    # event in the agent's internal accumulator.
+    try:
+        from app.utils.metrics import record_trace_event_emitted
+
+        record_trace_event_emitted(str(event.get("type") or "unknown"))
+    except Exception:  # noqa: BLE001
+        # Metrics MUST never break the agent loop.
+        pass
     if emitter is None:
         return
     try:

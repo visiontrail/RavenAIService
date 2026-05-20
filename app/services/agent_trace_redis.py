@@ -103,6 +103,33 @@ class TraceBuffer:
                 task_id,
                 exc,
             )
+            return
+        # Best-effort buffer-size telemetry. ``MEMORY USAGE`` is not on
+        # the hot path of the pipeline (Redis answers in microseconds)
+        # and tolerates failure: if the command is unsupported by the
+        # server or the client lacks the helper, we skip silently.
+        self._observe_buffer_size(task_id)
+
+    def _observe_buffer_size(self, task_id: str) -> None:
+        client = self._client
+        if client is None:
+            return
+        size: Optional[int] = None
+        try:
+            mem_usage = getattr(client, "memory_usage", None)
+            if callable(mem_usage):
+                size = mem_usage(_key(task_id))
+        except Exception:  # noqa: BLE001
+            size = None
+        if not isinstance(size, int) or size < 0:
+            return
+        try:
+            from app.utils.metrics import record_trace_redis_bytes
+
+            record_trace_redis_bytes(size)
+        except Exception:  # noqa: BLE001
+            # Metrics MUST never break the trace pipeline.
+            return
 
     def read_all(self, task_id: str) -> List[Dict[str, Any]]:
         """Return every event currently buffered for ``task_id``.

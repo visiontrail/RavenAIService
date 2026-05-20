@@ -32,7 +32,7 @@
 - [x] 4.3 新建 `frontend/src/components/AgentTraceStream.vue`：props `events: AgentTraceEvent[]`、`running: boolean`、可选 `onCancel: () => void`、可选 `toolNameMap?`；渲染卡片列表（每张卡片单独 `<TraceStepCard>` 子组件维持自身 expand 状态）；最终汇总条覆盖逻辑（默认折叠，点击展开）
 - [x] 4.4 工具名映射表 `frontend/src/composables/useToolDisplayName.ts`：内置 `Bash`、`Read`、`Grep`、`Glob`、`Skill`、`mcp__project_repo__lookup_project_repo` 默认映射；未匹配回退原名
 - [x] 4.5 Storybook / fixtures：`frontend/src/components/__fixtures__/agentTrace.fixture.ts` 包含 normal / cancel / error / 大量 thinking 四组事件流；本地手工回放验证四态与折叠行为
-- [ ] 4.6 单测 `frontend/src/composables/useAgentTraceStream.spec.ts`：seq 乱序去重、`step_delta` 累积、终态切换、`trace_summary` 优先级（end vs computed fallback）
+- [x] 4.6 单测 `frontend/src/composables/useAgentTraceStream.spec.ts`：seq 乱序去重、`step_delta` 累积、终态切换、`trace_summary` 优先级（end vs computed fallback）
 
 ## 5. 前端：双入口接入
 
@@ -50,7 +50,7 @@
 
 ## 7. 监控与上线
 
-- [ ] 7.1 新增 metric `ai_analysis_trace_events_emitted_total{kind}`（counter）与 `ai_analysis_trace_redis_bytes`（gauge）；接入现有 Prometheus 暴露面
-- [ ] 7.2 Loadtest：本地用 fake agent emitter 模拟一次 1500 事件的 trace，分别走 chat 与 log detail 两条通道，统计端到端 P99 延迟（目标 ≤ 500ms）
+- [x] 7.1 新增 metric `ai_analysis_trace_events_emitted_total{kind}`（counter）与 `ai_analysis_trace_redis_bytes`（gauge）；接入现有 Prometheus 暴露面
+- [x] 7.2 Loadtest：本地用 fake agent emitter 模拟一次 1500 事件的 trace，分别走 chat 与 log detail 两条通道，统计端到端 P99 延迟（目标 ≤ 500ms）
 - [x] 7.3 Runbook：在 `docs/runbook/` 增加 trace 通道排错条目（Redis 不可用、SSE 早断、事件丢失三种症状的定位步骤）
 - [ ] 7.4 灰度：先把后端字段写入与 Redis 缓冲合入，再合前端组件；分两次发布

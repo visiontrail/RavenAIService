@@ -12,7 +12,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config import settings
 from app.api import health, logs, tasks, admin, users, packages
-from app.api import ai_chat, device_link
+from app.api import ai_chat, device_link, metrics as metrics_api
 from app.api.releases import admin_router as releases_admin_router, public_router as releases_public_router
 from app.middleware import RequestLoggingMiddleware, FileSizeLimitMiddleware
 from app.exceptions import register_exception_handlers
@@ -186,7 +186,7 @@ def create_app() -> FastAPI:
     # 添加自定义中间件
     # 注意: 流式响应端点必须排除，因为 BaseHTTPMiddleware 会缓冲整个响应体
     app.add_middleware(RequestLoggingMiddleware, exclude_paths=[
-        "/health", "/docs", "/redoc", "/openapi.json",
+        "/health", "/metrics", "/docs", "/redoc", "/openapi.json",
         "/api/v1/ai-chat/chat/stream",
         "/api/v1/ai-chat/log-analysis/stream",
     ])
@@ -210,6 +210,7 @@ def create_app() -> FastAPI:
     
     # 注册路由
     app.include_router(health.router, tags=["健康检查"])
+    app.include_router(metrics_api.router, tags=["Metrics"])
     app.include_router(logs.router, prefix="/api/v1/logs", tags=["日志管理"])
     app.include_router(tasks.router, prefix="/api/v1", tags=["任务管理"])
     app.include_router(ai_chat.router, prefix="/api/v1/ai-chat", tags=["AI Chat"])

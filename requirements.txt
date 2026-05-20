@@ -28,3 +28,7 @@ tiktoken>=0.7.0
 
 # YAML parser for prompts_config.yaml
 PyYAML>=6.0.1
+
+# Prometheus metrics surface (soft-imported; the app degrades to no-op
+# counters/gauges if this is missing in older deployment images).
+prometheus-client>=0.20.0
