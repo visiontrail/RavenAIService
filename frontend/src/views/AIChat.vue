@@ -8,6 +8,8 @@ import { renderMarkdown } from '@/utils/markdownRenderer'
 import { useUserStore } from '@/stores/user'
 import { useAppStore } from '@/stores/app'
 import { useChatSessionStore } from '@/stores/chatSession'
+import AgentTraceStream from '@/components/AgentTraceStream.vue'
+import type { AgentTraceEvent } from '@/types/agentTrace'
 
 type MentionOption =
   | { type: 'agent'; id: string; name: string; description?: string; agentType: 'package-manager' | 'log-analysis' }
@@ -39,6 +41,8 @@ type ChatEntry = {
   role: ChatRole
   content: string
   kind?: 'plan' | 'device_action' | 'answer' | 'user'
+  traceEvents?: AgentTraceEvent[]
+  traceRunning?: boolean
 }
 
 const generateUUID = (): string => {
@@ -475,6 +479,19 @@ const applyStreamEvent = (payload: any, answerId: string) => {
     targetMessage.content = `**日志分析 Agent**\n\n${statusText}`
     return
   }
+  if (type === 'agent_trace') {
+    const targetMessage = ensureAnswerMessage(answerId)
+    if (!targetMessage.traceEvents) targetMessage.traceEvents = []
+    targetMessage.traceRunning = true
+    // Strip the SSE-level `event` field; the inner `type` is the trace
+    // event variant. Composable de-dupes by seq, so replayed frames on
+    // reconnect are safe.
+    const { event: _evt, ...trace } = payload as Record<string, unknown>
+    if (trace && typeof trace.seq === 'number' && typeof trace.type === 'string') {
+      targetMessage.traceEvents.push(trace as unknown as AgentTraceEvent)
+    }
+    return
+  }
   if (type === 'log_analysis_context') return
   if (type === 'session') return
   const targetMessage = ensureAnswerMessage(answerId)
@@ -489,8 +506,10 @@ const applyStreamEvent = (payload: any, answerId: string) => {
   } else if (type === 'done') {
     if (typeof payload?.answer === 'string' && payload.answer) targetMessage.content = payload.answer.trimStart()
     else if (!targetMessage.content || targetMessage.content === '正在思考...') targetMessage.content = '（无回复内容）'
+    targetMessage.traceRunning = false
   } else if (type === 'error') {
     targetMessage.content = `调用后端失败：${payload?.message || '未知错误'}`
+    targetMessage.traceRunning = false
   }
 }
 
@@ -834,7 +853,14 @@ const sendMessage = async () => {
     : chatHistory.value.slice(0, -1).map(msg => ({ role: msg.role, content: msg.content }))
 
   const answerMessageId = generateUUID()
-  chatHistory.value.push({ id: answerMessageId, role: 'ai', content: '正在思考...', kind: 'answer' })
+  chatHistory.value.push({
+    id: answerMessageId,
+    role: 'ai',
+    content: '正在思考...',
+    kind: 'answer',
+    traceEvents: shouldUseLogAnalysisAgent ? [] : undefined,
+    traceRunning: shouldUseLogAnalysisAgent ? true : undefined,
+  })
 
   inputMessage.value = ''
   resetMentionState()
@@ -1074,8 +1100,15 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             </div>
             <div class="rw-ai-body">
               <div class="rw-ai-name">RAVENAI</div>
+              <AgentTraceStream
+                v-if="msg.traceEvents && msg.traceEvents.length > 0 || msg.traceRunning"
+                class="rw-ai-trace"
+                :events="msg.traceEvents || []"
+                :running="!!msg.traceRunning"
+                :on-cancel="msg.traceRunning ? cancelLogAnalysis : undefined"
+              />
               <template v-if="msg.content === '正在思考...'">
-                <div class="rw-thinking">正在思考…</div>
+                <div v-if="!msg.traceRunning" class="rw-thinking">正在思考…</div>
               </template>
               <template v-else>
                 <div class="rw-ai-text" v-html="renderAiMessage(msg.content)"></div>
@@ -1371,6 +1404,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
   font-size: 12.5px; color: var(--rw-muted); font-weight: 600;
   margin-bottom: 6px; letter-spacing: 0.2px; text-transform: uppercase;
 }
+.rw-ai-trace { margin-bottom: 12px; }
 .rw-ai-text { font-size: 14.5px; color: var(--rw-ink); line-height: 1.62; }
 .rw-thinking {
   display: inline-block;

@@ -308,6 +308,13 @@
             </div>
           </div>
 
+          <AgentTraceStream
+            v-if="aiTraceEvents.length > 0 || aiTraceRunning"
+            class="analysis-trace"
+            :events="aiTraceEvents"
+            :running="aiTraceRunning"
+          />
+
           <AIAnalysisResult
             v-if="aiAnalysisResult"
             :result="aiAnalysisResult"
@@ -416,7 +423,11 @@ import {
   downloadFile 
 } from '../utils'
 import { logApi } from '../api'
+import { API_BASE_URL } from '../api'
 import AIAnalysisResult from '../components/AIAnalysisResult.vue'
+import AgentTraceStream from '../components/AgentTraceStream.vue'
+import type { AgentTraceEvent } from '../types/agentTrace'
+import { useUserStore } from '../stores/user'
 import { renderMarkdown } from '../utils/markdownRenderer'
 
 interface Props {
@@ -427,6 +438,7 @@ const props = defineProps<Props>()
 const route = useRoute()
 const router = useRouter()
 const logStore = useLogStore()
+const userStore = useUserStore()
 
 // 响应式变量
 const downloadLoading = ref(false)
@@ -470,6 +482,14 @@ const aiAnalysisPollTimer = ref<number | null>(null)
 const aiAnalysisProgressTimer = ref<number | null>(null)
 const showReasoningProcess = ref(false)
 const showDetailedOutput = ref(false)
+
+// AgentTrace stream state. Sourced from either the live SSE endpoint
+// (`/logs/{log_id}/ai-analysis/trace/stream`) while a task is running, or
+// from `ai_analysis_result.trace_events` once a task has finished.
+const aiTraceEvents = ref<AgentTraceEvent[]>([])
+const aiTraceRunning = ref(false)
+const aiTraceAbort = ref<AbortController | null>(null)
+const aiTraceLogId = ref<string | null>(null)
 
 const normalizeAIAnalysisResult = (raw: any) => {
   // 临时调试：打印后端返回的原始 ai_analysis_result 结构
@@ -1018,6 +1038,115 @@ const stopAIAnalysisPolling = () => {
   }
 }
 
+const closeTraceStream = () => {
+  if (aiTraceAbort.value) {
+    try { aiTraceAbort.value.abort() } catch { /* noop */ }
+    aiTraceAbort.value = null
+  }
+  aiTraceRunning.value = false
+}
+
+const seedTraceFromResult = (result: any) => {
+  // Backend persists the full event list to ai_analysis_result.trace_events
+  // on task completion. Hydrating here lets a refresh restore the trace as
+  // the terminal collapsed summary (component does that automatically once
+  // it sees run_complete/cancelled/error in the events array).
+  const events = Array.isArray(result?.trace_events) ? result.trace_events : []
+  if (events.length > 0) {
+    aiTraceEvents.value = events as AgentTraceEvent[]
+    aiTraceRunning.value = false
+  } else {
+    aiTraceEvents.value = []
+  }
+}
+
+const openTraceStream = async (logId: string) => {
+  if (aiTraceLogId.value === logId && aiTraceAbort.value) return
+  closeTraceStream()
+
+  aiTraceLogId.value = logId
+  aiTraceRunning.value = true
+  // Don't clobber any already-seeded events — backend replays from seq=1
+  // and the composable de-dupes, so an existing buffer is harmless.
+  if (aiTraceEvents.value.length === 0) aiTraceEvents.value = []
+
+  const controller = new AbortController()
+  aiTraceAbort.value = controller
+
+  const headers: Record<string, string> = { Accept: 'text/event-stream' }
+  const token = userStore.token as unknown as string
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  try {
+    const resp = await fetch(
+      `${API_BASE_URL}/api/v1/logs/${encodeURIComponent(logId)}/ai-analysis/trace/stream`,
+      { method: 'GET', headers, signal: controller.signal },
+    )
+    if (!resp.ok || !resp.body) {
+      if (resp.status === 404) {
+        // No task exists yet — nothing to stream.
+        aiTraceRunning.value = false
+        return
+      }
+      throw new Error(`HTTP ${resp.status}`)
+    }
+
+    const textStream = typeof TextDecoderStream !== 'undefined'
+      ? resp.body.pipeThrough(new TextDecoderStream())
+      : null
+    const reader = textStream ? textStream.getReader() : null
+    const binaryReader = !textStream ? resp.body.getReader() : null
+    const decoder = !textStream ? new TextDecoder('utf-8') : null
+
+    let buffer = ''
+    const processChunk = (chunk: string) => {
+      buffer += chunk
+      let remaining = buffer.replace(/\r\n/g, '\n')
+      while (true) {
+        const idx = remaining.indexOf('\n\n')
+        if (idx === -1) break
+        const raw = remaining.slice(0, idx)
+        remaining = remaining.slice(idx + 2)
+        const trimmed = raw.trim()
+        if (!trimmed.startsWith('data:')) continue
+        const jsonStr = trimmed.replace(/^data:\s*/, '')
+        if (!jsonStr) continue
+        try {
+          const event = JSON.parse(jsonStr)
+          if (event && typeof event.seq === 'number' && typeof event.type === 'string') {
+            aiTraceEvents.value.push(event as AgentTraceEvent)
+          }
+        } catch (err) {
+          console.warn('解析 trace 流数据失败', err, jsonStr)
+        }
+      }
+      buffer = remaining
+    }
+
+    if (reader) {
+      while (true) {
+        const { value, done } = await reader.read()
+        if (value) processChunk(value)
+        if (done) break
+      }
+    } else if (binaryReader && decoder) {
+      while (true) {
+        const { value, done } = await binaryReader.read()
+        if (value) processChunk(decoder.decode(value, { stream: !done }))
+        if (done) break
+      }
+    }
+    if (buffer.trim()) processChunk('\n\n')
+  } catch (err: any) {
+    if (err?.name !== 'AbortError') {
+      console.warn('trace 流读取失败', err)
+    }
+  } finally {
+    aiTraceRunning.value = false
+    if (aiTraceAbort.value === controller) aiTraceAbort.value = null
+  }
+}
+
 const stopFakeProgress = () => {
   if (aiAnalysisProgressTimer.value) {
     window.clearInterval(aiAnalysisProgressTimer.value)
@@ -1124,6 +1253,8 @@ const handleAIAnalysisSubmit = async () => {
     aiAnalysisProgress.value = 5
     aiAnalysisStatus.value = 'queued'
     aiAnalysisError.value = null
+    aiTraceEvents.value = []
+    closeTraceStream()
 
     const response = await logApi.analyzeLog(logStore.currentLog.id, query)
 
@@ -1171,6 +1302,8 @@ const resetAIAnalysis = () => {
   showDetailedOutput.value = false
   stopAIAnalysisPolling()
   stopFakeProgress()
+  closeTraceStream()
+  aiTraceEvents.value = []
 }
 
 // 复制分析结果
@@ -1340,8 +1473,10 @@ watch(
   (savedResult) => {
     if (savedResult) {
       aiAnalysisResult.value = normalizeAIAnalysisResult(savedResult)
+      seedTraceFromResult(savedResult)
     } else {
       aiAnalysisResult.value = null
+      aiTraceEvents.value = []
     }
   },
   { immediate: true }
@@ -1368,15 +1503,23 @@ watch(
     if (status === 'queued' || status === 'running') {
       aiAnalysisLoading.value = true
       startAIAnalysisPolling()
+      if (logStore.currentLog?.id) {
+        // Fire-and-forget: SSE consumer runs until terminal or unmount.
+        openTraceStream(logStore.currentLog.id)
+      }
     } else if (status === 'completed') {
       aiAnalysisLoading.value = false
       stopAIAnalysisPolling()
       stopFakeProgress()
       aiAnalysisProgress.value = 100
+      closeTraceStream()
+    } else if (status === 'failed') {
+      closeTraceStream()
     } else if (!status) {
       aiAnalysisLoading.value = false
       stopAIAnalysisPolling()
       stopFakeProgress()
+      closeTraceStream()
     }
   },
   { immediate: true }
@@ -1402,6 +1545,9 @@ watch(
     manualAnalysisSaving.value = false
     stopAIAnalysisPolling()
     stopFakeProgress()
+    closeTraceStream()
+    aiTraceEvents.value = []
+    aiTraceLogId.value = null
   }
 )
 
@@ -1416,6 +1562,7 @@ onMounted(async () => {
 onUnmounted(() => {
   stopAIAnalysisPolling()
   stopFakeProgress()
+  closeTraceStream()
 })
 </script>
 
@@ -1886,6 +2033,8 @@ onUnmounted(() => {
 .analysis-input { display: flex; flex-direction: column; gap: 12px; }
 .analysis-hint { font-size: 13px; color: var(--rw-body); margin: 0; }
 .analysis-actions { display: flex; gap: 8px; }
+
+.analysis-trace { margin: 12px 0; }
 
 .analysis-loading {
   display: flex;

@@ -62,7 +62,7 @@ async def test_log_analysis_stream_sends_elapsed_status_while_agent_runs(monkeyp
     context_meta = _make_context_meta()
 
     class FakeLogAnalysisAgent:
-        def run_sync(self, _ctx, _cancel_event=None):
+        def run_sync(self, _ctx, _cancel_event=None, _trace_emitter=None):
             time.sleep(0.05)
             return {
                 "status": "ok",
@@ -113,7 +113,7 @@ async def test_sse_disconnect_does_not_cancel_agent_job(monkeypatch, tmp_path):
     agent_finished = threading.Event()
 
     class SlowAgent:
-        def run_sync(self, _ctx, _cancel_event=None):
+        def run_sync(self, _ctx, _cancel_event=None, _trace_emitter=None):
             agent_started.set()
             # Sleep long enough that the SSE consumer disconnects first.
             time.sleep(0.4)
@@ -181,7 +181,7 @@ async def test_reconnect_subscribes_to_running_job_and_replays_events(monkeypatc
     proceed = threading.Event()
 
     class GatedAgent:
-        def run_sync(self, _ctx, _cancel_event=None):
+        def run_sync(self, _ctx, _cancel_event=None, _trace_emitter=None):
             proceed.wait(timeout=5)
             return {
                 "status": "ok",
@@ -258,7 +258,7 @@ async def test_cancel_signals_agent_and_get_status_reflects_state(monkeypatch, t
     captured_cancel_event: dict = {}
 
     class CancellableAgent:
-        def run_sync(self, _ctx, cancel_event=None):
+        def run_sync(self, _ctx, cancel_event=None, _trace_emitter=None):
             captured_cancel_event["evt"] = cancel_event
             # Spin until cancelled.
             for _ in range(200):

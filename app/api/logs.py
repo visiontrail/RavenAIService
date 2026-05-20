@@ -6,6 +6,7 @@
 import logging
 import re
 import io
+import time
 import uuid
 import json
 import tarfile
@@ -1333,6 +1334,180 @@ async def get_ai_analysis_status(
             error_code="AI_ANALYSIS_STATUS_ERROR",
             detail=str(e)
         )
+
+
+_TRACE_STREAM_POLL_INTERVAL_SECONDS = 0.2
+_TRACE_STREAM_HEARTBEAT_INTERVAL_SECONDS = 15
+_TRACE_STREAM_MAX_DURATION_SECONDS = 30 * 60
+
+
+@router.get("/{log_id}/ai-analysis/trace/stream")
+async def stream_ai_analysis_trace(
+    log_id: str = Path(..., description="日志文件ID"),
+    from_seq: int = Query(0, ge=0, description="只返回 seq 严格大于该值的事件，用于断线重连增量取回"),
+    db: AsyncSession = Depends(get_db),
+):
+    """SSE stream of ``AgentTraceEvent`` rows for a log's AI analysis task.
+
+    Three execution modes, transparently chosen from the current task status:
+
+    - ``running`` / ``queued`` — polls the Redis ``TraceBuffer`` every
+      ~200ms and emits new events (those with ``seq > from_seq``).
+    - ``completed`` / ``failed`` — replays the persisted
+      ``ai_analysis_result.trace_events`` slice in one shot, then closes.
+    - no task at all — 404.
+
+    Heartbeat: a ``system_notice{kind:"heartbeat"}`` frame is yielded every
+    15s of inactivity while the task is still running, so proxies do not
+    close the long-running SSE as idle.
+    """
+    import asyncio as _asyncio
+
+    request_validator.validate_log_id(log_id)
+    log_info = await log_service.get_log_detail(db, log_id)
+    if log_info is None:
+        raise FileNotFoundError(file_id=log_id)
+
+    task_id = getattr(log_info, "ai_analysis_task_id", None)
+    initial_status = (getattr(log_info, "ai_analysis_status", None) or "").lower()
+    if not task_id and initial_status not in {"completed", "failed"}:
+        raise HTTPException(
+            status_code=404,
+            detail={"error_kind": "no_task", "message": "该日志暂未发起 AI 分析任务"},
+        )
+
+    def _sse(payload: dict) -> str:
+        return f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+
+    def _agent_trace_frame(event: dict) -> str:
+        return _sse({"event": "agent_trace", **event})
+
+    def _heartbeat_frame() -> str:
+        return _sse({
+            "event": "agent_trace",
+            "type": "system_notice",
+            "task_id": task_id,
+            "kind": "heartbeat",
+            "timestamp": datetime.utcnow().timestamp(),
+        })
+
+    def _events_from_result(result: object) -> list:
+        if not isinstance(result, dict):
+            return []
+        events = result.get("trace_events") or []
+        return events if isinstance(events, list) else []
+
+    def _replay_completed_events(events: list, last_seq: int):
+        frames = []
+        new_last = last_seq
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            try:
+                seq = int(event.get("seq", 0))
+            except (TypeError, ValueError):
+                seq = 0
+            if seq > last_seq:
+                frames.append(_agent_trace_frame(event))
+                new_last = max(new_last, seq)
+        return frames, new_last
+
+    async def _generate():
+        from app.services.agent_trace_redis import get_buffer
+
+        last_seq = int(from_seq or 0)
+        started_at = time.monotonic()
+        last_activity = started_at
+        buffer = get_buffer()
+
+        # Terminal-state shortcut: stream persisted history once and close.
+        if initial_status in {"completed", "failed"}:
+            persisted = _events_from_result(getattr(log_info, "ai_analysis_result", None))
+            frames, _ = _replay_completed_events(persisted, last_seq)
+            for frame in frames:
+                yield frame
+            yield _sse({
+                "event": "stream_end",
+                "task_id": task_id,
+                "reason": initial_status,
+            })
+            return
+
+        # Running path: replay whatever Redis already has, then poll.
+        if task_id:
+            buffered = buffer.read_all(task_id)
+            frames, last_seq = _replay_completed_events(buffered, last_seq)
+            for frame in frames:
+                yield frame
+            if frames:
+                last_activity = time.monotonic()
+
+        # Poll loop. We re-check the DB status every cycle so we can close
+        # the stream as soon as the task transitions to a terminal state.
+        while True:
+            now = time.monotonic()
+            if now - started_at > _TRACE_STREAM_MAX_DURATION_SECONDS:
+                yield _sse({
+                    "event": "stream_end",
+                    "task_id": task_id,
+                    "reason": "max_duration",
+                })
+                return
+
+            saw_new = False
+            if task_id:
+                for event in buffer.read_all(task_id):
+                    try:
+                        seq = int(event.get("seq", 0))
+                    except (TypeError, ValueError):
+                        seq = 0
+                    if seq > last_seq:
+                        yield _agent_trace_frame(event)
+                        last_seq = seq
+                        saw_new = True
+            if saw_new:
+                last_activity = time.monotonic()
+
+            # Check whether the task has finished. Use a fresh session so we
+            # see writes the Celery worker has committed.
+            try:
+                refreshed = await log_service.get_log_detail(db, log_id)
+            except Exception:
+                refreshed = None
+
+            current_status = (
+                getattr(refreshed, "ai_analysis_status", None) or ""
+            ).lower() if refreshed else ""
+
+            if current_status in {"completed", "failed"}:
+                # Flush any events that landed only in the persisted result
+                # (and not in Redis), in case the LTRIM truncated history.
+                persisted = _events_from_result(getattr(refreshed, "ai_analysis_result", None))
+                frames, last_seq = _replay_completed_events(persisted, last_seq)
+                for frame in frames:
+                    yield frame
+                yield _sse({
+                    "event": "stream_end",
+                    "task_id": task_id,
+                    "reason": current_status,
+                })
+                return
+
+            if time.monotonic() - last_activity >= _TRACE_STREAM_HEARTBEAT_INTERVAL_SECONDS:
+                yield _heartbeat_frame()
+                last_activity = time.monotonic()
+
+            await _asyncio.sleep(_TRACE_STREAM_POLL_INTERVAL_SECONDS)
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.put("/{log_id}/issue-description")

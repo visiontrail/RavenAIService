@@ -60,6 +60,10 @@ class AgentJob:
     filename: Optional[str]
     started_at: float
     events: List[Dict[str, Any]] = field(default_factory=list)
+    # Raw AgentTraceEvent payloads (no SSE wrapper) for late-subscriber
+    # full-history replay and for the final `done` frame to carry the
+    # complete trace.
+    trace_events: List[Dict[str, Any]] = field(default_factory=list)
     done: bool = False
     cancel_requested: bool = False
     cancel_event: threading.Event = field(default_factory=threading.Event)
@@ -247,8 +251,18 @@ class LogAnalysisChatService:
     async def _run_job_async(self, job: AgentJob, ctx: WorkspaceContext) -> None:
         """Background Agent task. Survives SSE disconnects; persists to DB on completion."""
         try:
+            # Sync emitter: append the raw AgentTraceEvent to job.trace_events
+            # (for late-subscriber replay + final `done` payload) AND push an
+            # SSE-shaped frame onto job.events so live subscribers see the
+            # event right away. The lambda is invoked from the Agent's thread
+            # (via asyncio.to_thread → run_sync → asyncio.run); list.append
+            # is thread-safe under the GIL.
+            def _emit_trace(event: Dict[str, Any]) -> None:
+                job.trace_events.append(event)
+                job.events.append({"event": "agent_trace", **event})
+
             result = await asyncio.to_thread(
-                LogAnalysisAgent().run_sync, ctx, job.cancel_event
+                LogAnalysisAgent().run_sync, ctx, job.cancel_event, _emit_trace
             )
             job.result = result
             answer_text = self._format_agent_result(
@@ -266,6 +280,8 @@ class LogAnalysisChatService:
                     "answer": answer_text,
                     "model": result.get("model"),
                     "result": result,
+                    "trace_summary": result.get("trace_summary"),
+                    "trace_events": result.get("trace_events"),
                 }
             )
             logger.info(
@@ -335,27 +351,45 @@ class LogAnalysisChatService:
 
     async def _subscribe(self, job: AgentJob) -> AsyncIterator[str]:
         """Yield SSE chunks for this Job. Replays the full event buffer to
-        late subscribers, then polls for new events until the Job is done."""
+        late subscribers, then polls for new events until the Job is done.
+
+        Late subscribers automatically get the full historical ``agent_trace``
+        stream because those frames live in ``job.events`` next to the
+        coarse ``log_analysis_status`` frames — the ``sent`` cursor walks
+        every appended event in order.
+
+        Heartbeats: if no event has been buffered for
+        ``_AGENT_PROGRESS_INTERVAL_SECONDS`` (15s) while the Job is still
+        running, yield a ``system_notice{kind: heartbeat}`` frame to keep
+        proxies / browsers from closing the SSE stream as idle.
+        """
         sent = 0
-        last_heartbeat = time.monotonic()
+        last_activity = time.monotonic()
         while True:
+            saw_new = False
             while sent < len(job.events):
                 yield self._sse_event(job.events[sent])
                 sent += 1
+                saw_new = True
+            if saw_new:
+                last_activity = time.monotonic()
             if job.done:
                 return
             await asyncio.sleep(_JOB_POLL_INTERVAL_SECONDS)
             now = time.monotonic()
-            if now - last_heartbeat >= _AGENT_PROGRESS_INTERVAL_SECONDS:
+            if now - last_activity >= _AGENT_PROGRESS_INTERVAL_SECONDS:
                 elapsed = int(now - job.started_at)
                 yield self._sse_event(
                     {
-                        "event": "log_analysis_status",
-                        "message": f"Log Analysis Agent 已运行 {elapsed}s，仍在分析日志与代码上下文...",
+                        "event": "agent_trace",
+                        "type": "system_notice",
+                        "task_id": job.task_id,
+                        "kind": "heartbeat",
                         "elapsed_seconds": elapsed,
+                        "timestamp": time.time(),
                     }
                 )
-                last_heartbeat = now
+                last_activity = now
 
     def cancel(self, session_id: str, user: Optional[User] = None) -> bool:
         """Request cancellation of the in-flight Agent Job for ``session_id``.

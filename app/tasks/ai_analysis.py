@@ -13,6 +13,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.agents.log_analysis.agent import LogAnalysisAgent
+from app.agents.log_analysis.trace import summarize as summarize_trace
 from app.agents.log_analysis.workspace import (
     MissingArchiveError,
     MissingMetadataJsonError,
@@ -23,6 +24,7 @@ from app.agents.log_analysis.workspace import (
 from app.celery_app import celery_app
 from app.config import settings
 from app.models.log import LogRecord
+from app.services.agent_trace_redis import get_buffer as get_trace_buffer
 
 logger = logging.getLogger(__name__)
 
@@ -544,7 +546,13 @@ def _inject_repo_info(session, workspace_ctx) -> None:
     )
 
 
-def _error_result(error_kind: str, message: str = "") -> Dict[str, Any]:
+def _error_result(
+    error_kind: str,
+    message: str = "",
+    *,
+    trace_events: Optional[list] = None,
+    trace_summary: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     return {
         "engine": "claude-agent-sdk",
         "model": settings.anthropic_model or "unknown",
@@ -559,10 +567,46 @@ def _error_result(error_kind: str, message: str = "") -> Dict[str, Any]:
         "recommended_actions": [],
         "related_keywords": [],
         "tool_trace": [],
+        "trace_events": list(trace_events or []),
+        "trace_summary": trace_summary or {
+            "thought_duration_seconds": 0.0,
+            "tool_call_count": 0,
+            "thinking_chars": 0,
+        },
         "raw": "",
         "duration_seconds": 0.0,
         "token_usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0},
     }
+
+
+def _build_trace_emitter(task_id: Optional[str], collected: list):
+    """Build a synchronous emitter for the Agent.
+
+    Side effects per event:
+      - append to ``collected`` (in-memory accumulator) so the Celery task
+        can still persist the trace if the Agent run raises;
+      - push into the Redis ``TraceBuffer`` so the FastAPI SSE endpoint can
+        replay running-task progress to subscribers.
+
+    Failures inside the Redis write are swallowed by ``TraceBuffer.write``
+    itself; we still log here defensively if the emitter call raises so a
+    bug in this glue never kills the Agent loop.
+    """
+    buffer = get_trace_buffer()
+
+    def _emit(event: Dict[str, Any]) -> None:
+        try:
+            collected.append(event)
+            if task_id:
+                buffer.write(task_id, event)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "ai_analysis trace emitter failed task_id=%s err=%s",
+                task_id,
+                exc,
+            )
+
+    return _emit
 
 
 _timeout = settings.anthropic_request_timeout_seconds
@@ -584,6 +628,9 @@ def run_ai_analysis_task(self, log_id: str, query: str) -> Dict[str, Any]:
     task_id = getattr(current_task.request, "id", None)
     start_time = datetime.utcnow()
     workspace_ctx = None
+    # Accumulates every AgentTraceEvent emitted during this run so the trace
+    # survives even if the Agent run raises before returning a result dict.
+    collected_trace_events: list = []
 
     try:
         log_record = session.query(LogRecord).filter(LogRecord.id == log_id).first()
@@ -652,10 +699,39 @@ def run_ai_analysis_task(self, log_id: str, query: str) -> Dict[str, Any]:
             session, log_record, status="running", progress=20.0, task_id=task_id,
         )
 
+        trace_emitter = _build_trace_emitter(task_id, collected_trace_events)
         try:
-            analysis_result = LogAnalysisAgent().run_sync(workspace_ctx)
+            analysis_result = LogAnalysisAgent().run_sync(
+                workspace_ctx,
+                None,
+                trace_emitter,
+            )
         finally:
             cleanup(workspace_ctx)
+
+        # Defense-in-depth: if the Agent did not populate trace fields
+        # (e.g. timeout-fallback dict in run_sync), backfill from the
+        # accumulator so the persisted result always carries the trace.
+        if not analysis_result.get("trace_events"):
+            analysis_result["trace_events"] = list(collected_trace_events)
+        if not analysis_result.get("trace_summary"):
+            analysis_result["trace_summary"] = summarize_trace(collected_trace_events)
+
+        # Celery PROGRESS meta carries only the summary — broadcasting the
+        # full event list through the broker can balloon memory and is
+        # already available via the SSE endpoint (Redis).
+        try:
+            current_task.update_state(
+                state="PROGRESS",
+                meta={
+                    "log_id": log_id,
+                    "trace_summary": analysis_result.get("trace_summary"),
+                },
+            )
+        except Exception:  # noqa: BLE001
+            # update_state is best-effort progress reporting; never let it
+            # break the task.
+            pass
 
         _update_ai_task_metadata(
             session, log_record,
@@ -691,10 +767,21 @@ def run_ai_analysis_task(self, log_id: str, query: str) -> Dict[str, Any]:
                 pass
         try:
             if log_record:
+                # Build a synthetic error result that still carries whatever
+                # trace events the Agent emitted before crashing — keeps the
+                # UI replay consistent on unexpected failures.
+                trace_summary = summarize_trace(collected_trace_events)
+                result = _error_result(
+                    "task_exception",
+                    str(exc),
+                    trace_events=collected_trace_events,
+                    trace_summary=trace_summary,
+                )
                 _update_ai_task_metadata(
                     session, log_record,
                     status="failed", progress=100.0,
-                    error=str(exc), finished_at=datetime.utcnow(), task_id=task_id,
+                    error=str(exc), result=result,
+                    finished_at=datetime.utcnow(), task_id=task_id,
                 )
         except Exception:
             pass
