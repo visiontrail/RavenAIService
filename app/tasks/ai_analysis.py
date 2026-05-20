@@ -614,6 +614,50 @@ _soft_limit = _timeout + 60
 _hard_limit = _soft_limit + 60
 
 
+def _inject_repo_info_from_project_id(session, workspace_ctx, project_repo_id: int) -> bool:
+    """Resolve project_repo by primary key and write repo_info into task.json.
+
+    Used when the user explicitly selects a project from the registry instead
+    of relying on metadata.json. Returns True on success, False if no
+    enabled record matches.
+    """
+    from app.agents.log_analysis.mcp_tools import build_clone_url
+    from app.models.project_repo import ProjectRepo
+
+    repo = (
+        session.query(ProjectRepo)
+        .filter(ProjectRepo.id == project_repo_id, ProjectRepo.enabled.is_(True))
+        .first()
+    )
+    if not repo:
+        logger.info(
+            "_inject_repo_info_from_project_id: project_repo_id=%s not found or disabled",
+            project_repo_id,
+        )
+        return False
+
+    effective_token = repo.git_token or settings.code_repo_git_token or ""
+    clone_url = build_clone_url(repo.repo_url, effective_token or None)
+    repo_info = {
+        "project_code": repo.project_code,
+        "project_name": repo.project_name,
+        "repo_url": repo.repo_url,
+        "clone_url": clone_url,
+        "default_branch": repo.default_branch,
+        "auth_required": bool(effective_token),
+        "matched_via": "user_selection",
+        "source": "user_selected_project_repo",
+    }
+    _write_task_json_fields(workspace_ctx, {"repo_info": repo_info})
+    logger.info(
+        "_inject_repo_info_from_project_id: injected repo_info project_code=%s id=%s auth=%s",
+        repo.project_code,
+        repo.id,
+        bool(effective_token),
+    )
+    return True
+
+
 @celery_app.task(
     bind=True,
     name="app.tasks.ai_analysis.run_ai_analysis_task",
@@ -621,7 +665,12 @@ _hard_limit = _soft_limit + 60
     soft_time_limit=_soft_limit,
     time_limit=_hard_limit,
 )
-def run_ai_analysis_task(self, log_id: str, query: str) -> Dict[str, Any]:
+def run_ai_analysis_task(
+    self,
+    log_id: str,
+    query: str,
+    project_repo_id: Optional[int] = None,
+) -> Dict[str, Any]:
     """Celery 任务：调用 Claude Agent SDK LogAnalysisAgent 完成日志分析。"""
     session = SessionLocal()
     log_record: Optional[LogRecord] = None
@@ -653,9 +702,15 @@ def run_ai_analysis_task(self, log_id: str, query: str) -> Dict[str, Any]:
             )
             return {"status": "error", "error_kind": "missing_archive", "log_id": log_id}
 
-        # Prepare workspace (extract archive, verify metadata.json)
+        # Prepare workspace (extract archive). When the caller already
+        # supplied an explicit project_repo_id, metadata.json is optional —
+        # the project identity comes from the user's selection, not from
+        # the archive.
         try:
-            workspace_ctx = prepare(log_record)
+            workspace_ctx = prepare(
+                log_record,
+                require_metadata=project_repo_id is None,
+            )
         except MissingArchiveError as exc:
             result = _error_result("missing_archive", str(exc))
             _update_ai_task_metadata(
@@ -687,11 +742,20 @@ def run_ai_analysis_task(self, log_id: str, query: str) -> Dict[str, Any]:
             log_type=getattr(log_record, "log_type", None),
         )
 
-        # Pre-resolve project_repo from metadata.json so the agent can clone
-        # via plain Bash. Required for providers (e.g. deepseek) that can't
-        # invoke the MCP lookup tool.
+        # Pre-resolve project_repo so the agent can clone via plain Bash.
+        # Two paths:
+        #   1) explicit project_repo_id from API caller → lookup by id;
+        #   2) otherwise → infer from metadata.json (legacy behaviour).
+        # Required for providers (e.g. deepseek) that can't invoke the MCP
+        # lookup tool.
         try:
-            _inject_repo_info(session, workspace_ctx)
+            injected_from_selection = False
+            if project_repo_id is not None:
+                injected_from_selection = _inject_repo_info_from_project_id(
+                    session, workspace_ctx, project_repo_id
+                )
+            if not injected_from_selection:
+                _inject_repo_info(session, workspace_ctx)
         except Exception as exc:
             logger.warning("repo_info injection failed (non-fatal): %s", exc)
 

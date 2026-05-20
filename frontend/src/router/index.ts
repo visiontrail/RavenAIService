@@ -163,6 +163,14 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/admin/model-settings',
+    name: 'AdminModelSettings',
+    component: () => import('../views/AdminModelSettings.vue'),
+    meta: {
+      title: '模型设置',
+    },
+  },
+  {
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
     component: () => import('../views/NotFound.vue'),

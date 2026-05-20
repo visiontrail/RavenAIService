@@ -141,9 +141,22 @@ class AIChatService(BaseService):
         user_content: str,
         answer_text: str,
     ) -> None:
-        """Best-effort title generation that never blocks message persistence."""
+        """Best-effort title generation that never blocks message persistence.
+
+        Skips when the session already has a user-provided / pre-summarized title
+        (i.e. anything other than the default "新对话") — the lightweight summary
+        path is preferred and runs immediately on user send.
+        """
         if not answer_text:
             return
+        try:
+            existing = await chat_history_service._get_session(db, user.id, session_id)
+            if existing and existing.title and existing.title.strip() != "新对话":
+                logger.info("chat: 跳过标题生成（已存在自定义标题）: %s", existing.title)
+                return
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("chat: 读取会话标题失败，继续尝试生成: %s", exc)
+
         try:
             session_title = await asyncio.wait_for(
                 self._generate_session_title(user_content, answer_text),

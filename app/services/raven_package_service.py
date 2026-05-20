@@ -21,6 +21,13 @@ from typing import Any, Iterable, Optional
 
 from fastapi import HTTPException, UploadFile, status
 
+try:
+    from packaging.version import InvalidVersion, Version, parse as _parse_version
+except ImportError:  # pragma: no cover - packaging is a hard dep of project
+    Version = None  # type: ignore[assignment]
+    InvalidVersion = Exception  # type: ignore[assignment]
+    _parse_version = None  # type: ignore[assignment]
+
 from app.config import settings
 from app.utils.storage_utils import get_free_bytes
 
@@ -86,10 +93,9 @@ class RavenPackageService:
         self.data_dir = _abs_path(settings.raven_data_dir)
         self.uploads_dir = _abs_path(settings.upload_dir)
         self.metadata_file = _abs_path(settings.raven_metadata_file)
-        self.vector_store_path = _abs_path(settings.raven_vector_store_path)
-        self.vector_meta_file = Path(f"{self.vector_store_path}.meta.json")
-        self.uploads_dir.mkdir(parents=True, exist_ok=True)
-        self.metadata_file.parent.mkdir(parents=True, exist_ok=True)
+        # mkdir is deferred to first write/upload to avoid import-time
+        # failures when the configured paths are not yet writable (e.g.
+        # in test environments or read-only filesystems).
 
     def load_packages(self) -> list[dict[str, Any]]:
         if not self.metadata_file.exists():
@@ -269,6 +275,8 @@ class RavenPackageService:
         packages = self.load_packages()
         known_paths = {str(pkg.get("path")) for pkg in packages}
         added = 0
+        if not self.uploads_dir.exists():
+            return 0
         for file_path in self.uploads_dir.iterdir():
             if not file_path.is_file():
                 continue
@@ -530,6 +538,335 @@ class RavenPackageService:
                 shutil.rmtree(path)
             else:
                 path.unlink()
+
+    # ─────────────────── Agent 检索专用：数据访问 API ───────────────────
+
+    @staticmethod
+    def compare_versions(a: str, b: str) -> int:
+        """Compare two version strings using SemVer semantics.
+
+        Returns -1 if a < b, 0 if equal, 1 if a > b. Falls back to
+        string comparison when either side is not parseable.
+        """
+        sa, sb = str(a or ""), str(b or "")
+        if _parse_version is not None:
+            try:
+                va = _parse_version(sa)
+                vb = _parse_version(sb)
+                if va < vb:
+                    return -1
+                if va > vb:
+                    return 1
+                return 0
+            except InvalidVersion:
+                pass
+        if sa < sb:
+            return -1
+        if sa > sb:
+            return 1
+        return 0
+
+    @staticmethod
+    def _is_prerelease(value: str) -> bool:
+        if _parse_version is None:
+            return False
+        try:
+            return bool(_parse_version(str(value or "")).is_prerelease)
+        except InvalidVersion:
+            return False
+
+    @staticmethod
+    def _component_names(package: dict[str, Any]) -> list[str]:
+        meta = package.get("metadata") or {}
+        out: list[str] = []
+        for item in meta.get("components") or []:
+            if isinstance(item, dict):
+                name = item.get("name")
+                if name:
+                    out.append(str(name))
+            else:
+                out.append(str(item))
+        return out
+
+    def iter_brief(self, packages: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Project an iterable of packages to PackageBrief shape.
+
+        Brief = {id, name, version, packageType, isPatch, createdAt,
+        components, tags, size}. Excludes sha256 and disk path.
+        """
+        out: list[dict[str, Any]] = []
+        for pkg in packages:
+            meta = pkg.get("metadata") or {}
+            out.append({
+                "id": pkg.get("id"),
+                "name": pkg.get("name"),
+                "version": pkg.get("version"),
+                "packageType": pkg.get("packageType"),
+                "isPatch": bool(meta.get("isPatch")),
+                "createdAt": pkg.get("createdAt"),
+                "components": self._component_names(pkg),
+                "tags": [str(t) for t in (meta.get("tags") or [])],
+                "size": pkg.get("size"),
+            })
+        return out
+
+    def _clamp_limit(self, limit: Optional[int], max_limit: Optional[int]) -> int:
+        hard_cap = int(max_limit if max_limit is not None else settings.package_search_max_limit)
+        if hard_cap < 1:
+            hard_cap = 1
+        default = int(settings.package_search_default_limit)
+        try:
+            value = int(limit) if limit is not None else default
+        except (TypeError, ValueError):
+            value = default
+        if value < 1:
+            value = 1
+        return min(value, hard_cap)
+
+    def query_packages(
+        self,
+        filters: Optional[dict[str, Any]] = None,
+        sort: Optional[dict[str, Any]] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        max_limit: Optional[int] = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Generic structured query against the package metadata store.
+
+        Returns ``(brief_items, total_before_paging)``. Filters supported:
+        ``type``, ``is_patch``, ``tags`` (list), ``component`` (single name).
+        Sort accepts ``{"by": "createdAt"|"version"|"name", "order": "asc"|"desc"}``.
+        """
+        packages = self.get_all_packages()
+        filters = filters or {}
+
+        pkg_type = filters.get("type")
+        if pkg_type:
+            packages = [p for p in packages if p.get("packageType") == pkg_type]
+
+        is_patch = filters.get("is_patch")
+        if is_patch is not None:
+            want = _as_bool(is_patch)
+            packages = [p for p in packages if _as_bool((p.get("metadata") or {}).get("isPatch")) == want]
+
+        tags = filters.get("tags")
+        if tags:
+            wanted = {str(t).lower() for t in tags}
+            packages = [
+                p for p in packages
+                if wanted.issubset({str(t).lower() for t in (p.get("metadata") or {}).get("tags", [])})
+            ]
+
+        component = filters.get("component")
+        if component:
+            needle = str(component).lower()
+            packages = [
+                p for p in packages
+                if any(needle == c.lower() for c in self._component_names(p))
+            ]
+
+        sort = sort or {}
+        sort_by = str(sort.get("by") or "createdAt")
+        sort_order = str(sort.get("order") or "desc").lower()
+        reverse = sort_order != "asc"
+
+        if sort_by == "version":
+            from functools import cmp_to_key
+            packages.sort(
+                key=cmp_to_key(lambda a, b: self.compare_versions(a.get("version", ""), b.get("version", ""))),
+                reverse=reverse,
+            )
+        else:
+            packages.sort(key=lambda p: self._sort_value(p, sort_by), reverse=reverse)
+
+        total = len(packages)
+        start = max(int(offset or 0), 0)
+        effective_limit = self._clamp_limit(limit, max_limit)
+        sliced = packages[start:start + effective_limit]
+        return self.iter_brief(sliced), total
+
+    def text_search(
+        self,
+        text: str,
+        fields: Optional[list[str]] = None,
+        limit: Optional[int] = None,
+        max_limit: Optional[int] = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Literal substring match across the requested fields.
+
+        Returns ``(items_with_matched_fields, total_before_paging)``.
+        Each item is a PackageBrief plus ``matched_fields: list[str]``.
+        """
+        needle = str(text or "").strip().lower()
+        if not needle:
+            return [], 0
+        allowed = {"name", "version", "description", "tags", "components"}
+        targets = [f for f in (fields or list(allowed)) if f in allowed]
+        if not targets:
+            targets = list(allowed)
+
+        matches: list[tuple[dict[str, Any], list[str]]] = []
+        for pkg in self.get_all_packages():
+            meta = pkg.get("metadata") or {}
+            hit_fields: list[str] = []
+            if "name" in targets and needle in str(pkg.get("name") or "").lower():
+                hit_fields.append("name")
+            if "version" in targets and needle in str(pkg.get("version") or "").lower():
+                hit_fields.append("version")
+            if "description" in targets and needle in str(meta.get("description") or "").lower():
+                hit_fields.append("description")
+            if "tags" in targets and any(needle in str(t).lower() for t in (meta.get("tags") or [])):
+                hit_fields.append("tags")
+            if "components" in targets and any(needle in c.lower() for c in self._component_names(pkg)):
+                hit_fields.append("components")
+            if hit_fields:
+                matches.append((pkg, hit_fields))
+
+        total = len(matches)
+        effective_limit = self._clamp_limit(limit, max_limit)
+        sliced = matches[:effective_limit]
+
+        items: list[dict[str, Any]] = []
+        for pkg, hits in sliced:
+            brief = self.iter_brief([pkg])[0]
+            brief["matched_fields"] = hits
+            items.append(brief)
+        return items, total
+
+    def version_filter(
+        self,
+        package_type: Optional[str] = None,
+        version_min: Optional[str] = None,
+        version_max: Optional[str] = None,
+        include_prerelease: bool = False,
+        limit: Optional[int] = None,
+        max_limit: Optional[int] = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """SemVer-aware version range filter.
+
+        ``version_min`` is inclusive lower bound, ``version_max`` is inclusive
+        upper bound. Both fall back to string comparison if a value is not
+        parseable as a Version.
+        """
+        candidates = self.get_all_packages()
+        if package_type:
+            candidates = [p for p in candidates if p.get("packageType") == package_type]
+
+        if not include_prerelease:
+            candidates = [p for p in candidates if not self._is_prerelease(p.get("version", ""))]
+
+        if version_min is not None:
+            candidates = [p for p in candidates if self.compare_versions(p.get("version", ""), version_min) >= 0]
+        if version_max is not None:
+            candidates = [p for p in candidates if self.compare_versions(p.get("version", ""), version_max) <= 0]
+
+        from functools import cmp_to_key
+        candidates.sort(
+            key=cmp_to_key(lambda a, b: self.compare_versions(a.get("version", ""), b.get("version", ""))),
+            reverse=True,
+        )
+
+        total = len(candidates)
+        effective_limit = self._clamp_limit(limit, max_limit)
+        return self.iter_brief(candidates[:effective_limit]), total
+
+    def list_components(self, package_type: Optional[str] = None) -> list[dict[str, Any]]:
+        """Aggregate distinct components with usage counts.
+
+        Returns list of ``{name, count, package_types: [str]}`` sorted by
+        count descending.
+        """
+        packages = self.get_all_packages()
+        if package_type:
+            packages = [p for p in packages if p.get("packageType") == package_type]
+
+        agg: dict[str, dict[str, Any]] = {}
+        for pkg in packages:
+            ptype = str(pkg.get("packageType") or "")
+            for name in self._component_names(pkg):
+                entry = agg.setdefault(name, {"name": name, "count": 0, "package_types": set()})
+                entry["count"] += 1
+                if ptype:
+                    entry["package_types"].add(ptype)
+
+        out = [
+            {"name": v["name"], "count": v["count"], "package_types": sorted(v["package_types"])}
+            for v in agg.values()
+        ]
+        out.sort(key=lambda r: (-r["count"], r["name"]))
+        return out
+
+    def find_by_component(
+        self,
+        component_name: str,
+        version: Optional[str] = None,
+        limit: Optional[int] = None,
+        max_limit: Optional[int] = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Find packages whose components include ``component_name``.
+
+        Optional ``version`` matches against the component's own version
+        (since components are recorded as ``{name, version}`` dicts).
+        """
+        needle = str(component_name or "").lower()
+        if not needle:
+            return [], 0
+        target_version = str(version).strip() if version else None
+
+        matched: list[dict[str, Any]] = []
+        for pkg in self.get_all_packages():
+            meta = pkg.get("metadata") or {}
+            for comp in meta.get("components") or []:
+                if isinstance(comp, dict):
+                    cname = str(comp.get("name") or "").lower()
+                    cver = str(comp.get("version") or "")
+                else:
+                    cname = str(comp).lower()
+                    cver = str(pkg.get("version") or "")
+                if cname != needle:
+                    continue
+                if target_version is not None and cver != target_version:
+                    continue
+                matched.append(pkg)
+                break
+
+        total = len(matched)
+        effective_limit = self._clamp_limit(limit, max_limit)
+        return self.iter_brief(matched[:effective_limit]), total
+
+    def stats_by(self, group_by: str) -> list[dict[str, Any]]:
+        """Aggregate counts by one of ``type | version_major | tag | isPatch``."""
+        valid = {"type", "version_major", "tag", "isPatch"}
+        if group_by not in valid:
+            raise ValueError(f"group_by must be one of {sorted(valid)}, got {group_by!r}")
+
+        packages = self.get_all_packages()
+        counts: dict[str, int] = {}
+
+        if group_by == "type":
+            for pkg in packages:
+                key = str(pkg.get("packageType") or "unknown")
+                counts[key] = counts.get(key, 0) + 1
+        elif group_by == "version_major":
+            for pkg in packages:
+                ver = str(pkg.get("version") or "")
+                major = ver.split(".", 1)[0] if ver else "unknown"
+                if not major:
+                    major = "unknown"
+                counts[major] = counts.get(major, 0) + 1
+        elif group_by == "tag":
+            for pkg in packages:
+                for tag in (pkg.get("metadata") or {}).get("tags") or []:
+                    key = str(tag)
+                    counts[key] = counts.get(key, 0) + 1
+        elif group_by == "isPatch":
+            for pkg in packages:
+                key = "patch" if _as_bool((pkg.get("metadata") or {}).get("isPatch")) else "full"
+                counts[key] = counts.get(key, 0) + 1
+
+        out = [{"key": k, "count": v} for k, v in counts.items()]
+        out.sort(key=lambda r: (-r["count"], r["key"]))
+        return out
 
 
 raven_package_service = RavenPackageService()

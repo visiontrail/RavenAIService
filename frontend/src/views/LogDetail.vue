@@ -290,6 +290,27 @@
                 ? '已自动填入问题描述，您可以修改或直接开始分析...'
                 : '例如：分析所有错误日志、查找天线异常、统计告警信息等...'"
             />
+            <div class="analysis-project-row">
+              <label class="analysis-project-label">关联项目仓库</label>
+              <el-select
+                v-model="selectedProjectRepoId"
+                :loading="projectReposLoading"
+                placeholder="自动从 metadata.json 解析（推荐显式选择）"
+                clearable
+                filterable
+                class="analysis-project-select"
+              >
+                <el-option
+                  v-for="repo in projectRepos"
+                  :key="repo.id"
+                  :label="`${repo.project_name}（${repo.project_code}）`"
+                  :value="repo.id"
+                />
+              </el-select>
+              <span class="analysis-project-hint">
+                未提供 metadata.json 时，请在此选择项目；否则可留空由后端自动识别。
+              </span>
+            </div>
             <div class="analysis-actions">
               <button class="rw-btn-primary" @click="handleAIAnalysisSubmit">开始分析</button>
               <button class="rw-btn-secondary" @click="aiAnalysisQuery = ''">清空</button>
@@ -422,7 +443,8 @@ import {
   formatDateTime,
   downloadFile 
 } from '../utils'
-import { logApi } from '../api'
+import { logApi, projectRepoApi } from '../api'
+import type { ProjectRepoOption } from '../api'
 import { API_BASE_URL } from '../api'
 import AIAnalysisResult from '../components/AIAnalysisResult.vue'
 import AgentTraceStream from '../components/AgentTraceStream.vue'
@@ -490,6 +512,32 @@ const aiTraceEvents = ref<AgentTraceEvent[]>([])
 const aiTraceRunning = ref(false)
 const aiTraceAbort = ref<AbortController | null>(null)
 const aiTraceLogId = ref<string | null>(null)
+
+// 项目仓库选项（用于在 AI 分析时显式指定项目身份，
+// 当上传的归档中不含 metadata.json 时尤为关键）
+const projectRepos = ref<ProjectRepoOption[]>([])
+const selectedProjectRepoId = ref<number | null>(null)
+const projectReposLoading = ref(false)
+const projectReposLoaded = ref(false)
+
+const fetchProjectRepos = async () => {
+  if (projectReposLoading.value || projectReposLoaded.value) return
+  projectReposLoading.value = true
+  try {
+    const response = await projectRepoApi.listEnabled()
+    if (response.success && Array.isArray(response.data)) {
+      projectRepos.value = response.data
+    } else {
+      projectRepos.value = []
+    }
+    projectReposLoaded.value = true
+  } catch (err) {
+    console.warn('加载项目仓库列表失败:', err)
+    projectRepos.value = []
+  } finally {
+    projectReposLoading.value = false
+  }
+}
 
 const normalizeAIAnalysisResult = (raw: any) => {
   // 临时调试：打印后端返回的原始 ai_analysis_result 结构
@@ -1256,7 +1304,11 @@ const handleAIAnalysisSubmit = async () => {
     aiTraceEvents.value = []
     closeTraceStream()
 
-    const response = await logApi.analyzeLog(logStore.currentLog.id, query)
+    const response = await logApi.analyzeLog(
+      logStore.currentLog.id,
+      query,
+      selectedProjectRepoId.value,
+    )
 
     if (response.success) {
       const taskId = response.data?.task_id || response.data?.taskId || null
@@ -1298,6 +1350,7 @@ const resetAIAnalysis = () => {
   aiAnalysisTaskId.value = null
   aiAnalysisError.value = null
   aiAnalysisLoading.value = false
+  selectedProjectRepoId.value = null
   showReasoningProcess.value = false
   showDetailedOutput.value = false
   stopAIAnalysisPolling()
@@ -1557,6 +1610,8 @@ onMounted(async () => {
     await logStore.fetchLogDetail(id)
     updatePageMeta()
   }
+  // 并行加载项目仓库下拉项，不阻塞主流程
+  fetchProjectRepos()
 })
 
 onUnmounted(() => {
@@ -2033,6 +2088,25 @@ onUnmounted(() => {
 .analysis-input { display: flex; flex-direction: column; gap: 12px; }
 .analysis-hint { font-size: 13px; color: var(--rw-body); margin: 0; }
 .analysis-actions { display: flex; gap: 8px; }
+.analysis-project-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 0 0;
+}
+.analysis-project-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--rw-ink);
+  flex-shrink: 0;
+}
+.analysis-project-select { min-width: 280px; flex: 0 0 auto; }
+.analysis-project-hint {
+  font-size: 12px;
+  color: var(--rw-muted);
+  flex: 1 1 100%;
+}
 
 .analysis-trace { margin: 12px 0; }
 

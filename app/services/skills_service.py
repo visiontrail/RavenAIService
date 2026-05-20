@@ -373,6 +373,153 @@ def delete_skill(agent_key: str, skill_id: str) -> None:
     logger.info("skill deleted: agent=%s id=%s", agent_key, skill_id)
 
 
+# ─────────────────────── 文件浏览 / 预览 ──────────────────────────
+
+# 文本预览限制：避免把超大文件塞回响应
+MAX_PREVIEW_FILE_BYTES = 1 * 1024 * 1024   # 单文件 ≤ 1 MiB
+MAX_TREE_ENTRIES = 2000                    # 树节点上限
+
+# 视为可文本预览的扩展名（其余按二进制处理，仅返回元数据）
+_TEXT_LIKE_SUFFIXES = {
+    ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".vue", ".html", ".htm", ".css",
+    ".scss", ".sass", ".less", ".sh", ".bash", ".zsh", ".fish", ".rb",
+    ".go", ".rs", ".java", ".kt", ".kts", ".c", ".h", ".cc", ".cpp",
+    ".hpp", ".cs", ".swift", ".php", ".sql", ".xml", ".csv", ".tsv",
+    ".env", ".gitignore", ".dockerignore", ".log", ".lua", ".r",
+    ".proto", ".graphql", ".gql",
+}
+
+
+def _resolve_skill_dir(agent_key: str, skill_id: str) -> Tuple[Dict[str, Any], Path]:
+    """根据 skill_id 定位磁盘目录，返回 (registry entry, 目录绝对路径)。"""
+    registry = _load_registry(agent_key)
+    entry = next((e for e in registry if e.get("id") == skill_id), None)
+    if entry is None:
+        raise SkillNotFoundError(f"Skill 不存在: {skill_id}")
+    skill_dir = (_store_root(agent_key) / entry.get("dir_name", entry.get("name", ""))).resolve()
+    if not skill_dir.is_dir() or not (skill_dir / "SKILL.md").is_file():
+        raise SkillNotFoundError(f"Skill 目录已丢失: {skill_id}")
+    return entry, skill_dir
+
+
+def _safe_join(base: Path, rel_path: str) -> Path:
+    """把用户传入的相对路径限制在 base 子树内，防 path-traversal。"""
+    if not rel_path or rel_path in (".", "./"):
+        return base
+    candidate = (base / rel_path).resolve()
+    base_resolved = base.resolve()
+    if candidate != base_resolved and not str(candidate).startswith(str(base_resolved) + os.sep):
+        raise SkillValidationError(f"非法路径: {rel_path}")
+    return candidate
+
+
+def list_skill_files(agent_key: str, skill_id: str) -> Dict[str, Any]:
+    """返回 skill 目录的文件树，前端用于左侧导航。
+
+    结构：{ "name": skill_name, "tree": <node> }
+    node = { "name": str, "path": str(rel), "type": "dir"|"file", "size"?: int,
+             "children"?: [node, ...] }
+    """
+    _ = _agent_root(agent_key)
+    entry, skill_dir = _resolve_skill_dir(agent_key, skill_id)
+
+    count = 0
+
+    def build(node_dir: Path) -> Dict[str, Any]:
+        nonlocal count
+        children: List[Dict[str, Any]] = []
+        items = sorted(
+            node_dir.iterdir(),
+            key=lambda p: (not p.is_dir(), p.name.lower()),
+        )
+        for child in items:
+            count += 1
+            if count > MAX_TREE_ENTRIES:
+                raise SkillValidationError(
+                    f"Skill 文件数超过预览上限 {MAX_TREE_ENTRIES}"
+                )
+            rel = child.relative_to(skill_dir).as_posix()
+            if child.is_dir():
+                children.append(
+                    {
+                        "name": child.name,
+                        "path": rel,
+                        "type": "dir",
+                        "children": build(child)["children"],
+                    }
+                )
+            else:
+                children.append(
+                    {
+                        "name": child.name,
+                        "path": rel,
+                        "type": "file",
+                        "size": child.stat().st_size,
+                    }
+                )
+        return {
+            "name": node_dir.name if node_dir != skill_dir else entry["name"],
+            "path": "",
+            "type": "dir",
+            "children": children,
+        }
+
+    tree = build(skill_dir)
+    return {"name": entry["name"], "tree": tree}
+
+
+def read_skill_file(agent_key: str, skill_id: str, rel_path: str) -> Dict[str, Any]:
+    """读取 skill 目录下指定文件的内容（仅文本类型返回正文）。
+
+    返回:
+      { path, size, mime, encoding: "utf-8"|"binary", content?: str, truncated: bool }
+    """
+    if not rel_path:
+        raise SkillValidationError("path 不能为空")
+    _ = _agent_root(agent_key)
+    _, skill_dir = _resolve_skill_dir(agent_key, skill_id)
+
+    target = _safe_join(skill_dir, rel_path)
+    if not target.is_file():
+        raise SkillNotFoundError(f"文件不存在: {rel_path}")
+
+    size = target.stat().st_size
+    suffix = target.suffix.lower()
+    is_textlike = suffix in _TEXT_LIKE_SUFFIXES or target.name.lower() in {"skill.md", "readme", "license"}
+
+    if not is_textlike:
+        # 用前 4 KiB 做一次启发式判断，没有 NUL 字节就当文本读
+        with open(target, "rb") as fh:
+            sniff = fh.read(4096)
+        is_textlike = b"\x00" not in sniff
+
+    if not is_textlike:
+        return {
+            "path": rel_path,
+            "size": size,
+            "encoding": "binary",
+            "truncated": False,
+        }
+
+    truncated = size > MAX_PREVIEW_FILE_BYTES
+    read_size = MAX_PREVIEW_FILE_BYTES if truncated else size
+    with open(target, "rb") as fh:
+        raw = fh.read(read_size)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("utf-8", errors="replace")
+
+    return {
+        "path": rel_path,
+        "size": size,
+        "encoding": "utf-8",
+        "content": text,
+        "truncated": truncated,
+    }
+
+
 def set_skill_enabled(agent_key: str, skill_id: str, enabled: bool) -> Dict[str, Any]:
     registry = _load_registry(agent_key)
     entry = next((e for e in registry if e.get("id") == skill_id), None)

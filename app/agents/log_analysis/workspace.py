@@ -136,11 +136,14 @@ def _extract_archive(archive_path: Path, dest: Path, max_bytes: int) -> None:
 
 # ─────────────────────── Public API ────────────────────────────────
 
-def prepare(log_record: Any) -> WorkspaceContext:
+def prepare(log_record: Any, *, require_metadata: bool = True) -> WorkspaceContext:
     """准备任务工作区：解压日志归档，创建 task.json，不包含仓库 URL / token。
 
     Args:
         log_record: LogRecord ORM 对象（含 id, archive_path, question 等字段）
+        require_metadata: 是否强制要求归档内包含 metadata.json。当调用方
+            已经通过其它方式（如显式选择项目仓库）提供项目身份时，可置为
+            False 以跳过该校验。
 
     Returns:
         WorkspaceContext
@@ -148,7 +151,7 @@ def prepare(log_record: Any) -> WorkspaceContext:
     Raises:
         MissingArchiveError: archive_path 为空或文件不存在
         WorkspaceExtractTooLarge: 解压超限
-        MissingMetadataJsonError: 解压后找不到 metadata.json
+        MissingMetadataJsonError: require_metadata=True 且解压后找不到 metadata.json
     """
     from app.config import settings
 
@@ -182,12 +185,13 @@ def prepare(log_record: Any) -> WorkspaceContext:
             shutil.rmtree(str(logs_dir), ignore_errors=True)
             raise
 
-        # Verify metadata.json exists
-        meta_path = _find_metadata_json(logs_dir)
-        if meta_path is None:
-            raise MissingMetadataJsonError(
-                f"No metadata.json found under {logs_dir}"
-            )
+        # Verify metadata.json exists (unless caller opted out)
+        if require_metadata:
+            meta_path = _find_metadata_json(logs_dir)
+            if meta_path is None:
+                raise MissingMetadataJsonError(
+                    f"No metadata.json found under {logs_dir}"
+                )
 
         # Write task.json with non-sensitive fields only
         task_data = {

@@ -5,7 +5,7 @@ Admin endpoints for prompt configuration and repo settings management.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.models.database import get_db
 from app.security.admin_auth import ADMIN_TOKEN_HEADER, ADMIN_TOKEN_PREFIX, auth_manager
-from app.services import project_repo_service, skills_service
+from app.services import project_repo_service, runtime_settings_service, skills_service
 from app.services.prompts_config_service import (
     load_prompts_config,
     update_prompt_entries,
@@ -177,6 +177,60 @@ async def save_prompts_config(
         message="保存成功",
     )
 
+
+# ─────────────────── Runtime model settings ────────────────────────
+
+
+class LightModelData(BaseModel):
+    llm_light_model_name: Optional[str] = None
+    llm_light_base_url: Optional[str] = None
+    llm_light_api_key_set: bool = False
+    llm_light_temperature: float = 0.2
+    fallback_model_name: str = ""
+    fallback_base_url: str = ""
+
+
+class LightModelResponse(BaseModel):
+    success: bool = True
+    data: LightModelData
+    message: str = "ok"
+
+
+class LightModelUpdateRequest(BaseModel):
+    """轻量级模型设置更新请求。
+
+    传入空字符串表示清除该字段（恢复默认）。传 null 或省略表示不变。
+    `clear_api_key=true` 用于显式清除已存储的 API Key。
+    """
+
+    model_name: Optional[str] = Field(default=None, max_length=256)
+    base_url: Optional[str] = Field(default=None, max_length=512)
+    api_key: Optional[str] = Field(default=None, max_length=512)
+    temperature: Optional[float] = None
+    clear_api_key: bool = False
+
+
+@router.get("/settings/light-model", response_model=LightModelResponse)
+async def get_light_model_settings(
+    _username: str = Depends(require_admin),
+) -> LightModelResponse:
+    data = runtime_settings_service.get_all()
+    return LightModelResponse(data=LightModelData(**data), message="读取成功")
+
+
+@router.put("/settings/light-model", response_model=LightModelResponse)
+async def update_light_model_settings(
+    payload: LightModelUpdateRequest,
+    _username: str = Depends(require_admin),
+) -> LightModelResponse:
+    data = runtime_settings_service.update_light_model(
+        model_name=payload.model_name,
+        base_url=payload.base_url,
+        api_key=payload.api_key,
+        temperature=payload.temperature,
+        clear_api_key=payload.clear_api_key,
+    )
+    return LightModelResponse(data=LightModelData(**data), message="保存成功")
 
 
 # ─────────────────── Project Repo Registry ────────────────────────
@@ -394,6 +448,26 @@ class UpdateSkillRequest(BaseModel):
     enabled: bool
 
 
+class SkillFilesResponse(BaseModel):
+    success: bool = True
+    data: Dict[str, Any]
+    message: str = "ok"
+
+
+class SkillFileContent(BaseModel):
+    path: str
+    size: int
+    encoding: str
+    content: Optional[str] = None
+    truncated: bool = False
+
+
+class SkillFileContentResponse(BaseModel):
+    success: bool = True
+    data: SkillFileContent
+    message: str = "ok"
+
+
 def _ensure_known_agent(agent_key: str) -> None:
     if agent_key not in skills_service.SUPPORTED_AGENTS:
         raise HTTPException(
@@ -488,6 +562,53 @@ async def update_agent_skill(
     except skills_service.SkillNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return SkillResponse(data=SkillData(**entry), message="更新成功")
+
+
+@router.get(
+    "/agents/{agent_key}/skills/{skill_id}/files",
+    response_model=SkillFilesResponse,
+)
+async def list_agent_skill_files(
+    agent_key: str,
+    skill_id: str,
+    _username: str = Depends(require_admin),
+) -> SkillFilesResponse:
+    """列出某个 Skill 目录的文件树，用于左侧导航预览。"""
+    _ensure_known_agent(agent_key)
+    try:
+        data = skills_service.list_skill_files(agent_key, skill_id)
+    except skills_service.SkillNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except skills_service.SkillValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return SkillFilesResponse(data=data)
+
+
+@router.get(
+    "/agents/{agent_key}/skills/{skill_id}/file",
+    response_model=SkillFileContentResponse,
+)
+async def get_agent_skill_file(
+    agent_key: str,
+    skill_id: str,
+    path: str = Query(..., description="Skill 目录下的相对路径"),
+    _username: str = Depends(require_admin),
+) -> SkillFileContentResponse:
+    """读取 Skill 目录下指定文件的内容（文本类型才返回正文）。"""
+    _ensure_known_agent(agent_key)
+    try:
+        data = skills_service.read_skill_file(agent_key, skill_id, path)
+    except skills_service.SkillNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except skills_service.SkillValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    return SkillFileContentResponse(data=SkillFileContent(**data))
 
 
 @router.delete(

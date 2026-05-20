@@ -2,19 +2,32 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  ChevronDown,
+  ChevronRight,
   Cpu,
+  File as FileIcon,
   FileArchive,
+  FileText,
+  Folder,
+  FolderOpen,
+  FolderTree,
   LogOut,
   Menu,
   PanelLeftClose,
   Power,
   RefreshCw,
   Trash2,
+  X,
 } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
-import type { AgentSkill, AgentSkillAgentInfo } from '@/types'
+import type {
+  AgentSkill,
+  AgentSkillAgentInfo,
+  SkillFileContent,
+  SkillFileNode,
+} from '@/types'
 
 const appStore = useAppStore()
 const route = useRoute()
@@ -38,6 +51,38 @@ const skills = ref<AgentSkill[]>([])
 const overwrite = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const dragOver = ref(false)
+
+// 已安装 Skill 文件预览
+const manageSkill = ref<AgentSkill | null>(null)
+const skillTreeRoot = ref<SkillFileNode | null>(null)
+const skillTreeLoading = ref(false)
+const expandedDirs = ref<Set<string>>(new Set())
+const activeFilePath = ref<string | null>(null)
+const activeFileContent = ref<SkillFileContent | null>(null)
+const activeFileLoading = ref(false)
+const activeFileError = ref<string | null>(null)
+
+interface FlatTreeRow {
+  node: SkillFileNode
+  depth: number
+}
+
+const flatTreeRows = computed<FlatTreeRow[]>(() => {
+  const root = skillTreeRoot.value
+  if (!root) return []
+  const rows: FlatTreeRow[] = []
+  const walk = (children: SkillFileNode[] | undefined, depth: number) => {
+    if (!children) return
+    for (const node of children) {
+      rows.push({ node, depth })
+      if (node.type === 'dir' && expandedDirs.value.has(node.path)) {
+        walk(node.children, depth + 1)
+      }
+    }
+  }
+  walk(root.children, 0)
+  return rows
+})
 
 const authForm = reactive({
   username: '',
@@ -252,6 +297,97 @@ const deleteSkill = async (skill: AgentSkill) => {
     appStore.showNotification({ title: '删除失败', message: parseErrorMessage(err), type: 'error' })
   } finally {
     deletingId.value = null
+  }
+}
+
+const collectInitialExpandedDirs = (root: SkillFileNode | null): Set<string> => {
+  const out = new Set<string>()
+  if (!root?.children) return out
+  // 默认展开根目录的直接子目录，便于一眼看到结构
+  for (const c of root.children) {
+    if (c.type === 'dir') out.add(c.path)
+  }
+  return out
+}
+
+const findFirstReadableFile = (root: SkillFileNode | null): SkillFileNode | null => {
+  if (!root?.children) return null
+  // 优先 SKILL.md
+  const stack: SkillFileNode[] = [...root.children]
+  let fallback: SkillFileNode | null = null
+  while (stack.length) {
+    const node = stack.shift() as SkillFileNode
+    if (node.type === 'file') {
+      if (node.name.toLowerCase() === 'skill.md') return node
+      if (!fallback) fallback = node
+    } else if (node.children) {
+      stack.push(...node.children)
+    }
+  }
+  return fallback
+}
+
+const openSkillManager = async (skill: AgentSkill) => {
+  manageSkill.value = skill
+  skillTreeRoot.value = null
+  activeFilePath.value = null
+  activeFileContent.value = null
+  activeFileError.value = null
+  expandedDirs.value = new Set()
+  skillTreeLoading.value = true
+  try {
+    const resp = await adminApi.listSkillFiles(selectedAgentKey.value, skill.id)
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || '加载失败')
+    skillTreeRoot.value = resp.data.tree
+    expandedDirs.value = collectInitialExpandedDirs(resp.data.tree)
+    const first = findFirstReadableFile(resp.data.tree)
+    if (first) await selectSkillFile(first)
+  } catch (err: any) {
+    appStore.showNotification({
+      title: '加载文件失败',
+      message: parseErrorMessage(err),
+      type: 'error',
+    })
+  } finally {
+    skillTreeLoading.value = false
+  }
+}
+
+const closeSkillManager = () => {
+  manageSkill.value = null
+  skillTreeRoot.value = null
+  activeFilePath.value = null
+  activeFileContent.value = null
+  activeFileError.value = null
+  expandedDirs.value = new Set()
+}
+
+const toggleDir = (node: SkillFileNode) => {
+  if (node.type !== 'dir') return
+  const next = new Set(expandedDirs.value)
+  if (next.has(node.path)) next.delete(node.path)
+  else next.add(node.path)
+  expandedDirs.value = next
+}
+
+const selectSkillFile = async (node: SkillFileNode) => {
+  if (node.type !== 'file' || !manageSkill.value) return
+  activeFilePath.value = node.path
+  activeFileContent.value = null
+  activeFileError.value = null
+  activeFileLoading.value = true
+  try {
+    const resp = await adminApi.readSkillFile(
+      selectedAgentKey.value,
+      manageSkill.value.id,
+      node.path
+    )
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || '读取失败')
+    activeFileContent.value = resp.data
+  } catch (err: any) {
+    activeFileError.value = parseErrorMessage(err)
+  } finally {
+    activeFileLoading.value = false
   }
 }
 
@@ -496,7 +632,13 @@ onMounted(() => bootstrap())
                 >
                   <td class="py-3 pl-5 pr-4">
                     <div class="flex items-center gap-2">
-                      <code class="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-mono text-slate-700">{{ skill.name }}</code>
+                      <button
+                        class="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-mono text-slate-700 hover:bg-cyan-50 hover:text-cyan-700 transition"
+                        :title="`预览 ${skill.name} 的文件`"
+                        @click="openSkillManager(skill)"
+                      >
+                        {{ skill.name }}
+                      </button>
                     </div>
                     <p v-if="skill.description" class="mt-1 max-w-[420px] text-xs text-slate-500" :title="skill.description">
                       {{ skill.description }}
@@ -519,6 +661,13 @@ onMounted(() => bootstrap())
                   <td class="py-3 pr-4 whitespace-nowrap text-xs text-slate-400">{{ formatTimestamp(skill.updated_at) }}</td>
                   <td class="py-3 pr-5">
                     <div class="flex justify-end gap-2">
+                      <button
+                        class="admin-action-btn"
+                        title="查看文件"
+                        @click="openSkillManager(skill)"
+                      >
+                        <FolderTree :size="15" />
+                      </button>
                       <button
                         class="admin-action-btn"
                         :disabled="togglingId === skill.id"
@@ -544,6 +693,157 @@ onMounted(() => bootstrap())
         </div>
       </section>
     </main>
+
+    <div
+      v-if="manageSkill"
+      class="skill-manager-overlay"
+      role="dialog"
+      aria-modal="true"
+      @click.self="closeSkillManager"
+    >
+      <div class="skill-manager-panel">
+        <header class="skill-manager-header">
+          <div class="min-w-0">
+            <p class="text-xs text-slate-400 uppercase tracking-wide">Skill 预览</p>
+            <h2 class="text-base font-semibold text-slate-900 truncate">
+              {{ manageSkill.name }}
+            </h2>
+            <p
+              v-if="manageSkill.description"
+              class="mt-0.5 text-xs text-slate-500 truncate"
+              :title="manageSkill.description"
+            >
+              {{ manageSkill.description }}
+            </p>
+          </div>
+          <button
+            class="skill-manager-close"
+            aria-label="关闭"
+            @click="closeSkillManager"
+          >
+            <X :size="18" />
+          </button>
+        </header>
+
+        <div class="skill-manager-body">
+          <aside class="skill-tree-pane">
+            <div class="skill-tree-title">
+              <FolderTree :size="14" />
+              <span>文件结构</span>
+            </div>
+            <div v-if="skillTreeLoading" class="skill-tree-empty">加载中…</div>
+            <div
+              v-else-if="!flatTreeRows.length"
+              class="skill-tree-empty"
+            >
+              此 Skill 没有可显示的文件
+            </div>
+            <ul v-else class="skill-tree-list">
+              <li
+                v-for="row in flatTreeRows"
+                :key="row.node.path"
+                class="skill-tree-row"
+                :class="{
+                  'is-active':
+                    row.node.type === 'file' && row.node.path === activeFilePath,
+                }"
+                :style="{ paddingLeft: `${row.depth * 14 + 8}px` }"
+                @click="row.node.type === 'dir' ? toggleDir(row.node) : selectSkillFile(row.node)"
+              >
+                <span class="skill-tree-icon">
+                  <template v-if="row.node.type === 'dir'">
+                    <ChevronDown
+                      v-if="expandedDirs.has(row.node.path)"
+                      :size="12"
+                      class="skill-tree-chevron"
+                    />
+                    <ChevronRight v-else :size="12" class="skill-tree-chevron" />
+                    <FolderOpen
+                      v-if="expandedDirs.has(row.node.path)"
+                      :size="14"
+                      class="text-amber-500"
+                    />
+                    <Folder v-else :size="14" class="text-amber-500" />
+                  </template>
+                  <template v-else>
+                    <span class="skill-tree-chevron-placeholder"></span>
+                    <FileText
+                      v-if="row.node.name.toLowerCase() === 'skill.md'"
+                      :size="14"
+                      class="text-cyan-600"
+                    />
+                    <FileIcon v-else :size="14" class="text-slate-400" />
+                  </template>
+                </span>
+                <span class="skill-tree-name" :title="row.node.name">
+                  {{ row.node.name }}
+                </span>
+                <span
+                  v-if="row.node.type === 'file' && row.node.size != null"
+                  class="skill-tree-size"
+                >
+                  {{ formatSize(row.node.size) }}
+                </span>
+              </li>
+            </ul>
+          </aside>
+
+          <section class="skill-content-pane">
+            <div class="skill-content-header">
+              <div class="min-w-0">
+                <p
+                  v-if="activeFilePath"
+                  class="font-mono text-xs text-slate-700 truncate"
+                  :title="activeFilePath"
+                >
+                  {{ activeFilePath }}
+                </p>
+                <p v-else class="text-xs text-slate-400">
+                  从左侧选择文件以预览内容
+                </p>
+              </div>
+              <div
+                v-if="activeFileContent"
+                class="flex items-center gap-2 text-xs text-slate-400"
+              >
+                <span>{{ formatSize(activeFileContent.size) }}</span>
+                <span
+                  v-if="activeFileContent.truncated"
+                  class="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700"
+                >
+                  已截断
+                </span>
+              </div>
+            </div>
+
+            <div class="skill-content-body">
+              <div v-if="activeFileLoading" class="skill-content-msg">
+                正在读取文件…
+              </div>
+              <div v-else-if="activeFileError" class="skill-content-msg text-rose-600">
+                {{ activeFileError }}
+              </div>
+              <div
+                v-else-if="!activeFileContent && !activeFilePath"
+                class="skill-content-msg"
+              >
+                未选择文件
+              </div>
+              <div
+                v-else-if="activeFileContent && activeFileContent.encoding === 'binary'"
+                class="skill-content-msg"
+              >
+                此文件为二进制内容（{{ formatSize(activeFileContent.size) }}），不支持文本预览。
+              </div>
+              <pre
+                v-else-if="activeFileContent && activeFileContent.content !== undefined"
+                class="skill-content-pre"
+              ><code>{{ activeFileContent.content }}</code></pre>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -707,6 +1007,214 @@ onMounted(() => bootstrap())
 .admin-action-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ───────── Skill manager modal ───────── */
+
+.skill-manager-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.skill-manager-panel {
+  width: min(1100px, 100%);
+  height: min(720px, 100%);
+  background: #ffffff;
+  border-radius: 1rem;
+  box-shadow: 0 25px 60px rgba(15, 23, 42, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.skill-manager-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1.1rem;
+  border-bottom: 1px solid #e2e8f0;
+  background: linear-gradient(180deg, #f8fafc, #ffffff);
+}
+
+.skill-manager-close {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.55rem;
+  border: 1px solid #e2e8f0;
+  color: #475569;
+  background: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.skill-manager-close:hover {
+  border-color: #cbd5e1;
+  background: #f1f5f9;
+}
+
+.skill-manager-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  min-height: 0;
+}
+
+.skill-tree-pane {
+  border-right: 1px solid #e2e8f0;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.skill-tree-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0.85rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #64748b;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.skill-tree-empty {
+  padding: 1rem 0.85rem;
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+
+.skill-tree-list {
+  flex: 1;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem 0;
+}
+
+.skill-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem 0.3rem 0.5rem;
+  font-size: 0.8rem;
+  color: #334155;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 0;
+}
+
+.skill-tree-row:hover {
+  background: #e2e8f0;
+}
+
+.skill-tree-row.is-active {
+  background: #cffafe;
+  color: #0e7490;
+  font-weight: 500;
+}
+
+.skill-tree-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+  color: #64748b;
+}
+
+.skill-tree-chevron {
+  color: #94a3b8;
+}
+
+.skill-tree-chevron-placeholder {
+  display: inline-block;
+  width: 12px;
+}
+
+.skill-tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+}
+
+.skill-tree-size {
+  font-size: 0.68rem;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.skill-content-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.skill-content-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 0.95rem;
+  border-bottom: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+
+.skill-content-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: #0f172a;
+}
+
+.skill-content-msg {
+  padding: 2rem;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  text-align: center;
+}
+
+.skill-content-pre {
+  margin: 0;
+  padding: 1rem 1.2rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: #e2e8f0;
+  white-space: pre;
+  overflow: visible;
+}
+
+@media (max-width: 768px) {
+  .skill-manager-overlay {
+    padding: 0;
+  }
+
+  .skill-manager-panel {
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+  }
+
+  .skill-manager-body {
+    grid-template-columns: 200px 1fr;
+  }
 }
 
 @media (max-width: 1024px) {

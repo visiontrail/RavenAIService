@@ -69,6 +69,24 @@ export const userApi = {
       ai_content: aiContent,
       title_hint: titleHint,
     }),
+
+  summarizeUserMessage: (payload: {
+    user_content: string
+    session_id?: string | null
+    max_length?: number
+    persist?: boolean
+  }): Promise<{
+    success?: boolean
+    summary: string
+    session_id?: string | null
+    persisted?: boolean
+  }> =>
+    userClient.post('/api/v1/ai-chat/chat/summarize', {
+      user_content: payload.user_content,
+      session_id: payload.session_id || undefined,
+      max_length: payload.max_length ?? 16,
+      persist: payload.persist ?? true,
+    }),
 }
 
 export default userApi

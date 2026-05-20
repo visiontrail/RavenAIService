@@ -5,9 +5,12 @@ import type {
   AgentSkill,
   AgentSkillAgentInfo,
   ApiResponse,
+  LightModelSettings,
   PromptsConfigData,
   ProjectRepo,
   ProjectRepoPayload,
+  SkillFileContent,
+  SkillFileTree,
   TestConnectionResult,
   UserProfile,
 } from '@/types'
@@ -70,6 +73,18 @@ export const adminApi = {
 
   fetchPromptsConfig: (): Promise<ApiResponse<PromptsConfigData>> =>
     adminClient.get('/admin/prompts/config'),
+
+  fetchLightModelSettings: (): Promise<ApiResponse<LightModelSettings>> =>
+    adminClient.get('/admin/settings/light-model'),
+
+  updateLightModelSettings: (payload: {
+    model_name?: string | null
+    base_url?: string | null
+    api_key?: string | null
+    temperature?: number | null
+    clear_api_key?: boolean
+  }): Promise<ApiResponse<LightModelSettings>> =>
+    adminClient.put('/admin/settings/light-model', payload),
 
   savePromptsConfig: (payload: {
     content?: string
@@ -156,6 +171,21 @@ export const adminApi = {
 
   deleteAgentSkill: (agentKey: string, skillId: string): Promise<void> =>
     adminClient.delete(`/admin/agents/${agentKey}/skills/${skillId}`),
+
+  listSkillFiles: (
+    agentKey: string,
+    skillId: string
+  ): Promise<ApiResponse<SkillFileTree>> =>
+    adminClient.get(`/admin/agents/${agentKey}/skills/${skillId}/files`),
+
+  readSkillFile: (
+    agentKey: string,
+    skillId: string,
+    path: string
+  ): Promise<ApiResponse<SkillFileContent>> =>
+    adminClient.get(`/admin/agents/${agentKey}/skills/${skillId}/file`, {
+      params: { path },
+    }),
 }
 
 export default adminApi

@@ -49,12 +49,14 @@ class Settings(BaseSettings):
     raven_enable_legacy_paths: bool = True
     raven_data_dir: str = "data/raven"
     raven_metadata_file: str = "data/raven/package-metadata.json"
-    raven_vector_store_path: str = "data/raven/vector-store"
     upload_dir: str = "data/raven/uploads"
     upload_max_size_mb: int = 500
-    rag_embedding_provider: str = "local"
-    rag_embedding_model: str = "local"
     openai_base_url: Optional[str] = None
+
+    # Package search Agent 配置（Claude Agent SDK 驱动的重构包智能检索）
+    package_search_max_turns: int = 8
+    package_search_default_limit: int = 5
+    package_search_max_limit: int = 50
     
     # Agent配置（日志分析智能体）
     agent_enabled: bool = True
@@ -77,7 +79,14 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "http://oneapi.yhroot.com/v1"
     llm_model_name: str = "glm-4.6"
     llm_reasoning_model: str = "glm-4.6"
-    
+
+    # 轻量级模型 配置（用于会话摘要、标题生成等低延迟轻量任务）
+    # 留空则回退到 llm_model_name；base_url / api_key 留空则继承 deepseek_* 配置
+    llm_light_model_name: Optional[str] = None
+    llm_light_base_url: Optional[str] = None
+    llm_light_api_key: Optional[str] = None
+    llm_light_temperature: float = 0.2
+
     llm_temperature: float = 0.0
     
     # 上下文压缩/记忆配置
@@ -98,6 +107,9 @@ class Settings(BaseSettings):
 
     # Agent Skills 数据目录（Claude Agent SDK Skill 包按 agent 隔离存储）
     skills_data_dir: str = "data/agent_skills"
+
+    # 运行期可由 Admin 调整的轻量级模型设置持久化文件
+    runtime_settings_path: str = "data/runtime_settings.json"
 
     @field_validator("anthropic_provider")
     @classmethod

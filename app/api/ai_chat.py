@@ -2,6 +2,7 @@
 AI 对话相关 API
 """
 import logging
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
@@ -13,11 +14,30 @@ from app.api.users import get_optional_user
 from app.models.chat import ChatRequest, ChatResponse
 from app.models.database import get_db
 from app.services.ai_chat_service import ai_chat_service
+from app.services.chat_history_service import chat_history_service
+from app.services.light_llm_service import summarize_user_message
 from app.services.log_analysis_chat_service import log_analysis_chat_service
 
 
 class LogAnalysisCancelRequest(BaseModel):
     session_id: str
+
+
+class SummarizeRequest(BaseModel):
+    """Immediate session-title summary for a single user message."""
+
+    user_content: str
+    session_id: Optional[str] = None
+    max_length: int = 16
+    persist: bool = True
+
+
+class SummarizeResponse(BaseModel):
+    success: bool = True
+    message: str = "ok"
+    summary: str
+    session_id: Optional[str] = None
+    persisted: bool = False
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -77,6 +97,47 @@ async def chat_stream_endpoint(
     except Exception as exc:  # noqa: BLE001
         logger.exception("AI chat stream request failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/chat/summarize", response_model=SummarizeResponse, summary="对用户输入立即生成简短会话摘要")
+async def chat_summarize_endpoint(
+    payload: SummarizeRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_optional_user),
+) -> SummarizeResponse:
+    content = (payload.user_content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="user_content 不能为空")
+
+    max_length = max(4, min(40, int(payload.max_length or 16)))
+    summary = await summarize_user_message(content, max_length=max_length)
+
+    persisted = False
+    resolved_session_id = payload.session_id
+    if payload.persist and current_user is not None:
+        try:
+            if not resolved_session_id:
+                resolved_session_id = str(uuid.uuid4())
+            session = await chat_history_service.ensure_session(
+                db, current_user.id, session_id=resolved_session_id
+            )
+            await chat_history_service.update_session_title(
+                db,
+                user_id=current_user.id,
+                session_id=session.id,
+                title=summary,
+            )
+            await db.commit()
+            resolved_session_id = session.id
+            persisted = True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("chat/summarize: 持久化标题失败: %s", exc)
+
+    return SummarizeResponse(
+        summary=summary,
+        session_id=resolved_session_id,
+        persisted=persisted,
+    )
 
 
 @router.post("/log-analysis/stream", summary="主对话日志分析（流式）")

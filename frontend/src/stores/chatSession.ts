@@ -53,6 +53,29 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     selectedSessionId.value = id
   }
 
+  const upsertSessionTitle = (id: string, title: string) => {
+    const trimmed = (title || '').trim()
+    if (!id || !trimmed) return
+    const existing = sessions.value.find((s) => s.id === id)
+    const nowIso = new Date().toISOString()
+    if (existing) {
+      existing.title = trimmed
+      existing.last_message_at = existing.last_message_at || nowIso
+      return
+    }
+    sessions.value = [
+      {
+        id,
+        title: trimmed,
+        last_message_at: nowIso,
+        created_at: nowIso,
+        updated_at: nowIso,
+        message_count: 0,
+      } as ChatSessionSummary,
+      ...sessions.value,
+    ]
+  }
+
   const currentTitle = computed(() => {
     if (!selectedSessionId.value) return null
     return sessions.value.find((s) => s.id === selectedSessionId.value)?.title || null
@@ -71,5 +94,6 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     startNewChat,
     removeSession,
     setSelected,
+    upsertSessionTitle,
   }
 })

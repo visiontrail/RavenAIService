@@ -265,6 +265,27 @@ export interface AgentSkill {
   updated_at?: string | null
 }
 
+export interface SkillFileNode {
+  name: string
+  path: string
+  type: 'dir' | 'file'
+  size?: number
+  children?: SkillFileNode[]
+}
+
+export interface SkillFileTree {
+  name: string
+  tree: SkillFileNode
+}
+
+export interface SkillFileContent {
+  path: string
+  size: number
+  encoding: 'utf-8' | 'binary'
+  content?: string
+  truncated: boolean
+}
+
 // 用户与会话
 export interface UserProfile {
   id: string
@@ -281,6 +302,15 @@ export interface UserAuthPayload {
   token: string
   expires_at: number
   user: UserProfile
+}
+
+export interface LightModelSettings {
+  llm_light_model_name: string | null
+  llm_light_base_url: string | null
+  llm_light_api_key_set: boolean
+  llm_light_temperature: number
+  fallback_model_name: string
+  fallback_base_url: string
 }
 
 export interface ChatSessionSummary {

@@ -29,6 +29,12 @@ export const adminNavItems = [
     path: '/admin/agent-skills',
     description: '为 Claude Agent 上传/启用用户自定义 Skill 包',
   },
+  {
+    key: 'model-settings',
+    label: '模型设置',
+    path: '/admin/model-settings',
+    description: '配置轻量级模型（会话摘要、标题生成等）',
+  },
 ] as const
 
 export type AdminNavItem = (typeof adminNavItems)[number]
@@ -38,6 +44,7 @@ export const resolveAdminNavKey = (path: string) => {
   if (path.startsWith('/admin/releases')) return 'releases'
   if (path.startsWith('/admin/project-repos')) return 'project-repos'
   if (path.startsWith('/admin/agent-skills')) return 'agent-skills'
+  if (path.startsWith('/admin/model-settings')) return 'model-settings'
   if (path.startsWith('/admin')) return 'prompts'
   return ''
 }

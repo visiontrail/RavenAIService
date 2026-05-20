@@ -121,9 +121,16 @@ export const logApi = {
   },
 
   // AI分析日志
-  analyzeLog: (id: string, query: string): Promise<ApiResponse<any>> => {
+  analyzeLog: (
+    id: string,
+    query: string,
+    projectRepoId?: number | null,
+  ): Promise<ApiResponse<any>> => {
     const formData = new FormData()
     formData.append('query', query)
+    if (projectRepoId !== undefined && projectRepoId !== null) {
+      formData.append('project_repo_id', String(projectRepoId))
+    }
     return api.post(`/api/v1/logs/${id}/analyze`, formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
@@ -157,6 +164,22 @@ export const taskApi = {
   // 获取任务状态
   getTaskStatus: (taskId: string): Promise<ApiResponse<any>> => {
     return api.get(`/api/v1/tasks/${taskId}/status`)
+  },
+}
+
+// 项目仓库（只读，供 AI 分析时选择项目使用）
+export interface ProjectRepoOption {
+  id: number
+  project_code: string
+  project_name: string
+  default_branch: string
+  description?: string | null
+}
+
+export const projectRepoApi = {
+  // 列出所有已启用的项目仓库
+  listEnabled: (): Promise<ApiResponse<ProjectRepoOption[]>> => {
+    return api.get('/api/v1/project-repos')
   },
 }
 

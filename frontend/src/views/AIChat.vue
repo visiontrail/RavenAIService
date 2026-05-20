@@ -820,11 +820,44 @@ const cancelLogAnalysis = async () => {
   // runLogAnalysisAgent's finally block clears it.
 }
 
+const triggerSessionSummary = (userContent: string, sid: string | null) => {
+  if (!userContent || !userContent.trim()) return
+  // Fire-and-forget: lightweight model 立即生成会话摘要，作为历史侧边栏标题。
+  userApi
+    .summarizeUserMessage({
+      user_content: userContent,
+      session_id: sid || undefined,
+      max_length: 16,
+      persist: isLoggedIn.value,
+    })
+    .then((resp) => {
+      const summary = (resp?.summary || '').trim()
+      const resolvedId = resp?.session_id || sid
+      if (!summary || !resolvedId) return
+      if (isLoggedIn.value) {
+        sessionStore.upsertSessionTitle(resolvedId, summary)
+      }
+    })
+    .catch((err) => {
+      console.warn('生成会话摘要失败', err)
+    })
+}
+
 const sendMessage = async () => {
   if (isSending.value) return
   const content = inputMessage.value.trim()
   const fileForRequest = selectedLogFile.value
   if (!content && !fileForRequest) return
+
+  // 预分配 session_id，确保摘要与对话流引用同一会话。
+  if (!sessionId.value) {
+    sessionId.value = generateUUID()
+    sessionStore.setSelected(sessionId.value)
+  }
+  // 立即触发轻量级模型摘要，更新历史侧边栏标题。
+  if (content) {
+    triggerSessionSummary(content, sessionId.value)
+  }
 
   const shouldUseLogAnalysisAgent =
     isLogAnalysisAgentSelected.value || content.includes(`@${logAnalysisAgentOption.name}`) || !!fileForRequest

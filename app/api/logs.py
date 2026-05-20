@@ -1187,14 +1187,18 @@ async def download_batch_file(
 async def analyze_log(
     log_id: str = Path(..., description="日志文件ID"),
     query: str = Form(..., description="分析查询内容"),
+    project_repo_id: Optional[int] = Form(
+        None,
+        description="可选：指定项目仓库注册表 ID。若提供，则跳过 metadata.json 解析，直接使用该项目的仓库信息。",
+    ),
     db: AsyncSession = Depends(get_db)
 ):
     """
     AI分析日志文件
-    
+
     触发异步AI分析任务（Celery执行），立即返回任务信息。
     """
-    
+
     try:
         request_validator.validate_log_id(log_id)
         log_record = await log_service.get_by_id(db, log_id)
@@ -1217,13 +1221,31 @@ async def analyze_log(
                 },
             )
 
-        logger.info(f"Queue AI analysis for log {log_id}: query='{query}'")
+        # When the user explicitly chose a project repo, validate it exists
+        # and is enabled up-front so we fail fast with a clear 400.
+        if project_repo_id is not None:
+            from app.services import project_repo_service
+
+            repo = await project_repo_service.get_by_id(db, project_repo_id)
+            if not repo or not repo.enabled:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error_kind": "invalid_project_repo",
+                        "message": "所选项目仓库不存在或已禁用",
+                    },
+                )
+
+        logger.info(
+            "Queue AI analysis for log %s: query='%s' project_repo_id=%s",
+            log_id, query, project_repo_id,
+        )
 
         # 触发Celery异步任务
         try:
             from app.tasks.ai_analysis import run_ai_analysis_task
 
-            task_result = run_ai_analysis_task.delay(log_id, query)
+            task_result = run_ai_analysis_task.delay(log_id, query, project_repo_id)
 
             # 记录任务信息，便于前端轮询
             await log_service.update_ai_analysis_task(
