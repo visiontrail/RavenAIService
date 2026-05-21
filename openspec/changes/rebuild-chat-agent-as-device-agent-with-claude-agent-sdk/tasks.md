@@ -1,16 +1,17 @@
 ## 1. 配置与依赖清理
 
-- [ ] 1.1 在 `app/config.py` 的 `Settings` 中新增三个 DeviceAgent 字段：`device_agent_permission_timeout_seconds: int = 120`、`device_agent_result_excerpt_bytes: int = 16 * 1024`、`device_agent_result_max_bytes: int = 256 * 1024`、`device_agent_max_remote_tools: int = 64`、`anthropic_max_history_turns: int = 10`
-- [ ] 1.2 全仓库 grep 列出 `openai_api_key` / `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `deepseek_api_key` / `deepseek_base_url` / `llm_model_name` / `llm_reasoning_model` / `llm_temperature` / `llm_provider` 的使用者；在每一处确认要"删除 / 迁移到 anthropic_client / 保留"，把决定写到本任务的 PR 描述里
-- [ ] 1.3 删除 `Settings` 中确认不再被使用的 OpenAI-兼容字段；保留有外部依赖的（如有，记录在 design.md "Open Questions"）
-- [ ] 1.4 从 `requirements.txt` 移除 ChatAgent 独占的 `langgraph` / `langchain` / `langchain-community` / `langchain-openai` / `langchain-core`（若 Log Analysis 已删则跳过对应行，并在 PR 中注明）
-- [ ] 1.5 在 `.env.example`（如存在）同步移除 OpenAI/DeepSeek 旧字段并明确 `ANTHROPIC_API_KEY` 为 DeviceAgent 必需
+- [ ] 1.1 在 `app/config.py` 的 `Settings` 中新增 DeviceAgent / 历史 / 轻量级字段：`device_agent_permission_timeout_seconds: int = 120`、`device_agent_result_excerpt_bytes: int = 16 * 1024`、`device_agent_result_max_bytes: int = 256 * 1024`、`device_agent_max_remote_tools: int = 64`、`anthropic_max_history_turns: int = 10`、`anthropic_small_fast_max_tokens: int = 1024`、`anthropic_small_fast_request_timeout_seconds: int = 30`
+- [ ] 1.2 全仓库 grep 列出 `openai_api_key` / `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `deepseek_api_key` / `deepseek_base_url` / `llm_model_name` / `llm_reasoning_model` / `llm_temperature` / `llm_provider` / `llm_light_*` 的使用者；在每一处确认要"删除 / 迁移到 anthropic_client / 保留"，把决定写到本任务的 PR 描述里
+- [ ] 1.3 删除 `Settings` 中确认不再被使用的 OpenAI-兼容字段（含主力 + 轻量级两组：`openai_api_key`、`openai_base_url`、`deepseek_api_key`、`deepseek_base_url`、`llm_model_name`、`llm_reasoning_model`、`llm_temperature`、`llm_provider`、`llm_light_model_name`、`llm_light_base_url`、`llm_light_api_key`、`llm_light_temperature`）；保留有外部依赖的（如有，记录在 design.md "Open Questions"）
+- [ ] 1.4 从 `requirements.txt` 移除 ChatAgent 独占的 `langgraph` / `langchain` / `langchain-community` / `langchain-openai` / `langchain-core`（若 Log Analysis 已删则跳过对应行，并在 PR 中注明）；同时确认 `light_llm_service` 删除后没有任何 module 再 `import langchain_openai`
+- [ ] 1.5 在 `.env.example`（如存在）同步移除 OpenAI / DeepSeek / LLM_LIGHT_* 全部字段，明确 `ANTHROPIC_API_KEY` / `ANTHROPIC_PROVIDER` 必需，`ANTHROPIC_SMALL_FAST_MODEL` 推荐（默认走 provider profile）
 
 ## 2. 扩展 `anthropic_client.build_options`
 
 - [ ] 2.1 修改 `app/agents/anthropic_client.build_options` 签名，新增 `can_use_tool: Optional[Callable]=None`、`hooks: Optional[Dict[str, List[Any]]]=None` 两个 keyword-only 参数；存在时写入 `ClaudeAgentOptions`
 - [ ] 2.2 允许 `permission_mode="default"` 与 `can_use_tool` 同时传入；不做互斥校验，保留向下兼容
-- [ ] 2.3 单元测试：`can_use_tool` 与 `hooks` 透传、未传时默认行为不变、`permission_mode="default"` 与 callback 共存
+- [ ] 2.3 新增 `model: Optional[str] = None`、`max_tokens: Optional[int] = None`、`request_timeout_seconds: Optional[int] = None` 三个 keyword-only 参数；`model` 解析优先级：caller > `settings.anthropic_model` > `profile.default_model`；caller 显式传入且不等于 `settings.anthropic_model` 时记一条 INFO 日志（"effective_model overridden by caller: <model>"）
+- [ ] 2.4 单元测试：`can_use_tool` 与 `hooks` 透传、未传时默认行为不变、`permission_mode="default"` 与 callback 共存、`model="deepseek-v4-flash"` 覆盖时 `ClaudeAgentOptions.model == "deepseek-v4-flash"`、`max_tokens` / `request_timeout_seconds` 透传
 
 ## 3. DeviceAgent 模块骨架
 
@@ -67,24 +68,25 @@
 - [ ] 9.2 历史读取改为 `List[Dict[str,str]]`：从 `chat_history_service.fetch_messages` 直接取 `{"role","content"}`
 - [ ] 9.3 `chat_stream` 整体改写为：先 yield `session`/`run_start`，然后 `async for ev in DeviceAgent().run_stream(...)`：把 `AgentTraceEvent` 转 SSE（事件类型直接用 `ev["type"]`）；结束时 yield `done`（含 `answer` / `model` / `messages`）
 - [ ] 9.4 `chat`（非流式）调用 `DeviceAgent().run(...)`，组装 `ChatResponse`；`model` 字段取自 effective Anthropic model
-- [ ] 9.5 标题生成迁移：新增 `app/services/title_generator_service.py`，用 `build_options(allowed_tools=[], cwd=<tmp>, system_prompt=<title prompt>)` 跑一次 `query()`；`AIChatService._generate_session_title` 改为调用该 service
+- [ ] 9.5 标题生成迁移：新增 `app/services/title_generator_service.py`，对外暴露 `async def summarize_user_message(content: str, max_length: int = 16) -> str`（签名与旧 `light_llm_service` 完全对齐）；内部用 `build_options(allowed_tools=[], cwd=<tmp>, system_prompt=<title prompt>, model=settings.anthropic_small_fast_model or PROVIDER_PROFILES[provider].default_small_fast_model, max_tokens=settings.anthropic_small_fast_max_tokens, request_timeout_seconds=settings.anthropic_small_fast_request_timeout_seconds, max_turns=1, permission_mode="bypassPermissions")` 跑一次 `query()`；从结果取首行（≤ `max_length`）；异常/超时回退到截断输入字符串。`AIChatService._generate_session_title` / `app/api/ai_chat.py:18` 改为调用该 service
 - [ ] 9.6 删除 `rebuild_agent`（无运行期模型覆盖后无需重建）；删除 `runtime_settings_service` 调它的所有钩子
 - [ ] 9.7 单元 / 集成测试：流式分支 SSE 顺序、非流式分支响应字段、新标题生成回退到空字符串时不报错、历史长度截断生效
 
-## 10. 删除"主力模型"运行期配置
+## 10. 删除"主力模型"与"轻量级模型"运行期配置
 
-- [ ] 10.1 `app/services/runtime_settings_service.py`：移除 `get_effective_primary_config`、`update_primary_config`、`_PRIMARY_CONFIG_KEYS`、对 `ai_chat_service.rebuild_agent` 的所有调用；保留 prompts/其他 runtime 键
-- [ ] 10.2 `app/api/admin.py`：移除 `GET/PUT /admin/model-settings/primary`（或对应路径）；保留其他 admin 端点
-- [ ] 10.3 前端 `frontend/src/views/AdminModelSettings.vue`：删除主力模型表单块；保留 Anthropic 配置只读视图
-- [ ] 10.4 前端 `frontend/src/api/admin.ts`：移除 `getPrimaryModelConfig` / `updatePrimaryModelConfig` 等方法
-- [ ] 10.5 前端 `frontend/src/types/index.ts`：移除对应 TS 类型
+- [ ] 10.1 `app/services/runtime_settings_service.py`：移除 `get_effective_primary_config`、`update_primary_model`、`_PRIMARY_CONFIG_KEYS`、对 `ai_chat_service.rebuild_agent` 的所有调用；同时移除 `_LIGHT_CONFIG_KEYS`、`get_effective_light_config`、`update_light_model`、`light_llm_service.reset_cached_client()` 钩子；保留 prompts/其他 runtime 键
+- [ ] 10.2 `app/api/admin.py`：移除 `GET/PUT /admin/model-settings/primary`（或对应路径）与 `PUT /admin/model-settings/light` 端点、`PrimaryModelSettings*` 与 `LightModelSettings*` 请求/响应模型、相关字段（`llm_light_model_name` / `llm_light_base_url` / `llm_light_api_key_set` / `llm_light_temperature`）；保留其他 admin 端点
+- [ ] 10.3 前端 `frontend/src/views/AdminModelSettings.vue`：删除主力模型表单块 + 轻量级模型表单块；保留 Anthropic 配置只读视图（含 effective small_fast_model 展示）
+- [ ] 10.4 前端 `frontend/src/api/admin.ts`：移除 `getPrimaryModelConfig` / `updatePrimaryModelConfig` / `updateLightModelConfig` 等方法
+- [ ] 10.5 前端 `frontend/src/types/index.ts`：移除主力模型 + 轻量级模型对应 TS 类型
 - [ ] 10.6 grep 验证零残留；运行前后端构建确保无类型错误
 
-## 11. 删除旧 ChatAgent 与依赖
+## 11. 删除旧 ChatAgent / 旧轻量级 service 与依赖
 
-- [ ] 11.1 删除文件 `app/agents/chat_agent.py`、`app/agents/tools/device_prompt_tool.py`、`app/agents/tools/__init__.py`（若 `tools/` 目录为空则保留 `__init__.py` 占位或一并删除）
-- [ ] 11.2 grep 验证 `from app.agents.chat_agent`、`device_prompt`、`set_device_prompt_context`、`clear_device_prompt_context` 在 `app/` 中零引用
+- [ ] 11.1 删除文件 `app/agents/chat_agent.py`、`app/agents/tools/device_prompt_tool.py`、`app/agents/tools/__init__.py`（若 `tools/` 目录为空则保留 `__init__.py` 占位或一并删除）；删除 `app/services/light_llm_service.py`
+- [ ] 11.2 grep 验证 `from app.agents.chat_agent`、`device_prompt`、`set_device_prompt_context`、`clear_device_prompt_context`、`from app.services.light_llm_service`、`light_llm_service.` 在 `app/` 中零引用
 - [ ] 11.3 grep 验证 `langchain_core`、`langchain_openai`、`langgraph` 在 `app/agents/` 与 `app/services/` 中零引用（其他位置如有保留写入 PR 备注）
+- [ ] 11.4 grep 验证 `oneapi` / `glm-4` / `OPENAI_BASE_URL` / `OPENAI_API_KEY` 等字符串在 `app/` 中零引用（除 `.env.example` 注释说明外）
 
 ## 12. Skill 支持注册
 

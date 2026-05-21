@@ -135,19 +135,31 @@ DeviceAgent 在 `run` 入口先 `workspace.prepare_session(session_id)` 拿到 `
 
 **Admin 前端**：`AdminAgentSkills.vue` 的 Agent 下拉新增 `DeviceAgent`；API 路径 `/admin/agent-skills/*` 沿用现有实现，仅需通过 `SUPPORTED_AGENTS` 自动展示。
 
-### Decision 6：删除"主力模型"运行期配置，统一走 `ANTHROPIC_*`
+### Decision 6：删除"主力模型"与"轻量级模型"OpenAI 兼容配置，统一走 `ANTHROPIC_*`
 
-**删除**：
-- `app/services/runtime_settings_service.py`：移除 `get_effective_primary_config` / `update_primary_config` / `_PRIMARY_CONFIG_KEYS` 等"主力模型"相关入口；保留 prompts/其他运行期键。
-- `app/api/admin.py`：移除 `GET/PUT /admin/model-settings/primary`（或同名路径）相关路由。
-- `app/config.py`：移除 `openai_api_key`、`openai_base_url`、`deepseek_api_key`、`deepseek_base_url`、`llm_model_name`、`llm_temperature` 字段；用 grep 在全仓库验证无其他引用。
+**删除（主力模型链路）**：
+- `app/services/runtime_settings_service.py`：移除 `get_effective_primary_config` / `update_primary_model` / `_PRIMARY_CONFIG_KEYS` 等"主力模型"相关入口；保留 prompts/其他运行期键。
+- `app/api/admin.py`：移除 `GET/PUT /admin/model-settings/primary`（或同名路径）相关路由与 `PrimaryModelSettings*` 请求模型。
+- `app/config.py`：移除 `openai_api_key`、`openai_base_url`、`deepseek_api_key`、`deepseek_base_url`、`llm_model_name`、`llm_reasoning_model`、`llm_temperature`、`llm_provider` 字段；用 grep 在全仓库验证无其他引用。
 - 前端 `AdminModelSettings.vue` 中"主力模型"表单块、`api/admin.ts` 中 `getPrimaryModelConfig` / `updatePrimaryModelConfig` / 相关 TS 类型。
 - `chat_agent.py::_make_llm` 整体随 ChatAgent 删除。
 
-**保留 / 沿用**：`anthropic_provider` / `anthropic_api_key` / `anthropic_base_url` / `anthropic_model` / `anthropic_max_turns` / `anthropic_permission_mode` / `anthropic_request_timeout_seconds` 已经存在。本变更只新增三个对话场景独有的 setting：
+**删除（轻量级模型 OpenAI 兼容链路）**：
+- `app/services/light_llm_service.py` 整个文件删除（LangChain `ChatOpenAI` → oneapi 路径退场）。
+- `app/config.py`：移除 `llm_light_model_name`、`llm_light_base_url`、`llm_light_api_key`、`llm_light_temperature` 四个字段。
+- `app/services/runtime_settings_service.py`：移除 `_LIGHT_CONFIG_KEYS`（`llm_light_*` 四键）、`get_effective_light_config`、`update_light_model`、以及 `update_light_model` 调用的 `light_llm_service.reset_cached_client()` 钩子。
+- `app/api/admin.py`：移除 `PUT /admin/model-settings/light` 端点、`LightModelSettings*` 请求/响应模型、`light_llm_*` 状态字段。
+- 前端 `AdminModelSettings.vue` 中"轻量级模型"表单块（与主力模型同时移除）；`api/admin.ts` 中 `updateLightModelConfig` 等方法与 TS 类型移除。
+- `app/api/ai_chat.py:18` 的 `from app.services.light_llm_service import summarize_user_message` 替换为 `from app.services.title_generator_service import summarize_user_message`；保持原 `ai_chat.py:113` 调用点签名不变。
+
+**保留 / 沿用**：`anthropic_provider` / `anthropic_api_key` / `anthropic_base_url` / `anthropic_model` / `anthropic_small_fast_model` / `anthropic_max_turns` / `anthropic_permission_mode` / `anthropic_request_timeout_seconds` 已经存在。本变更只新增三个对话场景独有的 setting：
 - `device_agent_permission_timeout_seconds: int = 120`（HITL 等待用户决定的超时）
 - `device_agent_result_excerpt_bytes: int = 16 * 1024`
 - `device_agent_result_max_bytes: int = 256 * 1024`
+
+并新增轻量级路径自身的两个 setting（可选）：
+- `anthropic_small_fast_max_tokens: int = 1024`（标题/摘要单次响应上限，避免小模型也消耗 8K 上下文）
+- `anthropic_small_fast_request_timeout_seconds: int = 30`（短任务超时，独立于 `anthropic_request_timeout_seconds = 3600`）
 
 ### Decision 7：对话历史与会话标题生成
 
@@ -158,7 +170,27 @@ prompt = "\n\n".join(f"[{role}] {content}" for role, content in recent_history) 
 ```
 保留最近 N 轮（`anthropic_max_history_turns: int = 10`）。
 
-**会话标题生成**：不再依赖 `agent.planner_llm`；改为新增 `app/services/title_generator_service.py`，内部用 `anthropic_client.build_options(allowed_tools=[], cwd=<temp>, system_prompt=<title prompt>)` 一次 `query()` 调用，prompt 用 `{user_content}\n\n{ai_content}`，从结果中拿单行标题（≤60 字符）。
+**会话标题生成 / 用户输入摘要（统一为"轻量级 Anthropic 任务"）**：不再依赖 `agent.planner_llm`，也不再走 LangChain `ChatOpenAI`；改为新增 `app/services/title_generator_service.py`，对外保留与旧 `light_llm_service` 兼容的 `async def summarize_user_message(content: str, max_length: int = 16) -> str` 入口（这样 `app/api/ai_chat.py:113` 调用点不动）。内部实现：
+
+```python
+opts = anthropic_client.build_options(
+    system_prompt=<title_prompt>,
+    allowed_tools=[],                  # 不挂任何工具
+    cwd=<ephemeral_tempdir>,
+    max_turns=1,
+    permission_mode="bypassPermissions",
+    model=settings.anthropic_small_fast_model
+          or PROVIDER_PROFILES[settings.anthropic_provider].default_small_fast_model,
+    max_tokens=settings.anthropic_small_fast_max_tokens,
+    request_timeout_seconds=settings.anthropic_small_fast_request_timeout_seconds,
+)
+async for message in query(prompt=cleaned_input[:1200], options=opts):
+    ...
+```
+
+- 用结果中 final assistant text 的首行（≤ `max_length` 字符）作为标题；失败 / 超时回退到截断输入。
+- **路由保证**：`anthropic_small_fast_model` 与 `anthropic_model` 共享同一份 `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL`，仅 `model` 字段不同——DeepSeek provider 下，重活走 `deepseek-v4-pro`、轻活走 `deepseek-v4-flash`，二者都是 deepseek 的 Anthropic 兼容端点。
+- 该 service **不**依赖运行期 admin 覆盖；模型选择完全由 env (`ANTHROPIC_SMALL_FAST_MODEL`) 或 provider profile 的 `default_small_fast_model` 决定。如果运营确实需要单独切换 small_fast_model，靠环境变量重启即可，避免再造一套 runtime override。
 
 ### Decision 8：DeepSeek（`supports_mcp_server_tools=False`）降级策略
 
@@ -213,6 +245,36 @@ prompt = "\n\n".join(f"[{role}] {content}" for role, content in recent_history) 
 
 SSE 仍走 `ai_chat_service._sse_event`；前端在 `AIChat.vue` 接收时按事件 `type` 分发。
 
+### Decision 13：`build_options` 接受 `model` 覆盖（驱动轻量级路由）
+
+**问题**：`anthropic_client.build_options` 当前没有 `model` 形参，effective_model 只来自 `settings.anthropic_model or profile.default_model`，导致同一进程内"重活/轻活"无法在同一 provider 下选择不同 model id。
+
+**选择**：在 `build_options(...)` 签名中**新增 `model: Optional[str] = None`** 关键字参数：
+- 优先级：caller `model=` 覆盖 > `settings.anthropic_model` > `profile.default_model`。
+- 当 `model` 显式传入并与 `settings.anthropic_model` 不一致时，日志加一条 INFO 记录"effective_model overridden by caller"，便于排查轻量级路径走错模型的事故。
+- 同样新增 `max_tokens: Optional[int]` 与 `request_timeout_seconds: Optional[int]`，给短任务收敛输出长度与超时。
+
+**理由**：避免再造一个 `build_lightweight_options(...)` 工厂；调用方只多传一个关键字参数，profile/Settings 解析逻辑完全复用。
+
+**备选**：单独写 `build_lightweight_options(...)`。被否：profile 解析、能力校验、env 注入全部要重复一份，维护成本翻倍。
+
+### Decision 14：`title_generator_service` 目录与依赖
+
+新增 `app/services/title_generator_service.py`（位于 services/ 目录下，不归到 `app/agents/device_agent/`，因为它服务于多个调用点而非 DeviceAgent 专属），对外接口：
+
+```python
+async def summarize_user_message(content: str, max_length: int = 16) -> str
+```
+
+签名与旧 `light_llm_service.summarize_user_message` 完全对齐，使 `app/api/ai_chat.py` 调用点零改动。
+
+内部依赖：
+- `app.agents.anthropic_client.build_options`（用 Decision 13 新增的 `model` 形参）
+- `claude_agent_sdk.query`
+- `app.prompts.prompts_config_service.get_title_prompt`（沿用现有 `chat_title_prompt` key，prompt 文案不变；如该 key 不存在则在本变更中新增一份默认模板）
+
+`light_llm_service.py` 在本变更内删除；`runtime_settings_service.py` 中 `light_llm_service.reset_cached_client()` 钩子同步移除。
+
 ### Decision 12：目录布局与文件清单
 
 ```
@@ -225,6 +287,10 @@ app/agents/device_agent/
 ├── prompts.py        # get_prompts(scene_hint) -> (system, user_prompt_renderer)
 ├── trace.py          # device-agent-specific event constants + helpers
 └── workspace.py      # prepare_session / cleanup（仅 Skill 物化与临时目录）
+
+app/services/
+├── title_generator_service.py   # 新增；替代 light_llm_service，走 build_options(model=small_fast)
+└── (light_llm_service.py)       # 删除
 ```
 
 ## Risks / Trade-offs
