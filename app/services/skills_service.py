@@ -55,6 +55,27 @@ _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _REGISTRY_FILENAME = "_registry.json"
 _STORE_DIRNAME = "store"
 
+# 平台/压缩工具产生的无用条目，统一在解压与文件树中过滤。
+_IGNORED_DIR_NAMES = {"__MACOSX", ".git", ".svn", ".hg", ".idea", ".vscode"}
+_IGNORED_FILE_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+
+
+def _is_ignored_path_parts(parts: Iterable[str]) -> bool:
+    """判断路径任意一段是否落在忽略名单内。
+
+    覆盖：__MACOSX/、._xxx（macOS resource fork）、.DS_Store、Thumbs.db 等。
+    """
+    for part in parts:
+        if not part:
+            continue
+        if part in _IGNORED_DIR_NAMES:
+            return True
+        if part in _IGNORED_FILE_NAMES:
+            return True
+        if part.startswith("._"):
+            return True
+    return False
+
 
 # ─────────────────────── Exceptions ────────────────────────────────
 
@@ -184,6 +205,9 @@ def _safe_extract_zip(zip_bytes: bytes, dest: Path) -> List[Path]:
             member = Path(info.filename)
             if member.is_absolute() or any(part == ".." for part in member.parts):
                 raise SkillValidationError(f"zip 包含非法路径：{info.filename}")
+            # 跳过平台噪声（__MACOSX/、._foo、.DS_Store 等）
+            if _is_ignored_path_parts(member.parts):
+                continue
             target = (dest / member).resolve()
             if not str(target).startswith(str(dest_resolved) + os.sep) and target != dest_resolved:
                 raise SkillValidationError(f"zip 越权写入：{info.filename}")
@@ -430,7 +454,7 @@ def list_skill_files(agent_key: str, skill_id: str) -> Dict[str, Any]:
         nonlocal count
         children: List[Dict[str, Any]] = []
         items = sorted(
-            node_dir.iterdir(),
+            (p for p in node_dir.iterdir() if not _is_ignored_path_parts([p.name])),
             key=lambda p: (not p.is_dir(), p.name.lower()),
         )
         for child in items:

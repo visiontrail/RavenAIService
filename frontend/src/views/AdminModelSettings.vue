@@ -5,7 +5,7 @@ import { LogOut, Menu, PanelLeftClose } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
-import type { LightModelSettings } from '@/types'
+import type { LightModelSettings, PrimaryModelSettings } from '@/types'
 
 const appStore = useAppStore()
 const route = useRoute()
@@ -20,6 +20,11 @@ const saving = ref(false)
 const settings = ref<LightModelSettings | null>(null)
 const apiKeyTouched = ref(false)
 
+const primarySettings = ref<PrimaryModelSettings | null>(null)
+const primaryLoading = ref(false)
+const primarySaving = ref(false)
+const primaryApiKeyTouched = ref(false)
+
 const authForm = reactive({ username: '', password: '' })
 
 const form = reactive({
@@ -27,6 +32,14 @@ const form = reactive({
   base_url: '',
   api_key: '',
   temperature: 0.2,
+  clear_api_key: false,
+})
+
+const primaryForm = reactive({
+  model_name: '',
+  base_url: '',
+  api_key: '',
+  temperature: 0,
   clear_api_key: false,
 })
 
@@ -82,6 +95,41 @@ const fetchSettings = async () => {
   }
 }
 
+const applyPrimarySettings = (data: PrimaryModelSettings) => {
+  primarySettings.value = data
+  // 表单展示"当前生效值"：若被运行期覆盖则显示覆盖值，否则把 env 值投射进来。
+  primaryForm.model_name = data.model_name_overridden
+    ? data.llm_primary_model_name || ''
+    : data.env_model_name || ''
+  primaryForm.base_url = data.base_url_overridden
+    ? data.llm_primary_base_url || ''
+    : data.env_base_url || ''
+  primaryForm.temperature = data.temperature_overridden
+    ? data.llm_primary_temperature ?? 0
+    : data.env_temperature ?? 0
+  primaryForm.api_key = ''
+  primaryForm.clear_api_key = false
+  primaryApiKeyTouched.value = false
+}
+
+const fetchPrimarySettings = async () => {
+  if (!isAuthenticated.value) return
+  primaryLoading.value = true
+  try {
+    const resp = await adminApi.fetchPrimaryModelSettings()
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || '加载失败')
+    applyPrimarySettings(resp.data)
+  } catch (err: any) {
+    appStore.showNotification({ title: '加载失败', message: parseErrorMessage(err), type: 'error' })
+  } finally {
+    primaryLoading.value = false
+  }
+}
+
+const fetchAllSettings = async () => {
+  await Promise.all([fetchSettings(), fetchPrimarySettings()])
+}
+
 const handleSave = async () => {
   if (saving.value) return
   saving.value = true
@@ -112,6 +160,48 @@ const handleClearApiKey = () => {
   apiKeyTouched.value = false
 }
 
+const handlePrimarySave = async () => {
+  if (primarySaving.value) return
+  primarySaving.value = true
+  try {
+    const payload: any = {
+      model_name: primaryForm.model_name.trim(),
+      base_url: primaryForm.base_url.trim(),
+      temperature: Number(primaryForm.temperature) || 0,
+      clear_api_key: primaryForm.clear_api_key,
+    }
+    if (primaryApiKeyTouched.value && primaryForm.api_key.trim()) {
+      payload.api_key = primaryForm.api_key.trim()
+    }
+    const resp = await adminApi.updatePrimaryModelSettings(payload)
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || '保存失败')
+    applyPrimarySettings(resp.data)
+    // 主力模型变更后，轻量级模型回退值也可能变化 → 顺手刷新一次。
+    fetchSettings()
+    appStore.showNotification({ title: '已保存', message: '主力模型设置已生效', type: 'success' })
+  } catch (err: any) {
+    appStore.showNotification({ title: '保存失败', message: parseErrorMessage(err), type: 'error' })
+  } finally {
+    primarySaving.value = false
+  }
+}
+
+const handlePrimaryClearApiKey = () => {
+  primaryForm.clear_api_key = true
+  primaryForm.api_key = ''
+  primaryApiKeyTouched.value = false
+}
+
+const handlePrimaryResetToEnv = () => {
+  // 通过传入空字符串清除运行期覆盖，让所有字段回退到 env / settings。
+  primaryForm.model_name = ''
+  primaryForm.base_url = ''
+  primaryForm.temperature = primarySettings.value?.env_temperature ?? 0
+  primaryForm.api_key = ''
+  primaryForm.clear_api_key = true
+  primaryApiKeyTouched.value = false
+}
+
 const handleLogin = async () => {
   if (!authForm.username || !authForm.password) {
     appStore.showNotification({ title: '请输入用户名和密码', type: 'warning' })
@@ -124,7 +214,7 @@ const handleLogin = async () => {
     persistToken(resp.data.token)
     isAuthenticated.value = true
     appStore.showNotification({ title: '登录成功', message: `欢迎，${resp.data.username}`, type: 'success' })
-    await fetchSettings()
+    await fetchAllSettings()
   } catch (err: any) {
     appStore.showNotification({ title: '登录失败', message: parseErrorMessage(err), type: 'error' })
   } finally {
@@ -140,6 +230,7 @@ const handleLogout = async () => {
   } finally {
     clearAuth()
     settings.value = null
+    primarySettings.value = null
     appStore.showNotification({ title: '已退出登录', type: 'info' })
   }
 }
@@ -151,7 +242,7 @@ const bootstrap = async () => {
     const resp = await adminApi.me()
     if (resp?.success) {
       isAuthenticated.value = true
-      await fetchSettings()
+      await fetchAllSettings()
     } else {
       clearAuth()
     }
@@ -261,6 +352,168 @@ onMounted(() => {
       </section>
 
       <section v-else class="space-y-4">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h2 class="text-lg font-semibold text-slate-900">主力模型</h2>
+              <p class="text-sm text-slate-500">
+                用于对话主流程的核心模型。若未在此处覆盖，则使用环境变量 / <code>app/config.py</code> 默认值。
+              </p>
+            </div>
+            <button
+              class="text-sm text-slate-600 hover:text-slate-900"
+              :disabled="primaryLoading"
+              @click="fetchPrimarySettings"
+            >
+              {{ primaryLoading ? '同步中…' : '刷新' }}
+            </button>
+          </div>
+
+          <div v-if="primaryLoading" class="text-sm text-slate-500">正在加载...</div>
+          <div v-else-if="primarySettings" class="grid md:grid-cols-2 gap-4">
+            <label class="text-sm text-slate-700">
+              <span class="font-medium">
+                模型名称
+                <span
+                  v-if="primarySettings.model_name_overridden"
+                  class="ml-1 text-[10px] uppercase tracking-wide text-amber-600"
+                >已覆盖</span>
+                <span
+                  v-else
+                  class="ml-1 text-[10px] uppercase tracking-wide text-slate-500"
+                >来自环境变量</span>
+              </span>
+              <input
+                v-model="primaryForm.model_name"
+                type="text"
+                class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
+                :placeholder="`环境变量值：${primarySettings.env_model_name || '未配置'}`"
+              />
+              <p class="mt-1 text-xs text-slate-500">
+                当前生效：{{ primarySettings.llm_primary_model_name || '—' }}
+              </p>
+            </label>
+
+            <label class="text-sm text-slate-700">
+              <span class="font-medium">
+                Base URL
+                <span
+                  v-if="primarySettings.base_url_overridden"
+                  class="ml-1 text-[10px] uppercase tracking-wide text-amber-600"
+                >已覆盖</span>
+                <span
+                  v-else
+                  class="ml-1 text-[10px] uppercase tracking-wide text-slate-500"
+                >来自环境变量</span>
+              </span>
+              <input
+                v-model="primaryForm.base_url"
+                type="text"
+                class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
+                :placeholder="`环境变量值：${primarySettings.env_base_url || '未配置'}`"
+              />
+              <p class="mt-1 text-xs text-slate-500">
+                当前生效：{{ primarySettings.llm_primary_base_url || '—' }}
+              </p>
+            </label>
+
+            <label class="text-sm text-slate-700">
+              <span class="font-medium">
+                API Key
+                <span
+                  v-if="primarySettings.api_key_overridden"
+                  class="ml-1 text-[10px] uppercase tracking-wide text-amber-600"
+                >已覆盖</span>
+                <span
+                  v-else-if="primarySettings.env_api_key_set"
+                  class="ml-1 text-[10px] uppercase tracking-wide text-slate-500"
+                >来自环境变量</span>
+                <span
+                  v-else
+                  class="ml-1 text-[10px] uppercase tracking-wide text-rose-600"
+                >未设置</span>
+              </span>
+              <input
+                v-model="primaryForm.api_key"
+                type="password"
+                class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
+                :placeholder="
+                  primarySettings.api_key_overridden
+                    ? '已通过后台配置（留空则保持不变）'
+                    : primarySettings.env_api_key_set
+                      ? '环境变量中已配置（留空则继续使用 env）'
+                      : '请输入主力模型 API Key'
+                "
+                @input="primaryApiKeyTouched = true"
+              />
+              <div class="mt-1 flex items-center justify-between text-xs text-slate-500">
+                <span>
+                  当前：{{
+                    primarySettings.llm_primary_api_key_set
+                      ? primarySettings.api_key_overridden
+                        ? '已设置（后台覆盖）'
+                        : '已设置（来自环境变量）'
+                      : '未设置'
+                  }}
+                </span>
+                <button
+                  v-if="primarySettings.api_key_overridden"
+                  type="button"
+                  class="text-amber-600 hover:text-amber-700"
+                  @click="handlePrimaryClearApiKey"
+                >
+                  清除后台覆盖（回退到 env）
+                </button>
+              </div>
+              <p v-if="primaryForm.clear_api_key" class="mt-1 text-xs text-rose-600">
+                保存后将清除已存储的 API Key 覆盖。
+              </p>
+            </label>
+
+            <label class="text-sm text-slate-700">
+              <span class="font-medium">
+                Temperature
+                <span
+                  v-if="primarySettings.temperature_overridden"
+                  class="ml-1 text-[10px] uppercase tracking-wide text-amber-600"
+                >已覆盖</span>
+                <span
+                  v-else
+                  class="ml-1 text-[10px] uppercase tracking-wide text-slate-500"
+                >来自环境变量</span>
+              </span>
+              <input
+                v-model.number="primaryForm.temperature"
+                type="number"
+                step="0.1"
+                min="0"
+                max="2"
+                class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
+              />
+              <p class="mt-1 text-xs text-slate-500">
+                环境变量值：{{ primarySettings.env_temperature }}
+              </p>
+            </label>
+          </div>
+
+          <div class="mt-5 flex justify-end gap-2">
+            <button
+              class="px-3 py-2 text-sm font-medium text-slate-600 hover:text-slate-900"
+              :disabled="primarySaving || primaryLoading"
+              @click="handlePrimaryResetToEnv"
+            >
+              重置为环境变量
+            </button>
+            <button
+              class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-60"
+              :disabled="primarySaving || primaryLoading"
+              @click="handlePrimarySave"
+            >
+              {{ primarySaving ? '保存中…' : '保存' }}
+            </button>
+          </div>
+        </div>
+
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
           <div class="flex items-center justify-between mb-4">
             <div>

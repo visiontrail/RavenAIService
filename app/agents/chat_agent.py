@@ -129,13 +129,19 @@ SUMMARY_PROMPT = """
 def _make_llm(streaming: bool = True) -> Any:
     """
     构建 OpenAI 兼容的聊天模型。
+
+    主力模型配置解析顺序：runtime_settings_service 运行期覆盖 → 环境变量/settings 默认值。
     """
-    api_key = getattr(settings, "deepseek_api_key", None)
-    base_url = getattr(settings, "deepseek_base_url", None)
-    model = getattr(settings, "llm_model_name", None)
+    from app.services import runtime_settings_service
+
+    config = runtime_settings_service.get_effective_primary_config()
+    api_key = config.get("api_key")
+    base_url = config.get("base_url")
+    model = config.get("model")
+    temperature = float(config.get("temperature", 0.0))
 
     if not api_key or not base_url or not model:
-        raise RuntimeError("DeepSeek 配置缺失，无法初始化聊天模型")
+        raise RuntimeError("主力模型配置缺失（model/base_url/api_key），无法初始化聊天模型")
 
     try:
         os.environ["OPENAI_API_KEY"] = api_key
@@ -145,13 +151,13 @@ def _make_llm(streaming: bool = True) -> Any:
             model=model,
             api_key=api_key,
             base_url=base_url,
-            temperature=settings.llm_temperature,
+            temperature=temperature,
             streaming=streaming,
         )
         # 记录模型名称，便于响应时回传
         if not hasattr(llm, "model_name"):
             llm.model_name = model
-        logger.info("ChatAgent: using DeepSeek model %s (streaming=%s)", llm.model_name, streaming)
+        logger.info("ChatAgent: using primary model %s (streaming=%s)", llm.model_name, streaming)
         return llm
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"无法初始化聊天模型: {exc}") from exc

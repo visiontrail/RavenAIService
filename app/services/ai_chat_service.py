@@ -49,6 +49,14 @@ class AIChatService(BaseService):
         self.agent = ChatAgent()
         self.memory = _SessionMemory(max_turns=getattr(settings, "agent_short_term_window", 5))
 
+    def rebuild_agent(self) -> None:
+        """重建 ChatAgent，使新的主力模型配置立即生效（已在途请求继续使用旧实例）。"""
+        try:
+            self.agent = ChatAgent()
+        except Exception as exc:  # noqa: BLE001
+            # 避免运行期更新模型导致服务整体不可用：保留旧 agent，让管理员排查后再试。
+            logger.warning("AIChatService: 重建 ChatAgent 失败，沿用旧实例: %s", exc)
+
     async def _load_history_from_db(
         self,
         db: AsyncSession,

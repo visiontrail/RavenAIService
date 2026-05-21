@@ -356,6 +356,21 @@ export interface LightModelSettings {
   fallback_base_url: string
 }
 
+export interface PrimaryModelSettings {
+  llm_primary_model_name: string | null
+  llm_primary_base_url: string | null
+  llm_primary_temperature: number
+  llm_primary_api_key_set: boolean
+  model_name_overridden: boolean
+  base_url_overridden: boolean
+  api_key_overridden: boolean
+  temperature_overridden: boolean
+  env_model_name: string
+  env_base_url: string
+  env_api_key_set: boolean
+  env_temperature: number
+}
+
 export interface ChatSessionSummary {
   id: string
   title: string

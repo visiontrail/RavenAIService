@@ -22,6 +22,7 @@ import {
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
+import { renderMarkdown } from '@/utils/markdownRenderer'
 import type {
   AgentSkill,
   AgentSkillAgentInfo,
@@ -97,6 +98,71 @@ const selectedAgent = computed<AgentSkillAgentInfo | undefined>(() =>
 )
 const enabledCount = computed(() => skills.value.filter((s) => s.enabled).length)
 const disabledCount = computed(() => skills.value.length - enabledCount.value)
+
+const isMarkdownFile = computed<boolean>(() => {
+  const path = activeFilePath.value
+  if (!path) return false
+  const lower = path.toLowerCase()
+  return lower.endsWith('.md') || lower.endsWith('.markdown')
+})
+
+interface FrontmatterSplit {
+  frontmatter: Record<string, string> | null
+  body: string
+}
+
+const escapeHtml = (s: string): string =>
+  s.replace(/[&<>"']/g, (c) => {
+    switch (c) {
+      case '&': return '&amp;'
+      case '<': return '&lt;'
+      case '>': return '&gt;'
+      case '"': return '&quot;'
+      case "'": return '&#39;'
+      default: return c
+    }
+  })
+
+const splitFrontmatter = (raw: string): FrontmatterSplit => {
+  const text = raw.replace(/\r\n/g, '\n')
+  const m = text.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/)
+  if (!m) return { frontmatter: null, body: text }
+  const block = m[1]
+  const fm: Record<string, string> = {}
+  let currentKey: string | null = null
+  for (const line of block.split('\n')) {
+    const kv = line.match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/)
+    if (kv) {
+      currentKey = kv[1]
+      fm[currentKey] = kv[2].trim().replace(/^['"]|['"]$/g, '')
+    } else if (currentKey && line.trim()) {
+      // 连续行追加到当前 key（保留为单个空格分隔）
+      fm[currentKey] = `${fm[currentKey]} ${line.trim()}`.trim()
+    }
+  }
+  return { frontmatter: fm, body: text.slice(m[0].length) }
+}
+
+const renderedFrontmatter = computed<string>(() => {
+  if (!isMarkdownFile.value) return ''
+  const content = activeFileContent.value?.content
+  if (!content) return ''
+  const { frontmatter } = splitFrontmatter(content)
+  if (!frontmatter) return ''
+  const rows = Object.entries(frontmatter).map(
+    ([k, v]) =>
+      `<div class="skill-fm-row"><span class="skill-fm-key">${escapeHtml(k)}</span><span class="skill-fm-val">${escapeHtml(v)}</span></div>`
+  )
+  return `<div class="skill-fm-card">${rows.join('')}</div>`
+})
+
+const renderedMarkdown = computed<string>(() => {
+  if (!isMarkdownFile.value) return ''
+  const content = activeFileContent.value?.content
+  if (!content) return ''
+  const { body } = splitFrontmatter(content)
+  return renderMarkdown(body, { cleanXml: false, wrapperClass: 'skill-markdown' })
+})
 
 const parseErrorMessage = (err: any): string => {
   if (err?.response?.data?.detail) return err.response.data.detail
@@ -628,17 +694,15 @@ onMounted(() => bootstrap())
                 <tr
                   v-for="skill in skills"
                   :key="skill.id"
-                  class="border-b border-slate-50 hover:bg-slate-50/70 transition-colors"
+                  class="skill-row border-b border-slate-50 hover:bg-slate-50/70 transition-colors cursor-pointer"
+                  :title="`预览 ${skill.name} 的文件`"
+                  @click="openSkillManager(skill)"
                 >
                   <td class="py-3 pl-5 pr-4">
                     <div class="flex items-center gap-2">
-                      <button
-                        class="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-mono text-slate-700 hover:bg-cyan-50 hover:text-cyan-700 transition"
-                        :title="`预览 ${skill.name} 的文件`"
-                        @click="openSkillManager(skill)"
-                      >
+                      <span class="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-mono text-slate-700">
                         {{ skill.name }}
-                      </button>
+                      </span>
                     </div>
                     <p v-if="skill.description" class="mt-1 max-w-[420px] text-xs text-slate-500" :title="skill.description">
                       {{ skill.description }}
@@ -659,12 +723,12 @@ onMounted(() => bootstrap())
                     </span>
                   </td>
                   <td class="py-3 pr-4 whitespace-nowrap text-xs text-slate-400">{{ formatTimestamp(skill.updated_at) }}</td>
-                  <td class="py-3 pr-5">
+                  <td class="py-3 pr-5" @click.stop>
                     <div class="flex justify-end gap-2">
                       <button
                         class="admin-action-btn"
                         title="查看文件"
-                        @click="openSkillManager(skill)"
+                        @click.stop="openSkillManager(skill)"
                       >
                         <FolderTree :size="15" />
                       </button>
@@ -672,7 +736,7 @@ onMounted(() => bootstrap())
                         class="admin-action-btn"
                         :disabled="togglingId === skill.id"
                         :title="skill.enabled ? '停用' : '启用'"
-                        @click="toggleSkill(skill)"
+                        @click.stop="toggleSkill(skill)"
                       >
                         <Power :size="15" />
                       </button>
@@ -680,7 +744,7 @@ onMounted(() => bootstrap())
                         class="admin-action-btn danger"
                         :disabled="deletingId === skill.id"
                         title="删除"
-                        @click="deleteSkill(skill)"
+                        @click.stop="deleteSkill(skill)"
                       >
                         <Trash2 :size="15" />
                       </button>
@@ -834,6 +898,13 @@ onMounted(() => bootstrap())
                 class="skill-content-msg"
               >
                 此文件为二进制内容（{{ formatSize(activeFileContent.size) }}），不支持文本预览。
+              </div>
+              <div
+                v-else-if="activeFileContent && isMarkdownFile && renderedMarkdown"
+                class="skill-content-markdown"
+              >
+                <div v-if="renderedFrontmatter" v-html="renderedFrontmatter"></div>
+                <div v-html="renderedMarkdown"></div>
               </div>
               <pre
                 v-else-if="activeFileContent && activeFileContent.content !== undefined"
@@ -1197,8 +1268,173 @@ onMounted(() => bootstrap())
   font-size: 0.78rem;
   line-height: 1.55;
   color: #e2e8f0;
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-word;
   overflow: visible;
+}
+
+.skill-content-markdown {
+  padding: 1.25rem 1.5rem;
+  background: #ffffff;
+  color: #1e293b;
+  font-size: 0.9rem;
+  line-height: 1.7;
+  min-height: 100%;
+}
+
+.skill-content-markdown :deep(.skill-markdown) {
+  max-width: 880px;
+  margin: 0 auto;
+}
+
+.skill-content-markdown :deep(.skill-fm-card) {
+  max-width: 880px;
+  margin: 0 auto 1.2em;
+  padding: 0.85rem 1rem;
+  background: linear-gradient(135deg, #ecfeff 0%, #f0f9ff 100%);
+  border: 1px solid #bae6fd;
+  border-radius: 0.6rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.skill-content-markdown :deep(.skill-fm-row) {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 0.75rem;
+  align-items: start;
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+.skill-content-markdown :deep(.skill-fm-key) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #0e7490;
+  padding-top: 0.12em;
+}
+
+.skill-content-markdown :deep(.skill-fm-val) {
+  color: #0f172a;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.skill-content-markdown :deep(h1),
+.skill-content-markdown :deep(h2),
+.skill-content-markdown :deep(h3),
+.skill-content-markdown :deep(h4) {
+  font-weight: 700;
+  color: #0f172a;
+  margin: 1.4em 0 0.6em;
+  line-height: 1.3;
+}
+
+.skill-content-markdown :deep(h1) { font-size: 1.5rem; border-bottom: 1px solid #e2e8f0; padding-bottom: 0.3em; }
+.skill-content-markdown :deep(h2) { font-size: 1.25rem; border-bottom: 1px solid #f1f5f9; padding-bottom: 0.2em; }
+.skill-content-markdown :deep(h3) { font-size: 1.08rem; }
+.skill-content-markdown :deep(h4) { font-size: 0.98rem; }
+
+.skill-content-markdown :deep(p) {
+  margin: 0.7em 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.skill-content-markdown :deep(ul),
+.skill-content-markdown :deep(ol) {
+  padding-left: 1.5em;
+  margin: 0.7em 0;
+}
+
+.skill-content-markdown :deep(li) {
+  margin: 0.25em 0;
+}
+
+.skill-content-markdown :deep(a) {
+  color: #0891b2;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.skill-content-markdown :deep(code) {
+  background: #f1f5f9;
+  color: #334155;
+  padding: 0.12em 0.4em;
+  border-radius: 0.3em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+}
+
+.skill-content-markdown :deep(pre) {
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 0.9em 1.1em;
+  border-radius: 0.6em;
+  overflow-x: auto;
+  font-size: 0.82em;
+  line-height: 1.55;
+  margin: 0.9em 0;
+}
+
+.skill-content-markdown :deep(pre code) {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: inherit;
+  border-radius: 0;
+}
+
+.skill-content-markdown :deep(blockquote) {
+  border-left: 3px solid #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+  padding: 0.4em 1em;
+  margin: 0.9em 0;
+  border-radius: 0 0.4em 0.4em 0;
+}
+
+.skill-content-markdown :deep(.table-wrapper) {
+  overflow-x: auto;
+  margin: 0.9em 0;
+}
+
+.skill-content-markdown :deep(.markdown-table) {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.85em;
+}
+
+.skill-content-markdown :deep(.markdown-table th),
+.skill-content-markdown :deep(.markdown-table td) {
+  border: 1px solid #e2e8f0;
+  padding: 0.5em 0.75em;
+  text-align: left;
+}
+
+.skill-content-markdown :deep(.markdown-table th) {
+  background: #f1f5f9;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.skill-content-markdown :deep(hr) {
+  border: none;
+  border-top: 1px solid #e2e8f0;
+  margin: 1.4em 0;
+}
+
+.skill-content-markdown :deep(img) {
+  max-width: 100%;
+  border-radius: 0.4em;
+}
+
+.skill-row:hover {
+  background: rgba(241, 245, 249, 0.7);
 }
 
 @media (max-width: 768px) {
