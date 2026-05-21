@@ -1,10 +1,10 @@
 import axios from 'axios'
 import type {
   ApiResponse,
+  PackageAgentSearchResponse,
+  PackageAgentTraceEvent,
   RavenPackage,
   RavenPackageList,
-  RavenSearchResult,
-  RavenSearchStatus,
   RavenUploadMetadata,
 } from '@/types'
 
@@ -54,15 +54,113 @@ export const getRavenPackageDetail = (id: string) =>
 export const deleteRavenPackage = (id: string) =>
   ravenApi.delete<ApiResponse>(`/packages/${encodeURIComponent(id)}`)
 
-export const rebuildRavenIndex = () => ravenApi.post<ApiResponse>('/search/rebuild-index')
+export interface AgentSearchOptions {
+  sessionId?: string
+  signal?: AbortSignal
+}
 
-export const getRavenSearchStatus = () => ravenApi.get<ApiResponse<RavenSearchStatus>>('/search/status')
+/**
+ * Non-streaming Claude Agent driven package search. Calls
+ * `POST /raven/packages/agent-search` with `stream: false` and returns the
+ * decoded JSON body. The response shape matches `PackageAgentSearchResponse`.
+ */
+export const searchPackagesByAgent = (query: string, opts: AgentSearchOptions = {}) =>
+  ravenApi.post<PackageAgentSearchResponse>(
+    '/packages/agent-search',
+    {
+      query,
+      session_id: opts.sessionId,
+      stream: false,
+    },
+    { signal: opts.signal }
+  )
 
-export const intelligentSearchPackages = (query: string, limit = 5) =>
-  ravenApi.post<ApiResponse<RavenSearchResult>>('/search/intelligent', { query, limit })
+export interface AgentSearchStreamHandlers {
+  onEvent: (event: PackageAgentTraceEvent) => void
+  onError?: (err: Error) => void
+  signal?: AbortSignal
+  sessionId?: string
+}
 
-export const fetchRavenSuggestions = (query: string) =>
-  ravenApi.post<ApiResponse<string[]>>('/search/suggestions', { query })
+/**
+ * Open an SSE stream to `POST /raven/packages/agent-search` with
+ * `stream: true`. Each parsed event (one `data:` line per `\n\n` boundary)
+ * is forwarded to `onEvent`. The promise resolves when the server closes
+ * the stream and rejects on transport errors (AbortError is swallowed).
+ */
+export const streamPackagesAgentSearch = async (
+  query: string,
+  handlers: AgentSearchStreamHandlers
+): Promise<void> => {
+  const url = `${ravenApiBase}/packages/agent-search`
+  const body = JSON.stringify({
+    query,
+    session_id: handlers.sessionId,
+    stream: true,
+  })
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream',
+  }
+
+  let resp: Response
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      headers,
+      body,
+      signal: handlers.signal,
+    })
+  } catch (err: any) {
+    if (err?.name === 'AbortError') return
+    throw err
+  }
+  if (!resp.ok || !resp.body) {
+    throw new Error(`agent-search stream failed: HTTP ${resp.status}`)
+  }
+
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+
+  const processChunk = (chunk: string) => {
+    buffer += chunk
+    let remaining = buffer.replace(/\r\n/g, '\n')
+    while (true) {
+      const idx = remaining.indexOf('\n\n')
+      if (idx === -1) break
+      const raw = remaining.slice(0, idx)
+      remaining = remaining.slice(idx + 2)
+      const lines = raw.split('\n')
+      const dataLines = lines
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.replace(/^data:\s?/, ''))
+      if (dataLines.length === 0) continue
+      const payload = dataLines.join('\n').trim()
+      if (!payload) continue
+      try {
+        const parsed = JSON.parse(payload) as PackageAgentTraceEvent
+        handlers.onEvent(parsed)
+      } catch (err) {
+        handlers.onError?.(err instanceof Error ? err : new Error(String(err)))
+      }
+    }
+    buffer = remaining
+  }
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (value) processChunk(decoder.decode(value, { stream: !done }))
+      if (done) break
+    }
+    if (buffer.trim()) processChunk('\n\n')
+  } catch (err: any) {
+    if (err?.name === 'AbortError') return
+    handlers.onError?.(err instanceof Error ? err : new Error(String(err)))
+    throw err
+  }
+}
 
 /**
  * 返回直接可下载的链接，避免先在前端拉取完整 Blob 造成等待

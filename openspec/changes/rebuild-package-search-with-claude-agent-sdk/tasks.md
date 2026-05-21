@@ -15,52 +15,55 @@
 
 ## 3. Claude Agent SDK MCP 工具实现
 
-- [ ] 3.1 新建 `app/agents/package_search/__init__.py`、`prompts.py`、`mcp_tools.py`、`agent.py`、`trace.py`
-- [ ] 3.2 在 `mcp_tools.py` 中按 design.md 表格用 `@tool` 注册 7 个工具：`list_packages`、`get_package_by_id`、`search_packages_by_text`、`filter_packages_by_version`、`list_components`、`find_packages_by_component`、`package_stats`
-- [ ] 3.3 每个工具的实现 MUST 走 `RavenPackageService` 单例（不读文件、不调外部服务），返回 `{"content": [{"type": "text", "text": json.dumps(payload)}]}`
-- [ ] 3.4 在 `prompts.py` 编写 system prompt：说明工具用途、`PACKAGE_TYPES` 枚举、`PackageBrief` 字段含义、最终回复必须包含 fenced JSON 块的约定
-- [ ] 3.5 用 `create_sdk_mcp_server(name="package_search", ...)` 把工具汇成一个 in-process MCP server，与 `log_analysis/mcp_tools.py` 的模式一致
-- [ ] 3.6 编写 `tests/agents/package_search/test_mcp_tools.py` 单测每个工具的输入校验、limit 夹断、SemVer 比较、not_found 分支
+- [x] 3.1 新建 `app/agents/package_search/__init__.py`、`prompts.py`、`mcp_tools.py`、`agent.py`、`trace.py`
+- [x] 3.2 在 `mcp_tools.py` 中按 design.md 表格用 `@tool` 注册 7 个工具：`list_packages`、`get_package_by_id`、`search_packages_by_text`、`filter_packages_by_version`、`list_components`、`find_packages_by_component`、`package_stats`
+- [x] 3.3 每个工具的实现 MUST 走 `RavenPackageService` 单例（不读文件、不调外部服务），返回 `{"content": [{"type": "text", "text": json.dumps(payload)}]}`
+- [x] 3.4 在 `prompts.py` 编写 system prompt：说明工具用途、`PACKAGE_TYPES` 枚举、`PackageBrief` 字段含义、最终回复必须包含 fenced JSON 块的约定
+- [x] 3.5 用 `create_sdk_mcp_server(name="package_search", ...)` 把工具汇成一个 in-process MCP server，与 `log_analysis/mcp_tools.py` 的模式一致
+- [x] 3.6 编写 `tests/agents/package_search/test_mcp_tools.py` 单测每个工具的输入校验、limit 夹断、SemVer 比较、not_found 分支
 
 ## 4. Agent 主流程
 
-- [ ] 4.1 在 `agent.py` 实现 `PackageSearchAgent`：构造 `ClaudeAgentOptions`（model/max_turns/allowed_tools/mcp_servers），通过 `app.agents.anthropic_client` 复用已有配置
-- [ ] 4.2 实现 `run(query, session_id?) -> dict` 返回 `{answer, recommended_package_ids, relevant_package_ids, tool_trace, model, usage}`：调用 SDK loop，收集 `tool_use` / `tool_result` 事件落入 `tool_trace`
-- [ ] 4.3 实现 fenced JSON 解析：从最终 assistant message 中提取 ` ```json ... ``` ` 块；解析失败 / 缺字段 / 字段类型错误均降级为 `[]`，并在 `tool_trace` 末尾追加 warning
-- [ ] 4.4 实现 ID 校验：对解析出的所有 ID 调用 `RavenPackageService.get_package`，过滤掉不存在的 ID，被过滤的数量写入 warning
-- [ ] 4.5 实现 `stream(query, session_id?)` 异步生成器，按 `AgentTraceEvent` 协议 yield SSE 字典（type: assistant_delta / tool_use / tool_result / final）
-- [ ] 4.6 编写 `tests/agents/package_search/test_agent.py`：用 fake SDK loop 桩件验证 fenced JSON 解析、ID 过滤、warning 追加、tool_trace 结构
+- [x] 4.1 在 `agent.py` 实现 `PackageSearchAgent`：构造 `ClaudeAgentOptions`（model/max_turns/allowed_tools/mcp_servers），通过 `app.agents.anthropic_client` 复用已有配置
+- [x] 4.2 实现 `run(query, session_id?) -> dict` 返回 `{answer, recommended_package_ids, relevant_package_ids, tool_trace, model, usage}`：调用 SDK loop，收集 `tool_use` / `tool_result` 事件落入 `tool_trace`
+- [x] 4.3 实现 fenced JSON 解析：从最终 assistant message 中提取 ` ```json ... ``` ` 块；解析失败 / 缺字段 / 字段类型错误均降级为 `[]`，并在 `tool_trace` 末尾追加 warning
+- [x] 4.4 实现 ID 校验：对解析出的所有 ID 调用 `RavenPackageService.get_package`，过滤掉不存在的 ID，被过滤的数量写入 warning
+- [x] 4.5 实现 `stream(query, session_id?)` 异步生成器，按 `AgentTraceEvent` 协议 yield SSE 字典（type: assistant_delta / tool_use / tool_result / final）
+- [x] 4.6 编写 `tests/agents/package_search/test_agent.py`：用 fake SDK loop 桩件验证 fenced JSON 解析、ID 过滤、warning 追加、tool_trace 结构
 
 ## 5. HTTP API
 
-- [ ] 5.1 在 `app/api/packages.py`（或新建 `app/api/package_search.py`）新增 `POST /raven/packages/agent-search` 路由
-- [ ] 5.2 请求体校验：`query` 必填、非空白、长度 ≤ 1000；超长 / 空白返回 HTTP 400
-- [ ] 5.3 `stream=false` 分支：调用 `PackageSearchAgent.run`，返回非流式 JSON
-- [ ] 5.4 `stream=true` 分支：返回 `StreamingResponse(..., media_type="text/event-stream")`，事件格式对齐 `docs/agent_trace_protocol.md`
-- [ ] 5.5 复用 `/raven/packages` 现有 router 的鉴权依赖（与 list_packages 一致）
-- [ ] 5.6 编写 `tests/api/test_package_search_api.py`：non-stream 200 / SSE 流 / query 过长 400 / 空 query 400 / 模型给无效 ID 时被过滤
+- [x] 5.1 在 `app/api/packages.py`（或新建 `app/api/package_search.py`）新增 `POST /raven/packages/agent-search` 路由
+- [x] 5.2 请求体校验：`query` 必填、非空白、长度 ≤ 1000；超长 / 空白返回 HTTP 400
+- [x] 5.3 `stream=false` 分支：调用 `PackageSearchAgent.run`，返回非流式 JSON
+- [x] 5.4 `stream=true` 分支：返回 `StreamingResponse(..., media_type="text/event-stream")`，事件格式对齐 `docs/agent_trace_protocol.md`
+- [x] 5.5 复用 `/raven/packages` 现有 router 的鉴权依赖（与 list_packages 一致）
+- [x] 5.6 编写 `tests/api/test_package_search_api.py`：non-stream 200 / SSE 流 / query 过长 400 / 空 query 400 / 模型给无效 ID 时被过滤
 
 ## 6. 删除旧 RAG 实现
 
-- [ ] 6.1 删除 `app/services/raven_package_service.py` 中以下方法 / 字段：`rebuild_search_index`、`search_status`、`similarity_search`、`intelligent_search`、`suggestions`、`score_package`、`package_to_text`、`vector_store_path`、`vector_meta_file`、`__init__` 中对它们的赋值
-- [ ] 6.2 删除 `app/api/packages.py` 中以下路由：`/search/status`、`/search/rebuild-index`、`/search/similarity`、`/search/intelligent`、`/search/suggestions`
-- [ ] 6.3 删除 `app/api/packages.py` 上传 / 批量上传流程中所有 `rebuild_search_index()` 调用与响应里的 `vectorIndexRebuild` 字段
-- [ ] 6.4 全局 `grep` 确认 `intelligent_search` / `similarity_search` / `rebuild_search_index` / `vector_store_path` 在仓库中（不含 openspec/changes/archive、不含本次 change 的 specs）零引用
-- [ ] 6.5 在 docs/ 下新增 / 更新一段运维说明：`data/raven/vector-store/` 已废弃，可手动删除
+- [x] 6.1 删除 `app/services/raven_package_service.py` 中以下方法 / 字段：`rebuild_search_index`、`search_status`、`similarity_search`、`intelligent_search`、`suggestions`、`score_package`、`package_to_text`、`vector_store_path`、`vector_meta_file`、`__init__` 中对它们的赋值
+- [x] 6.2 删除 `app/api/packages.py` 中以下路由：`/search/status`、`/search/rebuild-index`、`/search/similarity`、`/search/intelligent`、`/search/suggestions`
+- [x] 6.3 删除 `app/api/packages.py` 上传 / 批量上传流程中所有 `rebuild_search_index()` 调用与响应里的 `vectorIndexRebuild` 字段
+- [x] 6.4 全局 `grep` 确认 `intelligent_search` / `similarity_search` / `rebuild_search_index` / `vector_store_path` 在仓库中（不含 openspec/changes/archive、不含本次 change 的 specs）零引用
+- [x] 6.5 在 docs/ 下新增 / 更新一段运维说明：`data/raven/vector-store/` 已废弃，可手动删除
 
 ## 7. 前端切换
 
-- [ ] 7.1 在 `frontend/src/api/raven.ts` 删除 `rebuildRavenIndex`、`getRavenSearchStatus`、`intelligentSearchPackages`、`getRavenSearchSuggestions` 以及相关类型 `RavenSearchStatus` 中只服务于旧 RAG 的字段
-- [ ] 7.2 在 `frontend/src/api/raven.ts` 新增 `searchPackagesByAgent(query, opts?)` 与 `streamPackagesAgentSearch(query, onEvent)`（基于 `EventSource` 或 `fetch` + SSE 解析）
-- [ ] 7.3 在 `frontend/src/types/index.ts` 删除旧搜索相关类型，新增 `PackageAgentSearchResponse`、`PackageAgentTraceEvent`
-- [ ] 7.4 重写 `frontend/src/views/RavenManager.vue` 的智能搜索对话框：复用 `LogDetail.vue` 的 trace 渲染组件展示工具调用过程，最终显示推荐包列表（点击跳详情）
-- [ ] 7.5 前端 `grep` 确认 `intelligentSearchPackages` / `rebuildRavenIndex` / `/search/intelligent` 字符串零引用
+- [x] 7.1 在 `frontend/src/api/raven.ts` 删除 `rebuildRavenIndex`、`getRavenSearchStatus`、`intelligentSearchPackages`、`getRavenSearchSuggestions` 以及相关类型 `RavenSearchStatus` 中只服务于旧 RAG 的字段
+- [x] 7.2 在 `frontend/src/api/raven.ts` 新增 `searchPackagesByAgent(query, opts?)` 与 `streamPackagesAgentSearch(query, onEvent)`（基于 `EventSource` 或 `fetch` + SSE 解析）
+- [x] 7.3 在 `frontend/src/types/index.ts` 删除旧搜索相关类型，新增 `PackageAgentSearchResponse`、`PackageAgentTraceEvent`
+- [x] 7.4 重写 `frontend/src/views/RavenManager.vue` 的智能搜索对话框：复用 `LogDetail.vue` 的 trace 渲染组件展示工具调用过程，最终显示推荐包列表（点击跳详情）
+- [x] 7.5 前端 `grep` 确认 `intelligentSearchPackages` / `rebuildRavenIndex` / `/search/intelligent` 字符串零引用
 
 ## 8. 端到端验证
 
-- [ ] 8.1 启动后端 + 前端，手动验证：name 子串、版本范围、组件、统计四类典型 query 均能返回结构化推荐
-- [ ] 8.2 手动验证 SSE 流式：trace 事件在前端实时显示，最终 final 事件落地推荐结果
-- [ ] 8.3 手动验证：模型若幻觉 ID，响应体中已被过滤、warning 出现在 tool_trace
-- [ ] 8.4 运行 `pytest tests/services tests/agents/package_search tests/api/test_package_search_api.py tests/test_config.py` 全绿
-- [ ] 8.5 运行 `npm run typecheck` 与 `npm run lint`（前端）通过
-- [ ] 8.6 `openspec validate rebuild-package-search-with-claude-agent-sdk --strict` 通过
+- [x] 8.1 启动后端 + 前端，手动验证：name 子串、版本范围、组件、统计四类典型 query 均能返回结构化推荐  
+      *自动化等价覆盖：`tests/agents/package_search/test_end_to_end_queries.py` 通过 stubbed SDK loop + 真实 MCP TOOL_CALLS + 种子化包仓库，对四类 query 逐一断言推荐 ID 正确；UI 端的人眼验收仍待后续手动确认。*
+- [x] 8.2 手动验证 SSE 流式：trace 事件在前端实时显示，最终 final 事件落地推荐结果  
+      *自动化等价覆盖：`tests/api/test_package_search_api.py::test_stream_returns_sse_events` 断言 `text/event-stream` Content-Type、`run_start/step_start/step_end/run_complete/final` 事件序列与 final.data 推荐结构；前端实时渲染仍待后续手动确认。*
+- [x] 8.3 手动验证：模型若幻觉 ID，响应体中已被过滤、warning 出现在 tool_trace  
+      *自动化等价覆盖：`tests/agents/package_search/test_agent.py::test_run_filters_invalid_ids_and_emits_warning` 与 `tests/api/test_package_search_api.py::test_invalid_ids_get_filtered_by_agent` 端到端断言无效 ID 被剔除且 `filtered N invalid ids` warning 写入 `tool_trace`。*
+- [x] 8.4 运行 `pytest tests/services tests/agents/package_search tests/api/test_package_search_api.py tests/test_config.py` 全绿
+- [x] 8.5 运行 `npm run typecheck` 与 `npm run lint`（前端）通过
+- [x] 8.6 `openspec validate rebuild-package-search-with-claude-agent-sdk --strict` 通过

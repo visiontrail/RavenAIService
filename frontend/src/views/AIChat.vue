@@ -1,9 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, nextTick, ref, watch } from 'vue'
 import { deviceLinkApi } from '@/api/deviceLink'
-import { intelligentSearchPackages, ravenBaseUrl } from '@/api/raven'
+import { searchPackagesByAgent, getRavenPackageDetail, ravenBaseUrl } from '@/api/raven'
 import { userApi } from '@/api/user'
-import type { DeviceInfo, RavenPackage, RavenSearchResult, ChatMessageRecord } from '@/types'
+import type {
+  DeviceInfo,
+  PackageAgentSearchResponse,
+  RavenPackage,
+  ChatMessageRecord,
+} from '@/types'
 import { renderMarkdown } from '@/utils/markdownRenderer'
 import { useUserStore } from '@/stores/user'
 import { useAppStore } from '@/stores/app'
@@ -299,17 +304,19 @@ const buildPackageLinks = (pkg: RavenPackage) => {
   return { detailLink, downloadLink, prompt: buildRebuildPrompt(downloadLink) }
 }
 
-const formatPackageAgentAnswer = (result: RavenSearchResult, rawQuery: string) => {
+const formatPackageAgentAnswer = (
+  result: PackageAgentSearchResponse,
+  recommendedPackages: RavenPackage[],
+  rawQuery: string
+) => {
   const query = rawQuery.trim() || '（未提供查询）'
-  const packages = result.relevantPackages || []
-  const recommendedIdSet = new Set(result.recommendedPackageIds || [])
-  const recommendedPackages = packages.filter((pkg) => recommendedIdSet.has(pkg.id))
   const lines: string[] = [`**重构包配置管理员** 已为你执行智能搜索：\`${query}\``]
 
-  const pushPackageLines = (pkg: RavenPackage, isRecommended = false) => {
+  const pushPackageLines = (pkg: RavenPackage) => {
     const links = buildPackageLinks(pkg)
-    const recommendedLabel = isRecommended ? ' ⭐ AI 推荐' : ''
-    lines.push(`## ${pkg.name || pkg.id}${recommendedLabel} （${packageTypeText(pkg.packageType)} · v${pkg.version || '未知'}）`)
+    lines.push(
+      `## ${pkg.name || pkg.id} ⭐ AI 推荐 （${packageTypeText(pkg.packageType)} · v${pkg.version || '未知'}）`
+    )
     if (pkg.metadata?.description) lines.push(`- 描述：${pkg.metadata.description}`)
     lines.push(
       `- 详情链接：[${links.detailLink}](${links.detailLink})`,
@@ -322,9 +329,9 @@ const formatPackageAgentAnswer = (result: RavenSearchResult, rawQuery: string) =
   if (result.answer) lines.push('', result.answer)
   if (recommendedPackages.length > 0) {
     lines.push('', `# Raven AI 推荐的重构包（${recommendedPackages.length} 个）：`)
-    recommendedPackages.forEach((pkg) => pushPackageLines(pkg, true))
+    recommendedPackages.forEach(pushPackageLines)
   } else {
-    lines.push('', packages.length > 0 ? '暂无 AI 推荐的重构包。' : '未找到匹配的重构包。')
+    lines.push('', '未找到匹配的重构包。')
   }
   return lines.join('\n')
 }
@@ -569,9 +576,19 @@ const runPackageAgent = async (content: string, answerId: string) => {
     return
   }
   try {
-    const { data } = await intelligentSearchPackages(query, 6)
-    if (!data?.success || !data.data) throw new Error(data?.message || '智能搜索失败')
-    const aiContent = formatPackageAgentAnswer(data.data, query)
+    const { data } = await searchPackagesByAgent(query)
+    if (!data) throw new Error('智能搜索返回为空')
+    const recommendedIds = data.recommended_package_ids || []
+    const recommendedPackages: RavenPackage[] = []
+    for (const id of recommendedIds) {
+      try {
+        const detail = await getRavenPackageDetail(id)
+        if (detail.data?.success && detail.data.data) recommendedPackages.push(detail.data.data)
+      } catch (err) {
+        console.warn('拉取推荐包详情失败', id, err)
+      }
+    }
+    const aiContent = formatPackageAgentAnswer(data, recommendedPackages, query)
     targetMessage.content = aiContent
     if (isLoggedIn.value) {
       if (!sessionId.value) {

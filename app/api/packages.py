@@ -12,10 +12,13 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
 from app.services.raven_package_service import raven_package_service
+
+# Hard limit for /packages/agent-search query length per spec.
+PACKAGE_SEARCH_QUERY_MAX_LEN = 1000
 
 router = APIRouter()
 
@@ -133,7 +136,6 @@ async def get_package(package_id: str) -> dict[str, Any]:
 async def delete_package(package_id: str) -> dict[str, Any]:
     if not raven_package_service.delete_package(package_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="包不存在或删除失败")
-    raven_package_service.rebuild_search_index()
     return _ok(message="包删除成功")
 
 
@@ -158,8 +160,7 @@ async def upload_package(
             package_info=_parse_package_info(packageInfo),
         )
         saved = raven_package_service.add_or_update_package(package)
-        raven_package_service.rebuild_search_index()
-        return _ok(message="包上传成功", package=saved, vectorIndexRebuild="completed")
+        return _ok(message="包上传成功", package=saved)
     except Exception:
         raven_package_service.cleanup_file(file_path)
         raise
@@ -192,14 +193,10 @@ async def upload_package_batch(request: Request) -> dict[str, Any]:
         except Exception as exc:
             errors.append({"filename": getattr(upload, "filename", ""), "error": str(exc)})
 
-    if results:
-        raven_package_service.rebuild_search_index()
-
     return _ok(
         message=f"成功上传 {len(results)} 个包",
         packages=results,
         errors=errors or None,
-        vectorIndexRebuild="completed" if results else "skipped",
     )
 
 
@@ -276,37 +273,89 @@ def _package_file_response(package: dict[str, Any]) -> FileResponse:
     )
 
 
-@router.get("/search/status")
-async def search_status() -> dict[str, Any]:
-    return _ok(raven_package_service.search_status())
+def _validate_search_query(raw: Any) -> str:
+    """Coerce + validate the agent-search ``query`` field.
+
+    Raises HTTPException 400 when:
+    - missing or non-string;
+    - empty / whitespace-only;
+    - longer than ``PACKAGE_SEARCH_QUERY_MAX_LEN`` characters.
+    """
+    if not isinstance(raw, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="query is required and must be a string",
+        )
+    text = raw.strip()
+    if not text:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="query must not be empty",
+        )
+    if len(text) > PACKAGE_SEARCH_QUERY_MAX_LEN:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"query exceeds {PACKAGE_SEARCH_QUERY_MAX_LEN}-character limit",
+        )
+    return text
 
 
-@router.post("/search/rebuild-index")
-async def rebuild_index() -> dict[str, Any]:
-    meta = raven_package_service.rebuild_search_index()
-    return _ok(meta, message=f"向量索引重建成功，共索引 {meta['totalPackages']} 个包")
+@router.post("/packages/agent-search")
+async def agent_search_packages(request: Request):
+    """Claude Agent SDK driven Raven package search.
 
+    Body: ``{query: string, session_id?: string, stream?: bool}``.
 
-@router.post("/search/similarity")
-async def similarity_search(request: Request) -> dict[str, Any]:
+    - ``stream=false`` (default): blocking JSON response with the structured
+      recommendation, tool trace, model & usage.
+    - ``stream=true``: ``text/event-stream`` SSE feed of
+      ``AgentTraceEvent`` dicts (matching ``docs/agent_trace_protocol.md``)
+      terminated by a synthetic ``final`` event whose ``data`` is the same
+      payload as the non-stream response.
+    """
+    from app.agents.package_search.agent import PackageSearchAgent
+
     body = await request.json()
-    query = str(body.get("query") or "").strip()
-    if not query:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="搜索查询不能为空")
-    return _ok(raven_package_service.similarity_search(query, int(body.get("limit") or 5)))
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="request body must be a JSON object",
+        )
+    query = _validate_search_query(body.get("query"))
+    session_id = body.get("session_id")
+    if session_id is not None and not isinstance(session_id, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="session_id must be a string",
+        )
+    use_stream = bool(body.get("stream") or False)
 
+    agent = PackageSearchAgent()
 
-@router.post("/search/intelligent")
-async def intelligent_search(request: Request) -> dict[str, Any]:
-    body = await request.json()
-    query = str(body.get("query") or "").strip()
-    if not query:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="搜索查询不能为空")
-    return _ok(raven_package_service.intelligent_search(query, int(body.get("limit") or 5)))
+    if not use_stream:
+        result = await agent.run(query, session_id=session_id)
+        return {
+            "answer": result["answer"],
+            "recommended_package_ids": result["recommended_package_ids"],
+            "relevant_package_ids": result["relevant_package_ids"],
+            "notes": result.get("notes"),
+            "tool_trace": result["tool_trace"],
+            "model": result["model"],
+            "usage": result["usage"],
+        }
 
+    async def _sse():
+        try:
+            async for event in agent.stream(query, session_id=session_id):
+                yield f"event: {event.get('type', 'message')}\n"
+                yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
+        except Exception as exc:  # noqa: BLE001
+            err = {
+                "type": "error",
+                "error_kind": type(exc).__name__,
+                "message": str(exc),
+            }
+            yield f"event: error\n"
+            yield f"data: {json.dumps(err, ensure_ascii=False, default=str)}\n\n"
 
-@router.post("/search/suggestions")
-async def search_suggestions(request: Request) -> dict[str, Any]:
-    body = await request.json()
-    query = str(body.get("query") or "").strip()
-    return _ok(raven_package_service.suggestions(query))
+    return StreamingResponse(_sse(), media_type="text/event-stream")

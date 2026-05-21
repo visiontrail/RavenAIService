@@ -161,20 +161,63 @@ export interface RavenUploadMetadata {
   components?: RavenComponent[]
 }
 
-export interface RavenSearchStatus {
-  initialized: boolean
-  vectorStoreExists: boolean
-  rebuilding: boolean
-  totalPackages: number
+// Trace entry attached to the agent-search response, mirroring
+// `tool_trace` produced by app/agents/package_search/agent.py. Each entry
+// is either a tool-call summary or a `warning`/`info` notice appended by
+// the API layer (e.g. `filtered N invalid ids`).
+export interface PackageAgentToolTraceEntry {
+  type?: string
+  tool?: string
+  step_id?: string
+  status?: 'ok' | 'error' | string
+  duration_seconds?: number
+  input?: Record<string, unknown>
+  output_excerpt?: string
+  message?: string
+  [key: string]: unknown
 }
 
-export interface RavenSearchResult {
-  answer: string
-  relevantPackages: RavenPackage[]
-  query: string
-  recommendedPackageIds?: string[]
-  searchResultsCount?: number
+export interface PackageAgentUsage {
+  input_tokens?: number
+  output_tokens?: number
+  cache_read_tokens?: number
+  [key: string]: unknown
 }
+
+// Response body for `POST /raven/packages/agent-search` with
+// `stream: false`. Mirrors the dict returned by the FastAPI handler in
+// app/api/packages.py.
+export interface PackageAgentSearchResponse {
+  answer: string
+  recommended_package_ids: string[]
+  relevant_package_ids: string[]
+  notes?: string | null
+  tool_trace: PackageAgentToolTraceEntry[]
+  model: string
+  usage: PackageAgentUsage
+}
+
+// Trace event emitted on the SSE channel. The schema is the union of the
+// standard `AgentTraceEvent` types plus a synthetic terminal `final`
+// event whose `data` field carries the same payload as the non-stream
+// response.
+export interface PackageAgentFinalEvent {
+  type: 'final'
+  task_id: string
+  seq: number
+  timestamp: number
+  data: PackageAgentSearchResponse
+}
+
+export type PackageAgentTraceEvent =
+  | PackageAgentFinalEvent
+  | {
+      type: string
+      task_id?: string
+      seq?: number
+      timestamp?: number
+      [key: string]: unknown
+    }
 
 // 管理端
 export interface AdminAuthData {

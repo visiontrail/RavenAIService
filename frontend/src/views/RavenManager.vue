@@ -5,23 +5,23 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   listRavenPackages,
   deleteRavenPackage,
-  rebuildRavenIndex,
-  getRavenSearchStatus,
-  intelligentSearchPackages,
   uploadRavenPackages,
-  fetchRavenSuggestions,
   getRavenPackageDetail,
   getRavenPackageDownloadUrl,
+  streamPackagesAgentSearch,
 } from '@/api/raven'
 import { downloadFileByUrl, formatDateTime, formatFileSize } from '@/utils'
 import { renderMarkdown } from '@/utils/markdownRenderer'
 import type {
+  PackageAgentSearchResponse,
+  PackageAgentToolTraceEntry,
+  PackageAgentTraceEvent,
   RavenComponent,
   RavenPackage,
-  RavenSearchResult,
-  RavenSearchStatus,
   RavenUploadMetadata,
 } from '@/types'
+import type { AgentTraceEvent } from '@/types/agentTrace'
+import AgentTraceStream from '@/components/AgentTraceStream.vue'
 import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'
 
 const router = useRouter()
@@ -72,10 +72,14 @@ const uploadController = ref<AbortController | null>(null)
 
 const searchQuery = ref('')
 const searchLoading = ref(false)
-const searchResult = ref<RavenSearchResult | null>(null)
-const searchStatus = ref<RavenSearchStatus | null>(null)
-const statusLoading = ref(false)
-const rebuildLoading = ref(false)
+const searchResult = ref<PackageAgentSearchResponse | null>(null)
+const searchTraceEvents = ref<AgentTraceEvent[]>([])
+const searchTraceRunning = ref(false)
+const searchAbortController = ref<AbortController | null>(null)
+const searchRecommendedPackages = ref<RavenPackage[]>([])
+const searchRelevantPackages = ref<RavenPackage[]>([])
+const searchPackagesLoading = ref(false)
+const searchError = ref<string | null>(null)
 const searchSuggestions = ref<string[]>([
   'LingXi-10 最新完整包',
   '查找补丁包',
@@ -382,17 +386,25 @@ const searchDetailDescription = computed(() =>
   renderMarkdown(searchDetailPackage.value?.metadata?.description || '暂无描述', { cleanXml: true })
 )
 
-const recommendedIdSet = computed(() => new Set(searchResult.value?.recommendedPackageIds || []))
+const recommendedIdSet = computed(
+  () => new Set(searchResult.value?.recommended_package_ids || [])
+)
 
 const sortedRelevantPackages = computed<RavenPackage[]>(() => {
-  const list = searchResult.value?.relevantPackages || []
-  if (!recommendedIdSet.value.size) return list
-  const recommended = list.filter((pkg) => recommendedIdSet.value.has(pkg.id))
-  const others = list.filter((pkg) => !recommendedIdSet.value.has(pkg.id))
+  const recommended = searchRecommendedPackages.value
+  const others = searchRelevantPackages.value.filter(
+    (pkg) => !recommendedIdSet.value.has(pkg.id)
+  )
   return [...recommended, ...others]
 })
 
 const isRecommendedPackage = (pkg: RavenPackage) => recommendedIdSet.value.has(pkg.id)
+
+const searchWarnings = computed<PackageAgentToolTraceEntry[]>(() =>
+  (searchResult.value?.tool_trace || []).filter(
+    (entry: PackageAgentToolTraceEntry) => entry.type === 'warning'
+  )
+)
 
 const openSearchPackageDetail = async (payload: RavenPackage) => {
   searchDetailVisible.value = true
@@ -414,67 +426,108 @@ const openSearchPackageDetail = async (payload: RavenPackage) => {
   }
 }
 
+const resolveRecommendedPackages = async (
+  result: PackageAgentSearchResponse
+): Promise<void> => {
+  const recommendedIds = result.recommended_package_ids || []
+  const relevantIds = result.relevant_package_ids || []
+  const allIds = Array.from(new Set([...recommendedIds, ...relevantIds]))
+  if (!allIds.length) {
+    searchRecommendedPackages.value = []
+    searchRelevantPackages.value = []
+    return
+  }
+  searchPackagesLoading.value = true
+  try {
+    const lookups = await Promise.all(
+      allIds.map(async (id) => {
+        try {
+          const { data } = await getRavenPackageDetail(id)
+          if (data?.success && data.data) return data.data
+        } catch (err) {
+          console.warn('包详情拉取失败', id, err)
+        }
+        return null
+      })
+    )
+    const map = new Map<string, RavenPackage>()
+    lookups.forEach((pkg) => {
+      if (pkg && pkg.id) map.set(pkg.id, pkg)
+    })
+    searchRecommendedPackages.value = recommendedIds
+      .map((id) => map.get(id))
+      .filter((pkg): pkg is RavenPackage => Boolean(pkg))
+    searchRelevantPackages.value = relevantIds
+      .map((id) => map.get(id))
+      .filter((pkg): pkg is RavenPackage => Boolean(pkg))
+  } finally {
+    searchPackagesLoading.value = false
+  }
+}
+
 const performSearch = async () => {
-  if (!searchQuery.value.trim()) {
+  const q = searchQuery.value.trim()
+  if (!q) {
     ElMessage.warning('请输入搜索内容')
     return
   }
+  if (q.length > 1000) {
+    ElMessage.warning('查询长度超过 1000 字符上限')
+    return
+  }
+
+  cancelSearch()
 
   searchLoading.value = true
+  searchTraceEvents.value = []
+  searchTraceRunning.value = true
+  searchResult.value = null
+  searchRecommendedPackages.value = []
+  searchRelevantPackages.value = []
+  searchError.value = null
+
+  const controller = new AbortController()
+  searchAbortController.value = controller
+
   try {
-    const { data } = await intelligentSearchPackages(searchQuery.value.trim(), 6)
-    if (data?.success && data.data) {
-      searchResult.value = data.data
-    } else {
-      throw new Error(data?.message || '搜索失败')
+    await streamPackagesAgentSearch(q, {
+      signal: controller.signal,
+      onEvent: (event: PackageAgentTraceEvent) => {
+        if (event.type === 'final' && (event as any).data) {
+          searchResult.value = (event as any).data as PackageAgentSearchResponse
+          return
+        }
+        if (typeof (event as any).seq === 'number' && typeof event.type === 'string') {
+          searchTraceEvents.value.push(event as unknown as AgentTraceEvent)
+        }
+      },
+      onError: (err) => {
+        console.warn('agent-search SSE 错误', err)
+      },
+    })
+
+    if (!searchResult.value) {
+      throw new Error('未收到搜索结果')
     }
+    await resolveRecommendedPackages(searchResult.value)
   } catch (error: any) {
+    if (error?.name === 'AbortError') return
     console.error(error)
-    ElMessage.error(error.message || '搜索失败')
+    searchError.value = error?.message || '搜索失败'
+    ElMessage.error(searchError.value || '搜索失败')
   } finally {
+    searchTraceRunning.value = false
     searchLoading.value = false
+    if (searchAbortController.value === controller) searchAbortController.value = null
   }
 }
 
-const checkSearchStatus = async () => {
-  statusLoading.value = true
-  try {
-    const { data } = await getRavenSearchStatus()
-    if (data?.success && data.data) {
-      searchStatus.value = data.data
-    }
-  } catch (error) {
-    console.error(error)
-  } finally {
-    statusLoading.value = false
+const cancelSearch = () => {
+  if (searchAbortController.value) {
+    searchAbortController.value.abort()
+    searchAbortController.value = null
   }
-}
-
-const rebuildIndex = async () => {
-  rebuildLoading.value = true
-  try {
-    const { data } = await rebuildRavenIndex()
-    if (!data?.success) throw new Error(data?.message || '重建索引失败')
-    ElMessage.success(data.message || '开始重建索引')
-    checkSearchStatus()
-  } catch (error: any) {
-    console.error(error)
-    ElMessage.error(error.message || '重建失败')
-  } finally {
-    rebuildLoading.value = false
-  }
-}
-
-const loadSuggestions = async () => {
-  if (!searchQuery.value.trim()) return
-  try {
-    const { data } = await fetchRavenSuggestions(searchQuery.value.trim())
-    if (data?.success && Array.isArray(data.data) && data.data.length) {
-      searchSuggestions.value = data.data
-    }
-  } catch (error) {
-    console.error(error)
-  }
+  searchTraceRunning.value = false
 }
 
 const triggerSuggestion = (item: string) => {
@@ -488,14 +541,17 @@ const openUploadDialog = () => {
 
 const openSearchDialog = () => {
   searchDialogVisible.value = true
-  if (!searchStatus.value) checkSearchStatus()
+}
+
+const closeSearchDialog = () => {
+  cancelSearch()
+  searchDialogVisible.value = false
 }
 
 const topbarMeta = computed(() => `${pagination.totalItems || packages.value.length} 个包`)
 
 onMounted(() => {
   fetchPackages()
-  checkSearchStatus()
 })
 </script>
 
@@ -893,7 +949,7 @@ onMounted(() => {
               <button class="rw-btn-ghost" :disabled="uploading" @click="clearUpload">重置</button>
             </div>
             <p class="rw-progress-hint">
-              上传过程中会自动重建向量索引，保持智能搜索可用
+              包元数据落盘后即对 AI Agent 可见，无需手动重建索引
             </p>
           </div>
         </div>
@@ -912,42 +968,36 @@ onMounted(() => {
       destroy-on-close
       :close-on-click-modal="false"
       class="rw-dialog"
-      title="智能搜索"
+      title="AI Agent 智能搜索"
+      :before-close="(done: () => void) => { closeSearchDialog(); done() }"
     >
       <div class="rw-search-body">
         <div class="rw-search-bar">
           <el-input
             v-model="searchQuery"
-            placeholder="用自然语言描述需求，例如：需要最新的 LingXi-10 正式包"
+            placeholder="用自然语言描述需求，例如：lingxi-10 v2.3 以上的非补丁包"
             clearable
             class="rw-search-input"
+            :disabled="searchLoading"
+            maxlength="1000"
             @keyup.enter="performSearch"
-            @change="loadSuggestions"
           >
             <template #prefix>
               <el-icon><MagicStick /></el-icon>
             </template>
           </el-input>
-          <button class="rw-btn-primary" :disabled="searchLoading" @click="performSearch">
+          <button
+            v-if="!searchLoading"
+            class="rw-btn-primary"
+            :disabled="searchLoading"
+            @click="performSearch"
+          >
             <el-icon><Search /></el-icon>
-            {{ searchLoading ? '搜索中' : '智能搜索' }}
+            智能搜索
           </button>
-        </div>
-
-        <div class="rw-search-tools">
-          <button class="rw-btn-ghost" :disabled="statusLoading" @click="checkSearchStatus">
-            {{ statusLoading ? '检查中…' : '检查状态' }}
+          <button v-else class="rw-btn-secondary" @click="cancelSearch">
+            停止
           </button>
-          <button class="rw-btn-ghost" :disabled="rebuildLoading" @click="rebuildIndex">
-            {{ rebuildLoading ? '重建中…' : '重建索引' }}
-          </button>
-          <span class="rw-pill" :class="searchStatus?.initialized ? 'rw-pill-success' : 'rw-pill-neutral'">
-            {{ searchStatus?.initialized ? '向量索引已准备' : '待初始化' }}
-          </span>
-          <span v-if="searchStatus?.rebuilding" class="rw-pill rw-pill-warning">正在重建索引</span>
-          <span v-if="searchStatus?.totalPackages" class="rw-search-stat">
-            已索引 {{ searchStatus.totalPackages }} 个包
-          </span>
         </div>
 
         <div class="rw-suggestion-row">
@@ -961,6 +1011,17 @@ onMounted(() => {
           </span>
         </div>
 
+        <AgentTraceStream
+          v-if="searchTraceEvents.length > 0 || searchTraceRunning"
+          class="rw-search-trace"
+          :events="searchTraceEvents"
+          :running="searchTraceRunning"
+        />
+
+        <div v-if="searchError" class="rw-search-error">
+          {{ searchError }}
+        </div>
+
         <div v-if="searchResult" class="rw-search-results">
           <div class="rw-card rw-answer-card">
             <div class="rw-answer-head">
@@ -968,17 +1029,32 @@ onMounted(() => {
                 <el-icon><StarFilled /></el-icon>
                 AI 回答
               </span>
-              <span class="rw-answer-disclaimer">根据描述生成，不保证完全准确</span>
+              <span class="rw-answer-disclaimer">由 Claude Agent + 工具调用生成</span>
             </div>
             <div class="rw-markdown" v-html="renderedAnswer" />
+            <p v-if="searchResult.notes" class="rw-answer-notes">{{ searchResult.notes }}</p>
+            <div v-if="searchWarnings.length" class="rw-answer-warnings">
+              <span
+                v-for="(warning, idx) in searchWarnings"
+                :key="idx"
+                class="rw-pill rw-pill-warning"
+              >
+                ⚠ {{ warning.message || warning.type }}
+              </span>
+            </div>
           </div>
 
-          <div class="rw-card rw-match-card">
+          <div
+            v-if="sortedRelevantPackages.length || searchPackagesLoading"
+            v-loading="searchPackagesLoading"
+            class="rw-card rw-match-card"
+          >
             <div class="rw-match-head">
-              <span class="rw-match-title">匹配包</span>
+              <span class="rw-match-title">推荐包</span>
               <span class="rw-match-meta">
-                命中 {{ searchResult.relevantPackages.length }} /
-                {{ searchResult.searchResultsCount || searchResult.relevantPackages.length }}
+                推荐 {{ searchResult.recommended_package_ids.length }} · 相关 {{
+                  searchResult.relevant_package_ids.length
+                }}
               </span>
             </div>
             <div class="rw-match-grid">
@@ -1006,13 +1082,6 @@ onMounted(() => {
                       <el-icon><StarFilled /></el-icon>
                       AI 推荐
                     </span>
-                    <span
-                      v-if="(pkg as any).relevanceScore"
-                      class="rw-pill"
-                      :class="isRecommendedPackage(pkg) ? 'rw-pill-warning' : 'rw-pill-success'"
-                    >
-                      {{ ((pkg as any).relevanceScore * 100).toFixed(0) }}%
-                    </span>
                   </div>
                 </div>
                 <div class="rw-pill-group">
@@ -1031,14 +1100,26 @@ onMounted(() => {
               </div>
             </div>
           </div>
+
+          <div
+            v-else-if="!searchPackagesLoading"
+            class="rw-search-empty"
+          >
+            Agent 未推荐任何包
+          </div>
         </div>
 
-        <div v-else class="rw-search-empty">输入需求并执行智能搜索，结果会显示在这里</div>
+        <div
+          v-else-if="!searchTraceRunning && searchTraceEvents.length === 0"
+          class="rw-search-empty"
+        >
+          输入需求并执行智能搜索，Agent 的工具调用过程会显示在这里
+        </div>
       </div>
 
       <template #footer>
         <div class="rw-dialog-footer">
-          <button class="rw-btn-ghost" @click="searchDialogVisible = false">关闭</button>
+          <button class="rw-btn-ghost" @click="closeSearchDialog">关闭</button>
         </div>
       </template>
     </el-dialog>
