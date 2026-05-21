@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import type { RouteLocationNormalized, RouteRecordRaw } from 'vue-router'
+import type { RouteRecordRaw } from 'vue-router'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -7,16 +7,11 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../layouts/WorkbenchLayout.vue'),
     children: [
       {
-        path: '',
-        name: 'Home',
+        path: 'workbench',
+        alias: ['/ai-chat'],
+        name: 'Workbench',
         component: () => import('../views/AIChat.vue'),
         meta: { title: 'RavenAI 工作台' },
-      },
-      {
-        path: 'ai-chat',
-        name: 'AIChat',
-        component: () => import('../views/AIChat.vue'),
-        meta: { title: 'Raven AI Chat' },
       },
       {
         path: 'logs',
@@ -183,32 +178,8 @@ const router = createRouter({
   routes,
 })
 
-const normalizePort = (value?: unknown) => {
-  if (value === null || value === undefined) return ''
-  return String(value)
-}
-
-const shouldRedirectToRaven = (to: RouteLocationNormalized, from: RouteLocationNormalized) => {
-  // 仅在首次访问根路径时尝试重定向到 Raven 管理（保留兼容旧端口部署的行为）
-  if (from?.name) return false
-  if (to.path !== '/' && to.name !== 'Home') return false
-  if (typeof window === 'undefined') return false
-
-  const configuredPort =
-    normalizePort((window as any).__RAVEN_SERVER_PORT__) ||
-    normalizePort(import.meta.env.VITE_RAVEN_PORT)
-  const currentPort = normalizePort(window.location.port)
-
-  return configuredPort !== '' && currentPort === configuredPort
-}
-
 // 路由守卫
-router.beforeEach((to, from, next) => {
-  if (shouldRedirectToRaven(to, from)) {
-    next({ name: 'RavenManager', replace: true })
-    return
-  }
-
+router.beforeEach((to, _from, next) => {
   // 设置页面标题
   if (to.meta?.title) {
     document.title = `${to.meta.title} - Raven智能测试平台`

@@ -330,12 +330,15 @@ export interface SkillFileContent {
 }
 
 // 用户与会话
+export type UserRole = 'user' | 'admin'
+
 export interface UserProfile {
   id: string
   username: string
   display_name?: string | null
   email?: string | null
   is_active: boolean
+  role?: UserRole | string
   last_login_at?: string | null
   created_at: string
   updated_at: string

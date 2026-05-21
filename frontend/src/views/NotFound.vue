@@ -10,7 +10,7 @@
           <el-button @click="$router.back()">
             返回上页
           </el-button>
-          <el-button type="primary" @click="$router.push('/')">
+          <el-button type="primary" @click="goHome">
             回到首页
           </el-button>
         </div>
@@ -20,7 +20,9 @@
 </template>
 
 <script setup lang="ts">
-// 404页面组件
+const goHome = () => {
+  window.location.href = '/'
+}
 </script>
 
 <style scoped>

@@ -93,6 +93,12 @@ class UserLoginRequest(BaseModel):
 
 @router.post("/auth/login", response_model=UserAuthResponse)
 async def user_login(payload: UserLoginRequest, db: AsyncSession = Depends(get_db)) -> UserAuthResponse:
+    # Ensure admin users from admin_auth.yaml are provisioned with the admin role
+    # so they can access the backend management entry after their first login.
+    try:
+        await user_service.ensure_admin_users(db, admin_auth_manager.list_config_users())
+    except Exception:
+        pass
     user = await user_service.authenticate(db, username=payload.username, password=payload.password)
     token, expires_at = user_auth_manager.issue_token(user.id, user.username)
     return UserAuthResponse(
@@ -121,6 +127,7 @@ class CreateUserRequest(BaseModel):
     password: str
     display_name: Optional[str] = None
     email: Optional[str] = None
+    role: Optional[str] = "user"
 
 
 class UpdateUserRequest(BaseModel):
@@ -128,6 +135,7 @@ class UpdateUserRequest(BaseModel):
     email: Optional[str] = None
     is_active: Optional[bool] = None
     password: Optional[str] = None
+    role: Optional[str] = None
 
 
 @router.get("", response_model=UserListResponse)
@@ -155,6 +163,7 @@ async def create_user(
         password=payload.password,
         display_name=payload.display_name,
         email=payload.email,
+        role=payload.role or "user",
     )
     return UserDetailResponse(
         message="用户创建成功",
@@ -175,6 +184,7 @@ async def update_user(
         display_name=payload.display_name,
         email=payload.email,
         is_active=payload.is_active,
+        role=payload.role,
     )
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")

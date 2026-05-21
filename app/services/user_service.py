@@ -19,6 +19,21 @@ from app.security.user_auth import hash_password, verify_password
 from app.services.base import BaseService
 
 
+VALID_ROLES = ("user", "admin")
+
+
+def _normalize_role(role: Optional[str]) -> str:
+    """Coerce role string to a known value, defaulting to ``user``."""
+    if not role:
+        return "user"
+    value = str(role).strip().lower()
+    if value in VALID_ROLES:
+        return value
+    if value in ("superuser", "ops", "administrator", "root"):
+        return "admin"
+    return "user"
+
+
 class UserService(BaseService):
     """Encapsulate user CRUD and authentication."""
 
@@ -38,6 +53,7 @@ class UserService(BaseService):
         password: str,
         display_name: Optional[str] = None,
         email: Optional[str] = None,
+        role: str = "user",
     ) -> User:
         existing = await self.get_by_username(db, username)
         if existing:
@@ -50,6 +66,7 @@ class UserService(BaseService):
             password_hash=hash_password(password),
             display_name=display_name or username,
             email=email,
+            role=_normalize_role(role),
         )
         db.add(user)
         try:
@@ -94,12 +111,17 @@ class UserService(BaseService):
         """Sync admin auth users into users table so they can be managed in UI."""
         if not admin_users:
             return
+        dirty = False
         for admin_user in admin_users:
             if not admin_user.username:
                 continue
             user = await self.get_by_username(db, admin_user.username)
             expected_is_active = not admin_user.disabled
             if user:
+                # Ensure existing users from admin_auth.yaml are tagged as admin role
+                if user.role != "admin":
+                    user.role = "admin"
+                    dirty = True
                 continue
             password_hash = (
                 admin_user.password_hash
@@ -112,9 +134,12 @@ class UserService(BaseService):
                 email=None,
                 password_hash=password_hash,
                 is_active=expected_is_active,
+                role="admin",
             )
             db.add(user)
-        await db.flush()
+            dirty = True
+        if dirty:
+            await db.flush()
 
     async def update_user(
         self,
@@ -124,6 +149,7 @@ class UserService(BaseService):
         display_name: Optional[str] = None,
         email: Optional[str] = None,
         is_active: Optional[bool] = None,
+        role: Optional[str] = None,
     ) -> Optional[User]:
         user = await self.get_by_id(db, user_id)
         if not user:
@@ -134,6 +160,8 @@ class UserService(BaseService):
             user.email = email
         if is_active is not None:
             user.is_active = is_active
+        if role is not None:
+            user.role = _normalize_role(role)
         await db.flush()
         await db.refresh(user)
         return user

@@ -4,14 +4,14 @@
       <div class="flex justify-between items-center h-16 navbar-inner">
         <!-- Logo和标题 -->
         <div class="flex items-center space-x-4 navbar-brand-wrap">
-          <router-link to="/" class="flex items-center space-x-2 navbar-brand-link">
+          <a href="/" class="flex items-center space-x-2 navbar-brand-link">
             <img
               :src="ravenLogo"
               alt="Raven Logo"
               class="h-9 w-9 rounded-xl shadow-sm ring-1 ring-gray-200 object-contain"
             />
             <span class="text-xl font-semibold text-gray-900 navbar-title">Raven智能测试平台</span>
-          </router-link>
+          </a>
         </div>
 
         <!-- 导航菜单 -->

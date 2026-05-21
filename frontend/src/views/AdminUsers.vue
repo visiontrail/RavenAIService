@@ -33,6 +33,7 @@ const userDialogForm = reactive({
   display_name: '',
   email: '',
   password: '',
+  role: 'user' as 'user' | 'admin',
 })
 
 const navVisible = computed(() => appStore.adminSidebarVisible)
@@ -156,7 +157,13 @@ const resetUserDialogForm = () => {
   userDialogForm.display_name = ''
   userDialogForm.email = ''
   userDialogForm.password = ''
+  userDialogForm.role = 'user'
 }
+
+const normalizeRole = (role?: string | null): 'user' | 'admin' =>
+  (role || '').toString().toLowerCase() === 'admin' ? 'admin' : 'user'
+
+const roleLabel = (role?: string | null) => (normalizeRole(role) === 'admin' ? '管理员' : '普通用户')
 
 const openCreateUserDialog = () => {
   userDialogMode.value = 'create'
@@ -172,6 +179,7 @@ const openEditUserDialog = (user: UserProfile) => {
   userDialogForm.display_name = user.display_name || ''
   userDialogForm.email = user.email || ''
   userDialogForm.password = ''
+  userDialogForm.role = normalizeRole(user.role)
   userDialogVisible.value = true
 }
 
@@ -198,6 +206,7 @@ const submitUserDialog = async () => {
         password: userDialogForm.password,
         display_name: userDialogForm.display_name || undefined,
         email: userDialogForm.email || undefined,
+        role: userDialogForm.role,
       })
       if (!resp?.success || !resp.data) {
         throw new Error(resp?.message || '创建失败')
@@ -212,9 +221,11 @@ const submitUserDialog = async () => {
         display_name?: string
         email?: string
         password?: string
+        role?: 'user' | 'admin'
       } = {
         display_name: userDialogForm.display_name || undefined,
         email: userDialogForm.email || undefined,
+        role: userDialogForm.role,
       }
       if (userDialogForm.password) {
         payload.password = userDialogForm.password
@@ -497,6 +508,7 @@ onMounted(() => {
                   <th class="py-2 pr-4 font-semibold">用户名</th>
                   <th class="py-2 pr-4 font-semibold">展示名</th>
                   <th class="py-2 pr-4 font-semibold">邮箱</th>
+                  <th class="py-2 pr-4 font-semibold">角色</th>
                   <th class="py-2 pr-4 font-semibold">状态</th>
                   <th class="py-2 pr-4 font-semibold">最近登录</th>
                   <th class="py-2 pr-4 font-semibold">操作</th>
@@ -507,6 +519,14 @@ onMounted(() => {
                   <td class="py-2 pr-4 font-medium text-slate-900">{{ user.username }}</td>
                   <td class="py-2 pr-4">{{ user.display_name || '-' }}</td>
                   <td class="py-2 pr-4">{{ user.email || '-' }}</td>
+                  <td class="py-2 pr-4">
+                    <span
+                      class="px-2 py-1 rounded-full text-xs font-semibold"
+                      :class="normalizeRole(user.role) === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'"
+                    >
+                      {{ roleLabel(user.role) }}
+                    </span>
+                  </td>
                   <td class="py-2 pr-4">
                     <span
                       class="px-2 py-1 rounded-full text-xs font-semibold"
@@ -605,6 +625,17 @@ onMounted(() => {
                   class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
                   :placeholder="userDialogMode === 'create' ? '至少 6 位' : '留空则不修改'"
                 />
+              </label>
+              <label class="text-sm text-slate-700">
+                角色
+                <select
+                  v-model="userDialogForm.role"
+                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none bg-white"
+                >
+                  <option value="user">普通用户</option>
+                  <option value="admin">管理员</option>
+                </select>
+                <p class="text-xs text-slate-500 mt-1">管理员可在对话窗口左下角进入后台管理。</p>
               </label>
             </div>
 

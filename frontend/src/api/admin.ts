@@ -113,6 +113,7 @@ export const adminApi = {
     password: string
     display_name?: string
     email?: string
+    role?: 'user' | 'admin'
   }): Promise<ApiResponse<UserProfile>> => adminClient.post('/api/v1/users', payload),
 
   updateUser: (
@@ -122,6 +123,7 @@ export const adminApi = {
       email?: string
       is_active?: boolean
       password?: string
+      role?: 'user' | 'admin'
     }
   ): Promise<ApiResponse<UserProfile>> => adminClient.patch(`/api/v1/users/${userId}`, payload),
 

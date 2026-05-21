@@ -160,7 +160,7 @@
               <el-button
                 type="text"
                 size="small"
-                @click="$router.push('/')"
+                @click="$router.push('/logs')"
               >
                 查看全部
               </el-button>

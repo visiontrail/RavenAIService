@@ -55,6 +55,12 @@ class User(Base, TimestampMixin):
         nullable=False,
         comment="是否启用",
     )
+    role: Mapped[str] = mapped_column(
+        String(32),
+        default="user",
+        nullable=False,
+        comment="用户角色（user/admin）",
+    )
     last_login_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime,
         nullable=True,
@@ -173,6 +179,7 @@ class UserProfile(BaseModel):
     display_name: Optional[str] = None
     email: Optional[str] = None
     is_active: bool = True
+    role: str = "user"
     last_login_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime

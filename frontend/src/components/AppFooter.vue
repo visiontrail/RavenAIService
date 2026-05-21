@@ -29,11 +29,11 @@
         <div class="footer-col footer-panel">
           <h4 class="footer-col-title">产品功能</h4>
           <nav class="space-y-2">
-            <router-link to="/" class="footer-link">日志列表</router-link>
+            <router-link to="/logs" class="footer-link">日志列表</router-link>
             <router-link to="/upload" class="footer-link">上传日志</router-link>
             <router-link to="/devices" class="footer-link">设备机柜</router-link>
             <router-link to="/raven-manager" class="footer-link">重构包管理</router-link>
-            <router-link to="/ai-chat" class="footer-link">AI 对话</router-link>
+            <router-link to="/workbench" class="footer-link">AI 对话</router-link>
           </nav>
         </div>
 

@@ -26,7 +26,7 @@ const handleClick = async () => {
   
   // Wait for sphere to expand before navigating
   setTimeout(() => {
-    router.push('/ai-chat')
+    router.push('/workbench')
   }, 350)
 }
 </script>

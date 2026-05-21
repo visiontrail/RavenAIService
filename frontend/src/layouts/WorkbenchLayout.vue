@@ -34,7 +34,14 @@ const currentUserName = computed(() =>
   userStore.profile?.display_name || userStore.profile?.username || '用户'
 )
 const currentUserEmail = computed(() => userStore.profile?.email || '')
+const currentUserRole = computed(() => (userStore.profile?.role || 'user').toString().toLowerCase())
+const isAdmin = computed(() => isLoggedIn.value && currentUserRole.value === 'admin')
 const userInitial = computed(() => (currentUserName.value || 'U').slice(0, 2).toUpperCase())
+
+const goToAdminConsole = () => {
+  showUserMenu.value = false
+  router.push('/admin')
+}
 
 const navItems = computed(() => ([
   { id: 'logs',    label: '日志列表',   to: '/logs',          icon: 'logs', activeNames: ['Logs', 'LogDetail'] },
@@ -48,7 +55,7 @@ const isNavItemActive = (item: { activeNames?: string[] }, isActive: boolean) =>
 }
 
 const isHomeRoute = computed(() =>
-  route.name === 'Home' || route.name === 'AIChat' || route.path === '/' || route.path === '/ai-chat'
+  route.name === 'Workbench' || route.path === '/workbench' || route.path === '/ai-chat'
 )
 
 const filteredSessions = computed(() => {
@@ -131,12 +138,12 @@ watch(isLoggedIn, async (loggedIn) => {
 const handleSelectSession = (session: ChatSessionSummary) => {
   openRowMenuId.value = null
   sessionStore.selectSession(session.id)
-  if (!isHomeRoute.value) router.push('/')
+  if (!isHomeRoute.value) router.push('/workbench')
 }
 
 const startNewChat = () => {
   sessionStore.startNewChat()
-  if (!isHomeRoute.value) router.push('/')
+  if (!isHomeRoute.value) router.push('/workbench')
 }
 
 const reloadSessions = async () => {
@@ -342,10 +349,23 @@ const handleUserLogout = () => {
             <div class="rw-user-menu-head">
               <div class="rw-avatar lg">{{ userInitial }}</div>
               <div style="flex:1; min-width:0;">
-                <div class="rw-user-menu-name">{{ currentUserName }}</div>
+                <div class="rw-user-menu-name">
+                  {{ currentUserName }}
+                  <span v-if="isAdmin" class="rw-role-badge">管理员</span>
+                </div>
                 <div class="rw-user-menu-mail">{{ currentUserEmail || '未登录' }}</div>
               </div>
             </div>
+            <button
+              v-if="isAdmin"
+              class="rw-user-menu-item"
+              @click="goToAdminConsole"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><path d="M12 3l8 4v6c0 4.5-3.5 7-8 8-4.5-1-8-3.5-8-8V7l8-4z"/><path d="m9 12 2 2 4-4"/></svg>
+              后台管理
+              <span class="rw-kbd-right">/admin</span>
+            </button>
+            <div v-if="isAdmin" class="rw-menu-divider"/>
             <div class="rw-menu-section">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
               <span>语言</span>
@@ -383,7 +403,8 @@ const handleUserLogout = () => {
             <div class="rw-user-meta">
               <div class="rw-user-name">{{ currentUserName }}</div>
               <div class="rw-user-role">
-                <span v-if="isLoggedIn">{{ currentUserEmail || '已登录' }}</span>
+                <span v-if="isAdmin">管理员 · {{ currentUserEmail || '已登录' }}</span>
+                <span v-else-if="isLoggedIn">{{ currentUserEmail || '已登录' }}</span>
                 <span v-else>未登录 · 点击登录</span>
               </div>
             </div>
@@ -679,7 +700,18 @@ const handleUserLogout = () => {
   border-bottom: 1px solid var(--rw-hairline);
   margin-bottom: 4px;
 }
-.rw-user-menu-name { font-size: 13.5px; font-weight: 600; color: var(--rw-ink); line-height: 1.2; }
+.rw-user-menu-name {
+  font-size: 13.5px; font-weight: 600; color: var(--rw-ink); line-height: 1.2;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.rw-role-badge {
+  display: inline-flex; align-items: center;
+  padding: 1px 6px; border-radius: 4px;
+  background: #171717; color: #ffffff;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.4px;
+  text-transform: uppercase; line-height: 1.4;
+  font-family: var(--rw-mono);
+}
 .rw-user-menu-mail { font-size: 11.5px; color: var(--rw-muted); margin-top: 3px; line-height: 1.2; font-family: var(--rw-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rw-menu-section,
 .raven-workbench button.rw-user-menu-item {
