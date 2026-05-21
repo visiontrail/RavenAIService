@@ -58,7 +58,8 @@ class TestProviderProfiles:
         assert p.default_model == "deepseek-v4-pro"
         assert p.supports_image_input is False
         assert p.thinking_budget_tokens_effective is False
-        assert p.supports_mcp_server_tools is False
+        # SDK 进程内 MCP server 通过标准 tool_use 暴露，DeepSeek 支持
+        assert p.supports_mcp_server_tools is True
         assert p.supports_document_input is False
         assert p.disable_parallel_tool_use_effective is False
 
@@ -162,15 +163,18 @@ class TestBuildOptions:
         opts = self._build(base_settings)
         assert opts.model == "deepseek-v4-pro"
 
-    def test_mcp_servers_and_allowed_tools_dropped_on_deepseek(self, base_settings):
+    def test_mcp_servers_and_allowed_tools_passthrough_on_deepseek(self, base_settings):
+        # SDK 进程内 MCP server 通过标准 tool_use 协议工作，DeepSeek 支持，
+        # 因此不应丢弃 mcp_servers 与 mcp__* 工具名。
+        mcp_mock = MagicMock()
         opts = self._build(
             base_settings,
             allowed_tools=["Bash", "mcp__project_repo__lookup_project_repo"],
-            mcp_servers={"project_repo": MagicMock()},
+            mcp_servers={"project_repo": mcp_mock},
         )
 
-        assert opts.mcp_servers is None
-        assert opts.allowed_tools == ["Bash"]
+        assert opts.mcp_servers == {"project_repo": mcp_mock}
+        assert opts.allowed_tools == ["Bash", "mcp__project_repo__lookup_project_repo"]
 
 
 class TestConfigValidation:

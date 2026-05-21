@@ -59,10 +59,14 @@ PROVIDER_PROFILES: Dict[str, ProviderProfile] = {
         default_small_fast_model="deepseek-v4-flash",
         supports_image_input=False,
         supports_document_input=False,
-        supports_mcp_server_tools=False,
+        # SDK 进程内 MCP server（create_sdk_mcp_server）通过标准 tool_use 协议
+        # 暴露给模型，与上游是否支持 API 端 mcp_servers 透传无关。
+        # DeepSeek Anthropic 兼容端点支持标准 tool use，因此可启用。
+        supports_mcp_server_tools=True,
         thinking_budget_tokens_effective=False,
         disable_parallel_tool_use_effective=False,
-        notes="DeepSeek Anthropic 兼容端点；不支持图像/文档输入与 thinking budget",
+        notes="DeepSeek Anthropic 兼容端点；不支持图像/文档输入与 thinking budget；"
+        "支持标准 tool use（含 SDK 进程内 MCP server）",
     ),
 }
 
