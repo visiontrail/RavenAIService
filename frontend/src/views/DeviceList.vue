@@ -1,6 +1,6 @@
 <template>
   <div class="rw-page">
-    <WorkbenchTopbar title="设备列表" :meta="`在线 ${onlineCount} / ${devices.length}`">
+    <WorkbenchTopbar title="设备机柜" :meta="`在线 ${onlineCount} / ${devices.length}`">
       <template #actions>
         <span class="rw-meta">{{ lastUpdatedLabel }}</span>
         <button

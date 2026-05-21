@@ -35,7 +35,6 @@ const filters = reactive({
   page: 1,
   limit: 10,
 })
-const mobileListFilterVisible = ref(false)
 
 const packages = ref<RavenPackage[]>([])
 const pagination = reactive({
@@ -557,7 +556,7 @@ onMounted(() => {
 
 <template>
   <div class="rw-page">
-    <WorkbenchTopbar title="重构包列表" :meta="topbarMeta">
+    <WorkbenchTopbar title="重构包仓库" :meta="topbarMeta">
       <template #actions>
         <button class="rw-btn-secondary" @click="openSearchDialog">
           <el-icon><MagicStick /></el-icon>
@@ -571,7 +570,7 @@ onMounted(() => {
     </WorkbenchTopbar>
 
     <div class="rw-page-scroll">
-      <section class="rw-card rw-filter-card desktop-only">
+      <section class="rw-card rw-filter-card">
         <div class="rw-filter-row">
           <el-input
             v-model="filters.search"
@@ -635,7 +634,7 @@ onMounted(() => {
         </div>
       </section>
 
-      <section class="rw-card rw-list-card desktop-only">
+      <section class="rw-card rw-list-card">
         <div class="rw-table-wrap">
           <el-table
             :data="packages"
@@ -729,88 +728,7 @@ onMounted(() => {
         </div>
       </section>
 
-      <div class="mobile-only rw-mobile-shell">
-        <section class="rw-card rw-mobile-filter">
-          <el-input
-            v-model="filters.search"
-            placeholder="按名称、版本或描述搜索"
-            clearable
-            @change="fetchPackages"
-            @clear="fetchPackages"
-          >
-            <template #prefix>
-              <el-icon><Search /></el-icon>
-            </template>
-          </el-input>
-          <button class="rw-btn-secondary" @click="mobileListFilterVisible = true">筛选</button>
-        </section>
-
-        <section class="rw-card rw-mobile-list" v-loading="loadingList">
-          <div class="rw-mobile-summary">共 {{ pagination.totalItems }} 个包</div>
-          <div v-if="packages.length" class="rw-mobile-card-list">
-            <article
-              v-for="pkg in packages"
-              :key="pkg.id"
-              class="rw-mobile-card"
-              @click="openPackageDetail(pkg.id)"
-            >
-              <h2 class="rw-mobile-name" :title="pkg.name">{{ pkg.name }}</h2>
-              <div class="rw-pill-group">
-                <span class="rw-pill" :class="packageTypePillClass(pkg.packageType)">
-                  {{ packageTypeText(pkg.packageType) }}
-                </span>
-                <span class="rw-pill rw-pill-neutral rw-pill-mono">v{{ pkg.version || '未知' }}</span>
-                <span class="rw-pill" :class="isPatchPackage(pkg) ? 'rw-pill-warning' : 'rw-pill-success'">
-                  {{ humanizePatch(pkg) }}
-                </span>
-              </div>
-              <p class="rw-mobile-desc">{{ pkg.metadata?.description || '暂无描述' }}</p>
-              <div class="rw-mobile-meta">
-                <span>{{ formatFileSize(pkg.size) }}</span>
-                <span>{{ formatDateTime(pkg.createdAt) }}</span>
-              </div>
-              <div class="rw-mobile-actions" @click.stop>
-                <button class="rw-btn-secondary" @click="openPackageDetail(pkg.id)">详情</button>
-                <button class="rw-btn-primary" @click="downloadPackage(pkg)">下载</button>
-              </div>
-            </article>
-          </div>
-          <div v-else class="rw-empty">暂无重构包</div>
-          <div class="rw-pagination-row">
-            <el-pagination
-              background
-              layout="prev, pager, next"
-              :current-page="pagination.currentPage"
-              :total="pagination.totalItems"
-              :page-size="pagination.itemsPerPage"
-              @current-change="handlePageChange"
-            />
-          </div>
-        </section>
-      </div>
     </div>
-
-    <el-drawer v-model="mobileListFilterVisible" title="筛选重构包" direction="btt" size="65%">
-      <div class="rw-mobile-filter-drawer">
-        <el-select v-model="filters.type" placeholder="包类型" clearable>
-          <el-option label="LingXi-10" value="lingxi-10" />
-          <el-option label="LingXi-07A" value="lingxi-07a" />
-          <el-option label="KaTx" value="ka-tx" />
-          <el-option label="KaRx" value="ka-rx" />
-          <el-option label="配置包" value="config" />
-          <el-option label="LingXi-06-TRD" value="lingxi-06-thrid" />
-        </el-select>
-        <el-input v-model="filters.version" placeholder="版本号" clearable />
-        <el-select v-model="filters.isPatch" placeholder="补丁/正式" clearable>
-          <el-option label="正式包" value="false" />
-          <el-option label="补丁包" value="true" />
-        </el-select>
-        <div class="rw-mobile-filter-actions">
-          <button class="rw-btn-secondary" @click="resetFilters">重置</button>
-          <button class="rw-btn-primary" @click="fetchPackages(); mobileListFilterVisible = false">应用</button>
-        </div>
-      </div>
-    </el-drawer>
 
     <el-dialog
       v-model="uploadDialogVisible"
@@ -1236,8 +1154,6 @@ onMounted(() => {
   flex-direction: column;
   gap: 24px;
 }
-
-.mobile-only { display: none; }
 
 .rw-card {
   background: var(--rw-canvas, #fff);
@@ -1884,94 +1800,7 @@ onMounted(() => {
 .rw-detail-desc { font-size: 13px; color: var(--rw-body, #60646c); }
 .rw-detail-footnote { font-size: 11.5px; color: var(--rw-muted, #999); }
 
-/* Drawer */
-.rw-mobile-filter-drawer {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 4px 4px 0;
-}
-.rw-mobile-filter-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-:deep(.el-drawer__header) {
-  margin-bottom: 12px;
-  padding: 18px 20px 0;
-  color: var(--rw-ink, #171717);
-  font-weight: 600;
-  font-size: 15px;
-}
-:deep(.el-drawer__body) { padding: 0 20px 20px; }
-
-/* Mobile shell */
-.rw-mobile-shell { display: flex; flex-direction: column; gap: 14px; }
-.rw-mobile-filter {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px;
-  align-items: center;
-  padding: 14px 16px;
-}
-.rw-mobile-list { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-.rw-mobile-list .rw-pagination-row { padding: 12px 0 0; border-top: 1px solid var(--rw-hairline, #f0f0f3); }
-.rw-mobile-summary { font-size: 12.5px; color: var(--rw-muted, #999); }
-
-.rw-mobile-card-list { display: flex; flex-direction: column; gap: 10px; }
-.rw-mobile-card {
-  border: 1px solid var(--rw-hairline-strong, #dcdee0);
-  border-radius: 12px;
-  padding: 14px;
-  background: var(--rw-canvas, #fff);
-  cursor: pointer;
-  transition: border-color 0.15s ease;
-}
-.rw-mobile-card:hover { border-color: var(--rw-ink, #171717); }
-.rw-mobile-name {
-  margin: 0 0 8px;
-  font-size: 14.5px;
-  font-weight: 600;
-  color: var(--rw-ink, #171717);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.rw-mobile-desc {
-  margin: 8px 0 0;
-  font-size: 12.5px;
-  color: var(--rw-body, #60646c);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.rw-mobile-meta {
-  margin-top: 8px;
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  color: var(--rw-muted, #999);
-  font-family: var(--rw-mono, JetBrains Mono, monospace);
-}
-.rw-mobile-actions {
-  margin-top: 10px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-.rw-mobile-actions .rw-btn-primary,
-.rw-mobile-actions .rw-btn-secondary { width: 100%; justify-content: center; }
-
 @media (max-width: 900px) {
   .rw-page-scroll { padding: 16px; gap: 16px; }
-}
-
-@media (max-width: 768px) {
-  .desktop-only { display: none !important; }
-  .mobile-only { display: block; }
-  .mobile-only.rw-mobile-shell { display: flex; }
 }
 </style>

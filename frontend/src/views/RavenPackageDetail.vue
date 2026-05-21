@@ -92,21 +92,24 @@ const packageTypeText = (type?: string) => {
   return map[type || ''] || type || '未知类型'
 }
 
-const packageTypeTag = (type?: string) => {
+const packageTypePillClass = (type?: string) => {
   const map: Record<string, string> = {
-    'lingxi-10': 'primary',
-    'lingxi-07a': 'success',
-    'ka-tx': 'danger',
-    'ka-rx': 'warning',
-    config: 'info',
-    'lingxi-06-thrid': 'warning',
+    'lingxi-10': 'rw-pill-info',
+    'lingxi-07a': 'rw-pill-success',
+    'ka-tx': 'rw-pill-danger',
+    'ka-rx': 'rw-pill-warning',
+    config: 'rw-pill-neutral',
+    'lingxi-06-thrid': 'rw-pill-warning',
   }
-  return map[type || ''] || 'info'
+  return map[type || ''] || 'rw-pill-neutral'
 }
 
 const renderedDescription = computed(() =>
   renderMarkdown(pkg.value?.metadata?.description || '暂无描述', { cleanXml: true })
 )
+
+const tags = computed(() => normalizeTags(pkg.value?.metadata?.tags))
+const components = computed(() => normalizeComponents(pkg.value?.metadata?.components))
 
 const fetchDetail = async () => {
   if (!packageId.value) {
@@ -133,7 +136,6 @@ const fetchDetail = async () => {
 }
 
 const goBack = () => {
-  // 如果有历史记录，则返回上一页；否则跳转到重构包列表
   if (window.history.length > 1) {
     router.back()
   } else {
@@ -182,199 +184,526 @@ watch(
 </script>
 
 <template>
-  <div class="space-y-6 raven-detail-page">
-    <div class="flex items-center justify-between flex-wrap gap-3">
-      <div class="detail-head-main flex items-center gap-3">
-        <el-button text @click="goBack" class="text-gray-600 hover:text-gray-900">
-          <el-icon class="mr-1" size="18">
-            <ArrowLeft />
-          </el-icon>
-          返回列表
-        </el-button>
-        <div class="detail-divider h-6 w-px bg-gray-200" />
-        <div>
-          <p class="text-sm text-gray-500">Raven 包详情</p>
-          <div class="flex items-center gap-2">
-            <h1 class="text-2xl font-bold text-gray-900">{{ pkg?.name || '加载中...' }}</h1>
-            <el-tag v-if="pkg" size="small" effect="plain" type="info">
-              v{{ pkg.version || '未知' }}
-            </el-tag>
-            <el-tag v-if="pkg" size="small" :type="packageTypeTag(pkg.packageType)">
-              {{ packageTypeText(pkg.packageType) }}
-            </el-tag>
-            <el-tag v-if="pkg" size="small" effect="plain" :type="isPatchPackage(pkg) ? 'warning' : 'success'">
-              {{ humanizePatch(pkg) }}
-            </el-tag>
+  <div class="rw-page package-detail-page">
+    <header class="rw-topbar">
+      <div class="rw-topbar-left">
+        <button class="back-btn" @click="goBack" title="返回">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 18l-6-6 6-6" />
+          </svg>
+        </button>
+        <span class="rw-crumb">重构包详情</span>
+        <span v-if="pkg" class="rw-crumb-meta">· {{ pkg.name }}</span>
+      </div>
+      <div class="rw-topbar-right">
+        <button v-if="pkg" class="rw-btn-secondary" @click="copyShareLink(shareLink)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          <span>复制详情链接</span>
+        </button>
+        <button v-if="pkg" class="rw-btn-secondary" @click="copyShareLink(downloadLink)">
+          <span>复制下载链接</span>
+        </button>
+        <button v-if="pkg" class="rw-btn-secondary" @click="copyRebuildPrompt">
+          <span>复制重构提示词</span>
+        </button>
+        <button v-if="pkg" class="rw-btn-primary" @click="downloadPackage(pkg)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+          <span>下载</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="rw-page-scroll">
+      <div v-if="errorMessage" class="rw-error-banner">
+        {{ errorMessage }}
+      </div>
+
+      <div v-if="loading && !pkg" class="rw-card">
+        <el-skeleton :rows="8" animated />
+      </div>
+
+      <template v-else-if="pkg">
+        <!-- 标题卡 -->
+        <section class="rw-card title-card">
+          <div class="title-row">
+            <div class="title-left">
+              <h1 class="title-name">{{ pkg.name }}</h1>
+              <div class="title-meta">
+                <span class="title-id">ID: {{ pkg.id }}</span>
+              </div>
+            </div>
+            <div class="title-tags">
+              <span class="rw-pill" :class="packageTypePillClass(pkg.packageType)">
+                {{ packageTypeText(pkg.packageType) }}
+              </span>
+              <span class="rw-pill rw-pill-neutral rw-pill-mono">v{{ pkg.version || '未知' }}</span>
+              <span class="rw-pill" :class="isPatchPackage(pkg) ? 'rw-pill-warning' : 'rw-pill-success'">
+                {{ humanizePatch(pkg) }}
+              </span>
+            </div>
           </div>
-          <p class="text-gray-500 text-sm mt-1">
-            创建于 {{ pkg ? formatDateTime(pkg.createdAt) : '-' }}
-          </p>
-        </div>
-      </div>
-      <div class="detail-actions flex flex-wrap items-center gap-2">
-        <el-button v-if="pkg" size="small" @click="copyShareLink(shareLink)">
-          <el-icon class="mr-1"><Link /></el-icon>
-          复制详情链接
-        </el-button>
-        <el-button v-if="pkg" size="small" @click="copyShareLink(downloadLink)">
-          复制下载链接
-        </el-button>
-        <el-button v-if="pkg" size="small" @click="copyRebuildPrompt">
-          复制重构提示词
-        </el-button>
-        <el-button v-if="pkg" size="small" type="primary" @click="downloadPackage(pkg)">
-          <el-icon class="mr-1"><Download /></el-icon>
-          下载
-        </el-button>
-      </div>
-    </div>
+        </section>
 
-    <el-alert
-      v-if="errorMessage"
-      type="error"
-      show-icon
-      :closable="false"
-      class="bg-red-50 border-red-200"
-      :description="errorMessage"
-    />
-
-    <el-skeleton v-if="loading" :rows="8" animated />
-
-    <div v-else-if="pkg" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <div class="space-y-4">
-        <el-card shadow="never" class="border border-gray-100">
-          <template #header>
-            <div class="flex items-center gap-2">
-              <el-icon><Document /></el-icon>
-              <span class="font-semibold text-gray-800">基本信息</span>
+        <!-- 基本信息 -->
+        <section class="rw-card">
+          <div class="card-head">
+            <h2 class="card-title">基本信息</h2>
+          </div>
+          <div class="info-grid">
+            <div class="info-item">
+              <label>包名</label>
+              <div class="info-value strong">{{ pkg.name }}</div>
             </div>
-          </template>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm text-gray-700">
-            <div>
-              <p class="text-gray-500 mb-1">包 ID</p>
-              <div class="font-mono bg-gray-50 p-2 rounded border border-gray-100 break-all">
-                {{ pkg.id }}
-              </div>
+            <div class="info-item">
+              <label>版本</label>
+              <div class="info-value mono">v{{ pkg.version || '未知' }}</div>
             </div>
-            <div>
-              <p class="text-gray-500 mb-1">大小</p>
-              <div class="text-gray-900 font-medium">{{ formatFileSize(pkg.size) }}</div>
+            <div class="info-item">
+              <label>文件大小</label>
+              <div class="info-value strong">{{ formatFileSize(pkg.size) }}</div>
             </div>
-            <div>
-              <p class="text-gray-500 mb-1">存储路径</p>
-              <div class="text-gray-900 bg-gray-50 p-2 rounded border border-gray-100 break-all">
-                {{ pkg.path || '-' }}
-              </div>
-            </div>
-            <div>
-              <p class="text-gray-500 mb-1">SHA-256</p>
-              <div class="text-gray-900 bg-gray-50 p-2 rounded border border-gray-100 break-all">
-                {{ pkg.metadata?.sha256 || '暂无' }}
-              </div>
-            </div>
-            <div>
-              <p class="text-gray-500 mb-1">包类型</p>
-              <div class="flex items-center gap-2">
-                <el-tag size="small" :type="packageTypeTag(pkg.packageType)">
+            <div class="info-item">
+              <label>包类型</label>
+              <div>
+                <span class="rw-pill" :class="packageTypePillClass(pkg.packageType)">
                   {{ packageTypeText(pkg.packageType) }}
-                </el-tag>
-                <el-tag size="small" effect="plain" :type="isPatchPackage(pkg) ? 'warning' : 'success'">
-                  {{ humanizePatch(pkg) }}
-                </el-tag>
+                </span>
               </div>
             </div>
-          </div>
-        </el-card>
-
-        <el-card shadow="never" class="border border-gray-100">
-          <template #header>
-            <div class="flex items-center gap-2">
-              <el-icon><PriceTag /></el-icon>
-              <span class="font-semibold text-gray-800">标签</span>
+            <div class="info-item">
+              <label>包形式</label>
+              <div>
+                <span class="rw-pill" :class="isPatchPackage(pkg) ? 'rw-pill-warning' : 'rw-pill-success'">
+                  {{ humanizePatch(pkg) }}
+                </span>
+              </div>
             </div>
-          </template>
-          <div class="flex flex-wrap gap-2">
-            <el-tag
-              v-for="tag in normalizeTags(pkg.metadata?.tags)"
-              :key="tag"
-              size="small"
-              effect="light"
-            >
+            <div class="info-item">
+              <label>创建时间</label>
+              <div class="info-value mono">{{ formatDateTime(pkg.createdAt) }}</div>
+            </div>
+            <div class="info-item col-span-all">
+              <label>包 ID</label>
+              <div class="code-box">{{ pkg.id }}</div>
+            </div>
+            <div class="info-item col-span-all">
+              <label>存储路径</label>
+              <div class="code-box">{{ pkg.path || '-' }}</div>
+            </div>
+            <div class="info-item col-span-all" v-if="pkg.metadata?.sha256">
+              <label>文件校验和 (SHA-256)</label>
+              <div class="code-box">{{ pkg.metadata.sha256 }}</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 描述 -->
+        <section class="rw-card">
+          <div class="card-head">
+            <h2 class="card-title">描述</h2>
+          </div>
+          <div class="rw-markdown" v-html="renderedDescription" />
+        </section>
+
+        <!-- 标签 -->
+        <section class="rw-card">
+          <div class="card-head">
+            <h2 class="card-title">标签</h2>
+            <span v-if="tags.length" class="card-subtitle">共 {{ tags.length }} 个</span>
+          </div>
+          <div class="pill-group">
+            <span v-for="tag in tags" :key="tag" class="rw-pill rw-pill-neutral">
               {{ tag }}
-            </el-tag>
-            <span v-if="!normalizeTags(pkg.metadata?.tags).length" class="text-gray-400 text-sm">
-              暂无标签
             </span>
+            <span v-if="!tags.length" class="empty-inline">暂无标签</span>
           </div>
-        </el-card>
+        </section>
 
-        <el-card shadow="never" class="border border-gray-100">
-          <template #header>
-            <div class="flex items-center gap-2">
-              <el-icon><Collection /></el-icon>
-              <span class="font-semibold text-gray-800">组件</span>
-            </div>
-          </template>
-          <div class="flex flex-wrap gap-2">
-            <el-tag
-              v-for="comp in normalizeComponents(pkg.metadata?.components)"
+        <!-- 组件 -->
+        <section class="rw-card">
+          <div class="card-head">
+            <h2 class="card-title">组件</h2>
+            <span v-if="components.length" class="card-subtitle">共 {{ components.length }} 个</span>
+          </div>
+          <div class="pill-group">
+            <span
+              v-for="comp in components"
               :key="`${comp.name}-${comp.version || 'na'}`"
-              size="small"
-              effect="plain"
-              type="success"
+              class="rw-pill rw-pill-info"
             >
-              {{ comp.name }} <span v-if="comp.version">· {{ comp.version }}</span>
-            </el-tag>
-            <span v-if="!normalizeComponents(pkg.metadata?.components).length" class="text-gray-400 text-sm">
-              暂无组件
+              {{ comp.name }}<span v-if="comp.version" class="rw-pill-sub"> · {{ comp.version }}</span>
             </span>
+            <span v-if="!components.length" class="empty-inline">暂无组件</span>
           </div>
-        </el-card>
-      </div>
+        </section>
 
-      <div class="space-y-4">
-        <el-card shadow="never" class="border border-gray-100">
-          <template #header>
-            <div class="flex items-center gap-2">
-              <el-icon><Memo /></el-icon>
-              <span class="font-semibold text-gray-800">描述</span>
-            </div>
+        <!-- 操作 -->
+        <section class="rw-card">
+          <div class="card-head">
+            <h2 class="card-title">操作</h2>
+          </div>
+          <div class="actions-grid">
+            <button class="rw-btn-primary" @click="downloadPackage(pkg)">下载重构包</button>
+            <button class="rw-btn-secondary" @click="copyShareLink(shareLink)">复制详情链接</button>
+            <button class="rw-btn-secondary" @click="copyShareLink(downloadLink)">复制下载链接</button>
+            <button class="rw-btn-secondary" @click="copyRebuildPrompt">复制重构提示词</button>
+          </div>
+        </section>
+      </template>
+
+      <div v-else-if="!loading" class="not-found">
+        <el-result icon="warning" title="包不存在" sub-title="请检查包 ID 是否正确，或包可能已被删除">
+          <template #extra>
+            <button class="rw-btn-primary" @click="$router.push({ name: 'RavenManager' })">返回列表</button>
           </template>
-          <div class="markdown-content text-sm text-gray-800" v-html="renderedDescription" />
-        </el-card>
+        </el-result>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.markdown-content :deep(img) {
-  max-width: 100%;
+.rw-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--rw-canvas, #fff);
+  color: var(--rw-ink, #171717);
+  font-family: var(--rw-sans, Inter, system-ui, sans-serif);
 }
 
-@media (max-width: 768px) {
-  .detail-head-main {
-    width: 100%;
-    align-items: flex-start;
-  }
+.rw-page *,
+.rw-page *::before,
+.rw-page *::after { box-sizing: border-box; }
 
-  .detail-divider {
-    display: none;
-  }
+.rw-page button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+}
 
-  .detail-actions {
-    width: 100%;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-  }
+/* Topbar */
+.rw-topbar {
+  height: 56px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--rw-hairline, #f0f0f3);
+  display: flex;
+  align-items: center;
+  padding: 0 28px;
+  gap: 14px;
+  background: var(--rw-canvas, #fff);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.rw-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+.rw-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.rw-crumb {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--rw-ink, #171717);
+  letter-spacing: -0.1px;
+  flex-shrink: 0;
+}
+.rw-crumb-meta {
+  font-size: 12px;
+  color: var(--rw-muted, #999);
+  font-family: var(--rw-mono, JetBrains Mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
 
-  .detail-actions :deep(.el-button) {
-    width: 100%;
-    margin: 0;
-  }
+.back-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid var(--rw-hairline-strong, #dcdee0);
+  background: var(--rw-canvas, #fff);
+  color: var(--rw-ink, #171717);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease;
+}
+.back-btn:hover { background: var(--rw-surface-strong, #f0f0f3); }
 
-  .raven-detail-page :deep(.el-button) {
-    white-space: nowrap;
-  }
+/* Buttons */
+.rw-page .rw-btn-primary,
+.rw-page .rw-btn-secondary,
+.rw-page .rw-btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--rw-sans, Inter, system-ui, sans-serif);
+  cursor: pointer;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+  white-space: nowrap;
+  border: none;
+  line-height: 1;
+}
+.rw-page .rw-btn-primary {
+  background: var(--rw-primary, #171717);
+  color: var(--rw-on-primary, #fff);
+}
+.rw-page .rw-btn-primary:hover:not(:disabled) {
+  background: var(--rw-primary-active, #404040);
+}
+.rw-page .rw-btn-secondary {
+  background: var(--rw-canvas, #fff);
+  color: var(--rw-ink, #171717);
+  border: 1px solid var(--rw-hairline-strong, #dcdee0);
+}
+.rw-page .rw-btn-secondary:hover:not(:disabled) {
+  background: var(--rw-surface-strong, #f0f0f3);
+}
+.rw-page .rw-btn-primary:disabled,
+.rw-page .rw-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Pills */
+.rw-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  line-height: 1;
+}
+.rw-pill-success { background: rgba(22, 163, 74, 0.12); color: #15803d; }
+.rw-pill-info { background: var(--rw-surface-strong, #f0f0f3); color: var(--rw-ink, #171717); }
+.rw-pill-warning { background: rgba(171, 100, 0, 0.10); color: #ab6400; }
+.rw-pill-danger { background: rgba(192, 56, 43, 0.10); color: #c0382b; }
+.rw-pill-neutral { background: var(--rw-surface-strong, #f0f0f3); color: var(--rw-body, #60646c); }
+.rw-pill-mono {
+  font-family: var(--rw-mono, JetBrains Mono, monospace);
+  font-weight: 500;
+}
+.rw-pill-sub { font-weight: 500; opacity: 0.8; }
+
+.pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.empty-inline {
+  color: var(--rw-muted, #999);
+  font-size: 13px;
+}
+
+/* Page scroll */
+.rw-page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 28px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.rw-card {
+  background: var(--rw-surface-card, #fff);
+  border: 1px solid var(--rw-hairline-strong, #dcdee0);
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+}
+
+/* Title card */
+.title-card { padding: 20px 24px; }
+.title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.title-left { flex: 1; min-width: 0; }
+.title-name {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  color: var(--rw-ink, #171717);
+  margin: 0;
+  word-break: break-all;
+  line-height: 1.3;
+}
+.title-meta { margin-top: 6px; }
+.title-id {
+  font-family: var(--rw-mono, JetBrains Mono, monospace);
+  font-size: 12px;
+  color: var(--rw-muted, #999);
+}
+.title-tags { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Card head */
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--rw-ink, #171717);
+  letter-spacing: -0.1px;
+  margin: 0;
+}
+.card-subtitle {
+  font-size: 12px;
+  color: var(--rw-muted, #999);
+}
+
+/* Info grid */
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px 22px;
+}
+.info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.info-item > label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  color: var(--rw-muted, #999);
+  text-transform: uppercase;
+}
+.info-value {
+  font-size: 13.5px;
+  color: var(--rw-ink, #171717);
+  word-break: break-word;
+}
+.info-value.strong { font-weight: 600; }
+.info-value.mono {
+  font-family: var(--rw-mono, JetBrains Mono, monospace);
+  font-size: 12.5px;
+  color: var(--rw-body, #60646c);
+}
+.info-item.col-span-all { grid-column: 1 / -1; }
+
+.code-box {
+  background: var(--rw-canvas-soft, #fafafa);
+  border: 1px solid var(--rw-hairline, #f0f0f3);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: var(--rw-mono, JetBrains Mono, monospace);
+  font-size: 12px;
+  color: var(--rw-body, #60646c);
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+/* Markdown */
+.rw-markdown {
+  font-size: 13.5px;
+  color: var(--rw-ink, #171717);
+  line-height: 1.6;
+}
+.rw-markdown :deep(img) { max-width: 100%; }
+.rw-markdown :deep(p) { margin: 0 0 8px; }
+.rw-markdown :deep(p:last-child) { margin-bottom: 0; }
+.rw-markdown :deep(pre) {
+  background: var(--rw-surface-dark, #171717);
+  color: var(--rw-on-primary, #fff);
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-family: var(--rw-mono, JetBrains Mono, monospace);
+  font-size: 12.5px;
+  overflow: auto;
+}
+.rw-markdown :deep(code) {
+  font-family: var(--rw-mono, JetBrains Mono, monospace);
+  font-size: 12px;
+  background: var(--rw-surface-strong, #f0f0f3);
+  color: var(--rw-ink, #171717);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.rw-markdown :deep(pre code) {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font-size: 12.5px;
+}
+
+/* Actions grid */
+.actions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+/* Error / not found */
+.rw-error-banner {
+  background: rgba(192, 56, 43, 0.08);
+  color: #c0382b;
+  border: 1px solid rgba(192, 56, 43, 0.18);
+  border-radius: 12px;
+  padding: 14px 18px;
+  font-size: 13px;
+}
+.not-found {
+  background: var(--rw-canvas, #fff);
+  border: 1px solid var(--rw-hairline-strong, #dcdee0);
+  border-radius: 12px;
+  padding: 32px;
+}
+
+@media (max-width: 1024px) {
+  .info-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .rw-topbar { padding: 0 16px; }
+  .rw-page-scroll { padding: 16px 16px 32px; gap: 14px; }
+  .info-grid { grid-template-columns: 1fr; gap: 14px; }
+  .title-name { font-size: 18px; }
 }
 </style>

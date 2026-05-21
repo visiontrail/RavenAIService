@@ -12,7 +12,7 @@ const appStore = useAppStore()
 const route = useRoute()
 
 // Workbench routes share the WorkbenchLayout (sidebar + main pane).
-const workbenchRouteNames = new Set(['Home', 'AIChat', 'Logs', 'LogDetail', 'DeviceList', 'RavenManager'])
+const workbenchRouteNames = new Set(['Home', 'AIChat', 'Logs', 'LogDetail', 'DeviceList', 'RavenManager', 'RavenPackageDetail'])
 const isWorkbenchRoute = computed(() => {
   const name = (route.name as string) || ''
   if (workbenchRouteNames.has(name)) return true
@@ -26,7 +26,9 @@ const isWorkbenchRoute = computed(() => {
     route.path === '/devices' ||
     route.path === '/raven-manager' ||
     route.path === '/raven' ||
-    route.path === '/raven/'
+    route.path === '/raven/' ||
+    route.path.startsWith('/raven/package/') ||
+    route.path.startsWith('/package/')
   )
 })
 

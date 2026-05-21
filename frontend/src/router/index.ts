@@ -36,14 +36,22 @@ const routes: RouteRecordRaw[] = [
         path: 'devices',
         name: 'DeviceList',
         component: () => import('../views/DeviceList.vue'),
-        meta: { title: '设备列表' },
+        meta: { title: '设备机柜' },
       },
       {
         path: 'raven-manager',
         alias: ['/raven', '/raven/'],
         name: 'RavenManager',
         component: () => import('../views/RavenManager.vue'),
-        meta: { title: '重构包列表' },
+        meta: { title: '重构包仓库' },
+      },
+      {
+        path: 'raven/package/:id',
+        alias: ['/package/:id'],
+        name: 'RavenPackageDetail',
+        component: () => import('../views/RavenPackageDetail.vue'),
+        meta: { title: '包详情' },
+        props: true,
       },
     ],
   },
@@ -63,16 +71,6 @@ const routes: RouteRecordRaw[] = [
     meta: {
       title: '上传日志',
     },
-  },
-  {
-    path: '/raven/package/:id',
-    alias: ['/package/:id'],
-    name: 'RavenPackageDetail',
-    component: () => import('../views/RavenPackageDetail.vue'),
-    meta: {
-      title: '包详情',
-    },
-    props: true,
   },
   {
     path: '/download',

@@ -38,8 +38,8 @@ const userInitial = computed(() => (currentUserName.value || 'U').slice(0, 2).to
 
 const navItems = computed(() => ([
   { id: 'logs',    label: '日志列表',   to: '/logs',          icon: 'logs', activeNames: ['Logs', 'LogDetail'] },
-  { id: 'devices', label: '设备列表',   to: '/devices',       icon: 'device' },
-  { id: 'pkgs',    label: '重构包列表', to: '/raven-manager', icon: 'box' },
+  { id: 'devices', label: '设备机柜',   to: '/devices',       icon: 'device' },
+  { id: 'pkgs',    label: '重构包仓库', to: '/raven-manager', icon: 'box' },
 ]))
 
 const isNavItemActive = (item: { activeNames?: string[] }, isActive: boolean) => {

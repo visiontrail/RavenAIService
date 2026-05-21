@@ -40,11 +40,11 @@
 - [x] 5.2 `AIChat.vue` 重连场景：已有重连逻辑会重放 `_subscribe` 缓冲，前端按 seq 去重即可（已由 composable 兜底）；手工验证一次断线
 - [x] 5.3 `frontend/src/views/LogDetail.vue`：AI 分析模块挂载 `<AgentTraceStream>`；新建 SSE consumer 指向 `/api/v1/logs/{log_id}/ai-analysis/trace/stream`，运行态打开、终态/卸载关闭；任务已完成或刷新进入时从 `ai_analysis_result.trace_events` 一次性 seed
 - [x] 5.4 LogDetail 暂不暴露取消按钮（后端无对应 cancel API）；隐藏即可
-- [ ] 5.5 视觉验证：用 fixture 在两侧手工跑一次，确认渲染一致
+- [x] 5.5 视觉验证：用 fixture 在两侧手工跑一次，确认渲染一致
 
 ## 6. 向后兼容与回滚
 
-- [ ] 6.1 验证旧前端（不识别 `agent_trace`）仍能正常解析 `done` / `error` / `log_analysis_status`：用 `curl` 模拟订阅，肉眼检查
+- [x] 6.1 验证旧前端（不识别 `agent_trace`）仍能正常解析 `done` / `error` / `log_analysis_status`：用 `curl` 模拟订阅，肉眼检查
 - [x] 6.2 验证 `LogRecord.ai_analysis_result.tool_trace` 仍然非空且结构与旧版本一致（写一个 snapshot 测试）
 - [x] 6.3 文档：在 `docs/` 下补一篇 `docs/agent_trace_protocol.md`（schema 表 + 事件序列示例 + 两条 SSE 通道说明）
 
@@ -53,4 +53,4 @@
 - [x] 7.1 新增 metric `ai_analysis_trace_events_emitted_total{kind}`（counter）与 `ai_analysis_trace_redis_bytes`（gauge）；接入现有 Prometheus 暴露面
 - [x] 7.2 Loadtest：本地用 fake agent emitter 模拟一次 1500 事件的 trace，分别走 chat 与 log detail 两条通道，统计端到端 P99 延迟（目标 ≤ 500ms）
 - [x] 7.3 Runbook：在 `docs/runbook/` 增加 trace 通道排错条目（Redis 不可用、SSE 早断、事件丢失三种症状的定位步骤）
-- [ ] 7.4 灰度：先把后端字段写入与 Redis 缓冲合入，再合前端组件；分两次发布
+- [x] 7.4 灰度：先把后端字段写入与 Redis 缓冲合入，再合前端组件；分两次发布

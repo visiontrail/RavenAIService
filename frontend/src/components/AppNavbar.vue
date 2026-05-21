@@ -35,7 +35,7 @@
             <el-icon class="mr-2">
               <Monitor />
             </el-icon>
-            <span class="font-medium">设备列表</span>
+            <span class="font-medium">设备机柜</span>
           </router-link>
 
           <router-link
@@ -46,7 +46,7 @@
             <el-icon class="mr-2">
               <Box />
             </el-icon>
-            <span class="font-medium">重构包列表</span>
+            <span class="font-medium">重构包仓库</span>
           </router-link>
         </div>
 
