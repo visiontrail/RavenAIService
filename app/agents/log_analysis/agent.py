@@ -642,6 +642,30 @@ class LogAnalysisAgent:
         except Exception:
             pass
 
+        # When the user explicitly selected a project repository on the
+        # frontend, the backend writes repo_info into task.json with
+        # source="user_selected_project_repo". The base system prompt
+        # already makes cloning mandatory for every run; this block only
+        # adds the extra signal that metadata.json discovery can be
+        # skipped because repo_info is already authoritative.
+        repo_info = task_data.get("repo_info") if isinstance(task_data, dict) else None
+        user_selected_repo = (
+            isinstance(repo_info, dict)
+            and repo_info.get("source") == "user_selected_project_repo"
+        )
+        if user_selected_repo:
+            system_prompt += (
+                "\n\n## User-Selected Project Repository\n"
+                "The user explicitly selected the project repository for this "
+                "run. `task.json` already contains a fully-resolved "
+                "`repo_info` (`clone_url`, `repo_url`, `default_branch`) — "
+                "treat it as the authoritative source and skip metadata.json "
+                "discovery / `project_code` lookup. Proceed directly to "
+                "Step 4 (clone) and Step 5 (investigate). Cloning and using "
+                "the source code is mandatory, as already stated in the "
+                "base workflow.\n"
+            )
+
         user_prompt = render_user_prompt(
             user_prompt_template,
             task_id=ctx.task_id,
@@ -669,8 +693,10 @@ class LogAnalysisAgent:
                 "\n\n## Runtime Constraint\n"
                 f"The active provider `{provider}` does not support MCP server tools. "
                 "`mcp__project_repo__lookup_project_repo` is unavailable in this run. "
-                "If source code is required, use explicit repository fields or "
-                "`repo_info` from `task.json`. If neither exists, finish with "
+                "Use explicit repository fields or `repo_info` from `task.json` / "
+                "`metadata.json` to resolve the repo. Source code consultation is "
+                "still mandatory per the base workflow. If no explicit repository "
+                "info exists anywhere, finish with "
                 '`"status": "error", "error_kind": "project_repo_not_registered"`.'
             )
             logger.info(

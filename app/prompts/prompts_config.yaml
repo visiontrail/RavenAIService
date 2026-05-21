@@ -77,19 +77,23 @@ claude_agent_log_analysis:
       If `question` is empty or whitespace, treat it as if the user asked
       "请给出这份日志的概览" and use `question_type = "qa"`.
 
-      ### Step 1 — Locate metadata.json
-      Use `Glob("logs/**/metadata.json")` or `find logs -name metadata.json` to locate the file, then `Read` it.
+      ### Step 1 — Locate metadata.json (best-effort)
+      Use `Glob("logs/**/metadata.json")` or `find logs -name metadata.json`
+      to locate the file, then `Read` it. If no metadata.json is present,
+      that is fine — the user may have selected a project explicitly and the
+      authoritative repository info will be in `task.json` (see Step 2).
 
-      ### Step 2 — Extract repository information (only if you need the repo)
-      You only need to resolve the repo when investigation requires reading
-      source code or repository history. If the user's question explicitly asks
-      to clone code, inspect a code repository, use git, read commits/branches,
-      or report recent/latest changes, the repo is REQUIRED even if the question
-      also mentions metadata.json.
+      ### Step 2 — Extract repository information (MANDATORY)
+      Resolving the repository is **mandatory for every run**, regardless of
+      question type. Code-grounded analysis is required: even for `qa` /
+      `search` / `stats` / `meta` questions, the source code is the ground
+      truth that lets you verify what the logs actually mean, what each
+      module/function does, and whether your interpretation matches the
+      implementation. Do **not** decide on your own that "the logs are
+      enough" — they are not, by policy.
 
-      If you do need it, read repository information from both
-      `metadata.json` and `task.json`. Prefer explicit repository fields over
-      project-code lookup:
+      Read repository information from both `metadata.json` and `task.json`.
+      Prefer explicit repository fields over project-code lookup:
       1. `repo_info.clone_url` / `repo_info.repo_url` + `repo_info.default_branch`
       2. `project_info.clone_url` / `project_info.repo_url` + `project_info.default_branch`
       3. top-level `clone_url` / `repo_url` / `repository_url` + `default_branch`
@@ -101,14 +105,19 @@ claude_agent_log_analysis:
 
       Also read `project_info.project_name` → `project_name` for retry fallback.
 
-      If neither explicit repository fields nor project identity exist AND
-      you actually need the repo, output the final JSON immediately with:
-        `"status": "error", "error_kind": "missing_project_identity"`
+      Note: when the user explicitly selected a project on the frontend,
+      `task.json` contains a pre-resolved `repo_info` object (often with
+      `source: "user_selected_project_repo"`). Treat it as authoritative
+      and skip metadata-based discovery.
 
-      ### Step 3 — Resolve repository info (only if you need the repo)
+      If neither explicit repository fields nor project identity exist
+      anywhere, output the final JSON with:
+        `"status": "error", "error_kind": "missing_project_identity"`
+      and STOP. Do not proceed with logs-only analysis.
+
+      ### Step 3 — Resolve repository info (MANDATORY)
       If `metadata.json` or `task.json` already contains explicit repository
-      info, use it directly and proceed to Step 4. This is the expected path
-      when the archive metadata already includes the code repository.
+      info, use it directly and proceed to Step 4. This is the expected path.
 
       Only if explicit repository info is absent AND
       `mcp__project_repo__lookup_project_repo` is present in your allowed tools,
@@ -116,16 +125,13 @@ claude_agent_log_analysis:
 
       - If the tool returns `{"error": "not_found", ...}` AND you have a `project_name`:
         retry once with `{"project_code": "<project_name>"}`.
-      - If both attempts return `not_found` AND you actually need the repo
-        to answer the question: output the final JSON with
+      - If both attempts return `not_found`: output the final JSON with
         `"status": "error", "error_kind": "project_repo_not_registered"` and STOP.
       - If the lookup tool is not present in your allowed tools AND explicit
-        repository info is absent AND you actually need the repo: output the
-        same `project_repo_not_registered` final JSON and STOP.
-      - If you don't strictly need the repo, just continue without it and
-        say so in `answer`.
+        repository info is absent: output the same
+        `project_repo_not_registered` final JSON and STOP.
 
-      ### Step 4 — Clone the repository (only if you need the repo)
+      ### Step 4 — Clone the repository (MANDATORY)
       First check whether `repo/.git` already exists. If it exists, reuse the
       existing checkout and skip `git clone`.
 
@@ -144,17 +150,36 @@ claude_agent_log_analysis:
       `git -C repo log -2 --oneline --decorate` (or a more detailed `git log -2`)
       to answer directly.
 
-      ### Step 5 — Investigate (driven by the user's question, not by template)
+      **Clone failure handling:** If `git clone` fails (network, auth,
+      permission denied, etc.), report the failure honestly in `answer`
+      together with the exit code / error excerpt, then continue with
+      logs-only analysis as a degraded mode. Never fabricate code-derived
+      findings when the clone did not succeed.
+
+      ### Step 5 — Investigate (driven by the user's question, grounded in code)
       **Everything you do here must be in service of answering the user's
       actual question.** Do not run a generic "find all errors" sweep if the
       user asked something specific.
 
+      Code consultation is part of every investigation:
       - Start from the keywords / symbols / time range mentioned in the
-        question. Grep the logs first; read the code only if needed.
-      - If you find nothing relevant: that IS the answer. Do not pivot to
-        unrelated findings just to fill the report.
-      - Only collect "evidence" (file:line refs) that directly supports
-        your answer to the user's question.
+        question. Grep the logs to find the relevant timestamps and threads,
+        then **always** `Grep` / `Read` the matching identifiers in `repo/`
+        (function names, log format strings, module names, error codes) to
+        confirm what those log lines actually mean.
+      - For `qa` / `search` / `stats` / `meta` questions, the code is used
+        to verify your interpretation and to enrich the explanation — not
+        to invent new findings. The answer still focuses on what the user
+        asked.
+      - For `root_cause`, the code is the primary source for connecting
+        symptoms to causes; each hypothesis must cite both a log line and
+        the corresponding code site whenever possible.
+      - If you find nothing relevant after consulting both logs and code:
+        that IS the answer. Say so honestly. Do not pivot to unrelated
+        findings just to fill the report.
+      - Evidence (`file:line` refs) you collect MUST point to real lines
+        in `logs/` or `repo/`. Prefer pairing a `log:` ref with a `repo:`
+        ref when both are available.
 
       ### Step 6 — Output (schema depends on question_type)
       When investigation is complete, output ONLY the following fenced JSON
@@ -225,7 +250,12 @@ claude_agent_log_analysis:
       Log type hint: {log_type}
       Hints: {hints}
 
-      Please answer the question above using the logs in your workspace.
-      Follow Step 0 first: classify the question, then investigate ONLY
-      what is needed to answer it. If nothing in the logs is relevant,
-      say so honestly — do not produce an unrelated root-cause report.
+      Please answer the question above using the logs AND the source
+      repository in your workspace. Follow Step 0 first: classify the
+      question. Steps 2–4 (resolve repo info → clone → use code) are
+      MANDATORY for every run — do not skip them even for `qa` / `search`
+      / `stats` / `meta` questions. Then investigate ONLY what is needed
+      to answer the question, citing both log lines and code sites in
+      your evidence wherever possible. If nothing in the logs or code is
+      relevant, say so honestly — do not produce an unrelated root-cause
+      report.
