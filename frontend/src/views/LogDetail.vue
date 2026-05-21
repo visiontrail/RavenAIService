@@ -291,7 +291,7 @@
                 : '例如：分析所有错误日志、查找天线异常、统计告警信息等...'"
             />
             <div class="analysis-project-row">
-              <label class="analysis-project-label">关联项目仓库</label>
+              <label class="analysis-project-label">关联项目</label>
               <el-select
                 v-model="selectedProjectRepoId"
                 :loading="projectReposLoading"

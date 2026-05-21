@@ -94,6 +94,7 @@ class LogAnalysisChatService:
         remember: bool,
         db: Optional[AsyncSession],
         user: Optional[User],
+        project_repo_id: Optional[int] = None,
     ) -> AsyncIterator[str]:
         """SSE stream for one log-analysis turn.
 
@@ -152,6 +153,25 @@ class LogAnalysisChatService:
                 yield chunk
             return
 
+        # Validate explicit project_repo_id up-front so we fail fast before
+        # writing any file or running heavy work.
+        if project_repo_id is not None and db is not None:
+            try:
+                from app.services import project_repo_service
+
+                repo = await project_repo_service.get_by_id(db, project_repo_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("log-analysis chat: 校验 project_repo_id 失败: %s", exc)
+                repo = None
+            if not repo or not repo.enabled:
+                yield self._sse_event(
+                    {
+                        "event": "error",
+                        "message": "所选项目仓库不存在或已禁用，请重新选择。",
+                    }
+                )
+                return
+
         # Start a new Job.
         try:
             if uploaded_filename:
@@ -167,6 +187,7 @@ class LogAnalysisChatService:
                     question=question or "请分析这个日志包，给出概览、可疑异常和下一步建议。",
                     file=file,
                     user=user,
+                    project_repo_id=project_repo_id,
                 )
                 yield self._sse_event(
                     {
@@ -461,6 +482,7 @@ class LogAnalysisChatService:
         question: str,
         file: UploadFile,
         user: Optional[User],
+        project_repo_id: Optional[int] = None,
     ) -> Tuple[WorkspaceContext, Dict[str, Any]]:
         if db is None:
             raise RuntimeError("数据库会话不可用，无法保存日志包")
@@ -491,7 +513,10 @@ class LogAnalysisChatService:
         log_record.issue_description = question
         await db.flush()
 
-        ctx = prepare(log_record)
+        # When the user explicitly chose a project, skip metadata.json
+        # extraction validation in the workspace and resolve repo_info
+        # directly from the registry.
+        ctx = prepare(log_record, require_metadata=project_repo_id is None)
         ctx.metadata.update(
             {
                 "question": question,
@@ -499,7 +524,10 @@ class LogAnalysisChatService:
                 "hints": "",
             }
         )
-        self._inject_repo_info(ctx)
+        if project_repo_id is not None:
+            self._inject_repo_info_from_project_id(ctx, project_repo_id)
+        else:
+            self._inject_repo_info(ctx)
 
         context_meta = {
             "session_id": session_id,
@@ -531,6 +559,33 @@ class LogAnalysisChatService:
                 sync_session.close()
         except Exception as exc:  # noqa: BLE001
             logger.warning("log-analysis chat: repo_info injection skipped: %s", exc)
+
+    def _inject_repo_info_from_project_id(
+        self, ctx: WorkspaceContext, project_repo_id: int
+    ) -> None:
+        try:
+            from app.tasks.ai_analysis import (
+                SessionLocal,
+                _inject_repo_info_from_project_id,
+            )
+
+            sync_session = SessionLocal()
+            try:
+                ok = _inject_repo_info_from_project_id(
+                    sync_session, ctx, project_repo_id
+                )
+                if not ok:
+                    logger.warning(
+                        "log-analysis chat: project_repo_id=%s not resolvable; "
+                        "agent will run without explicit repo_info",
+                        project_repo_id,
+                    )
+            finally:
+                sync_session.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "log-analysis chat: repo_info injection from project_id failed: %s", exc
+            )
 
     def _bind_question_and_hints(self, ctx: WorkspaceContext, *, question: str, hints: str) -> None:
         try:

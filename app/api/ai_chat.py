@@ -146,6 +146,10 @@ async def log_analysis_stream_endpoint(
     session_id: Optional[str] = Form(None, description="对话会话ID"),
     history: Optional[str] = Form(None, description="前端传入的历史消息 JSON"),
     remember: bool = Form(True, description="是否保存到会话历史"),
+    project_repo_id: Optional[int] = Form(
+        None,
+        description="可选：项目仓库注册表 ID。提供时跳过 metadata.json 校验，直接使用该项目的仓库信息。",
+    ),
     file: Optional[UploadFile] = File(None, description="可选日志包附件"),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_optional_user),
@@ -153,7 +157,10 @@ async def log_analysis_stream_endpoint(
     logger.info("=" * 80)
     logger.info("接收到主对话日志分析请求")
     logger.info("message: %s...", message[:100])
-    logger.info("session_id: %s, has_file=%s", session_id, bool(file and file.filename))
+    logger.info(
+        "session_id: %s, has_file=%s, project_repo_id=%s",
+        session_id, bool(file and file.filename), project_repo_id,
+    )
     logger.info("=" * 80)
     try:
         generator = log_analysis_chat_service.stream(
@@ -162,6 +169,7 @@ async def log_analysis_stream_endpoint(
             history_json=history,
             file=file,
             remember=remember,
+            project_repo_id=project_repo_id,
             db=db,
             user=current_user,
         )

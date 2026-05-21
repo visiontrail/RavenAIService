@@ -15,6 +15,7 @@ import { useAppStore } from '@/stores/app'
 import { useChatSessionStore } from '@/stores/chatSession'
 import AgentTraceStream from '@/components/AgentTraceStream.vue'
 import type { AgentTraceEvent } from '@/types/agentTrace'
+import { projectRepoApi, type ProjectRepoOption } from '@/api'
 
 type MentionOption =
   | { type: 'agent'; id: string; name: string; description?: string; agentType: 'package-manager' | 'log-analysis' }
@@ -92,6 +93,27 @@ const sessionId = ref<string | null>(null)
 const isSending = ref(false)
 const activeLogAnalysisSessionId = ref<string | null>(null)
 const cancelInFlight = ref(false)
+
+// 关联项目（用于在日志分析 Agent 中显式指定项目身份；留空则回退到 metadata.json）
+const projectRepoOptions = ref<ProjectRepoOption[]>([])
+const projectRepoOptionsLoading = ref(false)
+const projectRepoOptionsLoaded = ref(false)
+const selectedProjectRepoId = ref<number | null>(null)
+
+const ensureProjectRepoOptions = async () => {
+  if (projectRepoOptionsLoading.value || projectRepoOptionsLoaded.value) return
+  projectRepoOptionsLoading.value = true
+  try {
+    const response = await projectRepoApi.listEnabled()
+    projectRepoOptions.value = Array.isArray(response?.data) ? response.data : []
+    projectRepoOptionsLoaded.value = true
+  } catch (err) {
+    console.warn('加载项目列表失败:', err)
+    projectRepoOptions.value = []
+  } finally {
+    projectRepoOptionsLoading.value = false
+  }
+}
 
 const isLoggedIn = computed(() => userStore.isAuthenticated)
 const currentUserName = computed(() => userStore.profile?.display_name || userStore.profile?.username || '用户')
@@ -278,6 +300,9 @@ const setTargetAgent = (option: MentionOption & { type: 'agent' }) => {
   targetAgent.value = { id: option.id, name: option.name, agentType: option.agentType }
   targetDeviceId.value = null
   targetDeviceName.value = null
+  if (option.agentType === 'log-analysis') {
+    ensureProjectRepoOptions()
+  }
 }
 
 const renderAiMessage = (content: string) =>
@@ -384,12 +409,16 @@ const applyMentionSelection = (option: MentionOption) => {
 }
 
 const clearTargetDevice = () => { targetDeviceId.value = null; targetDeviceName.value = null }
-const clearTargetAgent = () => { targetAgent.value = null }
+const clearTargetAgent = () => {
+  targetAgent.value = null
+  selectedProjectRepoId.value = null
+}
 const clearSelectedLogFile = () => { selectedLogFile.value = null }
 
 const triggerLogFilePicker = () => {
   if (isSending.value) return
   setTargetAgent(logAnalysisAgentOption)
+  ensureProjectRepoOptions()
   logFileInputRef.value?.click()
 }
 
@@ -418,6 +447,7 @@ const toggleLogAnalysisAgent = () => {
     return
   }
   setTargetAgent(logAnalysisAgentOption)
+  ensureProjectRepoOptions()
 }
 
 const findMessageIndex = (id: string) => chatHistory.value.findIndex((msg) => msg.id === id)
@@ -737,6 +767,9 @@ const runLogAnalysisAgent = async (
   formData.append('remember', 'true')
   formData.append('history', JSON.stringify(historyPayload))
   if (fileForRequest) formData.append('file', fileForRequest)
+  if (selectedProjectRepoId.value != null) {
+    formData.append('project_repo_id', String(selectedProjectRepoId.value))
+  }
 
   if (fileForRequest) selectedLogFile.value = null
 
@@ -1278,6 +1311,26 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h16"/><circle cx="18" cy="12" r="1.4"/></svg>
             日志分析
           </button>
+          <select
+            v-if="isLogAnalysisAgentSelected"
+            v-model="selectedProjectRepoId"
+            class="rw-project-select"
+            :disabled="projectRepoOptionsLoading"
+            :title="projectRepoOptionsLoading
+              ? '加载项目列表中…'
+              : '可选：选择关联项目；留空则后端从日志包内 metadata.json 自动识别'"
+          >
+            <option :value="null">
+              {{ projectRepoOptionsLoading ? '加载项目中…' : '关联项目（自动识别）' }}
+            </option>
+            <option
+              v-for="repo in projectRepoOptions"
+              :key="repo.id"
+              :value="repo.id"
+            >
+              {{ repo.project_name }}（{{ repo.project_code }}）
+            </option>
+          </select>
           <div v-if="selectedLogFile" class="rw-file-chip">
             <span>{{ selectedLogFile.name }}</span>
             <button type="button" aria-label="移除附件" @click="clearSelectedLogFile">
@@ -1553,6 +1606,20 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
   color: var(--rw-muted); background: none; border: none; cursor: pointer;
 }
 .rw-file-chip button:hover { background: var(--rw-hairline-strong); color: var(--rw-ink); }
+
+.rw-project-select {
+  height: 28px; max-width: 220px; padding: 0 26px 0 10px;
+  border: 1px solid var(--rw-hairline-strong);
+  background: var(--rw-canvas); color: var(--rw-ink);
+  border-radius: 999px; font-size: 12.5px; font-weight: 500;
+  cursor: pointer; transition: border-color .15s;
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23555' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+.rw-project-select:hover { border-color: var(--rw-ink); }
+.rw-project-select:disabled { opacity: .6; cursor: not-allowed; }
 
 .rw-cancel-btn {
   height: 32px; padding: 0 10px; border-radius: 8px;

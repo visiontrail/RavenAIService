@@ -1,7 +1,7 @@
 """add_user_chat_tables
 
 Revision ID: 2c9b4a1f6e8d
-Revises: f1a2b3c4d5e6
+Revises: 20260518_000000
 Create Date: 2025-02-06 10:00:00.000000
 
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "2c9b4a1f6e8d"
-down_revision = "f1a2b3c4d5e6"
+down_revision = "20260518_000000"
 branch_labels = None
 depends_on = None
 
