@@ -7,10 +7,38 @@ Anthropic 标准 LLM 配置层与 ClaudeAgentOptions 构建入口。
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+_UNEXPECTED_KWARG_RE = re.compile(r"unexpected keyword argument '([^']+)'")
+
+
+def _instantiate_options(cls: Any, options_kwargs: Dict[str, Any]) -> Any:
+    """Instantiate SDK options, dropping optional kwargs unsupported by older SDKs."""
+    kwargs = dict(options_kwargs)
+    dropped: List[str] = []
+    while True:
+        try:
+            options = cls(**kwargs)
+            if dropped:
+                logger.warning(
+                    "ClaudeAgentOptions does not support %s; parameter(s) dropped.",
+                    ", ".join(dropped),
+                )
+            return options
+        except TypeError as exc:
+            match = _UNEXPECTED_KWARG_RE.search(str(exc))
+            if not match:
+                raise
+            key = match.group(1)
+            if key not in kwargs:
+                raise
+            dropped.append(key)
+            kwargs.pop(key, None)
 
 
 # ─────────────────────── Exceptions ────────────────────────────────
@@ -270,4 +298,4 @@ def build_options(
     if request_timeout_seconds is not None:
         options_kwargs["request_timeout_seconds"] = request_timeout_seconds
 
-    return ClaudeAgentOptions(**options_kwargs)
+    return _instantiate_options(ClaudeAgentOptions, options_kwargs)

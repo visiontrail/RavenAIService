@@ -5,7 +5,7 @@ import logging
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +15,8 @@ from app.models.chat import ChatRequest, ChatResponse
 from app.models.database import get_db
 from app.services.ai_chat_service import ai_chat_service
 from app.services.chat_history_service import chat_history_service
+from app.services.chat_run_service import chat_run_service
+from app.services.owner_scope import resolve_owner_scope
 from app.services.title_generator_service import summarize_user_message
 from app.services.log_analysis_chat_service import log_analysis_chat_service
 
@@ -43,13 +45,15 @@ class SummarizeResponse(BaseModel):
 class ChatPermissionResolveRequest(BaseModel):
     """HITL 决策提交体（前端弹窗 -> 后端 broker）。
 
-    ``session_id`` 可选；提供时用于 O(1) 定位 broker，否则后端会扫描注册表。
+    ``run_id`` 优先：精确定位某次 run 的 broker；同一 session 可能存在多个历史 run。
+    ``session_id`` 兼容旧前端，没有 ``run_id`` 时按 session 的 active run 查找。
     ``updated_args`` 仅在 ``decision="allow"`` 且用户编辑参数时透传给 SDK。
     """
 
     decision: str
     updated_args: Optional[dict] = None
     message: Optional[str] = None
+    run_id: Optional[str] = None
     session_id: Optional[str] = None
 
 
@@ -84,39 +88,120 @@ async def chat_endpoint(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.post("/chat/stream", summary="AI 对话（流式）")
+@router.post("/chat/stream", summary="AI 对话（流式，create-or-subscribe）")
 async def chat_stream_endpoint(
     request: ChatRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_optional_user),
 ):
-    logger.info("=" * 80)
-    logger.info("接收到 AI 对话流式请求")
-    logger.info(f"请求消息: {request.message[:100]}...")
-    logger.info(f"session_id: {request.session_id}")
-    logger.info(f"历史记录条数（前端传入）: {len(request.history) if request.history else 0}")
-    if request.history:
-        logger.info("历史记录概览（前端传入）:")
-        for i, msg in enumerate(request.history[:5]):  # 只显示前5条
-            role = msg.role if hasattr(msg, 'role') else 'unknown'
-            content_preview = (msg.content[:50] if hasattr(msg, 'content') else '')
-            logger.info(f"  [{i+1}] {role}: {content_preview}...")
-        if len(request.history) > 5:
-            logger.info(f"  ... (还有 {len(request.history) - 5} 条)")
-    logger.info("=" * 80)
-    try:
-        generator = ai_chat_service.chat_stream(request, db=db, user=current_user)
-        return StreamingResponse(
-            generator,
+    """Create a new DeviceAgent run or subscribe to the session's active run.
+
+    Behaviour:
+    - ``message`` non-empty and no active run for session: create a new
+      :class:`ChatRunJob`, persist the user message + ``chat_agent_runs`` row,
+      then subscribe to the run's SSE buffer.
+    - ``message`` non-empty but session already has an active run: 409
+      ``{"active_run_id": ...}`` so the frontend can switch to subscribe mode.
+    - ``message`` empty and session has an active run: subscribe (resume).
+    - ``message`` empty and no active run: 400.
+    """
+    logger.info(
+        "chat/stream: session=%s msg_len=%d remember=%s device=%s",
+        request.session_id,
+        len(request.message or ""),
+        request.remember,
+        request.target_device_id,
+    )
+
+    session_id = request.session_id or str(uuid.uuid4())
+    message_text = (request.message or "").strip()
+
+    # Resolve owner_scope once for both resume + create paths. We pass a
+    # throwaway Response object so anonymous Set-Cookie writes can be lifted
+    # onto the StreamingResponse below.
+    cookie_carrier = Response()
+    owner_scope = resolve_owner_scope(http_request, cookie_carrier, current_user)
+
+    def _carry_cookies(target: StreamingResponse) -> StreamingResponse:
+        # Forward any Set-Cookie headers from owner_scope resolution onto the
+        # outgoing SSE response so the browser pins the anon scope.
+        for raw in cookie_carrier.raw_headers:
+            name = raw[0].decode("latin-1") if isinstance(raw[0], bytes) else raw[0]
+            value = raw[1].decode("latin-1") if isinstance(raw[1], bytes) else raw[1]
+            if name.lower() == "set-cookie":
+                target.raw_headers.append((b"set-cookie", value.encode("latin-1")))
+        return target
+
+    # Resume path: empty message → subscribe to the session's active run.
+    if not message_text:
+        job = chat_run_service.get_active_job_for_session(owner_scope, session_id)
+        if job is None:
+            raise HTTPException(
+                status_code=400,
+                detail="message 为空且该会话无运行中的 run，无法订阅",
+            )
+        async def _resume_stream():
+            # Prepend a ``session`` frame so legacy clients can update routing.
+            yield ai_chat_service._sse_event(  # noqa: SLF001
+                {"event": "session", "session_id": session_id, "run_id": job.run_id}
+            )
+            async for chunk in chat_run_service.subscribe(job.run_id, owner_scope=owner_scope):
+                yield chunk
+
+        return _carry_cookies(StreamingResponse(
+            _resume_stream(),
             media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        ))
+
+    # Create path: build history from DB (when authenticated) or request payload.
+    history = await ai_chat_service._prepare_history(  # noqa: SLF001
+        request, session_id, db, current_user
+    )
+
+    try:
+        job = await chat_run_service.start_device_run(
+            db=db,
+            user=current_user,
+            owner_scope=owner_scope,
+            session_id=session_id,
+            user_message=request.message,
+            target_device_id=request.target_device_id or "",
+            target_device_name=request.target_device_name,
+            history=history,
+            system_prompt_override=request.system_prompt,
+            remember=request.remember,
         )
+    except HTTPException:
+        # Surface 409 / 403 etc. to the client directly.
+        raise
     except Exception as exc:  # noqa: BLE001
-        logger.exception("AI chat stream request failed: %s", exc)
+        logger.exception("chat/stream: start_device_run failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    # Commit the request DB session so the user message + ChatAgentRun row are
+    # durable before subscribers start reading. The background task uses a
+    # fresh session for terminal persistence.
+    try:
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("chat/stream: db commit failed: %s", exc)
+
+    async def _stream():
+        # Backward-compat: emit a ``session`` frame first so existing clients can
+        # update routing before run-scoped events arrive.
+        yield ai_chat_service._sse_event(  # noqa: SLF001
+            {"event": "session", "session_id": job.session_id, "run_id": job.run_id}
+        )
+        async for chunk in chat_run_service.subscribe(job.run_id, owner_scope=owner_scope):
+            yield chunk
+
+    return _carry_cookies(StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    ))
 
 
 @router.post("/chat/summarize", response_model=SummarizeResponse, summary="对用户输入立即生成简短会话摘要")
@@ -168,12 +253,20 @@ async def chat_summarize_endpoint(
 async def chat_permission_resolve_endpoint(
     request_id: str,
     payload: ChatPermissionResolveRequest,
-    current_user=Depends(get_optional_user),  # noqa: ARG001  保留鉴权钩子位
+    http_request: Request,
+    response: Response,
+    current_user=Depends(get_optional_user),
 ) -> ChatPermissionResolveResponse:
     """Resolve a pending ``can_use_tool`` request raised by a DeviceAgent run.
 
+    Lookup order:
+    1. ``run_id`` (preferred): O(1) lookup in :class:`ChatRunService` broker registry.
+    2. ``session_id``: resolve to the session's active run, then lookup broker.
+    3. Legacy scan: walk every broker in chat_run_service to find ``request_id``.
+
     Behaviour:
     - 400 if ``decision`` is not ``"allow"``/``"deny"``, or ``updated_args`` is not dict.
+    - 403 if the caller is not the run's owner.
     - 404 if no broker holds ``request_id`` (already resolved, timed out, or unknown).
     - 200 with ``{request_id, decision}`` echoed back on success.
     """
@@ -192,17 +285,33 @@ async def chat_permission_resolve_endpoint(
         if msg:
             decision_payload["message"] = msg
 
-    registry = ai_chat_service.permission_broker_registry
+    owner_scope = resolve_owner_scope(http_request, response, current_user)
 
-    # 1. Direct lookup by session_id when the client supplies one.
+    def _owns(job_owner_scope: str) -> bool:
+        return job_owner_scope == owner_scope
+
+    # 1. run_id lookup — preferred. Only resolve if the run belongs to caller.
+    if payload.run_id:
+        job = chat_run_service.get_job(payload.run_id)
+        if job is not None and _owns(job.owner_scope):
+            broker = chat_run_service.get_broker_by_run_id(payload.run_id)
+            if broker is not None and broker.resolve(request_id, decision_payload):
+                return ChatPermissionResolveResponse(request_id=request_id, decision=decision)
+
+    # 2. session_id fallback — resolve to active run within owner_scope.
     if payload.session_id:
-        broker = registry.get(payload.session_id)
-        if broker is not None and broker.resolve(request_id, decision_payload):
-            return ChatPermissionResolveResponse(request_id=request_id, decision=decision)
+        job = chat_run_service.get_active_job_for_session(owner_scope, payload.session_id)
+        if job is not None:
+            broker = chat_run_service.get_broker_by_run_id(job.run_id)
+            if broker is not None and broker.resolve(request_id, decision_payload):
+                return ChatPermissionResolveResponse(request_id=request_id, decision=decision)
 
-    # 2. Fallback: scan all live brokers. The registry is per-session and typically
-    #    holds < 10 entries per user, so the linear walk is fine.
-    for broker in list(registry.values()):
+    # 3. Legacy scan: filter by owner_scope before attempting resolve, so user B
+    # can never observe or resolve user A's pending permission via brute force.
+    for run_id, broker in list(chat_run_service._brokers.items()):  # noqa: SLF001
+        job = chat_run_service.get_job(run_id)
+        if job is None or not _owns(job.owner_scope):
+            continue
         if broker.resolve(request_id, decision_payload):
             return ChatPermissionResolveResponse(request_id=request_id, decision=decision)
 
@@ -210,6 +319,124 @@ async def chat_permission_resolve_endpoint(
         status_code=404,
         detail=f"Permission request not found or already resolved: {request_id}",
     )
+
+
+# ──────────────────────── Chat Agent Run endpoints ────────────────────────
+
+
+@router.get(
+    "/chat/sessions/{session_id}/active-run",
+    summary="查询某会话当前运行中的 chat agent run",
+)
+async def chat_active_run_endpoint(
+    session_id: str,
+    http_request: Request,
+    response: Response,
+    current_user=Depends(get_optional_user),
+):
+    """Return the session's current active run snapshot or 404 if none.
+
+    Lookup is scoped to ``(owner_scope, session_id)`` so two users with the
+    same ``session_id`` see only their own run.
+    """
+    owner_scope = resolve_owner_scope(http_request, response, current_user)
+    snapshot = chat_run_service.get_active_run_snapshot(owner_scope, session_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="无运行中的 run")
+    return snapshot
+
+
+@router.get(
+    "/chat/runs/{run_id}",
+    summary="获取指定 run 的快照（含 trace events / 状态 / pending permissions）",
+)
+async def chat_run_snapshot_endpoint(
+    run_id: str,
+    http_request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
+    """In-memory snapshot first; fall back to ``chat_agent_runs`` for evicted
+    terminal runs so users can still view historical trace events.
+
+    All lookups enforce owner_scope; mismatches return 404 to avoid leaking
+    the existence of other users' runs.
+    """
+    owner_scope = resolve_owner_scope(http_request, response, current_user)
+    snapshot = chat_run_service.get_snapshot(run_id, owner_scope)
+    if snapshot is not None:
+        return snapshot
+    snapshot = await chat_run_service.load_terminal_snapshot_from_db(
+        db, run_id, owner_scope
+    )
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="未找到该 run")
+    return snapshot
+
+
+@router.get(
+    "/chat/runs/{run_id}/stream",
+    summary="订阅指定 run 的 SSE：先 replay 全部事件，再实时接续",
+)
+async def chat_run_stream_endpoint(
+    run_id: str,
+    http_request: Request,
+    current_user=Depends(get_optional_user),
+):
+    """SSE replay+follow for an existing run. Disconnect does not cancel the
+    underlying agent job; clients can reconnect and resume from the buffer.
+
+    Returns 404 for unknown runs and for runs owned by a different scope —
+    we never reveal whether ``run_id`` exists for someone else.
+    """
+    cookie_carrier = Response()
+    owner_scope = resolve_owner_scope(http_request, cookie_carrier, current_user)
+
+    job = chat_run_service.get_job(run_id)
+    if job is None or job.owner_scope != owner_scope:
+        raise HTTPException(
+            status_code=404,
+            detail="未找到该 run（可能已超出内存保留期，请改用 GET /chat/runs/{run_id}）",
+        )
+
+    async def _stream():
+        async for chunk in chat_run_service.subscribe(run_id, owner_scope=owner_scope):
+            yield chunk
+
+    sr = StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+    for raw in cookie_carrier.raw_headers:
+        name = raw[0].decode("latin-1") if isinstance(raw[0], bytes) else raw[0]
+        value = raw[1].decode("latin-1") if isinstance(raw[1], bytes) else raw[1]
+        if name.lower() == "set-cookie":
+            sr.raw_headers.append((b"set-cookie", value.encode("latin-1")))
+    return sr
+
+
+@router.post(
+    "/chat/runs/{run_id}/cancel",
+    summary="取消正在运行的 chat agent run",
+)
+async def chat_run_cancel_endpoint(
+    run_id: str,
+    http_request: Request,
+    response: Response,
+    current_user=Depends(get_optional_user),
+):
+    """Cancel the in-memory job (asyncio.Task.cancel) and let the run-driver
+    persist the terminal ``cancelled`` state. Owner_scope mismatch → 404."""
+    owner_scope = resolve_owner_scope(http_request, response, current_user)
+    try:
+        ok = chat_run_service.cancel(run_id, owner_scope=owner_scope)
+    except HTTPException:
+        raise
+    if not ok:
+        return {"run_id": run_id, "cancelled": False, "message": "未找到运行中的 run 或已终态"}
+    return {"run_id": run_id, "cancelled": True}
 
 
 @router.post("/log-analysis/stream", summary="主对话日志分析（流式）")

@@ -30,21 +30,40 @@ def _resolve_base_dir() -> Path:
     return base
 
 
-def prepare_session(session_id: Optional[str]) -> Path:
-    """创建 ``<base>/device_agent/<session_id>-<uuid>/`` 临时工作区。
+def _sanitize(value: Optional[str], fallback: str) -> str:
+    cleaned = (value or fallback).strip() or fallback
+    cleaned = "".join(ch for ch in cleaned if ch.isalnum() or ch in ("-", "_"))[:64]
+    return cleaned or fallback
 
-    返回工作区根目录的绝对 :class:`Path`。调用方负责在 ``finally`` 中调用
-    :func:`cleanup` 清理。
+
+def prepare_session(
+    session_id: Optional[str],
+    run_id: Optional[str] = None,
+    owner_scope: Optional[str] = None,
+) -> Path:
+    """创建 ``<base>/device_agent/<owner_scope>/<session_id>/<run_id>/`` 隔离工作区。
+
+    每个 ``(owner_scope, session_id, run_id)`` 三元组拥有独立目录，确保：
+    - 不同用户即使提交相同 ``session_id`` 也不共享 ``.claude/skills`` / 临时文件
+    - 同一用户的不同 run 互不干扰
+
+    调用方负责在 ``finally`` 中调用 :func:`cleanup` 清理。
     """
-    safe_session = (session_id or "anon").strip() or "anon"
-    # 防止 session_id 含路径分隔符 / 控制字符 — 仅保留 ASCII alnum/dash/underscore
-    safe_session = "".join(ch for ch in safe_session if ch.isalnum() or ch in ("-", "_"))[:64] or "anon"
+    safe_owner = _sanitize(owner_scope, "anon")
+    safe_session = _sanitize(session_id, "anon")
+    safe_run = _sanitize(run_id, uuid.uuid4().hex[:12])
 
     base = _resolve_base_dir() / "device_agent"
-    workspace = base / f"{safe_session}-{uuid.uuid4().hex[:12]}"
+    workspace = base / safe_owner / safe_session / safe_run
     skills_dir = workspace / ".claude" / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("DeviceAgent workspace prepared: session=%s path=%s", safe_session, workspace)
+    logger.info(
+        "DeviceAgent workspace prepared: owner=%s session=%s run=%s path=%s",
+        safe_owner,
+        safe_session,
+        safe_run,
+        workspace,
+    )
     return workspace
 
 

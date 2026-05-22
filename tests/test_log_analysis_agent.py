@@ -86,6 +86,21 @@ async def _fake_query_schema_mismatch(*args, **kwargs) -> AsyncIterator[Any]:
     yield FakeResultMessage(result="I analyzed the logs and found some issues but cannot format as JSON.")
 
 
+async def _fake_query_truncated_json_prefix(*args, **kwargs) -> AsyncIterator[Any]:
+    yield FakeResultMessage(result=(
+        "```json\n"
+        "{\n"
+        '  "status": "ok",\n'
+        '  "question_type": "root_cause",\n'
+        '  "answer": "## 根因分析\\n\\n```\\nlog:log/Irun_oam.log:11503\\n```\\n已定位到两路TOD交替注入。",\n'
+        '  "summary": "两路TOD时间源不一致导致校准分裂",\n'
+        '  "severity": "critical",\n'
+        '  "root_cause_hypotheses": [\n'
+        '    {"hypothesis": "M3广播两组TOD", "evidence": ["log:log/Irun_oam.log:11503"]},\n'
+        '    {"hypothesis": "第二条被截断", "evidence": ["repo:Code_CPUPl'
+    ))
+
+
 async def _fake_query_not_registered(*args, **kwargs) -> AsyncIterator[Any]:
     yield FakeAssistantMessage(
         tool_uses=[FakeToolUse(name="mcp__project_repo__lookup_project_repo", input={"project_code": "foo"})]
@@ -248,6 +263,34 @@ class TestLogAnalysisAgentRun:
 
         assert result["status"] == "schema_mismatch"
         assert "cannot format" in result["raw"]
+
+    @pytest.mark.asyncio
+    async def test_truncated_fenced_json_prefix_is_recovered(self, workspace_ctx):
+        from app.agents.log_analysis.agent import LogAnalysisAgent
+
+        fake_sdk = MagicMock()
+        fake_sdk.query = _fake_query_truncated_json_prefix
+
+        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), _patch_skills(), \
+             patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
+             patch("app.config.settings", MagicMock(
+                 anthropic_model="deepseek-v4-pro",
+                 anthropic_provider="deepseek",
+                 anthropic_request_timeout_seconds=600,
+             )):
+            result = await LogAnalysisAgent().run(workspace_ctx)
+
+        assert result["status"] == "ok"
+        assert result["question_type"] == "root_cause"
+        assert "两路TOD" in result["answer"]
+        assert "```" in result["answer"]
+        assert result["summary"] == "两路TOD时间源不一致导致校准分裂"
+        assert result["severity"] == "critical"
+        assert result["root_cause_hypotheses"] == [
+            {"hypothesis": "M3广播两组TOD", "evidence": ["log:log/Irun_oam.log:11503"]}
+        ]
+        assert result["recommended_actions"] == []
+        assert result["related_keywords"] == []
 
     @pytest.mark.asyncio
     async def test_project_repo_not_registered(self, workspace_ctx):

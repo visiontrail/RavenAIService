@@ -131,6 +131,109 @@ class ChatSession(Base, TimestampMixin):
         return f"<ChatSession id={self.id} user_id={self.user_id}>"
 
 
+class ChatAgentRun(Base, TimestampMixin):
+    """Persisted record of a single chat agent run.
+
+    A run is one user turn driven by an agent (DeviceAgent / LogAnalysisAgent).
+    The in-memory `ChatRunJob` is authoritative while running; this table holds
+    the recoverable metadata for snapshots, side-bar status overlays and
+    terminal replay after the in-memory job has been evicted.
+    """
+
+    __tablename__ = "chat_agent_runs"
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=lambda: str(uuid.uuid4()),
+        comment="Run ID",
+    )
+    session_id: Mapped[str] = mapped_column(
+        String(36),
+        nullable=False,
+        index=True,
+        comment="所属会话",
+    )
+    user_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        nullable=True,
+        index=True,
+        comment="所属用户（匿名为空）",
+    )
+    owner_scope: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        index=True,
+        default="anon:unknown",
+        comment="归属作用域：登录用户 user:<id>；匿名用户 anon:<client_scope>",
+    )
+    agent_kind: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        comment="device / log_analysis",
+    )
+    status: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default="running",
+        index=True,
+        comment="queued/running/succeeded/failed/cancelled/stale",
+    )
+    user_message: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="",
+        comment="本轮用户输入快照",
+    )
+    request_json: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="请求 payload JSON",
+    )
+    workspace_path: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Agent 运行时工作目录",
+    )
+    answer: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="终态助手答案",
+    )
+    model: Mapped[Optional[str]] = mapped_column(
+        String(128),
+        nullable=True,
+        comment="使用的模型名称",
+    )
+    error: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="错误描述",
+    )
+    trace_events_json: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="完成后写入的完整 trace events JSON",
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        comment="run 开始时间",
+    )
+    finished_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime,
+        nullable=True,
+        comment="run 终态时间",
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debug helper
+        return (
+            f"<ChatAgentRun id={self.id} session={self.session_id} "
+            f"kind={self.agent_kind} status={self.status}>"
+        )
+
+
 class ChatMessage(Base, TimestampMixin):
     """Single chat message inside a session."""
 
@@ -210,6 +313,14 @@ class ChatSessionSummary(BaseModel):
     message_count: int
     created_at: datetime
     updated_at: datetime
+    # Optional overlay of the currently active (or most recently active running)
+    # chat agent run, used by the sidebar to render running spinners and by the
+    # frontend to resume in-flight conversations.
+    active_run_id: Optional[str] = None
+    run_status: Optional[str] = None
+    run_agent_kind: Optional[str] = None
+    run_started_at: Optional[datetime] = None
+    run_updated_at: Optional[datetime] = None
 
 
 class ChatMessageRecord(BaseModel):

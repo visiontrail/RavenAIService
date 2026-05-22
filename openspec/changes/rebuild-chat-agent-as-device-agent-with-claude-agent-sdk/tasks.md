@@ -163,27 +163,39 @@
 - [x] 12.2 前端 `frontend/src/views/AdminAgentSkills.vue` 的 Agent 下拉确保读取 `SUPPORTED_AGENTS`（已实现）；目视确认新 Agent 出现
 
   实施：前端通过 `adminApi.listSkillAgents()` 读取 `/admin/agents`，后者直接返回 `SUPPORTED_AGENTS.values()`，新增 `device_agent` 后会自动出现在下拉中，无需前端改动。
-- [ ] 12.3 端到端测试：上传一个最小 Skill 包给 `device_agent`、启用、跑一次 `POST /chat` 确认 `<workspace>/.claude/skills/<name>/SKILL.md` 被物化
+- [x] 12.3 端到端测试：上传一个最小 Skill 包给 `device_agent`、启用、跑一次 `POST /chat` 确认 `<workspace>/.claude/skills/<name>/SKILL.md` 被物化
+
+  实施：`tests/api/test_chat_skill_materialization.py`（2 用例）。复用 `_FakeDevice` + 内存最小 zip（含合法 `name` frontmatter）走完整 `skills_service.install_skill` 路径；mock `claude_agent_sdk.query` 内拦截 `options.cwd` 并即时断言 `<cwd>/.claude/skills/device-troubleshooter/SKILL.md` 存在 + `setting_sources` 含 `"project"`；query 返回后再断言 workspace 已被 `finally` 清理。第二条用例覆盖 disabled skill 路径（`set_skill_enabled(..., False)` → skills 目录为空 + `setting_sources` 不含 `"project"`）。两条全部通过。
 
 ## 13. API 与前端 SSE 适配
 
 - [x] 13.1 `app/api/chat.py`：注册 `POST /chat/permissions/{request_id}/resolve`；接入 `AIChatService.permission_broker_registry`（每 session 一个 broker）
 
   实施：与 6.4 合并落地（同一端点 + 同一处布线）。`AIChatService.__init__` 已持有 `permission_broker_registry: Dict[str, PermissionBroker]`；`DeviceAgent.run_stream` 入口 `ctx.broker_registry[session_id] = broker`、`finally` 中 `pop`。端点通过 `ai_chat_service.permission_broker_registry` 跨请求共享同一注册表。
-- [ ] 13.2 前端 `frontend/src/views/AIChat.vue`：扩展 SSE 事件 switch，新增 `tool_permission_request`（弹模态框）/`tool_permission_resolved` / `result_validation` / `step_*` / `thinking_*` / `run_start` / `run_complete`
-- [ ] 13.3 前端调用 `POST /chat/permissions/{request_id}/resolve`：新增 `frontend/src/api/chat.ts` 方法 + 类型
-- [ ] 13.4 兼容旧前端：保留 `chunk` / `done` / `session` / `error` 事件不变；新事件未被识别时静默忽略，不阻断主流程
+- [x] 13.2 前端 `frontend/src/views/AIChat.vue`：扩展 SSE 事件 switch，新增 `tool_permission_request`（弹模态框）/`tool_permission_resolved` / `result_validation` / `step_*` / `thinking_*` / `run_start` / `run_complete`
+
+  实施：`applyStreamEvent` 中新增 `deviceTraceTypes` Set 路由 11 类 trace 事件到答卡 `traceEvents` 数组（已有 `AgentTraceStream` 组件负责渲染 `run_*`/`step_*`/`thinking_*`/`system_notice`）；`tool_permission_request` 同时压入 `pendingPermissions` 队列并弹出顶部模态；`tool_permission_resolved` 同步移除队列项。模板末尾新增 `.rw-hitl-modal`（包含风险标签、参数 JSON 文本框、3 个动作按钮）。DeviceAgent 路径下 `traceEvents` 现按默认分配，与 Log Analysis 路径一致。
+- [x] 13.3 前端调用 `POST /chat/permissions/{request_id}/resolve`：新增 `frontend/src/api/chat.ts` 方法 + 类型
+
+  实施：`frontend/src/api/chat.ts` 暴露 `resolveChatPermission(requestId, payload, authToken?)` + 4 个事件/请求 TypeScript 类型（`ChatPermissionDecision` / `ChatPermissionResolvePayload` / `ChatPermissionResolveResponse` + `ToolPermissionRequestEvent` 等）。复用 `API_BASE_URL` 实例化独立 axios 客户端，避免和默认拦截器的 5 分钟 timeout 共用配置。
+- [x] 13.4 兼容旧前端：保留 `chunk` / `done` / `session` / `error` 事件不变；新事件未被识别时静默忽略，不阻断主流程
+
+  实施：原有 `chunk` / `done` / `session` / `error` 分支位置完全未动；新增的 `deviceTraceTypes` 路由块在它们之前，命中即 `return`，否则透传到旧逻辑；旧逻辑结尾本身就是无 else 兜底，未匹配类型自然忽略。`vue-tsc --noEmit` 退出码 0。
 - [ ] 13.5 手测：在 staging 跑一条"列出后台任务 + 启动升级流程"两步对话，第二步触发 HITL 弹窗，覆盖允许/拒绝/编辑参数三条路径
 
 ## 14. 测试与发布
 
-- [ ] 14.1 集成测试：mock `claude_agent_sdk.query` + mock `device_link_manager.send_prompt`，跑通"读类工具自动允许 / 写类工具走 HITL / 结果 schema_mismatch 替换"完整路径
+- [x] 14.1 集成测试：mock `claude_agent_sdk.query` + mock `device_link_manager.send_prompt`，跑通"读类工具自动允许 / 写类工具走 HITL / 结果 schema_mismatch 替换"完整路径
+
+  实施：`tests/api/test_chat_hitl_integration.py`。难点：``TestClient`` 串行执行无法在 SSE 流尚未结束时回投 `/chat/permissions/.../resolve`；用后台线程 `uvicorn.Server` + `httpx.stream` 并发请求绕过。`_FakeDevice` 上报两个工具（`task.list_background_tasks` risk=read / `task.start_background_task` risk=write，后者 `outputSchema.required=[task_id]`）。`_make_fake_query` 模拟 SDK loop：从 `options.can_use_tool` + `options.hooks.PostToolUse` + 经 `create_sdk_mcp_server` 拦截捕获的 proxy.handler 串行驱动 read→write 两次调用；`device_link_manager.send_prompt` 被 monkeypatch 后按 (server,tool) 返回固定回包（write 工具回包故意缺 `task_id` 触发 schema_mismatch）。断言覆盖：(1) read 工具 0 个 `tool_permission_request`；(2) write 工具走完整 request → 200/`{decision:allow}` → `tool_permission_resolved{decision=allow}`；(3) read `result_validation.status=ok` + write `result_validation.status=schema_mismatch` 且 reason 含 `task_id`；(4) `send_prompt` 被调用两次，envelope 全为 `protocol_version=2`+`action=mcp_call`；(5) 整体以 `run_complete` + `done` 收尾。单条用例通过。
 - [x] 14.2 集成测试：DeepSeek provider 下 `POST /chat` 返回 `error_kind="provider_no_mcp_support"`
 
   实施：`tests/api/test_chat_provider_gate.py` 通过 monkeypatch 把 `PROVIDER_PROFILES["deepseek"]` 替换为 `supports_mcp_server_tools=False` 的 fixture profile（真实 deepseek profile 现在已支持 in-process MCP，需要 fixed test profile 保证 gate 触发），断言：
   - `POST /chat/stream` 返回 SSE 中按序出现 `session` → `run_start` → `error{error_kind="provider_no_mcp_support", message 含 "deepseek"}`，且 `claude_agent_sdk.query` 全程未被调用。
   - `POST /chat`（非流式）返回 200 + `answer=""`（错误在 trace 事件流里）。
-- [ ] 14.3 部署文档 `DEPLOY_USAGE.md` 增加 "DeviceAgent" 章节：说明 Anthropic provider 必需、HITL 流程、Skill 装载方法，链接到 Log Analysis 对应章节
+- [x] 14.3 部署文档 `DEPLOY_USAGE.md` 增加 "DeviceAgent" 章节：说明 Anthropic provider 必需、HITL 流程、Skill 装载方法，链接到 Log Analysis 对应章节
+
+  实施：仓库根目录原本没有 `DEPLOY_USAGE.md`；本次新建该文件并把 DeviceAgent 列为首个章节，覆盖：provider/env 必需变量表、HITL 流程四步（含 SSE 事件名 + API 端点）、Skill 装载流程（链接到 `docs/log_analysis_agent.md`）、`error_kind` 表、部署后观察阈值（含 HITL 超时 > 20% 调参建议）。
 - [ ] 14.4 在 staging 配置 `ANTHROPIC_PROVIDER=anthropic` + 真实设备，做至少一条 end-to-end 对话验证：能看到 thinking / step / tool_permission_request / result_validation 事件按预期出现
 - [ ] 14.5 打 tag `pre-device-agent-migration` 锁定回滚点（在合并前）
 - [ ] 14.6 部署后观察首批对话的成功率、平均 HITL 等待时长、超时占比、`provider_no_mcp_support` 计数；若 HITL 超时占比 > 20% 则把 `device_agent_permission_timeout_seconds` 默认值调大并发补丁

@@ -219,11 +219,38 @@ async def list_chat_sessions(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ChatSessionListResponse:
+    from datetime import datetime
+
+    from app.services.chat_run_service import chat_run_service
+    from app.services.owner_scope import owner_scope_for_user
+
     sessions = await chat_history_service.list_sessions(db, current_user.id)
-    return ChatSessionListResponse(
-        message="ok",
-        data=[ChatSessionSummary.model_validate(s, from_attributes=True) for s in sessions],
-    )
+    owner_scope = owner_scope_for_user(current_user) or ""
+    summaries: list[ChatSessionSummary] = []
+    for session in sessions:
+        summary = ChatSessionSummary.model_validate(session, from_attributes=True)
+        # Overlay the in-memory active run state, scoped strictly to the
+        # current user. Anonymous brokers / other users' runs MUST NOT leak
+        # into this user's sidebar spinner.
+        job = chat_run_service.get_active_job_for_session(owner_scope, session.id)
+        if job is not None:
+            summary.active_run_id = job.run_id
+            summary.run_status = job.status
+            summary.run_agent_kind = job.agent_kind
+            # ``started_at`` is monotonic seconds; convert via current wall time delta
+            # so the frontend can render a relative timestamp.
+            import time as _time
+
+            wall_now = _time.time()
+            mono_now = _time.monotonic()
+            summary.run_started_at = datetime.utcfromtimestamp(
+                wall_now - (mono_now - job.started_at)
+            )
+            summary.run_updated_at = datetime.utcfromtimestamp(
+                wall_now - (mono_now - job.updated_at)
+            )
+        summaries.append(summary)
+    return ChatSessionListResponse(message="ok", data=summaries)
 
 
 @router.get("/chat-sessions/{session_id}/messages", response_model=ChatMessagesResponse)

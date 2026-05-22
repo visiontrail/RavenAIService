@@ -357,6 +357,11 @@ export interface ChatSessionSummary {
   message_count: number
   created_at: string
   updated_at: string
+  active_run_id?: string | null
+  run_status?: string | null
+  run_agent_kind?: string | null
+  run_started_at?: string | null
+  run_updated_at?: string | null
 }
 
 export interface ReleaseItem {

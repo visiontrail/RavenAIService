@@ -191,6 +191,8 @@ def make_can_use_tool(
     emit: Optional[EmitFn] = None,
     seq_counter: Optional[SeqCounter] = None,
     task_id: str = "",
+    run_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> Callable[..., Awaitable[Dict[str, Any]]]:
     """构造 SDK ``can_use_tool`` callback。
 
@@ -245,6 +247,8 @@ def make_can_use_tool(
                     tool_input=masked_args if isinstance(masked_args, dict) else {"value": masked_args},
                     risk=risk,
                     rationale=rationale,
+                    run_id=run_id,
+                    session_id=session_id,
                 ),
             )
 
@@ -252,18 +256,27 @@ def make_can_use_tool(
             future = broker.open(request_id, tool_name=tool_name, risk=risk)
         except RuntimeError as exc:
             logger.warning("PermissionBroker closed while opening request: %s", exc)
-            _emit_resolved(emit, seq_counter, task_id, request_id, "deny", reason="broker_closed")
+            _emit_resolved(
+                emit, seq_counter, task_id, request_id, "deny",
+                reason="broker_closed", run_id=run_id, session_id=session_id,
+            )
             return {"behavior": "deny", "message": "permission broker unavailable"}
 
         try:
             decision = await asyncio.wait_for(future, timeout=timeout_seconds)
         except asyncio.TimeoutError:
             broker.cancel(request_id, reason="timeout")
-            _emit_resolved(emit, seq_counter, task_id, request_id, "deny", reason="timeout")
+            _emit_resolved(
+                emit, seq_counter, task_id, request_id, "deny",
+                reason="timeout", run_id=run_id, session_id=session_id,
+            )
             return {"behavior": "deny", "message": "permission timeout"}
         except asyncio.CancelledError:
             broker.cancel(request_id, reason="cancelled")
-            _emit_resolved(emit, seq_counter, task_id, request_id, "deny", reason="cancelled")
+            _emit_resolved(
+                emit, seq_counter, task_id, request_id, "deny",
+                reason="cancelled", run_id=run_id, session_id=session_id,
+            )
             raise
 
         # decision 形如 {decision, updated_args?, message?}
@@ -277,6 +290,8 @@ def make_can_use_tool(
             _emit_resolved(
                 emit, seq_counter, task_id, request_id, "allow",
                 updated_args=updated_args if isinstance(updated_args, dict) else None,
+                run_id=run_id,
+                session_id=session_id,
             )
             result: Dict[str, Any] = {"behavior": "allow"}
             if isinstance(updated_args, dict):
@@ -285,7 +300,11 @@ def make_can_use_tool(
 
         # 其余一律按 deny
         reason = decision.get("reason") or "user_denied"
-        _emit_resolved(emit, seq_counter, task_id, request_id, "deny", reason=str(reason), message=message)
+        _emit_resolved(
+            emit, seq_counter, task_id, request_id, "deny",
+            reason=str(reason), message=message,
+            run_id=run_id, session_id=session_id,
+        )
         deny: Dict[str, Any] = {"behavior": "deny"}
         if message:
             deny["message"] = message
@@ -306,6 +325,8 @@ def _emit_resolved(
     reason: Optional[str] = None,
     updated_args: Optional[Dict[str, Any]] = None,
     message: Optional[str] = None,
+    run_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> None:
     if emit is None or seq_counter is None:
         return
@@ -320,6 +341,8 @@ def _emit_resolved(
             reason=reason,
             updated_args=updated_args,
             message=message,
+            run_id=run_id,
+            session_id=session_id,
         ),
     )
 

@@ -23,7 +23,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 from app.agents.device_agent.mcp_tools import build_device_mcp_server
 from app.agents.device_agent.permissions import PermissionBroker, make_can_use_tool
@@ -80,9 +80,19 @@ class DeviceAgentContext:
     # 调用方可传入额外的 system prompt 段，会拼到 yaml ``system_prompt`` 之后。
     system_prompt_override: Optional[str] = None
     scene_hint: Optional[str] = None
-    # 共享 broker 注册表：``{session_id: PermissionBroker}``。``DeviceAgent.run_stream``
-    # 启动时把 broker 注册进去，``finally`` 中移除。HTTP 端点 ``POST /chat/permissions/...``
-    # 通过同一个 registry 找到 broker 并调用 ``resolve``。
+    # 本轮 ``ChatAgentRun.id``；trace ``task_id`` 与 workspace 目录都基于它，保证不同 run
+    # 的事件序列互不串扰。未提供时按 session_id 兜底（兼容单元测试 / 旧调用方）。
+    run_id: Optional[str] = None
+    # 归属作用域（user:<id> 或 anon:<token>）。 与 ``ChatRunJob.owner_scope`` 一致，
+    # 用于工作区物理隔离，确保不同用户即使提交相同 session_id 也不共享 ``.claude/skills``。
+    owner_scope: Optional[str] = None
+    # broker 注册回调：``register(run_id, broker)`` / ``unregister(run_id)``。由
+    # :class:`ChatRunService` 注入，使 HITL 端点可以按 ``run_id`` 找到 broker。
+    # 为空时退化为本地 broker_registry 字典。
+    broker_register: Optional[Callable[[str, PermissionBroker], None]] = None
+    broker_unregister: Optional[Callable[[str], None]] = None
+    # 共享 broker 注册表（旧字典风格）：``{session_id_or_run_id: PermissionBroker}``。
+    # 当 ``broker_register`` 未提供时使用；保留兼容旧 ``AIChatService`` 调用方。
     broker_registry: Optional[Dict[str, PermissionBroker]] = None
 
 
@@ -166,7 +176,13 @@ class DeviceAgent:
             ) from exc
 
         session_id = ctx.session_id or ""
-        task_id = session_id or "device-agent"
+        # ``task_id`` is what every trace event carries; using ``run_id`` keeps
+        # the seq spaces of concurrent runs in the same session isolated. Fall
+        # back to ``session_id`` to remain backward-compatible with callers that
+        # do not (yet) provide a run_id (unit tests, legacy chat endpoint).
+        run_id = ctx.run_id or session_id or "device-agent"
+        task_id = run_id
+        broker_key = ctx.run_id or session_id
 
         # Event queue: producer = _drive_loop coroutine, consumer = this generator.
         queue: "asyncio.Queue[AgentTraceEvent]" = asyncio.Queue()
@@ -224,7 +240,9 @@ class DeviceAgent:
         runner: Optional[asyncio.Task] = None
         start_ts = time.monotonic()
         try:
-            workspace_path = workspace_mod.prepare_session(session_id)
+            workspace_path = workspace_mod.prepare_session(
+                session_id, run_id=ctx.run_id, owner_scope=ctx.owner_scope
+            )
 
             materialized: List[str] = []
             try:
@@ -271,8 +289,13 @@ class DeviceAgent:
 
             # --- HITL broker + can_use_tool ---------------------------------
             broker = PermissionBroker()
-            if ctx.broker_registry is not None and session_id:
-                ctx.broker_registry[session_id] = broker
+            if ctx.broker_register is not None:
+                try:
+                    ctx.broker_register(run_id, broker)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("DeviceAgent: broker_register failed: %s", exc)
+            elif ctx.broker_registry is not None and broker_key:
+                ctx.broker_registry[broker_key] = broker
 
             risk_rules = get_risk_rules(ctx.scene_hint)
             timeout_s = float(
@@ -286,6 +309,8 @@ class DeviceAgent:
                 emit=emit,
                 seq_counter=seq_counter,
                 task_id=task_id,
+                run_id=run_id,
+                session_id=session_id,
             )
 
             # --- PostToolUse hook -------------------------------------------
@@ -424,8 +449,13 @@ class DeviceAgent:
                     pass
             if broker is not None:
                 broker.close()
-                if ctx.broker_registry is not None and session_id:
-                    ctx.broker_registry.pop(session_id, None)
+                if ctx.broker_unregister is not None:
+                    try:
+                        ctx.broker_unregister(run_id)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("DeviceAgent: broker_unregister failed: %s", exc)
+                elif ctx.broker_registry is not None and broker_key:
+                    ctx.broker_registry.pop(broker_key, None)
             if workspace_path is not None:
                 workspace_mod.cleanup(workspace_path)
 

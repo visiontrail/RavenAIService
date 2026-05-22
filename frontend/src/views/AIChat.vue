@@ -16,6 +16,7 @@ import { useChatSessionStore } from '@/stores/chatSession'
 import AgentTraceStream from '@/components/AgentTraceStream.vue'
 import type { AgentTraceEvent } from '@/types/agentTrace'
 import { projectRepoApi, type ProjectRepoOption } from '@/api'
+import { resolveChatPermission } from '@/api/chat'
 
 type MentionOption =
   | { type: 'agent'; id: string; name: string; description?: string; agentType: 'package-manager' | 'log-analysis' }
@@ -93,6 +94,26 @@ const sessionId = ref<string | null>(null)
 const isSending = ref(false)
 const activeLogAnalysisSessionId = ref<string | null>(null)
 const cancelInFlight = ref(false)
+
+// DeviceAgent HITL (tool permission) state. ``pendingPermissions`` is a queue
+// so consecutive ``tool_permission_request`` events all surface; the modal
+// always displays the head entry. ``permissionDecisionInFlight`` disables
+// the buttons while we POST the resolution back to the broker.
+type PendingPermission = {
+  request_id: string
+  tool_name: string
+  risk: 'read' | 'write' | 'destructive'
+  rationale?: string
+  tool_input?: Record<string, unknown>
+  session_id?: string
+  editingArgs: string
+  editingError?: string | null
+}
+const pendingPermissions = ref<PendingPermission[]>([])
+const permissionDecisionInFlight = ref(false)
+const currentPermission = computed<PendingPermission | null>(() =>
+  pendingPermissions.value.length > 0 ? pendingPermissions.value[0] : null,
+)
 
 // 关联项目（用于在日志分析 Agent 中显式指定项目身份；留空则回退到 metadata.json）
 const projectRepoOptions = ref<ProjectRepoOption[]>([])
@@ -531,6 +552,59 @@ const applyStreamEvent = (payload: any, answerId: string) => {
   }
   if (type === 'log_analysis_context') return
   if (type === 'session') return
+
+  // DeviceAgent trace events: forward to the AgentTraceStream component on
+  // the answer message. ``tool_permission_request`` additionally opens the
+  // HITL modal. Unknown events fall through silently (legacy compat).
+  const deviceTraceTypes = new Set([
+    'run_start', 'run_complete', 'cancelled',
+    'step_start', 'step_delta', 'step_end',
+    'thinking_start', 'thinking_delta', 'thinking_end',
+    'system_notice',
+    'tool_permission_request', 'tool_permission_resolved',
+    'result_validation',
+  ])
+  if (deviceTraceTypes.has(type)) {
+    const targetMessage = ensureAnswerMessage(answerId)
+    if (!targetMessage.traceEvents) targetMessage.traceEvents = []
+    if (type === 'run_start') targetMessage.traceRunning = true
+    const { event: _evt, ...trace } = payload as Record<string, unknown>
+    if (trace && typeof trace.seq === 'number' && typeof trace.type === 'string') {
+      targetMessage.traceEvents.push(trace as unknown as AgentTraceEvent)
+    }
+    if (type === 'run_complete') {
+      const finalText = (payload as any)?.final_text
+      if (typeof finalText === 'string' && finalText.trim()) {
+        targetMessage.content = finalText.trimStart()
+      }
+      targetMessage.traceRunning = false
+    }
+    if (type === 'tool_permission_request') {
+      const requestId = String((payload as any)?.request_id || '')
+      if (requestId) {
+        const toolInput = (payload as any)?.tool_input
+        pendingPermissions.value.push({
+          request_id: requestId,
+          tool_name: String((payload as any)?.tool_name || ''),
+          risk: ((payload as any)?.risk || 'write') as PendingPermission['risk'],
+          rationale: (payload as any)?.rationale || undefined,
+          tool_input: toolInput && typeof toolInput === 'object' ? toolInput : undefined,
+          session_id: (payload as any)?.session_id || sessionId.value || undefined,
+          editingArgs: toolInput ? JSON.stringify(toolInput, null, 2) : '{}',
+          editingError: null,
+        })
+      }
+    } else if (type === 'tool_permission_resolved') {
+      const requestId = String((payload as any)?.request_id || '')
+      if (requestId) {
+        pendingPermissions.value = pendingPermissions.value.filter(
+          (p) => p.request_id !== requestId,
+        )
+      }
+    }
+    return
+  }
+
   const targetMessage = ensureAnswerMessage(answerId)
   if (type === 'chunk' && typeof payload?.content === 'string') {
     const chunk = payload.content
@@ -547,6 +621,60 @@ const applyStreamEvent = (payload: any, answerId: string) => {
   } else if (type === 'error') {
     targetMessage.content = `调用后端失败：${payload?.message || '未知错误'}`
     targetMessage.traceRunning = false
+  }
+}
+
+const submitPermissionDecision = async (
+  decision: 'allow' | 'deny',
+  options: { useEdited?: boolean } = {},
+) => {
+  const head = pendingPermissions.value[0]
+  if (!head || permissionDecisionInFlight.value) return
+
+  let updatedArgs: Record<string, unknown> | undefined
+  if (decision === 'allow' && options.useEdited) {
+    try {
+      const parsed = JSON.parse(head.editingArgs || '{}')
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        head.editingError = '参数必须是 JSON 对象'
+        return
+      }
+      updatedArgs = parsed as Record<string, unknown>
+      head.editingError = null
+    } catch (err: any) {
+      head.editingError = `JSON 解析失败：${err?.message || String(err)}`
+      return
+    }
+  }
+
+  permissionDecisionInFlight.value = true
+  try {
+    const authToken = userStore.token as unknown as string | undefined
+    await resolveChatPermission(
+      head.request_id,
+      {
+        decision,
+        updated_args: updatedArgs ?? null,
+        session_id: head.session_id || sessionId.value || null,
+      },
+      authToken || null,
+    )
+    // Remove the head locally; tool_permission_resolved from SSE will be a no-op.
+    pendingPermissions.value = pendingPermissions.value.filter(
+      (p) => p.request_id !== head.request_id,
+    )
+  } catch (err: any) {
+    const status = err?.response?.status
+    if (status === 404) {
+      // Already resolved (timeout or external). Drop locally.
+      pendingPermissions.value = pendingPermissions.value.filter(
+        (p) => p.request_id !== head.request_id,
+      )
+    } else {
+      head.editingError = `提交失败：${err?.response?.data?.detail || err?.message || String(err)}`
+    }
+  } finally {
+    permissionDecisionInFlight.value = false
   }
 }
 
@@ -936,13 +1064,17 @@ const sendMessage = async () => {
     : chatHistory.value.slice(0, -1).map(msg => ({ role: msg.role, content: msg.content }))
 
   const answerMessageId = generateUUID()
+  // DeviceAgent path also emits agent_trace-style events, so allocate
+  // ``traceEvents`` for both log-analysis and the default device chat.
+  // Package-agent path stays unchanged (no trace stream).
+  const allocateTrace = shouldUseLogAnalysisAgent || !shouldUsePackageAgent
   chatHistory.value.push({
     id: answerMessageId,
     role: 'ai',
     content: '正在思考...',
     kind: 'answer',
-    traceEvents: shouldUseLogAnalysisAgent ? [] : undefined,
-    traceRunning: shouldUseLogAnalysisAgent ? true : undefined,
+    traceEvents: allocateTrace ? [] : undefined,
+    traceRunning: allocateTrace ? true : undefined,
   })
 
   inputMessage.value = ''
@@ -1356,6 +1488,63 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
       </div>
       <div class="rw-composer-hint">RavenAI 可能会出错。涉及在线设备的下发操作均需你二次确认。</div>
     </div>
+
+    <!-- DeviceAgent HITL: tool permission modal -->
+    <div v-if="currentPermission" class="rw-modal-backdrop rw-hitl-backdrop">
+      <div class="rw-modal rw-hitl-modal">
+        <div class="rw-modal-head">
+          <div>
+            <h3 class="rw-modal-title">设备工具调用待确认</h3>
+            <p class="rw-modal-sub">
+              <span class="rw-hitl-risk" :class="`risk-${currentPermission.risk}`">
+                {{ currentPermission.risk === 'destructive' ? '破坏性' : currentPermission.risk === 'write' ? '写入' : '读取' }}
+              </span>
+              <span class="rw-hitl-tool mono">{{ currentPermission.tool_name }}</span>
+            </p>
+          </div>
+        </div>
+        <div class="rw-hitl-body">
+          <div v-if="currentPermission.rationale" class="rw-hitl-rationale">
+            {{ currentPermission.rationale }}
+          </div>
+          <label class="rw-form-field">
+            <span class="rw-form-label">参数（可编辑后再批准）</span>
+            <textarea
+              v-model="currentPermission.editingArgs"
+              class="rw-input rw-hitl-args mono"
+              rows="8"
+              spellcheck="false"
+            ></textarea>
+          </label>
+          <div v-if="currentPermission.editingError" class="rw-hitl-error">
+            {{ currentPermission.editingError }}
+          </div>
+          <p class="rw-hitl-warn">
+            模型希望调用该工具，请确认参数无误后允许执行，或拒绝以取消本次调用。
+          </p>
+        </div>
+        <div class="rw-modal-actions rw-hitl-actions">
+          <button
+            type="button"
+            class="rw-btn-ghost"
+            :disabled="permissionDecisionInFlight"
+            @click="submitPermissionDecision('deny')"
+          >拒绝</button>
+          <button
+            type="button"
+            class="rw-btn-ghost"
+            :disabled="permissionDecisionInFlight"
+            @click="submitPermissionDecision('allow', { useEdited: true })"
+          >按编辑后的参数允许</button>
+          <button
+            type="button"
+            class="rw-btn-primary"
+            :disabled="permissionDecisionInFlight"
+            @click="submitPermissionDecision('allow')"
+          >允许</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1737,6 +1926,47 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
 }
 .rw-scroll::-webkit-scrollbar-thumb:hover,
 .rw-mention::-webkit-scrollbar-thumb:hover { background: var(--rw-muted-soft); }
+
+/* DeviceAgent HITL modal */
+.rw-hitl-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(15, 23, 42, 0.42);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 80;
+}
+.rw-hitl-modal {
+  width: min(520px, 92vw);
+  background: var(--rw-canvas, #fff);
+  border-radius: 12px;
+  padding: 20px 22px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+  display: flex; flex-direction: column; gap: 14px;
+}
+.rw-hitl-risk {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; margin-right: 8px;
+}
+.rw-hitl-risk.risk-read { background: #e0f2fe; color: #0369a1; }
+.rw-hitl-risk.risk-write { background: #fef3c7; color: #92400e; }
+.rw-hitl-risk.risk-destructive { background: #fee2e2; color: #b91c1c; }
+.rw-hitl-tool { font-size: 13px; color: var(--rw-ink, #111827); }
+.rw-hitl-body { display: flex; flex-direction: column; gap: 10px; }
+.rw-hitl-rationale {
+  font-size: 13px; color: var(--rw-muted, #6b7280);
+  background: var(--rw-canvas-soft, #fafafa);
+  padding: 8px 10px; border-radius: 8px;
+}
+.rw-hitl-args {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; line-height: 1.5;
+  min-height: 140px; resize: vertical;
+}
+.rw-hitl-error {
+  color: #b91c1c; font-size: 12px;
+  background: #fee2e2; padding: 6px 10px; border-radius: 6px;
+}
+.rw-hitl-warn { font-size: 12px; color: var(--rw-muted, #6b7280); margin: 0; }
+.rw-hitl-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
 /* Responsive */
 @media (max-width: 900px) {

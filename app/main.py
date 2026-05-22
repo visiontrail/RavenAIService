@@ -157,7 +157,31 @@ async def lifespan(app: FastAPI):
             logger.info("启动检查: 无需重试协议栈日志处理任务")
     except Exception as e:
         logger.error(f"启动检查: 重试失败的协议栈日志处理时出错: {str(e)}")
-    
+
+    # 标记上次进程未完成的 chat agent run 为 stale，避免侧边栏无限转圈
+    try:
+        from datetime import datetime
+        from sqlalchemy import update
+        from app.models.user import ChatAgentRun
+
+        async for session in db_manager.get_session():
+            stmt = (
+                update(ChatAgentRun)
+                .where(ChatAgentRun.status.in_(("queued", "running")))
+                .values(
+                    status="stale",
+                    error="server restarted before run completed",
+                    finished_at=datetime.utcnow(),
+                )
+            )
+            result = await session.execute(stmt)
+            stale_count = result.rowcount or 0
+            break
+        if stale_count:
+            logger.info(f"启动检查: 已将 {stale_count} 个未完成的 chat agent run 标记为 stale")
+    except Exception as e:
+        logger.error(f"启动检查: 处理未完成 chat agent run 时出错: {str(e)}")
+
     yield
     
     # 关闭时执行

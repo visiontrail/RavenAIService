@@ -69,6 +69,38 @@ class ChatHistoryService(BaseService):
             session.is_deleted = False
         return session
 
+    async def append_message(
+        self,
+        db: AsyncSession,
+        *,
+        user_id: str,
+        session_id: Optional[str],
+        role: str,
+        content: str,
+        title_hint: Optional[str] = None,
+    ) -> tuple[ChatSession, ChatMessage]:
+        """Append a single message to a session, creating the session if needed.
+
+        Used by the chat-run flow which persists the user message at run start
+        and the assistant message at run terminal, instead of writing both at
+        once. Maintains `message_count` / `last_message_at` and revives any
+        soft-deleted session.
+        """
+        session = await self.ensure_session(db, user_id, session_id=session_id)
+        if (session.message_count or 0) == 0 and role == "user":
+            preferred_title = title_hint or content
+            if preferred_title:
+                session.title = self._title_from_hint(preferred_title, fallback=session.title)
+
+        record = ChatMessage(session_id=session.id, role=role, content=content)
+        db.add(record)
+        session.message_count = (session.message_count or 0) + 1
+        session.last_message_at = datetime.utcnow()
+        await db.flush()
+        await db.refresh(session)
+        await db.refresh(record)
+        return session, record
+
     async def save_exchange(
         self,
         db: AsyncSession,
@@ -80,22 +112,21 @@ class ChatHistoryService(BaseService):
         title_hint: Optional[str] = None,
         session_title: Optional[str] = None,
     ) -> ChatSession:
-        session = await self.ensure_session(db, user_id, session_id=session_id)
-        if (session.message_count or 0) == 0:
-            preferred_title = session_title or title_hint
-            if preferred_title:
-                session.title = self._title_from_hint(preferred_title, fallback=session.title)
-
-        records: list[ChatMessage] = [
-            ChatMessage(session_id=session.id, role="user", content=user_content),
-            ChatMessage(session_id=session.id, role="ai", content=ai_content),
-        ]
-        db.add_all(records)
-
-        session.message_count = (session.message_count or 0) + len(records)
-        session.last_message_at = datetime.utcnow()
-        await db.flush()
-        await db.refresh(session)
+        session, _ = await self.append_message(
+            db,
+            user_id=user_id,
+            session_id=session_id,
+            role="user",
+            content=user_content,
+            title_hint=session_title or title_hint,
+        )
+        session, _ = await self.append_message(
+            db,
+            user_id=user_id,
+            session_id=session.id,
+            role="ai",
+            content=ai_content,
+        )
         return session
 
     async def list_sessions(self, db: AsyncSession, user_id: str) -> List[ChatSession]:

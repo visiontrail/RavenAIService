@@ -45,6 +45,27 @@ class FakeClaudeAgentOptions:
     request_timeout_seconds: Optional[int] = None
 
 
+class LegacyClaudeAgentOptions:
+    def __init__(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        allowed_tools: List[str],
+        cwd: str,
+        max_turns: int,
+        permission_mode: str,
+        env: Dict[str, Any],
+    ) -> None:
+        self.model = model
+        self.system_prompt = system_prompt
+        self.allowed_tools = allowed_tools
+        self.cwd = cwd
+        self.max_turns = max_turns
+        self.permission_mode = permission_mode
+        self.env = env
+
+
 def _make_fake_sdk():
     """Return a fake claude_agent_sdk module."""
     sdk = MagicMock()
@@ -246,6 +267,27 @@ class TestBuildOptionsExtensions:
         opts = self._build(base_settings, max_tokens=1024, request_timeout_seconds=30)
         assert opts.max_tokens == 1024
         assert opts.request_timeout_seconds == 30
+
+    def test_unsupported_sdk_option_kwargs_are_dropped(self, base_settings, caplog):
+        sdk = MagicMock()
+        sdk.ClaudeAgentOptions = LegacyClaudeAgentOptions
+        with patch("app.config.settings", base_settings), \
+             patch.dict("sys.modules", {"claude_agent_sdk": sdk}):
+            import importlib
+            import app.agents.anthropic_client as mod
+            importlib.reload(mod)
+            with caplog.at_level(logging.WARNING):
+                opts = mod.build_options(
+                    system_prompt="test prompt",
+                    allowed_tools=["Bash"],
+                    cwd="/tmp/test",
+                    max_tokens=1024,
+                    request_timeout_seconds=30,
+                )
+
+        assert opts.model == "deepseek-v4-pro"
+        assert "max_tokens" in caplog.text
+        assert "request_timeout_seconds" in caplog.text
 
 
 class TestConfigValidation:

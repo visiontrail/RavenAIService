@@ -72,16 +72,119 @@ AGENT_KEY = "log_analysis"
 TraceEmitter = Callable[[AgentTraceEvent], None]
 
 
-def _extract_fenced_json(text: str) -> Optional[Dict[str, Any]]:
-    """Extract and parse the first ```json ... ``` block from text."""
-    pattern = re.compile(r"```json\s*(.*?)\s*```", re.DOTALL)
-    m = pattern.search(text)
-    if not m:
+def _parse_partial_array(text: str, start: int, decoder: json.JSONDecoder) -> tuple[List[Any], int]:
+    """Parse completed items from a possibly truncated JSON array."""
+    items: List[Any] = []
+    i = start + 1
+    length = len(text)
+    while i < length:
+        while i < length and text[i].isspace():
+            i += 1
+        if i >= length:
+            break
+        if text[i] == "]":
+            return items, i + 1
+        try:
+            value, end = decoder.raw_decode(text, i)
+        except json.JSONDecodeError:
+            break
+        items.append(value)
+        i = end
+        while i < length and text[i].isspace():
+            i += 1
+        if i < length and text[i] == ",":
+            i += 1
+            continue
+        if i < length and text[i] == "]":
+            return items, i + 1
+        break
+    return items, i
+
+
+def _parse_json_object_prefix(text: str) -> Optional[Dict[str, Any]]:
+    """Parse a JSON object, keeping complete top-level members if truncated.
+
+    Claude-compatible providers occasionally stop after emitting a large JSON
+    prefix. The answer string is often already complete, while later arrays are
+    cut mid-field. This helper keeps only syntactically complete members so the
+    UI can still show the analysis without treating arbitrary broken JSON as
+    valid.
+    """
+    body = (text or "").strip()
+    if not body:
         return None
     try:
-        return json.loads(m.group(1))
+        parsed = json.loads(body)
+        return parsed if isinstance(parsed, dict) else None
     except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    i = 0
+    length = len(body)
+    while i < length and body[i].isspace():
+        i += 1
+    if i >= length or body[i] != "{":
         return None
+    i += 1
+    result: Dict[str, Any] = {}
+
+    while i < length:
+        while i < length and body[i].isspace():
+            i += 1
+        if i >= length:
+            break
+        if body[i] == "}":
+            return result
+        try:
+            key, end = decoder.raw_decode(body, i)
+        except json.JSONDecodeError:
+            break
+        if not isinstance(key, str):
+            break
+        i = end
+        while i < length and body[i].isspace():
+            i += 1
+        if i >= length or body[i] != ":":
+            break
+        i += 1
+        while i < length and body[i].isspace():
+            i += 1
+        if i >= length:
+            break
+        try:
+            value, end = decoder.raw_decode(body, i)
+            result[key] = value
+            i = end
+        except json.JSONDecodeError:
+            if body[i] == "[":
+                items, end = _parse_partial_array(body, i, decoder)
+                if items:
+                    result[key] = items
+                    i = end
+            break
+        while i < length and body[i].isspace():
+            i += 1
+        if i < length and body[i] == ",":
+            i += 1
+            continue
+        if i < length and body[i] == "}":
+            return result
+        break
+
+    return result or None
+
+
+def _extract_fenced_json(text: str) -> Optional[Dict[str, Any]]:
+    """Extract and parse the first ```json ... ``` block from text.
+
+    If the model emitted an opening fence but was truncated before the closing
+    fence, parse the completed JSON prefix as a best-effort recovery.
+    """
+    m = re.search(r"```json\s*", text or "")
+    if not m:
+        return None
+    return _parse_json_object_prefix((text or "")[m.end():])
 
 
 def _validate_result_schema(data: Dict[str, Any]) -> bool:
@@ -89,9 +192,11 @@ def _validate_result_schema(data: Dict[str, Any]) -> bool:
     # checked softly (the agent is instructed to emit them, but legacy
     # responses without them are still accepted so we can fall back to
     # `summary`).
-    required = {"status", "summary", "severity", "root_cause_hypotheses",
-                "recommended_actions", "related_keywords"}
-    return required.issubset(data.keys())
+    if not isinstance(data.get("status"), str):
+        return False
+    if not isinstance(data.get("severity"), str):
+        return False
+    return bool(data.get("answer") or data.get("summary"))
 
 
 _VALID_QUESTION_TYPES = {"root_cause", "qa", "search", "stats", "meta", "other"}
