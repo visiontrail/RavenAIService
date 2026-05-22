@@ -36,6 +36,10 @@ PROMPT_FUNCTION_META: Dict[str, Dict[str, str]] = {
         "name": "日志分析",
         "description": "Claude Agent SDK 驱动的日志智能分析提示词",
     },
+    "claude_agent_device": {
+        "name": "设备对话",
+        "description": "Claude Agent SDK 驱动的设备联动对话提示词",
+    },
     "chat": {
         "name": "AI 对话",
         "description": "AI 对话相关提示词",
@@ -46,6 +50,10 @@ PROMPT_AGENT_META: Dict[Tuple[str, str], Dict[str, str]] = {
     ("claude_agent_log_analysis", "generic"): {
         "name": "通用日志分析 Agent",
         "description": "统一适用于所有日志类型，按 metadata/task 中的代码库信息克隆代码并分析问题",
+    },
+    ("claude_agent_device", "default"): {
+        "name": "默认设备对话 Agent",
+        "description": "面向已链接设备的通用对话场景，模型直接选择设备 MCP 工具与参数",
     },
 }
 
@@ -210,6 +218,13 @@ def _invalidate_prompt_caches() -> None:
             log_analysis_prompts._PROMPTS_CACHE.clear()  # type: ignore[attr-defined]
     except Exception:
         pass
+    # Same for the device agent prompt cache.
+    try:
+        from app.agents.device_agent import prompts as device_agent_prompts
+
+        device_agent_prompts.reset_cache()
+    except Exception:
+        pass
 
 
 def _response_data(path: Path, content: str, parsed: Any) -> Dict[str, Any]:
@@ -337,6 +352,26 @@ def update_prompt_entries(
 
     _invalidate_prompt_caches()
     return _response_data(path, new_content, parsed)
+
+
+def get_device_agent_prompts(scene_hint: Optional[str] = None) -> Dict[str, Any]:
+    """Expose DeviceAgent prompts + risk rules through the same service layer
+    so callers (DeviceAgent, admin UI, tests) all read the cache-aware path.
+
+    Returns a dict with keys ``system_prompt`` / ``user_prompt_template``
+    / ``risk_rules`` / ``scene``. Empty strings / empty list when the yaml
+    section is missing or malformed.
+    """
+    from app.agents.device_agent import prompts as device_agent_prompts
+
+    system_prompt, user_prompt_template = device_agent_prompts.get_prompts(scene_hint)
+    risk_rules = device_agent_prompts.get_risk_rules(scene_hint)
+    return {
+        "scene": scene_hint or "default",
+        "system_prompt": system_prompt,
+        "user_prompt_template": user_prompt_template,
+        "risk_rules": risk_rules,
+    }
 
 
 def get_chat_title_prompt_template() -> str:

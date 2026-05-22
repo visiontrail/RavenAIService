@@ -5,8 +5,6 @@ import type {
   AgentSkill,
   AgentSkillAgentInfo,
   ApiResponse,
-  LightModelSettings,
-  PrimaryModelSettings,
   PromptsConfigData,
   ProjectRepo,
   ProjectRepoPayload,
@@ -74,30 +72,6 @@ export const adminApi = {
 
   fetchPromptsConfig: (): Promise<ApiResponse<PromptsConfigData>> =>
     adminClient.get('/admin/prompts/config'),
-
-  fetchLightModelSettings: (): Promise<ApiResponse<LightModelSettings>> =>
-    adminClient.get('/admin/settings/light-model'),
-
-  updateLightModelSettings: (payload: {
-    model_name?: string | null
-    base_url?: string | null
-    api_key?: string | null
-    temperature?: number | null
-    clear_api_key?: boolean
-  }): Promise<ApiResponse<LightModelSettings>> =>
-    adminClient.put('/admin/settings/light-model', payload),
-
-  fetchPrimaryModelSettings: (): Promise<ApiResponse<PrimaryModelSettings>> =>
-    adminClient.get('/admin/settings/primary-model'),
-
-  updatePrimaryModelSettings: (payload: {
-    model_name?: string | null
-    base_url?: string | null
-    api_key?: string | null
-    temperature?: number | null
-    clear_api_key?: boolean
-  }): Promise<ApiResponse<PrimaryModelSettings>> =>
-    adminClient.put('/admin/settings/primary-model', payload),
 
   savePromptsConfig: (payload: {
     content?: string

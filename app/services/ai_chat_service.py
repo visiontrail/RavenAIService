@@ -1,69 +1,88 @@
-"""
-AI 对话服务：封装 LangGraph 智能体与简单会话记忆。
-"""
+"""AI 对话服务：基于 DeviceAgent (Claude Agent SDK) 与持久化会话历史。"""
+
+from __future__ import annotations
+
 import asyncio
-import logging
 import json
+import logging
 import uuid
-from typing import AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
-from app.agents.chat_agent import ChatAgent
+from app.agents.device_agent.agent import DeviceAgent, DeviceAgentContext
+from app.agents.device_agent.permissions import PermissionBroker
 from app.config import settings
 from app.models.chat import ChatMessage, ChatRequest, ChatResponse
-from app.models.device_link import DeviceInfo
 from app.models.user import User
 from app.services.base import BaseService
 from app.services.chat_history_service import chat_history_service
-from app.services.device_link_service import device_link_manager
-from app.services.prompts_config_service import get_chat_title_prompt_template
+from app.services.title_generator_service import (
+    generate_session_title as _generate_title_external,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class _SessionMemory:
-    """轻量级内存会话管理，仅存储近期轮次。"""
+def _records_to_history_dicts(records: List[Any]) -> List[Dict[str, str]]:
+    """Convert DB ChatMessage records to ``[{"role","content"}, ...]``."""
+    out: List[Dict[str, str]] = []
+    for record in records:
+        role = getattr(record, "role", "user")
+        if role not in {"user", "ai", "assistant", "system"}:
+            role = "user"
+        if role == "ai":
+            role = "assistant"
+        out.append({"role": role, "content": str(getattr(record, "content", ""))})
+    return out
 
-    def __init__(self, max_turns: int = 10):
-        self._store: Dict[str, List[BaseMessage]] = {}
-        self.max_turns = max_turns
 
-    def get_history(self, session_id: str) -> List[BaseMessage]:
-        return list(self._store.get(session_id, []))
+def _chat_messages_to_history_dicts(history: List[ChatMessage]) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    for item in history:
+        role = (item.role or "user").lower()
+        if role in {"ai", "assistant"}:
+            role = "assistant"
+        elif role == "system":
+            role = "system"
+        else:
+            role = "user"
+        out.append({"role": role, "content": item.content})
+    return out
 
-    def save_history(self, session_id: str, messages: List[BaseMessage]) -> None:
-        # 仅保留最近 N 轮，避免内存无限增长
-        trim_size = max(self.max_turns * 2, 10)
-        self._store[session_id] = messages[-trim_size:]
+
+def _history_to_chat_messages(history: List[Dict[str, str]]) -> List[ChatMessage]:
+    out: List[ChatMessage] = []
+    for entry in history:
+        role = entry.get("role") or "user"
+        if role == "assistant":
+            role = "ai"
+        if role not in {"user", "ai", "system"}:
+            role = "user"
+        out.append(ChatMessage(role=role, content=str(entry.get("content") or "")))
+    return out
 
 
 class AIChatService(BaseService):
-    """Raven AI 对话服务"""
+    """Raven AI 对话服务 (DeviceAgent backed)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.agent = ChatAgent()
-        self.memory = _SessionMemory(max_turns=getattr(settings, "agent_short_term_window", 5))
+        # Session-scoped permission brokers — populated by DeviceAgent.run_stream
+        # when a session starts and removed in its ``finally``. The HTTP endpoint
+        # ``POST /chat/permissions/{request_id}/resolve`` looks brokers up here.
+        self.permission_broker_registry: Dict[str, PermissionBroker] = {}
 
-    def rebuild_agent(self) -> None:
-        """重建 ChatAgent，使新的主力模型配置立即生效（已在途请求继续使用旧实例）。"""
-        try:
-            self.agent = ChatAgent()
-        except Exception as exc:  # noqa: BLE001
-            # 避免运行期更新模型导致服务整体不可用：保留旧 agent，让管理员排查后再试。
-            logger.warning("AIChatService: 重建 ChatAgent 失败，沿用旧实例: %s", exc)
+    # ──────────────── history loading ────────────────
 
     async def _load_history_from_db(
         self,
         db: AsyncSession,
         user: User,
         session_id: Optional[str],
-    ) -> List[BaseMessage]:
-        """Load persisted messages for a user session."""
+    ) -> List[Dict[str, str]]:
         if not session_id:
             return []
         try:
@@ -76,8 +95,27 @@ class AIChatService(BaseService):
             if exc.status_code == 404:
                 return []
             raise
-        chat_messages = chat_history_service.to_chat_messages(records)
-        return self._to_langchain_messages(chat_messages)
+        return _records_to_history_dicts(records)
+
+    async def _prepare_history(
+        self,
+        payload: ChatRequest,
+        session_id: str,
+        db: Optional[AsyncSession],
+        user: Optional[User],
+    ) -> List[Dict[str, str]]:
+        if user and db:
+            stored = await self._load_history_from_db(db, user, session_id)
+            if stored:
+                return stored
+
+        if payload.history:
+            logger.info("chat: 使用前端传入的历史记录，条数: %d", len(payload.history))
+            return _chat_messages_to_history_dicts(payload.history)
+
+        return []
+
+    # ──────────────── persistence ────────────────
 
     async def _persist_exchange(
         self,
@@ -89,7 +127,6 @@ class AIChatService(BaseService):
         session_title: Optional[str] = None,
         title_hint: Optional[str] = None,
     ) -> None:
-        """Persist user/AI messages to the database."""
         await chat_history_service.save_exchange(
             db,
             user_id=user.id,
@@ -100,46 +137,11 @@ class AIChatService(BaseService):
             title_hint=title_hint,
         )
 
-    async def _generate_session_title(self, user_content: str, ai_content: str) -> Optional[str]:
-        """Generate a concise title for a new session."""
-        prompt_template = get_chat_title_prompt_template()
-        try:
-            prompt = prompt_template.format(
-                user_content=user_content.strip(),
-                ai_content=ai_content.strip(),
-                max_length=24,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("chat: 标题提示词渲染失败: %s", exc)
-            return None
-
-        try:
-            result = await self.agent.planner_llm.ainvoke(prompt)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("chat: 生成会话标题失败: %s", exc)
-            return None
-
-        raw = getattr(result, "content", result)
-        if isinstance(raw, list):
-            text_parts = []
-            for item in raw:
-                if isinstance(item, dict):
-                    text_parts.append(str(item.get("text", "")))
-                else:
-                    text_parts.append(str(item))
-            raw_text = "".join(text_parts)
-        else:
-            raw_text = str(raw)
-
-        normalized = " ".join(raw_text.strip().split())
-        normalized = normalized.split("\n", 1)[0].strip().strip("“”\"'`")
-        if not normalized:
-            return None
-        return normalized[:60]
-
-    async def generate_session_title(self, user_content: str, ai_content: str) -> Optional[str]:
-        """Public wrapper for chat title generation."""
-        return await self._generate_session_title(user_content, ai_content)
+    async def generate_session_title(
+        self, user_content: str, ai_content: str
+    ) -> Optional[str]:
+        """Public wrapper used by other services / API endpoints."""
+        return await _generate_title_external(user_content, ai_content)
 
     async def _try_generate_and_update_session_title(
         self,
@@ -149,25 +151,21 @@ class AIChatService(BaseService):
         user_content: str,
         answer_text: str,
     ) -> None:
-        """Best-effort title generation that never blocks message persistence.
-
-        Skips when the session already has a user-provided / pre-summarized title
-        (i.e. anything other than the default "新对话") — the lightweight summary
-        path is preferred and runs immediately on user send.
-        """
         if not answer_text:
             return
         try:
             existing = await chat_history_service._get_session(db, user.id, session_id)
             if existing and existing.title and existing.title.strip() != "新对话":
-                logger.info("chat: 跳过标题生成（已存在自定义标题）: %s", existing.title)
+                logger.info(
+                    "chat: 跳过标题生成（已存在自定义标题）: %s", existing.title
+                )
                 return
         except Exception as exc:  # noqa: BLE001
             logger.debug("chat: 读取会话标题失败，继续尝试生成: %s", exc)
 
         try:
             session_title = await asyncio.wait_for(
-                self._generate_session_title(user_content, answer_text),
+                _generate_title_external(user_content, answer_text),
                 timeout=8,
             )
         except asyncio.TimeoutError:
@@ -190,109 +188,20 @@ class AIChatService(BaseService):
         except Exception as exc:  # noqa: BLE001
             logger.warning("chat: 更新会话标题失败: %s", exc)
 
-    async def _prepare_history_messages(
-        self,
-        payload: ChatRequest,
-        session_id: str,
-        db: Optional[AsyncSession],
-        user: Optional[User],
-    ) -> List[BaseMessage]:
-        """Build conversation history for this turn."""
-        if user and db:
-            stored_history = await self._load_history_from_db(db, user, session_id)
-            if stored_history:
-                return stored_history
-
-        if payload.history:
-            logger.info(f"chat: 使用前端传入的历史记录，条数: {len(payload.history)}")
-            return self._to_langchain_messages(payload.history)
-
-        logger.info("chat: 使用服务端记忆中的历史记录")
-        return self.memory.get_history(session_id)
-
-    async def _build_device_capabilities_prompt(self, device_id: Optional[str]) -> Optional[str]:
-        """Fetch device info and format its capabilities for system prompt injection."""
-        if not device_id:
-            return None
-        try:
-            device = await device_link_manager.get_device(device_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to load device info for capabilities", exc_info=True, extra={"device_id": device_id})
-            return None
-        return self._format_device_capabilities(device)
+    # ──────────────── effective model resolution ────────────────
 
     @staticmethod
-    def _format_device_capabilities(device: Optional[DeviceInfo]) -> Optional[str]:
-        if not device:
-            return None
-        capabilities = device.capabilities or {}
-        mcp = capabilities.get("mcp") if isinstance(capabilities, dict) else None
-        servers = (mcp or {}).get("servers") if isinstance(mcp, dict) else None
-        if not servers:
-            return None
+    def _effective_model() -> str:
+        from app.agents.anthropic_client import PROVIDER_PROFILES
 
-        lines: list[str] = ["设备已上报的 MCP 能力如下，请在生成指令时参考："]
-        for server in servers:
-            if not isinstance(server, dict):
-                continue
-            name = server.get("name") or server.get("id") or "未知服务器"
-            provider = server.get("provider")
-            server_type = server.get("type")
-            base_url = server.get("baseUrl") or server.get("base_url")
-            description = server.get("description")
+        profile = PROVIDER_PROFILES.get(settings.anthropic_provider)
+        return (
+            settings.anthropic_model
+            or (profile.default_model if profile else "")
+            or "unknown"
+        )
 
-            header_parts = [name]
-            detail_parts = [part for part in [provider, server_type, base_url] if part]
-            if detail_parts:
-                header_parts.append(f"({', '.join(str(p) for p in detail_parts)})")
-            if description:
-                header_parts.append(f"- {description}")
-            lines.append(f"- {' '.join(header_parts)}")
-
-            tools = server.get("tools") if isinstance(server.get("tools"), list) else []
-            if tools:
-                tool_lines = []
-                for tool in tools:
-                    if not isinstance(tool, dict):
-                        continue
-                    tool_name = tool.get("name") or "未命名工具"
-                    tool_desc = tool.get("description")
-                    entry = tool_name if not tool_desc else f"{tool_name}（{tool_desc}）"
-                    tool_lines.append(entry)
-                if tool_lines:
-                    lines.append("  工具: " + "; ".join(tool_lines))
-
-            prompts = server.get("prompts") if isinstance(server.get("prompts"), list) else []
-            if prompts:
-                prompt_lines = []
-                for prompt in prompts:
-                    if not isinstance(prompt, dict):
-                        continue
-                    prompt_name = prompt.get("name") or "未命名提示词"
-                    prompt_desc = prompt.get("description")
-                    entry = prompt_name if not prompt_desc else f"{prompt_name}（{prompt_desc}）"
-                    prompt_lines.append(entry)
-                if prompt_lines:
-                    lines.append("  提示词: " + "; ".join(prompt_lines))
-
-            resources = server.get("resources") if isinstance(server.get("resources"), list) else []
-            if resources:
-                resource_lines = []
-                for resource in resources:
-                    if not isinstance(resource, dict):
-                        continue
-                    res_name = resource.get("name") or resource.get("uri") or "资源"
-                    res_desc = resource.get("description")
-                    entry = res_name if not res_desc else f"{res_name}（{res_desc}）"
-                    resource_lines.append(entry)
-                if resource_lines:
-                    lines.append("  资源: " + "; ".join(resource_lines))
-
-        collected_at = (mcp or {}).get("collectedAt") or (mcp or {}).get("collected_at")
-        if collected_at:
-            lines.append(f"(以上能力同步时间: {collected_at})")
-
-        return "\n".join(lines)
+    # ──────────────── chat (non-streaming) ────────────────
 
     async def chat(
         self,
@@ -300,95 +209,56 @@ class AIChatService(BaseService):
         db: Optional[AsyncSession] = None,
         user: Optional[User] = None,
     ) -> ChatResponse:
-        logger.info("==================== AIChatService.chat 开始 ====================")
-        logger.info(f"chat: 用户消息: {payload.message[:100]}...")
-        logger.info(f"chat: session_id: {payload.session_id}")
-        logger.info(f"chat: remember: {payload.remember}")
-        logger.info(
-            "chat: target device",
-            extra={"target_device_id": payload.target_device_id, "target_device_name": payload.target_device_name},
-        )
-        
+        logger.info("AIChatService.chat: session=%s remember=%s device=%s",
+                    payload.session_id, payload.remember, payload.target_device_id)
+
         session_id = payload.session_id or str(uuid.uuid4())
-        logger.info(f"chat: 使用的 session_id: {session_id}")
-        
-        history_messages = await self._prepare_history_messages(
-            payload,
-            session_id,
-            db,
-            user,
+        history = await self._prepare_history(payload, session_id, db, user)
+        is_new_session = len(history) == 0
+
+        ctx = DeviceAgentContext(
+            session_id=session_id,
+            user_message=payload.message,
+            target_device_id=payload.target_device_id or "",
+            target_device_name=payload.target_device_name,
+            history=history,
+            system_prompt_override=payload.system_prompt,
+            broker_registry=self.permission_broker_registry,
         )
-        is_new_session = len(history_messages) == 0
-        logger.info(f"chat: 历史记录条数: {len(history_messages)}")
-        
-        history_messages.append(HumanMessage(content=payload.message))
-        logger.info(f"chat: 添加用户消息后，总消息数: {len(history_messages)}")
 
-        device_capabilities_prompt = await self._build_device_capabilities_prompt(payload.target_device_id)
+        events, answer_text, model = await DeviceAgent().run(ctx)
+        if not model:
+            model = self._effective_model()
 
-        # 调用 LangGraph 智能体
-        logger.info("chat: 正在调用 agent.ainvoke...")
-        try:
-            state = await self.agent.ainvoke(
-                messages=history_messages,
-                system_prompt=payload.system_prompt,
-                session_id=session_id,
-                target_device_id=payload.target_device_id,
-                target_device_name=payload.target_device_name,
-                device_capabilities_prompt=device_capabilities_prompt,
-            )
-            logger.info("chat: agent.ainvoke 调用成功")
-        except Exception as e:
-            logger.error(f"chat: agent.ainvoke 调用失败: {str(e)}", exc_info=True)
-            raise
-        
-        messages = state.get("messages", history_messages)
-        logger.info(f"chat: 从 state 中获取到 {len(messages)} 条消息")
-
-        # 写回会话记忆
-        if payload.remember:
-            logger.info("chat: 保存会话记忆")
-            self.memory.save_history(session_id, messages)
-
-        ai_message = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
-        if ai_message:
-            answer_text = str(ai_message.content)
-            logger.info(f"chat: AI 回复长度: {len(answer_text)} 字符")
-            logger.info(f"chat: AI 回复预览: {answer_text[:100]}...")
-        else:
-            answer_text = ""
-            logger.warning("chat: 未找到 AI 回复消息")
+        # Build the messages list for the response: original history + this turn.
+        messages = _history_to_chat_messages(history) + [
+            ChatMessage(role="user", content=payload.message),
+            ChatMessage(role="ai", content=answer_text),
+        ]
 
         if payload.remember and user and db:
             try:
                 await self._persist_exchange(
-                    db,
-                    user,
-                    session_id,
-                    payload.message,
-                    answer_text,
+                    db, user, session_id,
+                    payload.message, answer_text,
                     title_hint=None,
                 )
                 if is_new_session:
                     await self._try_generate_and_update_session_title(
-                        db,
-                        user,
-                        session_id,
-                        payload.message,
-                        answer_text,
+                        db, user, session_id, payload.message, answer_text,
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("chat: 持久化会话失败: %s", exc)
 
-        response = ChatResponse(
+        return ChatResponse(
             session_id=session_id,
             answer=answer_text,
-            model=self.agent.model_name,
-            messages=self._to_chat_messages(messages),
+            model=model,
+            messages=messages,
             message="ok",
         )
-        logger.info("==================== AIChatService.chat 完成 ====================")
-        return response
+
+    # ──────────────── chat (streaming, SSE) ────────────────
 
     async def chat_stream(
         self,
@@ -396,268 +266,101 @@ class AIChatService(BaseService):
         db: Optional[AsyncSession] = None,
         user: Optional[User] = None,
     ) -> AsyncIterator[str]:
-        """流式返回模型回复，SSE 格式。"""
-        logger.info("==================== AIChatService.chat_stream 开始 ====================")
-        logger.info(f"chat_stream: 用户消息: {payload.message[:100]}...")
-        logger.info(f"chat_stream: remember: {payload.remember}")
-        logger.info(
-            "chat_stream: target device",
-            extra={"target_device_id": payload.target_device_id, "target_device_name": payload.target_device_name},
-        )
+        logger.info("AIChatService.chat_stream: session=%s remember=%s device=%s",
+                    payload.session_id, payload.remember, payload.target_device_id)
 
         session_id = payload.session_id or str(uuid.uuid4())
-        logger.info(f"chat_stream: 使用的 session_id: {session_id}")
+        history = await self._prepare_history(payload, session_id, db, user)
+        is_new_session = len(history) == 0
 
-        history_messages = await self._prepare_history_messages(
-            payload,
-            session_id,
-            db,
-            user,
-        )
-        is_new_session = len(history_messages) == 0
-        logger.info(f"chat_stream: 历史记录 {len(history_messages)} 条（数据库/内存加载）")
-        if history_messages:
-            logger.info("chat_stream: 历史记录概览（数据库/内存加载）:")
-            for i, msg in enumerate(history_messages[:5]):  # 只显示前5条
-                msg_type = type(msg).__name__
-                content_preview = str(msg.content)[:50] if hasattr(msg, 'content') else ''
-                logger.info(f"  [{i+1}] {msg_type}: {content_preview}...")
-            if len(history_messages) > 5:
-                logger.info(f"  ... (还有 {len(history_messages) - 5} 条)")
-
-        history_messages.append(HumanMessage(content=payload.message))
-        logger.info(f"chat_stream: 添加用户消息后共 {len(history_messages)} 条")
-
-        # 先返回 session 事件，便于前端更新会话
+        # Notify front-end of the session id first so it can update routing.
         yield self._sse_event({"event": "session", "session_id": session_id})
 
-        device_capabilities_prompt = await self._build_device_capabilities_prompt(payload.target_device_id)
+        ctx = DeviceAgentContext(
+            session_id=session_id,
+            user_message=payload.message,
+            target_device_id=payload.target_device_id or "",
+            target_device_name=payload.target_device_name,
+            history=history,
+            system_prompt_override=payload.system_prompt,
+            broker_registry=self.permission_broker_registry,
+        )
 
-        # 需要设备联动时不做逐字流式，确保工具调用后再返回。
-        if payload.target_device_id:
-            logger.info("chat_stream: 目标设备存在，使用非流式工具分支（实时进度）")
-            progress_queue: asyncio.Queue[Dict[str, object]] = asyncio.Queue()
-            state = None
+        agent = DeviceAgent()
+        answer_text = ""
+        model = ""
 
-            async def progress_callback(event: Dict[str, object]) -> None:
-                await progress_queue.put(event)
-
-            agent_task = asyncio.create_task(
-                self.agent.ainvoke_with_progress(
-                    messages=history_messages,
-                    system_prompt=payload.system_prompt,
-                    session_id=session_id,
-                    target_device_id=payload.target_device_id,
-                    target_device_name=payload.target_device_name,
-                    device_capabilities_prompt=device_capabilities_prompt,
-                    progress_callback=progress_callback,
-                )
-            )
-
-            try:
-                while True:
-                    # 优先清空已堆积的进度事件
-                    while True:
-                        try:
-                            progress = progress_queue.get_nowait()
-                        except asyncio.QueueEmpty:
-                            break
-
-                        event_type = progress.get("type")
-                        if not event_type:
-                            continue
-                        progress_payload = {k: v for k, v in progress.items() if k != "type"}
-                        progress_payload["event"] = event_type
-                        progress_payload["session_id"] = session_id
-                        yield self._sse_event(progress_payload)
-
-                    if agent_task.done():
-                        state = await agent_task
-                        while True:
-                            try:
-                                progress = progress_queue.get_nowait()
-                            except asyncio.QueueEmpty:
-                                break
-
-                            event_type = progress.get("type")
-                            if not event_type:
-                                continue
-                            progress_payload = {k: v for k, v in progress.items() if k != "type"}
-                            progress_payload["event"] = event_type
-                            progress_payload["session_id"] = session_id
-                            yield self._sse_event(progress_payload)
-                        break
-
-                    try:
-                        progress = await asyncio.wait_for(progress_queue.get(), timeout=0.1)
-                    except asyncio.TimeoutError:
-                        continue
-
-                    event_type = progress.get("type")
-                    if not event_type:
-                        continue
-                    progress_payload = {k: v for k, v in progress.items() if k != "type"}
-                    progress_payload["event"] = event_type
-                    progress_payload["session_id"] = session_id
-                    yield self._sse_event(progress_payload)
-            except Exception as exc:  # noqa: BLE001
-                logger.error("chat_stream: 工具分支执行失败: %s", exc, exc_info=True)
-                if not agent_task.done():
-                    agent_task.cancel()
-                yield self._sse_event({"event": "error", "message": str(exc)})
-                return
-
-            if state is None:
-                logger.error("chat_stream: agent 未返回 state")
-                yield self._sse_event({"event": "error", "message": "Agent 未返回结果"})
-                return
-
-            messages = state.get("messages", history_messages)
-            ai_message = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
-            answer_text = str(ai_message.content) if ai_message else ""
-            logger.info(
-                "chat_stream: 工具分支完成",
-                extra={"has_answer": bool(answer_text), "message_count": len(messages)},
-            )
-
-            if payload.remember:
-                logger.info("chat_stream: 保存会话记忆（工具分支）")
-                self.memory.save_history(session_id, messages)
-                if user and db:
-                    try:
-                        await self._persist_exchange(
-                            db,
-                            user,
-                            session_id,
-                            payload.message,
-                            answer_text,
-                            title_hint=None,
-                        )
-                        if is_new_session:
-                            await self._try_generate_and_update_session_title(
-                                db,
-                                user,
-                                session_id,
-                                payload.message,
-                                answer_text,
-                            )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("chat_stream: 持久化会话失败: %s", exc)
-
-            if answer_text:
-                yield self._sse_event({"event": "chunk", "content": answer_text})
-
-            yield self._sse_event(
-                {
-                    "event": "done",
-                    "session_id": session_id,
-                    "answer": answer_text,
-                    "model": self.agent.model_name,
-                    "messages": self._to_chat_messages(messages),
-                }
-            )
-            logger.info("==================== AIChatService.chat_stream 完成（工具分支） ====================")
-            return
-
-        ai_chunks: List[str] = []
         try:
-            async for token in self.agent.astream(
-                messages=history_messages,
-                system_prompt=payload.system_prompt,
-                session_id=session_id,
-            ):
-                ai_chunks.append(token)
-                yield self._sse_event({"event": "chunk", "content": token})
+            async for ev in agent.run_stream(ctx):
+                if not isinstance(ev, dict):
+                    continue
+                event_type = ev.get("type")
+                if not event_type:
+                    continue
+
+                if event_type == "run_start" and ev.get("model"):
+                    model = str(ev.get("model") or "")
+                if event_type == "run_complete":
+                    final_text = ev.get("final_text")
+                    if isinstance(final_text, str):
+                        answer_text = final_text
+                    elif isinstance(final_text, dict):
+                        # ``coerce_excerpt`` may return ``{"text": "...", "truncated": ...}``.
+                        text_val = final_text.get("text")
+                        if isinstance(text_val, str):
+                            answer_text = text_val
+
+                # SSE payload: drop the trace ``type`` and re-emit it as ``event``.
+                payload_out: Dict[str, Any] = {
+                    k: v for k, v in ev.items() if k != "type"
+                }
+                payload_out["event"] = event_type
+                payload_out["session_id"] = session_id
+                yield self._sse_event(payload_out)
+        except asyncio.CancelledError:
+            logger.info("chat_stream: cancelled session=%s", session_id)
+            raise
         except Exception as exc:  # noqa: BLE001
-            logger.error("chat_stream: LLM 流式输出失败: %s", exc, exc_info=True)
+            logger.exception("chat_stream: agent failed: %s", exc)
             yield self._sse_event({"event": "error", "message": str(exc)})
             return
 
-        answer_text = "".join(ai_chunks)
-        logger.info(f"chat_stream: 拼接后的回复长度 {len(answer_text)}")
+        if not model:
+            model = self._effective_model()
 
-        messages = history_messages + [AIMessage(content=answer_text)]
-        if payload.remember:
-            logger.info("chat_stream: 写入会话记忆")
-            self.memory.save_history(session_id, messages)
-            if user and db:
-                try:
-                    await self._persist_exchange(
-                        db,
-                        user,
-                        session_id,
-                        payload.message,
-                        answer_text,
-                        title_hint=None,
+        messages = _history_to_chat_messages(history) + [
+            ChatMessage(role="user", content=payload.message),
+            ChatMessage(role="ai", content=answer_text),
+        ]
+
+        if payload.remember and user and db:
+            try:
+                await self._persist_exchange(
+                    db, user, session_id,
+                    payload.message, answer_text,
+                    title_hint=None,
+                )
+                if is_new_session:
+                    await self._try_generate_and_update_session_title(
+                        db, user, session_id, payload.message, answer_text,
                     )
-                    if is_new_session:
-                        await self._try_generate_and_update_session_title(
-                            db,
-                            user,
-                            session_id,
-                            payload.message,
-                            answer_text,
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("chat_stream: 持久化会话失败: %s", exc)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("chat_stream: 持久化会话失败: %s", exc)
 
         yield self._sse_event(
             {
                 "event": "done",
                 "session_id": session_id,
                 "answer": answer_text,
-                "model": self.agent.model_name,
-                "messages": self._to_chat_messages(messages),
+                "model": model,
+                "messages": [m.model_dump() for m in messages],
             }
         )
-        logger.info("==================== AIChatService.chat_stream 完成 ====================")
 
-    @staticmethod
-    def _to_langchain_messages(history: List[ChatMessage]) -> List[BaseMessage]:
-        """将前端消息转换为 LangChain 消息"""
-        converted: List[BaseMessage] = []
-        for item in history:
-            role = item.role.lower()
-            if role in ("ai", "assistant"):
-                converted.append(AIMessage(content=item.content))
-            elif role == "system":
-                converted.append(SystemMessage(content=item.content))
-            else:
-                converted.append(HumanMessage(content=item.content))
-        return converted
-
-    @staticmethod
-    def _to_chat_messages(messages: List[BaseMessage]) -> List[ChatMessage]:
-        """将 LangChain 消息转换为前端可用的结构"""
-        result: List[ChatMessage] = []
-        for msg in messages:
-            if isinstance(msg, HumanMessage):
-                role = "user"
-            elif isinstance(msg, AIMessage):
-                role = "ai"
-            elif isinstance(msg, SystemMessage):
-                role = "system"
-            elif isinstance(msg, ToolMessage):
-                role = "system"
-            else:
-                continue
-            result.append(ChatMessage(role=role, content=str(msg.content)))
-        return result
-
-    @staticmethod
-    def _chat_messages_to_dicts(messages: List[ChatMessage]) -> List[Dict[str, str]]:
-        """将 ChatMessage 转为可 JSON 序列化的字典。"""
-        dicts: List[Dict[str, str]] = []
-        for msg in messages:
-            try:
-                dicts.append(msg.model_dump())
-            except Exception:
-                dicts.append({"role": msg.role, "content": msg.content})
-        return dicts
+    # ──────────────── SSE helpers ────────────────
 
     @staticmethod
     def _sse_event(payload: Dict[str, object]) -> str:
-        """格式化 SSE 数据行。"""
         safe_payload = jsonable_encoder(payload)
         return f"data: {json.dumps(safe_payload, ensure_ascii=False)}\n\n"
 

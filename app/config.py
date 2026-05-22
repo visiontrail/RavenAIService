@@ -51,7 +51,6 @@ class Settings(BaseSettings):
     raven_metadata_file: str = "data/raven/package-metadata.json"
     upload_dir: str = "data/raven/uploads"
     upload_max_size_mb: int = 500
-    openai_base_url: Optional[str] = None
 
     # Package search Agent 配置（Claude Agent SDK 驱动的重构包智能检索）
     package_search_max_turns: int = 8
@@ -69,26 +68,7 @@ class Settings(BaseSettings):
     # 代码仓库配置（用于代码分析智能体克隆源码）
     code_repo_clone_base_dir: str = "temp/code_repos"
     code_repo_git_token: Optional[str] = None      # 全局 Git Token（私有仓库认证，可被 project_repo 单独 token 覆盖）
-    
-    # 仅使用本地部署统一入口
-    llm_provider: str = "GalaxySpace"
-    
-    # 本地模型 配置
-    deepseek_api_key: Optional[str] = "sk-rebTXHBiV7Nr1PRzaODQOZKztKqpv7bPoQE10dNItF9yIyBh"
-    # 使用 OpenAI 兼容客户端的基础URL（不包含 /chat/completions 以避免重复）
-    deepseek_base_url: str = "http://oneapi.yhroot.com/v1"
-    llm_model_name: str = "glm-4.6"
-    llm_reasoning_model: str = "glm-4.6"
 
-    # 轻量级模型 配置（用于会话摘要、标题生成等低延迟轻量任务）
-    # 留空则回退到 llm_model_name；base_url / api_key 留空则继承 deepseek_* 配置
-    llm_light_model_name: Optional[str] = None
-    llm_light_base_url: Optional[str] = None
-    llm_light_api_key: Optional[str] = None
-    llm_light_temperature: float = 0.2
-
-    llm_temperature: float = 0.0
-    
     # 上下文压缩/记忆配置
     agent_compression_strategy: str = "map_reduce_summarize"  # 可选：map_reduce_summarize | extractive | hybrid
     agent_short_term_window: int = 5  # 短时记忆窗口消息条数
@@ -103,7 +83,16 @@ class Settings(BaseSettings):
     anthropic_max_turns: int = 30
     anthropic_permission_mode: str = "acceptEdits"
     anthropic_request_timeout_seconds: int = 3600
+    anthropic_max_history_turns: int = 10
+    anthropic_small_fast_max_tokens: int = 1024
+    anthropic_small_fast_request_timeout_seconds: int = 30
     ai_analysis_max_extract_bytes: int = 2 * 1024 * 1024 * 1024  # 2 GiB
+
+    # DeviceAgent 专属（Claude Agent SDK 设备联动对话）
+    device_agent_permission_timeout_seconds: int = 120
+    device_agent_result_excerpt_bytes: int = 16 * 1024
+    device_agent_result_max_bytes: int = 256 * 1024
+    device_agent_max_remote_tools: int = 64
 
     # Agent Skills 数据目录（Claude Agent SDK Skill 包按 agent 隔离存储）
     skills_data_dir: str = "data/agent_skills"

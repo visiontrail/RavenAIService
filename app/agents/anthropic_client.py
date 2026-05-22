@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,11 @@ def build_options(
     thinking_budget_tokens: Optional[int] = None,
     mcp_servers: Optional[Dict[str, Any]] = None,
     setting_sources: Optional[List[str]] = None,
+    can_use_tool: Optional[Callable[..., Any]] = None,
+    hooks: Optional[Dict[str, List[Any]]] = None,
+    model: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    request_timeout_seconds: Optional[int] = None,
 ) -> Any:
     """构建 ClaudeAgentOptions，按 caller override → Settings → provider profile 优先级解析参数。
 
@@ -147,10 +152,19 @@ def build_options(
         )
 
     # 解析 effective 值：caller override → Settings → profile default
-    effective_model = (
-        settings.anthropic_model
-        or profile.default_model
-    )
+    if model is not None:
+        effective_model = model
+        if model != (settings.anthropic_model or ""):
+            logger.info(
+                "effective_model overridden by caller: %s (settings.anthropic_model=%s)",
+                model,
+                settings.anthropic_model,
+            )
+    else:
+        effective_model = (
+            settings.anthropic_model
+            or profile.default_model
+        )
     effective_base_url = (
         settings.anthropic_base_url
         or profile.default_base_url
@@ -243,5 +257,17 @@ def build_options(
 
     if setting_sources:
         options_kwargs["setting_sources"] = list(setting_sources)
+
+    if can_use_tool is not None:
+        options_kwargs["can_use_tool"] = can_use_tool
+
+    if hooks:
+        options_kwargs["hooks"] = hooks
+
+    if max_tokens is not None:
+        options_kwargs["max_tokens"] = max_tokens
+
+    if request_timeout_seconds is not None:
+        options_kwargs["request_timeout_seconds"] = request_timeout_seconds
 
     return ClaudeAgentOptions(**options_kwargs)

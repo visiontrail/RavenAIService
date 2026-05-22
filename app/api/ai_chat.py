@@ -15,7 +15,7 @@ from app.models.chat import ChatRequest, ChatResponse
 from app.models.database import get_db
 from app.services.ai_chat_service import ai_chat_service
 from app.services.chat_history_service import chat_history_service
-from app.services.light_llm_service import summarize_user_message
+from app.services.title_generator_service import summarize_user_message
 from app.services.log_analysis_chat_service import log_analysis_chat_service
 
 
@@ -38,6 +38,26 @@ class SummarizeResponse(BaseModel):
     summary: str
     session_id: Optional[str] = None
     persisted: bool = False
+
+
+class ChatPermissionResolveRequest(BaseModel):
+    """HITL 决策提交体（前端弹窗 -> 后端 broker）。
+
+    ``session_id`` 可选；提供时用于 O(1) 定位 broker，否则后端会扫描注册表。
+    ``updated_args`` 仅在 ``decision="allow"`` 且用户编辑参数时透传给 SDK。
+    """
+
+    decision: str
+    updated_args: Optional[dict] = None
+    message: Optional[str] = None
+    session_id: Optional[str] = None
+
+
+class ChatPermissionResolveResponse(BaseModel):
+    success: bool = True
+    message: str = "ok"
+    request_id: str
+    decision: str
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -137,6 +157,58 @@ async def chat_summarize_endpoint(
         summary=summary,
         session_id=resolved_session_id,
         persisted=persisted,
+    )
+
+
+@router.post(
+    "/chat/permissions/{request_id}/resolve",
+    response_model=ChatPermissionResolveResponse,
+    summary="DeviceAgent HITL 工具调用裁决",
+)
+async def chat_permission_resolve_endpoint(
+    request_id: str,
+    payload: ChatPermissionResolveRequest,
+    current_user=Depends(get_optional_user),  # noqa: ARG001  保留鉴权钩子位
+) -> ChatPermissionResolveResponse:
+    """Resolve a pending ``can_use_tool`` request raised by a DeviceAgent run.
+
+    Behaviour:
+    - 400 if ``decision`` is not ``"allow"``/``"deny"``, or ``updated_args`` is not dict.
+    - 404 if no broker holds ``request_id`` (already resolved, timed out, or unknown).
+    - 200 with ``{request_id, decision}`` echoed back on success.
+    """
+    decision = (payload.decision or "").strip().lower()
+    if decision not in {"allow", "deny"}:
+        raise HTTPException(status_code=400, detail="decision must be 'allow' or 'deny'")
+
+    if payload.updated_args is not None and not isinstance(payload.updated_args, dict):
+        raise HTTPException(status_code=400, detail="updated_args must be a JSON object")
+
+    decision_payload: dict = {"decision": decision}
+    if payload.updated_args is not None:
+        decision_payload["updated_args"] = payload.updated_args
+    if payload.message is not None:
+        msg = str(payload.message).strip()
+        if msg:
+            decision_payload["message"] = msg
+
+    registry = ai_chat_service.permission_broker_registry
+
+    # 1. Direct lookup by session_id when the client supplies one.
+    if payload.session_id:
+        broker = registry.get(payload.session_id)
+        if broker is not None and broker.resolve(request_id, decision_payload):
+            return ChatPermissionResolveResponse(request_id=request_id, decision=decision)
+
+    # 2. Fallback: scan all live brokers. The registry is per-session and typically
+    #    holds < 10 entries per user, so the linear walk is fine.
+    for broker in list(registry.values()):
+        if broker.resolve(request_id, decision_payload):
+            return ChatPermissionResolveResponse(request_id=request_id, decision=decision)
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"Permission request not found or already resolved: {request_id}",
     )
 
 

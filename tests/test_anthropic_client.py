@@ -38,6 +38,11 @@ class FakeClaudeAgentOptions:
     thinking: Optional[Dict[str, Any]] = None
     mcp_servers: Optional[Dict[str, Any]] = None
     add_dirs: Optional[List[str]] = None
+    setting_sources: Optional[List[str]] = None
+    can_use_tool: Optional[Any] = None
+    hooks: Optional[Dict[str, Any]] = None
+    max_tokens: Optional[int] = None
+    request_timeout_seconds: Optional[int] = None
 
 
 def _make_fake_sdk():
@@ -175,6 +180,72 @@ class TestBuildOptions:
 
         assert opts.mcp_servers == {"project_repo": mcp_mock}
         assert opts.allowed_tools == ["Bash", "mcp__project_repo__lookup_project_repo"]
+
+
+class TestBuildOptionsExtensions:
+    """Tests for the can_use_tool / hooks / model / max_tokens / request_timeout_seconds
+    additions introduced for DeviceAgent + lightweight Anthropic routing."""
+
+    def _build(self, settings_mock, **kwargs) -> FakeClaudeAgentOptions:
+        with patch("app.config.settings", settings_mock), \
+             patch.dict("sys.modules", {"claude_agent_sdk": _make_fake_sdk()}):
+            import importlib
+            import app.agents.anthropic_client as mod
+            importlib.reload(mod)
+            return mod.build_options(
+                system_prompt=kwargs.pop("system_prompt", "test prompt"),
+                allowed_tools=kwargs.pop("allowed_tools", ["Bash"]),
+                cwd=kwargs.pop("cwd", "/tmp/test"),
+                **kwargs,
+            )
+
+    def test_can_use_tool_passthrough(self, base_settings):
+        async def my_cb(tool_name, tool_input, context):  # pragma: no cover - identity check
+            return {"behavior": "allow"}
+
+        opts = self._build(base_settings, can_use_tool=my_cb)
+        assert opts.can_use_tool is my_cb
+
+    def test_hooks_passthrough(self, base_settings):
+        matcher = MagicMock()
+        opts = self._build(base_settings, hooks={"PostToolUse": [matcher]})
+        assert opts.hooks == {"PostToolUse": [matcher]}
+
+    def test_default_no_callback_no_hooks(self, base_settings):
+        opts = self._build(base_settings)
+        assert opts.can_use_tool is None
+        assert opts.hooks is None
+
+    def test_permission_mode_default_with_callback(self, base_settings):
+        async def cb(*a, **kw):  # pragma: no cover
+            return {"behavior": "allow"}
+
+        opts = self._build(base_settings, permission_mode="default", can_use_tool=cb)
+        assert opts.permission_mode == "default"
+        assert opts.can_use_tool is cb
+
+    def test_caller_model_overrides_settings(self, base_settings):
+        base_settings.anthropic_model = None
+        opts = self._build(base_settings, model="deepseek-v4-flash")
+        assert opts.model == "deepseek-v4-flash"
+        assert opts.env["ANTHROPIC_BASE_URL"] == "https://api.deepseek.com/anthropic"
+
+    def test_caller_model_overrides_settings_with_log(self, base_settings, caplog):
+        base_settings.anthropic_model = "deepseek-v4-pro"
+        with caplog.at_level(logging.INFO):
+            opts = self._build(base_settings, model="deepseek-v4-flash")
+        assert opts.model == "deepseek-v4-flash"
+        assert "overridden by caller" in caplog.text
+
+    def test_omitted_model_falls_back_to_settings(self, base_settings):
+        base_settings.anthropic_model = "deepseek-v4-pro"
+        opts = self._build(base_settings)
+        assert opts.model == "deepseek-v4-pro"
+
+    def test_max_tokens_and_request_timeout_passthrough(self, base_settings):
+        opts = self._build(base_settings, max_tokens=1024, request_timeout_seconds=30)
+        assert opts.max_tokens == 1024
+        assert opts.request_timeout_seconds == 30
 
 
 class TestConfigValidation:

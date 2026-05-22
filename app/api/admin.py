@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from app.models.database import get_db
 from app.security.admin_auth import ADMIN_TOKEN_HEADER, ADMIN_TOKEN_PREFIX, auth_manager
-from app.services import project_repo_service, runtime_settings_service, skills_service
+from app.services import project_repo_service, skills_service
 from app.services.prompts_config_service import (
     load_prompts_config,
     update_prompt_entries,
@@ -176,124 +176,6 @@ async def save_prompts_config(
         data=PromptsConfigData(**data),
         message="保存成功",
     )
-
-
-# ─────────────────── Runtime model settings ────────────────────────
-
-
-class LightModelData(BaseModel):
-    llm_light_model_name: Optional[str] = None
-    llm_light_base_url: Optional[str] = None
-    llm_light_api_key_set: bool = False
-    llm_light_temperature: float = 0.2
-    fallback_model_name: str = ""
-    fallback_base_url: str = ""
-
-
-class LightModelResponse(BaseModel):
-    success: bool = True
-    data: LightModelData
-    message: str = "ok"
-
-
-class LightModelUpdateRequest(BaseModel):
-    """轻量级模型设置更新请求。
-
-    传入空字符串表示清除该字段（恢复默认）。传 null 或省略表示不变。
-    `clear_api_key=true` 用于显式清除已存储的 API Key。
-    """
-
-    model_name: Optional[str] = Field(default=None, max_length=256)
-    base_url: Optional[str] = Field(default=None, max_length=512)
-    api_key: Optional[str] = Field(default=None, max_length=512)
-    temperature: Optional[float] = None
-    clear_api_key: bool = False
-
-
-@router.get("/settings/light-model", response_model=LightModelResponse)
-async def get_light_model_settings(
-    _username: str = Depends(require_admin),
-) -> LightModelResponse:
-    data = runtime_settings_service.get_all()
-    return LightModelResponse(data=LightModelData(**data), message="读取成功")
-
-
-@router.put("/settings/light-model", response_model=LightModelResponse)
-async def update_light_model_settings(
-    payload: LightModelUpdateRequest,
-    _username: str = Depends(require_admin),
-) -> LightModelResponse:
-    data = runtime_settings_service.update_light_model(
-        model_name=payload.model_name,
-        base_url=payload.base_url,
-        api_key=payload.api_key,
-        temperature=payload.temperature,
-        clear_api_key=payload.clear_api_key,
-    )
-    return LightModelResponse(data=LightModelData(**data), message="保存成功")
-
-
-# ─────────────────── Primary (主力) model settings ─────────────────
-
-
-class PrimaryModelData(BaseModel):
-    llm_primary_model_name: Optional[str] = None
-    llm_primary_base_url: Optional[str] = None
-    llm_primary_temperature: float = 0.0
-    llm_primary_api_key_set: bool = False
-    # 区分当前值是来自环境变量还是运行期覆盖
-    model_name_overridden: bool = False
-    base_url_overridden: bool = False
-    api_key_overridden: bool = False
-    temperature_overridden: bool = False
-    # 直接暴露 env / settings 中的原始值，供 UI 提示 "环境变量值"
-    env_model_name: str = ""
-    env_base_url: str = ""
-    env_api_key_set: bool = False
-    env_temperature: float = 0.0
-
-
-class PrimaryModelResponse(BaseModel):
-    success: bool = True
-    data: PrimaryModelData
-    message: str = "ok"
-
-
-class PrimaryModelUpdateRequest(BaseModel):
-    """主力模型设置更新请求。
-
-    传入空字符串表示清除该字段（回退到环境变量/默认值）。传 null 或省略表示不变。
-    `clear_api_key=true` 用于显式清除已存储的 API Key 覆盖。
-    """
-
-    model_name: Optional[str] = Field(default=None, max_length=256)
-    base_url: Optional[str] = Field(default=None, max_length=512)
-    api_key: Optional[str] = Field(default=None, max_length=512)
-    temperature: Optional[float] = None
-    clear_api_key: bool = False
-
-
-@router.get("/settings/primary-model", response_model=PrimaryModelResponse)
-async def get_primary_model_settings(
-    _username: str = Depends(require_admin),
-) -> PrimaryModelResponse:
-    data = runtime_settings_service.get_all_primary()
-    return PrimaryModelResponse(data=PrimaryModelData(**data), message="读取成功")
-
-
-@router.put("/settings/primary-model", response_model=PrimaryModelResponse)
-async def update_primary_model_settings(
-    payload: PrimaryModelUpdateRequest,
-    _username: str = Depends(require_admin),
-) -> PrimaryModelResponse:
-    data = runtime_settings_service.update_primary_model(
-        model_name=payload.model_name,
-        base_url=payload.base_url,
-        api_key=payload.api_key,
-        temperature=payload.temperature,
-        clear_api_key=payload.clear_api_key,
-    )
-    return PrimaryModelResponse(data=PrimaryModelData(**data), message="保存成功")
 
 
 # ─────────────────── Project Repo Registry ────────────────────────

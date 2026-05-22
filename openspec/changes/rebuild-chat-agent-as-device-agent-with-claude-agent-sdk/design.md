@@ -106,7 +106,14 @@ async def proxy(args: dict) -> dict:
 
 ### Decision 4：客户端结果审查 —— `PostToolUse` hook + 工具 output schema
 
-**SDK 接口**：`ClaudeAgentOptions.hooks={"PostToolUse": [HookMatcher(matcher="mcp__device__*", hooks=[validator])]}`，validator 返回 `{"hookSpecificOutput":{"hookEventName":"PostToolUse","permissionDecision":"allow"|"deny", "permissionDecisionReason"?:str, "modifiedContent"?:str|list}}`。
+**SDK 接口**：`ClaudeAgentOptions.hooks={"PostToolUse": [HookMatcher(matcher="mcp__device__*", hooks=[validator])]}`，validator 返回 `{"hookSpecificOutput":{"hookEventName":"PostToolUse","updatedMCPToolOutput": {"content":[{"type":"text","text":"<json>"}]}}}`。
+
+> 注：spec.md / 早期 design 草案里写的是 `"modifiedContent"` 字段，实际 ``claude-agent-sdk``
+> 的 `PostToolUseHookSpecificOutput` 用 `updatedMCPToolOutput`（in-process MCP 工具输出
+> 形态）。实现以 SDK 实际字段为准；二者语义等价（"用新的内容替换原 tool_response 喂回模型"），
+> `app/agents/device_agent/post_tool_hook.py` 顶部注释做了相同说明。决定采用**手写最小子集
+> JSON Schema 校验**而非引入 `jsonschema` 依赖：本期只需要 `type` + `required` 检查，
+> 不值得多一份运行期依赖；如果未来需要 `oneOf`/`anyOf` 复杂校验再补依赖。
 
 **Validator 职责**：
 1. 解析上位机回包（`result`、`evidence`、`error`、`topic_id`）。
