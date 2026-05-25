@@ -7,16 +7,18 @@ import type {
   DeviceInfo,
   PackageAgentSearchResponse,
   RavenPackage,
-  ChatMessageRecord,
 } from '@/types'
 import { renderMarkdown } from '@/utils/markdownRenderer'
 import { useUserStore } from '@/stores/user'
 import { useAppStore } from '@/stores/app'
 import { useChatSessionStore } from '@/stores/chatSession'
+import {
+  useConversationRunsStore,
+  type ChatEntry,
+  type PendingPermission,
+} from '@/stores/conversationRuns'
 import AgentTraceStream from '@/components/AgentTraceStream.vue'
-import type { AgentTraceEvent } from '@/types/agentTrace'
 import { projectRepoApi, type ProjectRepoOption } from '@/api'
-import { resolveChatPermission } from '@/api/chat'
 
 type MentionOption =
   | { type: 'agent'; id: string; name: string; description?: string; agentType: 'package-manager' | 'log-analysis' }
@@ -41,16 +43,7 @@ const logAnalysisAgentOption: MentionOption = {
 const userStore = useUserStore()
 const appStore = useAppStore()
 const sessionStore = useChatSessionStore()
-
-type ChatRole = 'user' | 'ai' | 'system'
-type ChatEntry = {
-  id: string
-  role: ChatRole
-  content: string
-  kind?: 'plan' | 'device_action' | 'answer' | 'user'
-  traceEvents?: AgentTraceEvent[]
-  traceRunning?: boolean
-}
+const runsStore = useConversationRunsStore()
 
 const generateUUID = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -88,32 +81,37 @@ const selectedLogFile = ref<File | null>(null)
 
 const showTopMoreMenu = ref(false)
 
-const loadingMessages = ref(false)
-const chatHistory = ref<ChatEntry[]>([])
-const sessionId = ref<string | null>(null)
-const isSending = ref(false)
-const activeLogAnalysisSessionId = ref<string | null>(null)
+// Local session id used until the user sends the first message; once a run is
+// created or a history session is selected, the sessionStore drives this.
+const localSessionId = ref<string | null>(null)
 const cancelInFlight = ref(false)
 
-// DeviceAgent HITL (tool permission) state. ``pendingPermissions`` is a queue
-// so consecutive ``tool_permission_request`` events all surface; the modal
-// always displays the head entry. ``permissionDecisionInFlight`` disables
-// the buttons while we POST the resolution back to the broker.
-type PendingPermission = {
-  request_id: string
-  tool_name: string
-  risk: 'read' | 'write' | 'destructive'
-  rationale?: string
-  tool_input?: Record<string, unknown>
-  session_id?: string
-  editingArgs: string
-  editingError?: string | null
-}
-const pendingPermissions = ref<PendingPermission[]>([])
-const permissionDecisionInFlight = ref(false)
+// All per-conversation state (messages, isSending, pendingPermissions,
+// activeRunId, runAgentKind, subscription) now lives in the runs store keyed
+// by session id. The template binds to ``currentConversation`` so the panel
+// only ever reflects the selected session.
+const effectiveSessionId = computed<string | null>(
+  () => sessionStore.selectedSessionId || localSessionId.value,
+)
+const currentConversation = computed(() => {
+  const id = effectiveSessionId.value
+  return id ? runsStore.ensureState(id) : null
+})
+const chatHistory = computed<ChatEntry[]>(() => currentConversation.value?.messages || [])
+const loadingMessages = computed(() => !!currentConversation.value?.loadingMessages)
+const isSending = computed(() => !!currentConversation.value?.isSending)
+const pendingPermissions = computed<PendingPermission[]>(
+  () => currentConversation.value?.pendingPermissions || [],
+)
 const currentPermission = computed<PendingPermission | null>(() =>
   pendingPermissions.value.length > 0 ? pendingPermissions.value[0] : null,
 )
+const permissionDecisionInFlight = ref(false)
+// Sidebar cancel button only when the current session has an active run.
+const activeLogAnalysisSessionId = computed(() => {
+  const s = currentConversation.value
+  return s && s.runStatus === 'running' && s.runAgentKind === 'log_analysis' ? s.sessionId : null
+})
 
 // 关联项目（用于在日志分析 Agent 中显式指定项目身份；留空则回退到 metadata.json）
 const projectRepoOptions = ref<ProjectRepoOption[]>([])
@@ -167,8 +165,8 @@ onMounted(() => {
   document.addEventListener('click', handleClickOutside)
   document.addEventListener('keydown', handleKey)
   fetchDevices()
-  // If sidebar previously selected a session, load its messages now that the panel is mounted.
-  if (sessionStore.selectedSessionId && isLoggedIn.value) {
+  // Load the currently-selected session's messages on mount.
+  if (sessionStore.selectedSessionId) {
     loadMessages(sessionStore.selectedSessionId)
   }
 })
@@ -189,7 +187,7 @@ watch(chatHistory, () => { scrollToBottom() }, { deep: true })
 
 watch(() => sessionStore.selectSessionToken, () => {
   const id = sessionStore.selectedSessionId
-  if (id && isLoggedIn.value) loadMessages(id)
+  if (id) loadMessages(id)
 })
 
 watch(() => sessionStore.newChatToken, () => {
@@ -198,8 +196,8 @@ watch(() => sessionStore.newChatToken, () => {
 
 watch(isLoggedIn, (loggedIn) => {
   if (!loggedIn) {
-    chatHistory.value = []
-    sessionId.value = null
+    runsStore.reset()
+    localSessionId.value = null
   }
 })
 
@@ -221,31 +219,20 @@ const fetchDevices = async () => {
 }
 
 const loadMessages = async (id: string) => {
-  if (!isLoggedIn.value) return
-  loadingMessages.value = true
-  chatHistory.value = []
-  sessionId.value = id
+  localSessionId.value = id
   try {
-    const resp = await userApi.fetchMessages(id)
-    if (resp?.success && Array.isArray(resp.data)) {
-      chatHistory.value = (resp.data as ChatMessageRecord[]).map((item) => ({
-        id: item.id || generateUUID(),
-        role: (item.role === 'assistant' ? 'ai' : item.role) as ChatRole,
-        content: item.content || '',
-        kind: item.role === 'user' ? 'user' : 'answer',
-      }))
-    }
+    await runsStore.loadSession(id, {
+      authToken: (userStore.token as unknown as string) || null,
+      isLoggedIn: isLoggedIn.value,
+    })
   } catch (error) {
     console.error('加载会话消息失败', error)
     appStore.showNotification({ title: '加载消息失败', type: 'error' })
-  } finally {
-    loadingMessages.value = false
   }
 }
 
 const resetPanel = () => {
-  sessionId.value = null
-  chatHistory.value = []
+  localSessionId.value = null
   inputMessage.value = ''
   resetMentionState()
   nextTick(() => textareaRef.value?.focus())
@@ -253,9 +240,10 @@ const resetPanel = () => {
 
 const clearCurrentMessages = () => {
   showTopMoreMenu.value = false
-  if (!chatHistory.value.length) return
+  const state = currentConversation.value
+  if (!state || !state.messages.length) return
   if (!window.confirm('确定要清空当前消息吗？')) return
-  chatHistory.value = []
+  state.messages = []
 }
 
 const deleteCurrentSession = async () => {
@@ -266,6 +254,7 @@ const deleteCurrentSession = async () => {
   if (!confirmed) return
   try {
     await sessionStore.removeSession(id)
+    runsStore.clearSession(id)
     appStore.showNotification({ title: '会话已删除', type: 'success' })
   } catch (error) {
     console.error('删除会话失败', error)
@@ -471,167 +460,20 @@ const toggleLogAnalysisAgent = () => {
   ensureProjectRepoOptions()
 }
 
-const findMessageIndex = (id: string) => chatHistory.value.findIndex((msg) => msg.id === id)
-
-const ensureAnswerMessage = (answerId: string): ChatEntry => {
-  const idx = findMessageIndex(answerId)
-  if (idx !== -1) return chatHistory.value[idx]
-  const fallback: ChatEntry = { id: answerId, role: 'ai', content: '正在思考...', kind: 'answer' }
-  chatHistory.value.push(fallback)
-  return fallback
-}
-
-const insertBeforeAnswer = (answerId: string, entry: ChatEntry) => {
-  const idx = findMessageIndex(answerId)
-  if (idx === -1) chatHistory.value.push(entry)
-  else chatHistory.value.splice(idx, 0, entry)
-}
-
-const formatPlanMessage = (steps: any[]) => {
-  if (!Array.isArray(steps) || steps.length === 0) return '未生成计划。'
-  const lines: string[] = ['**计划步骤**']
-  steps.forEach((step, index) => {
-    const id = step?.id || `S${index + 1}`
-    const type = step?.type ? ` (${step.type})` : ''
-    const goal = step?.goal || '无描述'
-    lines.push(`- ${id}${type}: ${goal}`)
-    if (Array.isArray(step?.success_criteria) && step.success_criteria.length) {
-      lines.push(`  - 验证: ${step.success_criteria.join('; ')}`)
-    }
-  })
-  return lines.join('\n')
-}
-
-const formatDeviceActionMessage = (payload: any) => {
-  const order = typeof payload?.step_index === 'number' ? payload.step_index + 1 : null
-  const label = payload?.step_id || (order ? `步骤${order}` : '设备动作')
-  const goal = payload?.step_goal ? `：${payload.step_goal}` : ''
-  const lines: string[] = [`**设备动作 ${label}${goal}**`]
-  const answerText =
-    typeof payload?.answer === 'string' ? payload.answer
-      : payload?.answer ? String(payload.answer) : ''
-  if (answerText) lines.push(answerText)
-  else if (payload?.raw) lines.push(String(payload.raw))
-  else lines.push('无返回内容')
-  if (payload?.topic_id) lines.push(`- 话题ID: ${payload.topic_id}`)
-  return lines.join('\n')
-}
-
-const applyStreamEvent = (payload: any, answerId: string) => {
-  const type = payload?.event || payload?.type
-  if (payload?.session_id) {
-    sessionId.value = payload.session_id
-    sessionStore.setSelected(payload.session_id)
-  }
-  if (type === 'plan') {
-    insertBeforeAnswer(answerId, { id: generateUUID(), role: 'ai', content: formatPlanMessage(payload?.plan), kind: 'plan' })
-    return
-  }
-  if (type === 'device_action') {
-    insertBeforeAnswer(answerId, { id: generateUUID(), role: 'ai', content: formatDeviceActionMessage(payload), kind: 'device_action' })
-    return
-  }
-  if (type === 'log_analysis_status') {
-    const targetMessage = ensureAnswerMessage(answerId)
-    const statusText = payload?.message || 'Log Analysis Agent 正在处理...'
-    targetMessage.content = `**日志分析 Agent**\n\n${statusText}`
-    return
-  }
-  if (type === 'agent_trace') {
-    const targetMessage = ensureAnswerMessage(answerId)
-    if (!targetMessage.traceEvents) targetMessage.traceEvents = []
-    targetMessage.traceRunning = true
-    // Strip the SSE-level `event` field; the inner `type` is the trace
-    // event variant. Composable de-dupes by seq, so replayed frames on
-    // reconnect are safe.
-    const { event: _evt, ...trace } = payload as Record<string, unknown>
-    if (trace && typeof trace.seq === 'number' && typeof trace.type === 'string') {
-      targetMessage.traceEvents.push(trace as unknown as AgentTraceEvent)
-    }
-    return
-  }
-  if (type === 'log_analysis_context') return
-  if (type === 'session') return
-
-  // DeviceAgent trace events: forward to the AgentTraceStream component on
-  // the answer message. ``tool_permission_request`` additionally opens the
-  // HITL modal. Unknown events fall through silently (legacy compat).
-  const deviceTraceTypes = new Set([
-    'run_start', 'run_complete', 'cancelled',
-    'step_start', 'step_delta', 'step_end',
-    'thinking_start', 'thinking_delta', 'thinking_end',
-    'system_notice',
-    'tool_permission_request', 'tool_permission_resolved',
-    'result_validation',
-  ])
-  if (deviceTraceTypes.has(type)) {
-    const targetMessage = ensureAnswerMessage(answerId)
-    if (!targetMessage.traceEvents) targetMessage.traceEvents = []
-    if (type === 'run_start') targetMessage.traceRunning = true
-    const { event: _evt, ...trace } = payload as Record<string, unknown>
-    if (trace && typeof trace.seq === 'number' && typeof trace.type === 'string') {
-      targetMessage.traceEvents.push(trace as unknown as AgentTraceEvent)
-    }
-    if (type === 'run_complete') {
-      const finalText = (payload as any)?.final_text
-      if (typeof finalText === 'string' && finalText.trim()) {
-        targetMessage.content = finalText.trimStart()
-      }
-      targetMessage.traceRunning = false
-    }
-    if (type === 'tool_permission_request') {
-      const requestId = String((payload as any)?.request_id || '')
-      if (requestId) {
-        const toolInput = (payload as any)?.tool_input
-        pendingPermissions.value.push({
-          request_id: requestId,
-          tool_name: String((payload as any)?.tool_name || ''),
-          risk: ((payload as any)?.risk || 'write') as PendingPermission['risk'],
-          rationale: (payload as any)?.rationale || undefined,
-          tool_input: toolInput && typeof toolInput === 'object' ? toolInput : undefined,
-          session_id: (payload as any)?.session_id || sessionId.value || undefined,
-          editingArgs: toolInput ? JSON.stringify(toolInput, null, 2) : '{}',
-          editingError: null,
-        })
-      }
-    } else if (type === 'tool_permission_resolved') {
-      const requestId = String((payload as any)?.request_id || '')
-      if (requestId) {
-        pendingPermissions.value = pendingPermissions.value.filter(
-          (p) => p.request_id !== requestId,
-        )
-      }
-    }
-    return
-  }
-
-  const targetMessage = ensureAnswerMessage(answerId)
-  if (type === 'chunk' && typeof payload?.content === 'string') {
-    const chunk = payload.content
-    if (targetMessage.content === '正在思考...') {
-      const trimmedChunk = chunk.trimStart()
-      if (trimmedChunk) targetMessage.content = trimmedChunk
-    } else {
-      targetMessage.content += chunk
-    }
-  } else if (type === 'done') {
-    if (typeof payload?.answer === 'string' && payload.answer) targetMessage.content = payload.answer.trimStart()
-    else if (!targetMessage.content || targetMessage.content === '正在思考...') targetMessage.content = '（无回复内容）'
-    targetMessage.traceRunning = false
-  } else if (type === 'error') {
-    targetMessage.content = `调用后端失败：${payload?.message || '未知错误'}`
-    targetMessage.traceRunning = false
-  }
-}
+// NOTE: stream event handling, plan/device-action formatting, message
+// upserts, and SSE buffer parsing have all moved to
+// ``stores/conversationRuns.ts``. The remaining helpers here only support the
+// synchronous package-agent path (which doesn't go through ChatRunService).
 
 const submitPermissionDecision = async (
   decision: 'allow' | 'deny',
   options: { useEdited?: boolean } = {},
 ) => {
-  const head = pendingPermissions.value[0]
-  if (!head || permissionDecisionInFlight.value) return
+  const head = currentPermission.value
+  const sid = effectiveSessionId.value
+  if (!head || !sid || permissionDecisionInFlight.value) return
 
-  let updatedArgs: Record<string, unknown> | undefined
+  let updatedArgs: Record<string, unknown> | null = null
   if (decision === 'allow' && options.useEdited) {
     try {
       const parsed = JSON.parse(head.editingArgs || '{}')
@@ -650,49 +492,15 @@ const submitPermissionDecision = async (
   permissionDecisionInFlight.value = true
   try {
     const authToken = userStore.token as unknown as string | undefined
-    await resolveChatPermission(
-      head.request_id,
-      {
-        decision,
-        updated_args: updatedArgs ?? null,
-        session_id: head.session_id || sessionId.value || null,
-      },
-      authToken || null,
-    )
-    // Remove the head locally; tool_permission_resolved from SSE will be a no-op.
-    pendingPermissions.value = pendingPermissions.value.filter(
-      (p) => p.request_id !== head.request_id,
-    )
-  } catch (err: any) {
-    const status = err?.response?.status
-    if (status === 404) {
-      // Already resolved (timeout or external). Drop locally.
-      pendingPermissions.value = pendingPermissions.value.filter(
-        (p) => p.request_id !== head.request_id,
-      )
-    } else {
-      head.editingError = `提交失败：${err?.response?.data?.detail || err?.message || String(err)}`
-    }
+    await runsStore.submitPermission(sid, head.request_id, decision, {
+      updatedArgs,
+      authToken: authToken || null,
+    })
+  } catch {
+    // store has already recorded ``editingError`` on the entry
   } finally {
     permissionDecisionInFlight.value = false
   }
-}
-
-const processSseBuffer = (buffer: string, answerId: string) => {
-  let remaining = buffer.replace(/\r\n/g, '\n')
-  while (true) {
-    const idx = remaining.indexOf('\n\n')
-    if (idx === -1) break
-    const raw = remaining.slice(0, idx)
-    remaining = remaining.slice(idx + 2)
-    const trimmed = raw.trim()
-    if (!trimmed.startsWith('data:')) continue
-    const jsonStr = trimmed.replace(/^data:\s*/, '')
-    if (!jsonStr) continue
-    try { applyStreamEvent(JSON.parse(jsonStr), answerId) }
-    catch (err) { console.error('解析流式数据失败', err, jsonStr) }
-  }
-  return remaining
 }
 
 const handleKeydown = (event: KeyboardEvent) => {
@@ -726,9 +534,13 @@ const handleInput = (event: Event) => updateMentionState(event)
 const extractPackageQuery = (content: string) => content.replace(/@重构包配置管理员/g, '').trim()
 const extractLogAnalysisQuery = (content: string) => content.replace(/@日志分析/g, '').trim()
 
-const runPackageAgent = async (content: string, answerId: string) => {
+const runPackageAgent = async (content: string, sid: string, state: ReturnType<typeof runsStore.ensureState>) => {
+  // Synchronous package-agent path — doesn't go through ChatRunService, so we
+  // mutate the per-session state directly.
   const query = extractPackageQuery(content)
-  const targetMessage = ensureAnswerMessage(answerId)
+  const answerId = state.currentAnswerId
+  const targetMessage = answerId ? state.messages.find((m) => m.id === answerId) : null
+  if (!targetMessage) return
   if (!query) {
     targetMessage.content = '请描述需要查找的重构包需求，例如型号、版本或用途。'
     return
@@ -749,12 +561,8 @@ const runPackageAgent = async (content: string, answerId: string) => {
     const aiContent = formatPackageAgentAnswer(data, recommendedPackages, query)
     targetMessage.content = aiContent
     if (isLoggedIn.value) {
-      if (!sessionId.value) {
-        sessionId.value = generateUUID()
-        sessionStore.setSelected(sessionId.value)
-      }
       try {
-        await userApi.saveMessages(sessionId.value, content, aiContent, content.slice(0, 60))
+        await userApi.saveMessages(sid, content, aiContent, content.slice(0, 60))
         await sessionStore.load()
       } catch (error: any) {
         console.warn('保存重构包配置管理员对话失败', error)
@@ -766,236 +574,17 @@ const runPackageAgent = async (content: string, answerId: string) => {
   }
 }
 
-const buildAuthHeaders = (): Record<string, string> => {
-  const headers: Record<string, string> = {}
-  const authToken = userStore.token as unknown as string
-  if (isLoggedIn.value && authToken) headers.Authorization = `Bearer ${authToken}`
-  return headers
-}
-
-const consumeLogAnalysisStream = async (
-  resp: Response,
-  answerId: string,
-): Promise<{ done: boolean }> => {
-  // Reads the SSE body and returns { done: true } if the server emitted a
-  // terminal `done`/`error` event; otherwise { done: false } meaning the
-  // connection ended early and the caller should reconnect or poll.
-  if (!resp.body) throw new Error('响应体为空，无法流式读取')
-
-  const textStream = typeof TextDecoderStream !== 'undefined'
-    ? resp.body.pipeThrough(new TextDecoderStream()) : null
-  const reader = textStream ? textStream.getReader() : null
-  const binaryReader = !textStream ? resp.body.getReader() : null
-  const decoder = !textStream ? new TextDecoder('utf-8') : null
-  let buffer = ''
-  let terminal = false
-
-  const processChunk = (chunk: string) => {
-    buffer += chunk
-    let remaining = buffer.replace(/\r\n/g, '\n')
-    while (true) {
-      const idx = remaining.indexOf('\n\n')
-      if (idx === -1) break
-      const raw = remaining.slice(0, idx)
-      remaining = remaining.slice(idx + 2)
-      const trimmed = raw.trim()
-      if (!trimmed.startsWith('data:')) continue
-      const jsonStr = trimmed.replace(/^data:\s*/, '')
-      if (!jsonStr) continue
-      try {
-        const payload = JSON.parse(jsonStr)
-        applyStreamEvent(payload, answerId)
-        const type = payload?.event || payload?.type
-        if (type === 'done' || type === 'error') terminal = true
-      } catch (err) {
-        console.error('解析流式数据失败', err, jsonStr)
-      }
-    }
-    buffer = remaining
-  }
-
-  if (reader) {
-    while (true) {
-      const { value, done } = await reader.read()
-      if (value) processChunk(value)
-      if (done) break
-    }
-  } else if (binaryReader && decoder) {
-    while (true) {
-      const { value, done } = await binaryReader.read()
-      if (value) processChunk(decoder.decode(value, { stream: !done }))
-      if (done) break
-    }
-  }
-  if (buffer.trim()) processChunk('\n\n')
-  return { done: terminal }
-}
-
-const pollLogAnalysisResult = async (
-  pollSessionId: string,
-  answerId: string,
-): Promise<boolean> => {
-  // Last-resort fallback when SSE keeps failing. Polls `/result` until the
-  // server reports the Job is done, then renders the final events.
-  let renderedCount = 0
-  const headers = buildAuthHeaders()
-  const startedAt = Date.now()
-  const maxMs = 60 * 60 * 1000
-
-  while (Date.now() - startedAt < maxMs) {
-    try {
-      const resp = await fetch(
-        getServiceUrl(`/api/v1/ai-chat/log-analysis/result?session_id=${encodeURIComponent(pollSessionId)}`),
-        { headers },
-      )
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-      const snapshot = await resp.json()
-      const events: any[] = Array.isArray(snapshot?.events) ? snapshot.events : []
-      for (let i = renderedCount; i < events.length; i++) {
-        applyStreamEvent(events[i], answerId)
-      }
-      renderedCount = events.length
-      if (snapshot?.status === 'done') return true
-      if (snapshot?.status === 'not_found') {
-        // Job dropped from registry (process restart / retention expired).
-        return false
-      }
-    } catch (err) {
-      console.warn('轮询日志分析结果失败，将重试', err)
-    }
-    await new Promise(resolve => setTimeout(resolve, 3000))
-  }
-  return false
-}
-
-const runLogAnalysisAgent = async (
-  content: string,
-  answerId: string,
-  historyPayload: { role: string; content: string }[],
-  fileForRequest: File | null,
-) => {
-  const query = extractLogAnalysisQuery(content) || (fileForRequest
-    ? '请分析这个日志包，给出概览、可疑异常和下一步建议。'
-    : '')
-  const targetMessage = ensureAnswerMessage(answerId)
-  if (!query && !fileForRequest) {
-    targetMessage.content = '请先上传日志包，或基于当前日志分析上下文输入一个追问。'
-    return
-  }
-
-  if (!sessionId.value) {
-    sessionId.value = generateUUID()
-    sessionStore.setSelected(sessionId.value)
-  }
-  activeLogAnalysisSessionId.value = sessionId.value
-
-  const formData = new FormData()
-  formData.append('message', query)
-  formData.append('session_id', sessionId.value)
-  formData.append('remember', 'true')
-  formData.append('history', JSON.stringify(historyPayload))
-  if (fileForRequest) formData.append('file', fileForRequest)
-  if (selectedProjectRepoId.value != null) {
-    formData.append('project_repo_id', String(selectedProjectRepoId.value))
-  }
-
-  if (fileForRequest) selectedLogFile.value = null
-
-  const headers = buildAuthHeaders()
-
-  try {
-    let resp: Response
-    try {
-      resp = await fetch(getServiceUrl('/api/v1/ai-chat/log-analysis/stream'), {
-        method: 'POST',
-        headers,
-        body: formData,
-      })
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    } catch (initialError) {
-      // Initial request itself failed (server unreachable, etc.). Restore the
-      // file so the user can retry.
-      if (fileForRequest) selectedLogFile.value = fileForRequest
-      throw initialError
-    }
-
-    let result = await consumeLogAnalysisStream(resp, answerId).catch(err => {
-      console.warn('SSE 流读取中断，将尝试重连', err)
-      return { done: false }
-    })
-
-    // The Agent Job lives on the server independent of this SSE. If the SSE
-    // closed early without a terminal event, reconnect with the same
-    // session_id (no file) to resume; on repeated failure, poll /result.
-    let attempts = 0
-    const maxReconnects = 3
-    while (!result.done && attempts < maxReconnects) {
-      attempts += 1
-      await new Promise(resolve => setTimeout(resolve, 1000 * attempts))
-      try {
-        const reconnectForm = new FormData()
-        reconnectForm.append('message', '')
-        reconnectForm.append('session_id', sessionId.value!)
-        reconnectForm.append('remember', 'false')
-        const r2 = await fetch(getServiceUrl('/api/v1/ai-chat/log-analysis/stream'), {
-          method: 'POST',
-          headers,
-          body: reconnectForm,
-        })
-        if (!r2.ok) throw new Error(`HTTP ${r2.status}`)
-        result = await consumeLogAnalysisStream(r2, answerId)
-      } catch (err) {
-        console.warn(`SSE 重连第 ${attempts} 次失败`, err)
-      }
-    }
-
-    if (!result.done) {
-      // Reconnect exhausted — fall back to polling.
-      const polled = await pollLogAnalysisResult(sessionId.value!, answerId)
-      if (!polled) {
-        const fallback = ensureAnswerMessage(answerId)
-        if (fallback.content === '正在思考...') {
-          fallback.content = '分析任务运行时间过长或被服务端清理，请稍后查询会话历史。'
-        }
-      }
-    }
-
-    const answerMessage = ensureAnswerMessage(answerId)
-    if (answerMessage.content === '正在思考...') answerMessage.content = '（无回复内容）'
-
-    if (isLoggedIn.value) {
-      try { await sessionStore.load() } catch (error) { console.warn('刷新会话列表失败', error) }
-    }
-  } catch (error: any) {
-    console.error('日志分析调用失败', error)
-    if (fileForRequest) selectedLogFile.value = fileForRequest
-    targetMessage.content = `日志分析调用失败：${error?.message || String(error)}`
-  } finally {
-    if (activeLogAnalysisSessionId.value === sessionId.value) {
-      activeLogAnalysisSessionId.value = null
-    }
-    cancelInFlight.value = false
-  }
-}
-
 const cancelLogAnalysis = async () => {
-  const sid = activeLogAnalysisSessionId.value
+  const sid = effectiveSessionId.value
   if (!sid || cancelInFlight.value) return
   cancelInFlight.value = true
   try {
-    const resp = await fetch(getServiceUrl('/api/v1/ai-chat/log-analysis/cancel'), {
-      method: 'POST',
-      headers: { ...buildAuthHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sid }),
+    await runsStore.cancelActiveRun(sid, {
+      authToken: (userStore.token as unknown as string) || null,
     })
-    if (!resp.ok) {
-      console.warn('取消日志分析失败', await resp.text())
-    }
-  } catch (err) {
-    console.warn('取消日志分析请求失败', err)
+  } finally {
+    cancelInFlight.value = false
   }
-  // cancelInFlight stays true until the agent emits its `done` event;
-  // runLogAnalysisAgent's finally block clears it.
 }
 
 const triggerSessionSummary = (userContent: string, sid: string | null) => {

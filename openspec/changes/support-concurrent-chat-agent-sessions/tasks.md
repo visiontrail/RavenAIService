@@ -21,9 +21,9 @@
 - [x] 3.4 实现 `subscribe(run_id)`：先 replay buffered events，再实时推送；SSE 断开不取消 job；15s heartbeat
 - [x] 3.5 实现 `get_active_run(session_id, user)`、`get_snapshot(run_id, user)`、`cancel(run_id, user)`、`evict_finished_jobs()`
 - [x] 3.6 加入并发保护：同一 session 只允许一个 active run；不同 session 可同时运行；可选 `chat_agent_max_concurrent_runs_per_user` 限流
-- [ ] 3.7 后端测试：两个 session 同时启动 fake DeviceAgent，各自产生事件并成功完成，事件和答案不串线
-- [ ] 3.8 后端测试：订阅 A run 后主动断开，run 继续完成；重新订阅可 replay 全部事件与 done
-- [ ] 3.9 后端测试：同一 session active 时再次发送新消息返回 409，并携带 active_run_id
+- [x] 3.7 后端测试：两个 session 同时启动 fake DeviceAgent，各自产生事件并成功完成，事件和答案不串线
+- [x] 3.8 后端测试：订阅 A run 后主动断开，run 继续完成；重新订阅可 replay 全部事件与 done
+- [x] 3.9 后端测试：同一 session active 时再次发送新消息返回 409，并携带 active_run_id
 
 ## 4. DeviceAgent run_id 与工作区隔离
 
@@ -31,7 +31,7 @@
 - [x] 4.2 修改 `app/agents/device_agent/workspace.prepare_session(session_id, run_id)`，创建包含 run_id 的独立路径
 - [x] 4.3 修改 DeviceAgent trace task_id：使用 `run_id`，并在所有 SSE payload 中带 `run_id/session_id`
 - [x] 4.4 将 workspace path 回写到 `ChatAgentRun.workspace_path`
-- [ ] 4.5 测试：并发两个 run 时 workspace path 不同，且均位于各自 session/run 目录下；终态后按策略清理
+- [x] 4.5 测试：并发两个 run 时 workspace path 不同，且均位于各自 session/run 目录下；终态后按策略清理
 
 ## 5. 权限 broker 改为 run-scoped
 
@@ -39,7 +39,7 @@
 - [x] 5.2 `tool_permission_request/resolved` 事件增加 `run_id`
 - [x] 5.3 `POST /chat/permissions/{request_id}/resolve` body 增加 optional `run_id`；解析优先级为 run_id -> session_id -> legacy scan
 - [x] 5.4 权限校验：resolver 只能 resolve 当前用户自己的 run；匿名 run 保持现有进程内可见语义
-- [ ] 5.5 测试：两个 session 同时各有 pending permission，按 run_id resolve 时只解锁对应 run
+- [x] 5.5 测试：两个 session 同时各有 pending permission，按 run_id resolve 时只解锁对应 run
 
 ## 6. API 端点改造
 
@@ -49,23 +49,23 @@
 - [x] 6.4 新增 `GET /api/v1/ai-chat/chat/runs/{run_id}/stream`
 - [x] 6.5 新增 `POST /api/v1/ai-chat/chat/runs/{run_id}/cancel`
 - [x] 6.6 扩展 `list_chat_sessions`：为每个 session 叠加 active run 状态，输出 optional run 字段
-- [ ] 6.7 API 测试：active-run 404/200、run snapshot 权限、run stream replay、cancel terminal event
+- [x] 6.7 API 测试：active-run 404/200、run snapshot 权限、run stream replay、cancel terminal event
 
 ## 7. LogAnalysis 主对话适配
 
-- [ ] 7.1 将 `LogAnalysisChatService` 创建/完成/cancel 的 `AgentJob` 状态投影到 `chat_agent_runs`
-- [ ] 7.2 为日志分析 active job 提供统一 snapshot：`run_id/session_id/agent_kind/events/trace_events/status/answer/error`
+- [x] 7.1 将 `LogAnalysisChatService` 创建/完成/cancel 的 `AgentJob` 状态投影到 `chat_agent_runs`
+- [x] 7.2 为日志分析 active job 提供统一 snapshot：`run_id/session_id/agent_kind/events/trace_events/status/answer/error`
 - [ ] 7.3 前端日志分析路径改用 conversation run store 的 active run 状态；移除全局 `activeLogAnalysisSessionId`
 - [ ] 7.4 测试：A 会话日志分析运行时切到 B 会话可发送 DeviceAgent；回 A 会话可恢复日志分析 trace 与取消按钮
 
 ## 8. 前端 per-session conversation store
 
-- [ ] 8.1 新增 `frontend/src/stores/conversationRuns.ts`（命名可调整），按 session_id 保存 messages、activeRunId、runStatus、isSending、pendingPermissions、subscription
-- [ ] 8.2 实现 `loadSession(sessionId)`：加载 DB messages，再查询 active-run，存在则 merge virtual assistant message 并订阅 run stream
-- [ ] 8.3 实现 `startRun(sessionId, payload)`：本地 append user + assistant placeholder，创建/订阅 backend run
-- [ ] 8.4 实现 `applyRunEvent(sessionId, runId, payload)`：按 run_id+seq 去重，只更新匹配 session 的 state
-- [ ] 8.5 实现切会话时 abort 旧 subscription 但不 cancel 后端 run
-- [ ] 8.6 将 pending HITL 弹窗从 `AIChat.vue` 局部 ref 迁移到 run store，按当前 session/run 显示
+- [x] 8.1 新增 `frontend/src/stores/conversationRuns.ts`（命名可调整），按 session_id 保存 messages、activeRunId、runStatus、isSending、pendingPermissions、subscription
+- [x] 8.2 实现 `loadSession(sessionId)`：加载 DB messages，再查询 active-run，存在则 merge virtual assistant message 并订阅 run stream
+- [x] 8.3 实现 `startRun(sessionId, payload)`：本地 append user + assistant placeholder，创建/订阅 backend run
+- [x] 8.4 实现 `applyRunEvent(sessionId, runId, payload)`：按 run_id+seq 去重，只更新匹配 session 的 state
+- [x] 8.5 实现切会话时 abort 旧 subscription 但不 cancel 后端 run
+- [x] 8.6 将 pending HITL 弹窗从 `AIChat.vue` 局部 ref 迁移到 run store，按当前 session/run 显示
 - [ ] 8.7 前端单元测试：A run streaming 时切 B，A 后续事件不写入 B；B 可发送并独立完成
 
 ## 9. AIChat.vue 与 WorkbenchLayout.vue 改造

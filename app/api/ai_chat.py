@@ -441,6 +441,7 @@ async def chat_run_cancel_endpoint(
 
 @router.post("/log-analysis/stream", summary="主对话日志分析（流式）")
 async def log_analysis_stream_endpoint(
+    http_request: Request,
     message: str = Form("", description="用户问题"),
     session_id: Optional[str] = Form(None, description="对话会话ID"),
     history: Optional[str] = Form(None, description="前端传入的历史消息 JSON"),
@@ -461,6 +462,8 @@ async def log_analysis_stream_endpoint(
         session_id, bool(file and file.filename), project_repo_id,
     )
     logger.info("=" * 80)
+    cookie_carrier = Response()
+    owner_scope = resolve_owner_scope(http_request, cookie_carrier, current_user)
     try:
         generator = log_analysis_chat_service.stream(
             message=message,
@@ -471,8 +474,9 @@ async def log_analysis_stream_endpoint(
             project_repo_id=project_repo_id,
             db=db,
             user=current_user,
+            owner_scope=owner_scope,
         )
-        return StreamingResponse(
+        sr = StreamingResponse(
             generator,
             media_type="text/event-stream",
             headers={
@@ -480,6 +484,12 @@ async def log_analysis_stream_endpoint(
                 "X-Accel-Buffering": "no",
             },
         )
+        for raw in cookie_carrier.raw_headers:
+            name = raw[0].decode("latin-1") if isinstance(raw[0], bytes) else raw[0]
+            value = raw[1].decode("latin-1") if isinstance(raw[1], bytes) else raw[1]
+            if name.lower() == "set-cookie":
+                sr.raw_headers.append((b"set-cookie", value.encode("latin-1")))
+        return sr
     except Exception as exc:  # noqa: BLE001
         logger.exception("Log analysis chat stream request failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc

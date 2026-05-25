@@ -718,6 +718,93 @@ class ChatRunService:
                 )
                 last_activity = now
 
+    # ---- external (log_analysis) integration ----------------------------
+
+    def register_external_job(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        user_id: Optional[str],
+        owner_scope: str,
+        agent_kind: str,
+        user_message: str,
+        request_payload: Dict[str, Any],
+        events_ref: List[Dict[str, Any]],
+        trace_events_ref: List[Dict[str, Any]],
+    ) -> ChatRunJob:
+        """Register a run whose execution is driven by another service.
+
+        Used by :class:`LogAnalysisChatService` to project its in-memory
+        ``AgentJob`` lifecycle into the unified ChatRunJob registry so:
+
+        - ``GET /chat/sessions/{session_id}/active-run`` returns the
+          running log-analysis snapshot (events/trace_events/answer).
+        - ``list_chat_sessions`` sidebar overlay shows a spinner for the
+          session.
+        - ``cross-session HITL`` / restore code paths see the same run.
+
+        ``events_ref`` / ``trace_events_ref`` are shared list references —
+        appends made by the external driver are immediately visible through
+        the snapshot. The external driver is responsible for calling
+        :meth:`mark_external_terminal` when the run finishes/cancels.
+        """
+        self._evict_finished()
+        existing = self.get_active_job_for_session(owner_scope, session_id)
+        if existing is not None and existing.status not in TERMINAL_RUN_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": "该会话已有运行中的 agent run",
+                    "active_run_id": existing.run_id,
+                },
+            )
+        job = ChatRunJob(
+            run_id=run_id,
+            session_id=session_id,
+            user_id=user_id,
+            owner_scope=owner_scope,
+            agent_kind=agent_kind,
+            status=RUN_STATUS_RUNNING,
+            started_at=time.monotonic(),
+            user_message=user_message,
+            request_payload=request_payload,
+        )
+        # Share buffer references with the external driver so live subscribers
+        # of either side see the same event stream.
+        job.events = events_ref
+        job.trace_events = trace_events_ref
+        self._jobs[run_id] = job
+        self._active_by_owner_session[(owner_scope, session_id)] = run_id
+        return job
+
+    def mark_external_terminal(
+        self,
+        run_id: str,
+        terminal_status: str,
+        *,
+        answer: str = "",
+        model: str = "",
+        error: Optional[str] = None,
+    ) -> None:
+        """Mark an externally-driven run as terminal in the registry.
+
+        Counterpart to :meth:`register_external_job`. Idempotent. Clears the
+        active-session pointer so a new run can start immediately on the
+        same ``(owner_scope, session_id)``.
+        """
+        job = self._jobs.get(run_id)
+        if job is None:
+            return
+        if answer:
+            job.answer = answer
+        if model:
+            job.model = model
+        job.mark_status(terminal_status, error=error)
+        key = (job.owner_scope, job.session_id)
+        if self._active_by_owner_session.get(key) == run_id:
+            self._active_by_owner_session.pop(key, None)
+
     # ---- cancel ----------------------------------------------------------
 
     def cancel(self, run_id: str, owner_scope: Optional[str] = None) -> bool:

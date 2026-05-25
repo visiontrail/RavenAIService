@@ -59,6 +59,11 @@ class AgentJob:
     remember: bool
     filename: Optional[str]
     started_at: float
+    # run_id projects this job into the unified chat_agent_runs lifecycle so
+    # the sidebar overlay and /active-run snapshot can see log-analysis runs
+    # alongside DeviceAgent runs.
+    run_id: str = ""
+    owner_scope: str = ""
     events: List[Dict[str, Any]] = field(default_factory=list)
     # Raw AgentTraceEvent payloads (no SSE wrapper) for late-subscriber
     # full-history replay and for the final `done` frame to carry the
@@ -94,6 +99,7 @@ class LogAnalysisChatService:
         remember: bool,
         db: Optional[AsyncSession],
         user: Optional[User],
+        owner_scope: Optional[str] = None,
         project_repo_id: Optional[int] = None,
     ) -> AsyncIterator[str]:
         """SSE stream for one log-analysis turn.
@@ -233,6 +239,10 @@ class LogAnalysisChatService:
                 }
             )
 
+            run_id = str(uuid.uuid4())
+            effective_owner_scope = owner_scope or (
+                f"user:{user.id}" if getattr(user, "id", None) else "anon:legacy"
+            )
             job = AgentJob(
                 session_id=effective_session_id,
                 task_id=ctx.task_id,
@@ -242,8 +252,13 @@ class LogAnalysisChatService:
                 remember=bool(remember),
                 filename=context_meta.get("filename"),
                 started_at=time.monotonic(),
+                run_id=run_id,
+                owner_scope=effective_owner_scope,
             )
             self._jobs[effective_session_id] = job
+            # Project the job into the unified chat_agent_runs lifecycle so
+            # the active-run endpoint and sidebar overlay can show it.
+            await self._register_chat_run(job, ctx)
             job.task = asyncio.create_task(self._run_job_async(job, ctx))
 
             logger.info(
@@ -325,6 +340,172 @@ class LogAnalysisChatService:
         finally:
             job.done = True
             job.finished_at = time.monotonic()
+            # Project terminal state into chat_agent_runs + chat_run_service so
+            # snapshot endpoints and sidebar overlay reflect completion.
+            await self._finalize_chat_run(job)
+
+    async def _register_chat_run(self, job: AgentJob, ctx: WorkspaceContext) -> None:
+        """Create a ``chat_agent_runs`` row and register a ChatRunJob shadow.
+
+        Best-effort: persistence and registry failures are logged but do not
+        block the actual agent execution (the LogAnalysisChatService remains
+        the source of truth for execution; chat_run_service mirrors state).
+        """
+        from app.models.database import db_manager
+        from app.models.user import ChatAgentRun
+        from app.services.chat_run_service import (
+            RUN_STATUS_RUNNING,
+            chat_run_service,
+        )
+
+        request_payload: Dict[str, Any] = {
+            "filename": job.filename,
+            "log_id": job.context_meta.get("log_id"),
+            "log_type": job.context_meta.get("log_type"),
+            "project_repo_id": job.context_meta.get("project_repo_id"),
+        }
+
+        # Register the in-memory ChatRunJob first so even if DB write fails
+        # the sidebar/active-run endpoint still surfaces the running task.
+        try:
+            chat_run_service.register_external_job(
+                run_id=job.run_id,
+                session_id=job.session_id,
+                user_id=str(job.user_id) if job.user_id is not None else None,
+                owner_scope=job.owner_scope,
+                agent_kind="log_analysis",
+                user_message=job.question,
+                request_payload=request_payload,
+                events_ref=job.events,
+                trace_events_ref=job.trace_events,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "log-analysis chat: chat_run_service register failed run_id=%s: %s",
+                job.run_id,
+                exc,
+            )
+
+        if db_manager.session_factory is None:
+            return
+        try:
+            async with db_manager.session_factory() as db:
+                try:
+                    row = ChatAgentRun(
+                        id=job.run_id,
+                        session_id=job.session_id,
+                        user_id=(
+                            str(job.user_id) if job.user_id is not None else None
+                        ),
+                        owner_scope=job.owner_scope or "anon:legacy",
+                        agent_kind="log_analysis",
+                        status=RUN_STATUS_RUNNING,
+                        user_message=job.question or "",
+                        request_json=json.dumps(request_payload, ensure_ascii=False),
+                        workspace_path=ctx.temp_dir,
+                        started_at=datetime.utcnow(),
+                    )
+                    db.add(row)
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
+                    raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "log-analysis chat: chat_agent_runs row insert failed run_id=%s: %s",
+                job.run_id,
+                exc,
+            )
+
+    async def _finalize_chat_run(self, job: AgentJob) -> None:
+        """Update ``chat_agent_runs`` terminal state and clear active pointer.
+
+        Status mapping:
+        - ``cancel_requested`` → ``cancelled``
+        - ``job.error`` → ``failed``
+        - otherwise → ``succeeded``
+        """
+        if not job.run_id:
+            return
+
+        from app.models.database import db_manager
+        from app.models.user import ChatAgentRun
+        from app.services.chat_run_service import (
+            RUN_STATUS_CANCELLED,
+            RUN_STATUS_FAILED,
+            RUN_STATUS_SUCCEEDED,
+            chat_run_service,
+        )
+
+        # Prefer the agent's own status when available — cancel_requested may
+        # have been set after the agent already produced an answer.
+        agent_status = ""
+        if isinstance(job.result, dict):
+            agent_status = str(job.result.get("status") or "")
+        if job.error:
+            terminal_status = RUN_STATUS_FAILED
+        elif agent_status == "cancelled" or (
+            job.cancel_requested and not job.answer
+        ):
+            terminal_status = RUN_STATUS_CANCELLED
+        else:
+            terminal_status = RUN_STATUS_SUCCEEDED
+
+        result_model = ""
+        if isinstance(job.result, dict):
+            model_value = job.result.get("model")
+            if isinstance(model_value, str):
+                result_model = model_value
+
+        try:
+            chat_run_service.mark_external_terminal(
+                job.run_id,
+                terminal_status,
+                answer=job.answer or "",
+                model=result_model,
+                error=job.error,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "log-analysis chat: chat_run_service finalize failed run_id=%s: %s",
+                job.run_id,
+                exc,
+            )
+
+        if db_manager.session_factory is None:
+            return
+        try:
+            async with db_manager.session_factory() as db:
+                try:
+                    from sqlalchemy import select
+
+                    result = await db.execute(
+                        select(ChatAgentRun).where(ChatAgentRun.id == job.run_id)
+                    )
+                    row = result.scalar_one_or_none()
+                    if row is None:
+                        return
+                    row.status = terminal_status
+                    row.answer = job.answer or None
+                    row.model = result_model or None
+                    row.error = job.error
+                    row.finished_at = datetime.utcnow()
+                    try:
+                        row.trace_events_json = json.dumps(
+                            list(job.trace_events), ensure_ascii=False, default=str
+                        )
+                    except Exception:  # noqa: BLE001
+                        row.trace_events_json = None
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
+                    raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "log-analysis chat: chat_agent_runs finalize failed run_id=%s: %s",
+                job.run_id,
+                exc,
+            )
 
     async def _persist_job_result(
         self,
