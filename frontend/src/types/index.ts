@@ -4,6 +4,10 @@ export interface LogMetadata {
   environment?: string
   service_name?: string
   version?: string
+  version_info?: {
+    raw_content?: string
+    [key: string]: any
+  }
   tags?: string[]
   extra_fields?: Record<string, any>
 }

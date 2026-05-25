@@ -56,7 +56,7 @@
 - [x] 7.1 将 `LogAnalysisChatService` 创建/完成/cancel 的 `AgentJob` 状态投影到 `chat_agent_runs`
 - [x] 7.2 为日志分析 active job 提供统一 snapshot：`run_id/session_id/agent_kind/events/trace_events/status/answer/error`
 - [x] 7.3 前端日志分析路径改用 conversation run store 的 active run 状态；移除全局 `activeLogAnalysisSessionId`
-- [ ] 7.4 测试：A 会话日志分析运行时切到 B 会话可发送 DeviceAgent；回 A 会话可恢复日志分析 trace 与取消按钮
+- [x] 7.4 测试：A 会话日志分析运行时切到 B 会话可发送 DeviceAgent；回 A 会话可恢复日志分析 trace 与取消按钮
 
 ## 8. 前端 per-session conversation store
 
@@ -66,7 +66,7 @@
 - [x] 8.4 实现 `applyRunEvent(sessionId, runId, payload)`：按 run_id+seq 去重，只更新匹配 session 的 state
 - [x] 8.5 实现切会话时 abort 旧 subscription 但不 cancel 后端 run
 - [x] 8.6 将 pending HITL 弹窗从 `AIChat.vue` 局部 ref 迁移到 run store，按当前 session/run 显示
-- [ ] 8.7 前端单元测试：A run streaming 时切 B，A 后续事件不写入 B；B 可发送并独立完成
+- [x] 8.7 前端单元测试：A run streaming 时切 B，A 后续事件不写入 B；B 可发送并独立完成
 
 ## 9. AIChat.vue 与 WorkbenchLayout.vue 改造
 
@@ -75,7 +75,7 @@
 - [x] 9.3 点击历史 running session 时自动恢复 run snapshot + stream；不重复创建新 run
 - [x] 9.4 `WorkbenchLayout.vue` 会话行显示 running spinner，hover 菜单不遮挡 spinner
 - [x] 9.5 `chatSession` store 合并后端 `run_status` 与本地 running overlay；有 running run 时每 5s 轻量刷新
-- [ ] 9.6 前端组件/交互测试：侧边栏 spinner 出现/消失；点击 running 会话恢复 trace；终态刷新后显示最终 DB 消息
+- [x] 9.6 前端组件/交互测试：侧边栏 spinner 出现/消失；点击 running 会话恢复 trace；终态刷新后显示最终 DB 消息
 
 ## 10. 回归与发布检查
 

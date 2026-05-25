@@ -182,7 +182,7 @@
                     {{ log.filename }}
                   </p>
                   <p class="text-xs text-gray-500">
-                    {{ formatDateTime(log.upload_time) }}
+                    {{ formatDateTime(log.upload_time || log.created_at) }}
                   </p>
                 </div>
               </div>
@@ -351,7 +351,7 @@ const handleUpload = async () => {
 
 onMounted(() => {
   // 获取最近上传的文件
-  logStore.fetchLogs({ page: 1, size: 5 })
+  logStore.fetchLogs({ page: 1, per_page: 5 })
 })
 </script>
 

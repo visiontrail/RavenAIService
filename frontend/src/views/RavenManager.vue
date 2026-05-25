@@ -272,6 +272,11 @@ const handleFileInput = (event: Event) => {
   }
 }
 
+const triggerUploadInput = () => {
+  const input = globalThis.document?.getElementById('raven-upload-input') as HTMLInputElement | null
+  input?.click()
+}
+
 const handleDrop = (event: DragEvent) => {
   event.preventDefault()
   uploadZoneActive.value = false
@@ -758,7 +763,7 @@ onMounted(() => {
           <p class="rw-upload-hint">拖拽文件到此处，或</p>
           <button
             class="rw-btn-secondary"
-            @click="() => (document.getElementById('raven-upload-input') as HTMLInputElement)?.click()"
+            @click="triggerUploadInput"
           >
             选择文件
           </button>

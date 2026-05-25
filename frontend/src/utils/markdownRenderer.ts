@@ -12,6 +12,14 @@
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js'
 
+const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+
 /**
  * XML标签清理配置
  */
@@ -127,12 +135,12 @@ function cleanXmlAndMetadata(content: string): string {
  * 配置markdown-it实例
  */
 function createMarkdownRenderer(): MarkdownIt {
-  const md = new MarkdownIt({
+  const md: MarkdownIt = new MarkdownIt({
     html: true,        // 允许HTML标签
     linkify: true,     // 自动转换URL为链接
     typographer: true, // 启用一些语言中立的替换 + 引号美化
     breaks: false,     // 转换段落里的 '\n' 到 <br>
-    highlight: function (str, lang) {
+    highlight: function (str: string, lang: string): string {
       // 代码高亮处理
       if (lang && hljs.getLanguage(lang)) {
         try {
@@ -148,7 +156,7 @@ function createMarkdownRenderer(): MarkdownIt {
       }
       
       // 无语言标识或高亮失败时的fallback
-      const escaped = md.utils.escapeHtml(str)
+      const escaped = escapeHtml(str)
       return `<pre class="hljs"><code>${escaped}</code></pre>`
     }
   })
@@ -158,11 +166,10 @@ function createMarkdownRenderer(): MarkdownIt {
   md.renderer.rules.table_close = () => '</table></div>\n'
   
   // 自定义链接渲染规则（添加target="_blank"和安全属性）
-  const defaultLinkRender = md.renderer.rules.link_open || function(tokens, idx, options, env, self) {
-    return self.renderToken(tokens, idx, options)
-  }
+  type LinkOpenRule = NonNullable<typeof md.renderer.rules.link_open>
+  const defaultLinkRender = md.renderer.rules.link_open
   
-  md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
+  const linkOpenRule: LinkOpenRule = function (tokens, idx, options, env, self) {
     const aIndex = tokens[idx].attrIndex('target')
     
     if (aIndex < 0) {
@@ -173,8 +180,11 @@ function createMarkdownRenderer(): MarkdownIt {
     
     tokens[idx].attrPush(['rel', 'noopener noreferrer'])
     
-    return defaultLinkRender(tokens, idx, options, env, self)
+    return defaultLinkRender
+      ? defaultLinkRender(tokens, idx, options, env, self)
+      : self.renderToken(tokens, idx, options)
   }
+  md.renderer.rules.link_open = linkOpenRule
 
   return md
 }

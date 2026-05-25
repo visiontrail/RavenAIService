@@ -438,7 +438,7 @@ export class FormatAdapter {
       html = this.postprocessHtml(html)
       
       // 简单的HTML清理
-      return html
+      return this.sanitizeHtml(html)
     } catch (error) {
       console.error('Markdown处理失败:', error)
       return this.escapeHtml(content)
@@ -485,11 +485,11 @@ export class FormatAdapter {
       // 清理多余的空行
       .replace(/\n{3,}/g, '\n\n')
       // 修复表格格式
-      .replace(/\|([^|\n]+)\|/g, (match, cell) => `|${cell.trim()}|`)
+      .replace(/\|([^|\n]+)\|/g, (_match, cell) => `|${cell.trim()}|`)
       // 修复列表格式
       .replace(/^(\s*)[-*+]\s+/gm, '$1- ')
       // 修复代码块
-      .replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
+      .replace(/```(\w+)?\n([\s\S]*?)```/g, (_match, lang, code) => {
         return `\`\`\`${lang || ''}\n${code.trim()}\n\`\`\``
       })
       // 修复链接格式

@@ -711,15 +711,6 @@ const normalizeAIAnalysisResult = (raw: any) => {
   }
 }
 
-// 示例查询
-const exampleQueries = [
-  '分析所有错误日志',
-  '查找天线异常',
-  '统计告警信息',
-  '分析系统性能问题',
-  '查找连接失败原因'
-]
-
 // 计算属性
 const pageTitle = computed(() => {
   if (logStore.currentLog) {
@@ -1401,7 +1392,7 @@ const downloadAnalysisResult = () => {
 ${aiAnalysisResult.value.plan.content}
 
 ## 执行过程
-${aiAnalysisResult.value.acts.map((act, index) => `
+${aiAnalysisResult.value.acts.map((act: any, index: number) => `
 ### 步骤 ${index + 1}: ${act.title}
 **思考过程:**
 ${act.thought.reasoning}
@@ -1418,7 +1409,7 @@ ${aiAnalysisResult.value.final_result.summary}
 ${aiAnalysisResult.value.final_result.content}
 
 ### 推荐建议
-${aiAnalysisResult.value.final_result.recommendations.map(rec => `- ${rec}`).join('\n')}
+${aiAnalysisResult.value.final_result.recommendations.map((rec: string) => `- ${rec}`).join('\n')}
 `
     
     const blob = new Blob([content], { type: 'text/markdown' })

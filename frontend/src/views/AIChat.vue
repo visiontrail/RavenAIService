@@ -85,6 +85,7 @@ const showTopMoreMenu = ref(false)
 // created or a history session is selected, the sessionStore drives this.
 const localSessionId = ref<string | null>(null)
 const cancelInFlight = ref(false)
+const loadedSessionId = ref<string | null>(null)
 
 // All per-conversation state (messages, isSending, pendingPermissions,
 // activeRunId, runAgentKind, subscription) now lives in the runs store keyed
@@ -174,6 +175,8 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
   document.removeEventListener('keydown', handleKey)
+  const id = loadedSessionId.value || effectiveSessionId.value
+  if (id) runsStore.abortSubscription(id)
 })
 
 const scrollToBottom = async () => {
@@ -214,11 +217,16 @@ const fetchDevices = async () => {
 }
 
 const loadMessages = async (id: string) => {
+  if (loadedSessionId.value && loadedSessionId.value !== id) {
+    runsStore.abortSubscription(loadedSessionId.value)
+  }
+  loadedSessionId.value = id
   localSessionId.value = id
   try {
     await runsStore.loadSession(id, {
       authToken: (userStore.token as unknown as string) || null,
       isLoggedIn: isLoggedIn.value,
+      force: true,
     })
   } catch (error) {
     console.error('加载会话消息失败', error)
@@ -227,6 +235,9 @@ const loadMessages = async (id: string) => {
 }
 
 const resetPanel = () => {
+  const id = loadedSessionId.value || effectiveSessionId.value
+  if (id) runsStore.abortSubscription(id)
+  loadedSessionId.value = null
   localSessionId.value = null
   inputMessage.value = ''
   resetMentionState()
@@ -382,8 +393,8 @@ const updateMentionState = (event?: Event) => {
   mentionStart.value = lastAt
 }
 
-const setMentionOptionRef = (el: Element | null, idx: number) => {
-  mentionOptionRefs.value[idx] = el as HTMLElement | null
+const setMentionOptionRef = (el: unknown, idx: number) => {
+  mentionOptionRefs.value[idx] = el instanceof HTMLElement ? el : null
 }
 
 const applyMentionSelection = (option: MentionOption) => {
@@ -527,7 +538,6 @@ const handleKeydown = (event: KeyboardEvent) => {
 const handleInput = (event: Event) => updateMentionState(event)
 
 const extractPackageQuery = (content: string) => content.replace(/@重构包配置管理员/g, '').trim()
-const extractLogAnalysisQuery = (content: string) => content.replace(/@日志分析/g, '').trim()
 
 const runPackageAgent = async (content: string, sid: string, state: ReturnType<typeof runsStore.ensureState>) => {
   // Synchronous package-agent path — doesn't go through ChatRunService, so we

@@ -255,6 +255,16 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       const { event: _evt, ...trace } = payload as Record<string, unknown>
       if (trace && typeof trace.seq === 'number' && typeof trace.type === 'string') {
         target.traceEvents.push(trace as unknown as AgentTraceEvent)
+        if (trace.type === 'run_complete') {
+          state.runStatus = 'succeeded'
+          target.traceRunning = false
+        } else if (trace.type === 'cancelled') {
+          state.runStatus = 'cancelled'
+          target.traceRunning = false
+        } else if (trace.type === 'error') {
+          state.runStatus = 'failed'
+          target.traceRunning = false
+        }
       }
       return
     }
@@ -270,6 +280,10 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       if (type === 'run_complete') {
         const finalText = (payload as any)?.final_text
         if (typeof finalText === 'string' && finalText.trim()) target.content = finalText.trimStart()
+        state.runStatus = 'succeeded'
+        target.traceRunning = false
+      } else if (type === 'cancelled') {
+        state.runStatus = 'cancelled'
         target.traceRunning = false
       }
       if (type === 'tool_permission_request') {
@@ -311,9 +325,15 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     } else if (type === 'done') {
       if (typeof payload?.answer === 'string' && payload.answer) target.content = payload.answer.trimStart()
       else if (!target.content || target.content === '正在思考...') target.content = '（无回复内容）'
+      const resultStatus = String(payload?.result?.status || '').toLowerCase()
+      if (resultStatus === 'cancelled') state.runStatus = 'cancelled'
+      else if (resultStatus === 'stale') state.runStatus = 'stale'
+      else if (resultStatus === 'failed' || resultStatus === 'error') state.runStatus = 'failed'
+      else if (state.runStatus !== 'cancelled' && state.runStatus !== 'failed') state.runStatus = 'succeeded'
       target.traceRunning = false
     } else if (type === 'error') {
       target.content = `调用后端失败：${payload?.message || '未知错误'}`
+      state.runStatus = 'failed'
       target.traceRunning = false
     }
   }
@@ -328,6 +348,13 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     state.subscription = null
     // Keep seenSeq so a future reconnect to the same run still dedupes; the
     // map is small and cleared on session reload.
+  }
+
+  const terminalStatus = (state: ConversationState): RunStatus => {
+    if (state.runStatus === 'cancelled' || state.runStatus === 'failed' || state.runStatus === 'stale') {
+      return state.runStatus
+    }
+    return 'succeeded'
   }
 
   // ---- snapshot merge -----------------------------------------------------
@@ -488,6 +515,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     if (state.loaded && !opts.force) return state
 
     state.loadingMessages = true
+    let subscribeRunId: string | null = null
     try {
       if (opts.isLoggedIn) {
         try {
@@ -495,7 +523,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
           if (resp?.success && Array.isArray(resp.data)) {
             state.messages = (resp.data as ChatMessageRecord[]).map((item) => ({
               id: item.id || generateUUID(),
-              role: (item.role === 'assistant' ? 'ai' : item.role) as ChatRole,
+              role: item.role as ChatRole,
               content: item.content || '',
               kind: item.role === 'user' ? 'user' : 'answer',
             }))
@@ -514,9 +542,13 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         if (resp.ok) {
           const snapshot = await resp.json()
           mergeSnapshot(state, snapshot)
-          if (state.activeRunId) {
-            await subscribeRun(sessionId, state.activeRunId, { authToken: opts.authToken })
+          if (state.activeRunId && state.runStatus === 'running') {
+            subscribeRunId = state.activeRunId
+          } else if (state.activeRunId) {
+            markTerminal(state, terminalStatus(state))
           }
+        } else if (resp.status === 404 && (state.activeRunId || state.isSending)) {
+          markTerminal(state, terminalStatus(state))
         }
       } catch (err) {
         // 404 = no active run; anything else is just a warning.
@@ -528,6 +560,9 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       state.loaded = true
     } finally {
       state.loadingMessages = false
+    }
+    if (subscribeRunId) {
+      void subscribeRun(sessionId, subscribeRunId, { authToken: opts.authToken })
     }
     return state
   }
@@ -585,8 +620,9 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     // assistant id keeps the placeholder in place even after run_id arrives,
     // since the backend's session+run_id prologue will overwrite ours.
     const userDisplay = payload.message
+    const userMessageId = generateUUID()
     state.messages.push({
-      id: generateUUID(),
+      id: userMessageId,
       role: 'user',
       content: userDisplay,
       kind: 'user',
@@ -639,7 +675,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
           activeRunId = errBody?.active_run_id || errBody?.detail?.active_run_id || null
         } catch { /* ignore */ }
         // Roll back the optimistic append since backend is rejecting create.
-        state.messages = state.messages.filter((m) => m.id !== pendingAnswerId && m.content !== userDisplay)
+        state.messages = state.messages.filter((m) => m.id !== pendingAnswerId && m.id !== userMessageId)
         state.isSending = false
         if (activeRunId) {
           await subscribeRun(sessionId, activeRunId, opts)
@@ -712,9 +748,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       }
 
       const terminal = await reKeyPump()
-      if (terminal) {
-        markTerminal(state, state.runStatus === 'idle' ? 'succeeded' : state.runStatus)
-      }
+      if (terminal) markTerminal(state, terminalStatus(state))
     } catch (err: any) {
       if (err?.name === 'AbortError') return
       console.error('启动 DeviceAgent run 失败', err)
@@ -840,7 +874,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       }
 
       if (terminal) {
-        markTerminal(state, state.runStatus === 'idle' ? 'succeeded' : state.runStatus)
+        markTerminal(state, terminalStatus(state))
       } else {
         // SSE closed early without terminal — leave state.isSending true so the
         // sidebar spinner keeps spinning; user can re-select the session to
@@ -898,7 +932,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
           session_id: head.session_id || sessionId,
           // Add run_id when known. Backend prefers it over session_id.
           ...(head.run_id ? { run_id: head.run_id } : {}),
-        } as any,
+        },
         options.authToken || null,
       )
       state.pendingPermissions = state.pendingPermissions.filter((p) => p.request_id !== requestId)

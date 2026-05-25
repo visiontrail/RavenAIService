@@ -8,6 +8,7 @@ export interface ChatPermissionResolvePayload {
   updated_args?: Record<string, unknown> | null
   message?: string | null
   session_id?: string | null
+  run_id?: string | null
 }
 
 export interface ChatPermissionResolveResponse {
@@ -25,6 +26,7 @@ export interface ToolPermissionRequestEvent {
   risk: 'read' | 'write' | 'destructive'
   rationale?: string
   session_id?: string
+  run_id?: string
   seq?: number
   ts?: string
 }
@@ -37,6 +39,7 @@ export interface ToolPermissionResolvedEvent {
   updated_args?: Record<string, unknown> | null
   message?: string | null
   session_id?: string
+  run_id?: string
   seq?: number
   ts?: string
 }

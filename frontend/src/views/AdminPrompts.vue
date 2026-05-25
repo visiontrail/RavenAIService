@@ -535,7 +535,7 @@ onBeforeUnmount(() => {
               <button
                 class="admin-command-btn primary"
                 :disabled="saving || !hasUnsavedChanges"
-                @click="handleSave"
+                @click="() => handleSave()"
               >
                 <Save :size="15" />
                 <span>{{ saving ? '保存中' : '保存' }}</span>

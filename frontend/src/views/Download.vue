@@ -55,16 +55,6 @@ const groupedReleases = computed(() => {
   return groups
 })
 
-const latestByPlatform = computed(() => {
-  const result: Record<Platform, ReleaseItem | null> = { linux: null, macos: null, windows: null }
-  for (const platform of Object.keys(groups) as Platform[]) {
-    result[platform] = groups[platform][0] ?? null
-  }
-  return result
-})
-
-const groups = groupedReleases.value
-
 const formatBytes = (bytes: number): string => {
   if (bytes === 0) return '0 B'
   const k = 1024
