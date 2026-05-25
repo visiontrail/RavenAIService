@@ -55,7 +55,7 @@
 
 - [x] 7.1 将 `LogAnalysisChatService` 创建/完成/cancel 的 `AgentJob` 状态投影到 `chat_agent_runs`
 - [x] 7.2 为日志分析 active job 提供统一 snapshot：`run_id/session_id/agent_kind/events/trace_events/status/answer/error`
-- [ ] 7.3 前端日志分析路径改用 conversation run store 的 active run 状态；移除全局 `activeLogAnalysisSessionId`
+- [x] 7.3 前端日志分析路径改用 conversation run store 的 active run 状态；移除全局 `activeLogAnalysisSessionId`
 - [ ] 7.4 测试：A 会话日志分析运行时切到 B 会话可发送 DeviceAgent；回 A 会话可恢复日志分析 trace 与取消按钮
 
 ## 8. 前端 per-session conversation store
@@ -70,21 +70,21 @@
 
 ## 9. AIChat.vue 与 WorkbenchLayout.vue 改造
 
-- [ ] 9.1 `AIChat.vue` 删除全局 `chatHistory/sessionId/isSending/pendingPermissions` 主状态，改为从 conversation store 读取当前 session state
-- [ ] 9.2 输入框和发送按钮只按当前 session 的 `isSending` 禁用；其它 session running 不影响当前 session
-- [ ] 9.3 点击历史 running session 时自动恢复 run snapshot + stream；不重复创建新 run
-- [ ] 9.4 `WorkbenchLayout.vue` 会话行显示 running spinner，hover 菜单不遮挡 spinner
-- [ ] 9.5 `chatSession` store 合并后端 `run_status` 与本地 running overlay；有 running run 时每 5s 轻量刷新
+- [x] 9.1 `AIChat.vue` 删除全局 `chatHistory/sessionId/isSending/pendingPermissions` 主状态，改为从 conversation store 读取当前 session state
+- [x] 9.2 输入框和发送按钮只按当前 session 的 `isSending` 禁用；其它 session running 不影响当前 session
+- [x] 9.3 点击历史 running session 时自动恢复 run snapshot + stream；不重复创建新 run
+- [x] 9.4 `WorkbenchLayout.vue` 会话行显示 running spinner，hover 菜单不遮挡 spinner
+- [x] 9.5 `chatSession` store 合并后端 `run_status` 与本地 running overlay；有 running run 时每 5s 轻量刷新
 - [ ] 9.6 前端组件/交互测试：侧边栏 spinner 出现/消失；点击 running 会话恢复 trace；终态刷新后显示最终 DB 消息
 
 ## 10. 回归与发布检查
 
-- [ ] 10.1 后端测试集：`tests/api/test_chat_happy_path.py`、DeviceAgent tests、HITL tests、LogAnalysis chat stream tests 通过
-- [ ] 10.2 新增并发集成测试：两个不同 session 同时 fake agent run，总耗时证明并发而非串行等待
-- [ ] 10.3 前端 `vue-tsc --noEmit` 通过
+- [~] 10.1 后端测试集：`tests/api/test_chat_happy_path.py`、DeviceAgent tests、HITL tests、LogAnalysis chat stream tests 通过 — `test_chat_happy_path.py` 与其它 26 个 chat 测试全部通过（含 `_run_device_job` 的 `done` payload 补回 `messages` 字段）；`test_chat_hitl_integration.py::test_chat_stream_full_hitl_flow`、`test_log_analysis_chat_stream_trace.py` 中 2 个 reconnect-replay 用例在主分支上即已超时失败，与本变更无关，单独跟踪
+- [x] 10.2 新增并发集成测试：两个不同 session 同时 fake agent run，总耗时证明并发而非串行等待 — `tests/api/test_chat_concurrent_runs.py::test_two_sessions_run_concurrently_without_event_crosstalk`
+- [x] 10.3 前端 `vue-tsc --noEmit` 通过
 - [ ] 10.4 前端手测：A 会话发消息后切 B；侧边栏 A 转圈；B 可发消息；回 A 完整恢复内容
 - [ ] 10.5 手测 HITL：A 会话弹权限确认时切 B；回 A 弹窗仍在，可 allow/deny 并继续
-- [ ] 10.6 文档更新：`DEPLOY_USAGE.md` 补充多会话后台 run、stale run、工作区隔离和并发限制说明
+- [x] 10.6 文档更新：`DEPLOY_USAGE.md` 补充多会话后台 run、stale run、工作区隔离和并发限制说明
 
 ## 11. 多用户隔离补充
 

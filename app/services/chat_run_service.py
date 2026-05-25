@@ -562,6 +562,20 @@ class ChatRunService:
         job.mark_status(terminal_status, error=terminal_error)
         # Persist assistant message + terminal run state in a fresh session.
         await self._persist_terminal(job, terminal_status, remember=remember)
+        # Build the aggregated ``messages`` list expected by legacy clients of
+        # the streaming endpoint: original history + user_message + final
+        # assistant answer (only when we actually have one). This mirrors the
+        # contract the pre-ChatRunService AIChatService.chat_stream() observed.
+        history = ctx_kwargs.get("history") or []
+        composed_messages: List[Dict[str, Any]] = [
+            {"role": str(m.get("role", "user")), "content": str(m.get("content", ""))}
+            for m in history
+            if isinstance(m, dict)
+        ]
+        if job.user_message:
+            composed_messages.append({"role": "user", "content": job.user_message})
+        if job.answer:
+            composed_messages.append({"role": "ai", "content": job.answer})
         # Emit final ``done`` frame so subscribers can exit their loop.
         job.append_event(
             {
@@ -573,6 +587,7 @@ class ChatRunService:
                 "model": job.model,
                 "error": job.error,
                 "trace_truncated": job.trace_truncated,
+                "messages": composed_messages,
             }
         )
         # Clear the active-session pointer if it still points at us so a new

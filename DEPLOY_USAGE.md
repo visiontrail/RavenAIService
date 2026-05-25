@@ -52,8 +52,12 @@ API 端点（`app/api/ai_chat.py`）：
 | 方法 / 路径 | 用途 | 备注 |
 | --- | --- | --- |
 | `POST /api/v1/ai-chat/chat` | 非流式入口 | 返回 `ChatResponse{answer, model, session_id, messages}` |
-| `POST /api/v1/ai-chat/chat/stream` | SSE 流式入口 | 事件包含 `session`、`run_start`、`step_*`、`thinking_*`、`tool_permission_request/resolved`、`result_validation`、`run_complete`、`done` |
-| `POST /api/v1/ai-chat/chat/permissions/{request_id}/resolve` | HITL 决策回传 | body `{ decision: "allow"\|"deny", updated_args?, message?, session_id? }`；404 表示该请求已被 resolve 或超时 |
+| `POST /api/v1/ai-chat/chat/stream` | SSE 流式入口（create-or-subscribe） | 同一 `(owner_scope, session_id)` 已有 active run 时再次发送非空 `message` 返回 409 `{active_run_id}`；`message=""` 则订阅现有 run。事件包含 `session`、`run_start`、`step_*`、`thinking_*`、`tool_permission_request/resolved`、`result_validation`、`run_complete`、`done`，并在 payload 中携带 `run_id` / `session_id` |
+| `GET /api/v1/ai-chat/chat/sessions/{session_id}/active-run` | 查询当前会话 active run 的快照 | 200 含 `{run_id, status, agent_kind, events, trace_events, answer_so_far, pending_permissions}`；404 表示该 owner 下无 active run |
+| `GET /api/v1/ai-chat/chat/runs/{run_id}` | 获取 run 终态快照 | 内存命中优先；落库后从 `chat_agent_runs.trace_events_json` 回放；owner_scope 不匹配返回 404，不泄露其它用户 run 的存在 |
+| `GET /api/v1/ai-chat/chat/runs/{run_id}/stream` | 订阅指定 run 的 SSE | 先 replay buffered events，再实时接续；客户端断开**只**释放订阅，不会取消后台 Agent loop |
+| `POST /api/v1/ai-chat/chat/runs/{run_id}/cancel` | 主动取消 run | 仅 owner 可调用；对 DeviceAgent 调用 `asyncio.Task.cancel()`，对 LogAnalysis 调用其 cancel_event |
+| `POST /api/v1/ai-chat/chat/permissions/{request_id}/resolve` | HITL 决策回传 | body `{ decision, updated_args?, message?, run_id?, session_id? }`；解析顺序 `run_id` → `(owner_scope, session_id)` → legacy scan（始终按 owner_scope 过滤）；404 表示该请求已被 resolve 或超时 |
 
 ### 3. Skill 装载
 
@@ -77,7 +81,33 @@ DeviceAgent 与 Log Analysis Agent 共用 `app/services/skills_service.py` 的 S
 | `result_too_large` | PostToolUse 总长超过 `DEVICE_AGENT_RESULT_MAX_BYTES` | 调大上限或要求工具支持分页 |
 | `schema_mismatch` | 工具返回不符合 `Decision 10` 或 `outputSchema` | 查 trace 中的 `reason`，定位上位机字段 |
 
-### 5. 部署后观察清单
+### 5. 并发会话与后台 run
+
+自 `support-concurrent-chat-agent-sessions` 变更起，每次发送都会创建一个
+**ChatAgentRun**（落库 `chat_agent_runs` 表），由 `ChatRunService` 在后端独立持有
+生命周期。SSE 是订阅者，不是执行者：
+
+- **多会话并发**：不同 `(owner_scope, session_id)` 可以同时各自有一个 active run；
+  事件、HITL 弹窗、`.claude/skills` 工作区与最终持久化互不串线。
+- **单会话单 run**：同一 session 已有 active run 时再次发送 → HTTP 409 `{active_run_id}`，
+  前端可改用 `GET .../runs/{run_id}/stream` 订阅。
+- **离开窗口继续运行**：用户切到其它会话或关闭标签页只会释放订阅；后台 Agent loop
+  与 HITL broker 仍在运行。登录用户重新点击该 session 时通过 active-run snapshot 恢复
+  上下文与待裁决弹窗；匿名用户的恢复仅在进程内 retention 内有效。
+- **进程重启的 stale run**：服务启动时把 `chat_agent_runs.status IN ('queued','running')`
+  的旧 run 标记为 `stale`，并写入 `error="server restarted before run completed"`。
+  侧边栏 spinner 停转，用户重新发送即可。
+- **DeviceAgent 工作区隔离**：每个 run 的工作目录路径形如
+  `.../device_agent/<owner_scope>/<session_id>/<run_id>/`。即便两个用户使用相同
+  `session_id`，`.claude/skills` 与临时文件也完全隔离；可选保留时间由
+  `DEVICE_AGENT_RETAIN_WORKSPACE_SECONDS`（默认终态后立即清理）控制。
+- **可选每用户并发上限**：`CHAT_AGENT_MAX_CONCURRENT_RUNS_PER_USER`（默认 `0`，不限制）
+  超过时立即返回 429；用于压制突发流量。
+- **匿名用户隔离**：未登录请求的 `owner_scope = "anon:<server_generated>"`，承载在 cookie
+  或 `X-Client-Scope` header 上；同一用户多个 tab 仍共享同一 anon scope，跨用户/跨浏览器
+  无法触达彼此 run。
+
+### 6. 部署后观察清单
 
 - 首批对话的成功率（按 `done` vs `error` 事件计）。
 - 平均 HITL 等待时长（`tool_permission_request` → `tool_permission_resolved` 的 ts 差）。

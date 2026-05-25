@@ -201,11 +201,6 @@ watch(isLoggedIn, (loggedIn) => {
   }
 })
 
-const getServiceUrl = (path: string) => {
-  const hostname = window.location.hostname
-  return `http://${hostname}:8085${path}`
-}
-
 const fetchDevices = async () => {
   isLoadingDevices.value = true
   try {
@@ -611,19 +606,27 @@ const triggerSessionSummary = (userContent: string, sid: string | null) => {
 }
 
 const sendMessage = async () => {
-  if (isSending.value) return
+  // Only block the current session — other sessions running in the
+  // background do not affect this one.
+  if (currentConversation.value?.isSending) return
   const content = inputMessage.value.trim()
   const fileForRequest = selectedLogFile.value
   if (!content && !fileForRequest) return
 
-  // 预分配 session_id，确保摘要与对话流引用同一会话。
-  if (!sessionId.value) {
-    sessionId.value = generateUUID()
-    sessionStore.setSelected(sessionId.value)
+  // Allocate a session id locally if this is a brand-new conversation. The
+  // run service / DB layer will keep the same id for persistence.
+  let sid = effectiveSessionId.value
+  if (!sid) {
+    sid = generateUUID()
+    localSessionId.value = sid
+    sessionStore.setSelected(sid)
   }
-  // 立即触发轻量级模型摘要，更新历史侧边栏标题。
+  // Ensure a state object exists for the session before any local writes.
+  const state = runsStore.ensureState(sid)
+
+  // Fire-and-forget sidebar title summary.
   if (content) {
-    triggerSessionSummary(content, sessionId.value)
+    triggerSessionSummary(content, sid)
   }
 
   const shouldUseLogAnalysisAgent =
@@ -636,106 +639,88 @@ const sendMessage = async () => {
   if (shouldUseLogAnalysisAgent && targetAgent.value?.agentType !== 'log-analysis') {
     setTargetAgent(logAnalysisAgentOption)
   }
-
   if (shouldUsePackageAgent && !isPackageAgentSelected.value) {
     setTargetAgent(packageAgentOption)
   }
 
   const outgoingContent = content || '请分析这个日志包。'
-  const userDisplayContent = fileForRequest
-    ? `${outgoingContent}\n\n附件：${fileForRequest.name}`
-    : outgoingContent
-  const userMessage: ChatEntry = { id: generateUUID(), role: 'user', content: userDisplayContent, kind: 'user' }
-  chatHistory.value.push(userMessage)
+  const authToken = (userStore.token as unknown as string) || null
 
+  // History payload only for anonymous sessions; logged-in sessions reuse
+  // the DB transcript on the backend.
   const historyPayload = isLoggedIn.value
     ? []
-    : chatHistory.value.slice(0, -1).map(msg => ({ role: msg.role, content: msg.content }))
-
-  const answerMessageId = generateUUID()
-  // DeviceAgent path also emits agent_trace-style events, so allocate
-  // ``traceEvents`` for both log-analysis and the default device chat.
-  // Package-agent path stays unchanged (no trace stream).
-  const allocateTrace = shouldUseLogAnalysisAgent || !shouldUsePackageAgent
-  chatHistory.value.push({
-    id: answerMessageId,
-    role: 'ai',
-    content: '正在思考...',
-    kind: 'answer',
-    traceEvents: allocateTrace ? [] : undefined,
-    traceRunning: allocateTrace ? true : undefined,
-  })
+    : state.messages.map((msg) => ({ role: msg.role, content: msg.content }))
 
   inputMessage.value = ''
   resetMentionState()
-  isSending.value = true
 
   try {
     if (shouldUseLogAnalysisAgent) {
-      await runLogAnalysisAgent(outgoingContent, answerMessageId, historyPayload, fileForRequest)
-      return
-    }
-
-    if (shouldUsePackageAgent) {
-      await runPackageAgent(outgoingContent, answerMessageId)
-      return
-    }
-
-    const payload = {
-      message: outgoingContent,
-      session_id: sessionId.value || undefined,
-      history: historyPayload,
-      remember: true,
-      target_device_id: targetDeviceId.value || undefined,
-      target_device_name: targetDeviceName.value || undefined
-    }
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    const authToken = userStore.token as unknown as string
-    if (isLoggedIn.value && authToken) headers.Authorization = `Bearer ${authToken}`
-
-    const resp = await fetch(getServiceUrl('/api/v1/ai-chat/chat/stream'), {
-      method: 'POST', headers, body: JSON.stringify(payload)
-    })
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    if (!resp.body) throw new Error('响应体为空，无法流式读取')
-
-    const textStream = resp.body && typeof TextDecoderStream !== 'undefined'
-      ? resp.body.pipeThrough(new TextDecoderStream()) : null
-    const reader = textStream ? textStream.getReader() : null
-    const binaryReader = !textStream && resp.body ? resp.body.getReader() : null
-    const decoder = !textStream ? new TextDecoder('utf-8') : null
-    let buffer = ''
-
-    if (reader) {
-      while (true) {
-        const { value, done } = await reader.read()
-        if (value) { buffer += value; buffer = processSseBuffer(buffer, answerMessageId) }
-        if (done) break
+      const fileSnapshot = fileForRequest
+      // Clear the file from the composer; runLogAnalysisRun will append the
+      // user message with attachment info.
+      if (fileSnapshot) selectedLogFile.value = null
+      try {
+        await runsStore.startLogAnalysisRun(
+          sid,
+          {
+            message: outgoingContent,
+            history: historyPayload,
+            file: fileSnapshot,
+            project_repo_id: selectedProjectRepoId.value,
+            remember: true,
+          },
+          { authToken },
+        )
+      } catch (err) {
+        if (fileSnapshot) selectedLogFile.value = fileSnapshot
+        throw err
       }
-    } else if (binaryReader && decoder) {
-      while (true) {
-        const { value, done } = await binaryReader.read()
-        if (value) {
-          const decoded = decoder.decode(value, { stream: !done })
-          buffer += decoded
-          buffer = processSseBuffer(buffer, answerMessageId)
-        }
-        if (done) break
+    } else if (shouldUsePackageAgent) {
+      // Package agent: append local user + placeholder, then call the
+      // synchronous REST endpoint.
+      state.messages.push({
+        id: generateUUID(),
+        role: 'user',
+        content: outgoingContent,
+        kind: 'user',
+      })
+      const placeholderId = generateUUID()
+      state.currentAnswerId = placeholderId
+      state.messages.push({
+        id: placeholderId,
+        role: 'ai',
+        content: '正在思考...',
+        kind: 'answer',
+      })
+      state.isSending = true
+      try {
+        await runPackageAgent(outgoingContent, sid, state)
+      } finally {
+        state.isSending = false
+        state.currentAnswerId = null
       }
+    } else {
+      // DeviceAgent — fully delegated to the run store.
+      await runsStore.startDeviceRun(
+        sid,
+        {
+          message: outgoingContent,
+          history: historyPayload,
+          target_device_id: targetDeviceId.value,
+          target_device_name: targetDeviceName.value,
+          remember: true,
+        },
+        { authToken },
+      )
     }
-    if (buffer.trim()) processSseBuffer(buffer + '\n\n', answerMessageId)
-
-    const answerMessage = ensureAnswerMessage(answerMessageId)
-    if (answerMessage.content === '正在思考...') answerMessage.content = '（无回复内容）'
 
     if (isLoggedIn.value) {
       try { await sessionStore.load() } catch (error) { console.warn('刷新会话列表失败', error) }
     }
   } catch (error: any) {
     console.error('请求失败', error)
-    ensureAnswerMessage(answerMessageId).content = `调用后端失败：${error?.message || String(error)}`
-  } finally {
-    isSending.value = false
   }
 }
 

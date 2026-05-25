@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
 import { useChatSessionStore } from '@/stores/chatSession'
+import { useConversationRunsStore } from '@/stores/conversationRuns'
 import { userApi } from '@/api/user'
 import type { ChatSessionSummary } from '@/types'
 import brandIcon from '@/assets/icon.png'
@@ -13,6 +14,42 @@ const router = useRouter()
 const appStore = useAppStore()
 const userStore = useUserStore()
 const sessionStore = useChatSessionStore()
+const runsStore = useConversationRunsStore()
+
+/**
+ * Union of backend-reported running sessions (``run_status === 'running'``)
+ * and the local optimistic running overlay maintained by the run store. The
+ * overlay covers the gap between sendMessage and the next sessions list
+ * refresh.
+ */
+const runningSessionIds = computed(() => {
+  const ids = new Set<string>()
+  for (const s of sessionStore.sessions) {
+    if (s.run_status === 'running') ids.add(s.id)
+  }
+  for (const id of runsStore.localRunningSessionIds) ids.add(id)
+  return ids
+})
+
+const isSessionRunning = (id: string) => runningSessionIds.value.has(id)
+
+let pollHandle: number | null = null
+const schedulePoll = () => {
+  if (typeof window === 'undefined') return
+  if (pollHandle !== null) return
+  pollHandle = window.setInterval(() => {
+    // Only refresh when at least one session is in running state — avoids
+    // unnecessary polling for idle users.
+    if (runningSessionIds.value.size === 0) return
+    sessionStore.load().catch(() => { /* swallow; overlay still works */ })
+  }, 5000)
+}
+const stopPoll = () => {
+  if (pollHandle !== null && typeof window !== 'undefined') {
+    window.clearInterval(pollHandle)
+    pollHandle = null
+  }
+}
 
 const showUserMenu = ref(false)
 const showSearchBox = ref(false)
@@ -121,11 +158,13 @@ onMounted(() => {
   document.addEventListener('click', handleClickOutside)
   document.addEventListener('keydown', handleKey)
   bootstrapUser()
+  schedulePoll()
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
   document.removeEventListener('keydown', handleKey)
+  stopPoll()
 })
 
 watch(isLoggedIn, async (loggedIn) => {
@@ -161,6 +200,7 @@ const deleteSession = async (id: string) => {
   if (!confirmed) return
   try {
     await sessionStore.removeSession(id)
+    runsStore.clearSession(id)
     appStore.showNotification({ title: '会话已删除', type: 'success' })
   } catch (error) {
     console.error('删除会话失败', error)
@@ -307,6 +347,14 @@ const handleUserLogout = () => {
               @mouseleave="hoverSessionId = null"
             >
               <span class="rw-chat-row-text">{{ session.title || '未命名对话' }}</span>
+              <span
+                v-if="isSessionRunning(session.id)"
+                class="rw-row-spinner"
+                title="正在运行"
+                aria-label="正在运行"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+              </span>
               <button
                 class="rw-row-more"
                 :class="{ visible: hoverSessionId === session.id || openRowMenuId === session.id }"
@@ -659,6 +707,16 @@ const handleUserLogout = () => {
 }
 .rw-row-more.visible { visibility: visible; }
 .rw-row-more:hover { background: var(--rw-hairline-strong); }
+
+.rw-row-spinner {
+  display: inline-grid; place-items: center;
+  width: 16px; height: 16px;
+  color: var(--rw-muted);
+  flex-shrink: 0;
+  animation: rw-row-spin 1s linear infinite;
+}
+.rw-row-spinner svg { display: block; }
+@keyframes rw-row-spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 
 .rw-row-menu {
   position: absolute; top: 100%; right: 4px; margin-top: 2px;
