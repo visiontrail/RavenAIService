@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from celery import current_task
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
+
+from app.models.database import _apply_sqlite_pragmas
 
 from app.agents.log_analysis.agent import LogAnalysisAgent
 from app.agents.log_analysis.trace import summarize as summarize_trace
@@ -119,14 +121,25 @@ def _get_sync_database_url() -> str:
     return database_url.replace("+asyncpg", "").replace("+aiosqlite", "")
 
 
-_sync_engine = create_engine(
-    _get_sync_database_url(),
-    pool_size=1,
-    max_overflow=0,
-    pool_timeout=30,
-    pool_recycle=3600,
-    echo=False,
-)
+_sync_database_url = _get_sync_database_url()
+_is_sqlite_sync = _sync_database_url.startswith("sqlite")
+
+_sync_engine_kwargs: Dict[str, Any] = {
+    "pool_recycle": 3600,
+    "echo": False,
+}
+if not _is_sqlite_sync:
+    _sync_engine_kwargs.update(pool_size=1, max_overflow=0, pool_timeout=30)
+
+_sync_engine = create_engine(_sync_database_url, **_sync_engine_kwargs)
+
+if _is_sqlite_sync:
+    @event.listens_for(_sync_engine, "connect")
+    def _set_sqlite_pragma_sync(dbapi_connection, _connection_record):
+        # 与 async 引擎共用同一份 PRAGMA，避免两个引擎并发写时
+        # 因为只有一边启用了 WAL/busy_timeout 而触发 "database is locked"。
+        _apply_sqlite_pragmas(dbapi_connection)
+
 SessionLocal = sessionmaker(bind=_sync_engine)
 
 

@@ -692,7 +692,10 @@ class LogAnalysisChatService:
         log_record.status = LogStatus.COMPLETED
         log_record.progress = 100.0
         log_record.issue_description = question
-        await db.flush()
+        # 立即提交：SSE 流会持有 request 的 AsyncSession 很久（一次 Agent 运行常
+        # 达数分钟）；只 flush 不 commit 会让 SQLite 的写锁一直被持有，导致并发
+        # 上传/重构包检索触发 "database is locked"。
+        await db.commit()
 
         # When the user explicitly chose a project, skip metadata.json
         # extraction validation in the workspace and resolve repo_info

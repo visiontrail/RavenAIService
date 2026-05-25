@@ -392,6 +392,33 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       })
     }
 
+    // Restore the user message that initiated this run. The backend snapshot
+    // always carries ``user_message``, but the DB-side ``chat_messages`` row
+    // may not exist yet (log-analysis writes user+assistant together at run
+    // terminal via ``_persist_exchange``). Without this restore, switching
+    // away from an in-flight session and back would show only the assistant
+    // bubble — the user's own prompt would silently disappear.
+    const snapshotUserMessage =
+      typeof snapshot.user_message === 'string' ? snapshot.user_message : ''
+    const trimmedUserMessage = snapshotUserMessage.trim()
+    if (trimmedUserMessage) {
+      const userMsgId = `run:${runId}:user`
+      const alreadyPresent = state.messages.some(
+        (m) =>
+          m.role === 'user' &&
+          (m.id === userMsgId ||
+            (m.content || '').trim().startsWith(trimmedUserMessage)),
+      )
+      if (!alreadyPresent) {
+        state.messages.push({
+          id: userMsgId,
+          role: 'user',
+          content: snapshotUserMessage,
+          kind: 'user',
+        })
+      }
+    }
+
     // Replay trace events into the assistant placeholder. Snapshot already
     // deduplicates server-side, so we can clear and rebuild.
     const trace: any[] = Array.isArray(snapshot.trace_events) ? snapshot.trace_events : []

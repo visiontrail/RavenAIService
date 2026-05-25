@@ -342,4 +342,63 @@ describe('conversationRuns store', () => {
     )
     expect(sessionA.pendingPermissions.map((p: PendingPermission) => p.request_id)).toEqual(['req-b'])
   })
+
+  it('restores the user message from snapshot when DB history lacks it (log-analysis resume)', () => {
+    const store = useConversationRunsStore()
+    const sessionA = store.ensureState('session-a')
+
+    // Simulates the post-DB-fetch state for a log-analysis run that is still
+    // in flight: the chat_messages row hasn't been written yet because the
+    // log-analysis service only persists user+assistant together at terminal.
+    store.mergeSnapshot(sessionA, {
+      run_id: 'log-run-a',
+      session_id: 'session-a',
+      status: 'running',
+      agent_kind: 'log_analysis',
+      answer_so_far: '日志分析中',
+      user_message: '请分析这个日志包',
+      trace_events: [traceEvent('log-run-a', 'session-a', 1, 'run_start')],
+    })
+
+    const userMsg = sessionA.messages.find((m: ChatEntry) => m.role === 'user')
+    const answerMsg = sessionA.messages.find((m: ChatEntry) => m.id === 'run:log-run-a:assistant')
+
+    expect(userMsg).toMatchObject({
+      id: 'run:log-run-a:user',
+      role: 'user',
+      content: '请分析这个日志包',
+    })
+    // User message must be ordered before the assistant placeholder.
+    const userIdx = sessionA.messages.findIndex((m: ChatEntry) => m.id === 'run:log-run-a:user')
+    const aiIdx = sessionA.messages.findIndex((m: ChatEntry) => m.id === 'run:log-run-a:assistant')
+    expect(userIdx).toBeLessThan(aiIdx)
+    expect(answerMsg?.content).toBe('日志分析中')
+  })
+
+  it('does not duplicate the user message when DB history already has it', () => {
+    const store = useConversationRunsStore()
+    const sessionA = store.ensureState('session-a')
+    // Simulate post-DB-fetch state: backend already persisted the user msg
+    // (DeviceAgent path commits the user message before the SSE stream
+    // starts), so loadSession's fetchMessages has it in state.messages.
+    sessionA.messages.push({
+      id: 'msg-user-a',
+      role: 'user',
+      content: '请检查设备状态',
+      kind: 'user',
+    })
+
+    store.mergeSnapshot(sessionA, {
+      run_id: 'run-a',
+      session_id: 'session-a',
+      status: 'running',
+      agent_kind: 'device',
+      user_message: '请检查设备状态',
+      trace_events: [traceEvent('run-a', 'session-a', 1, 'run_start')],
+    })
+
+    const userMsgs = sessionA.messages.filter((m: ChatEntry) => m.role === 'user')
+    expect(userMsgs).toHaveLength(1)
+    expect(userMsgs[0].id).toBe('msg-user-a')
+  })
 })

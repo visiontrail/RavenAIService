@@ -53,7 +53,6 @@ const stopPoll = () => {
 
 const showUserMenu = ref(false)
 const showSearchBox = ref(false)
-const sidebarSearchKeyword = ref('')
 const hoverSessionId = ref<string | null>(null)
 const openRowMenuId = ref<string | null>(null)
 const lang = ref<'zh' | 'en'>('zh')
@@ -98,11 +97,7 @@ const isHomeRoute = computed(() =>
   route.name === 'Workbench' || route.path === '/workbench' || route.path === '/ai-chat'
 )
 
-const filteredSessions = computed(() => {
-  const k = sidebarSearchKeyword.value.trim().toLowerCase()
-  if (!k) return sessionStore.sessions
-  return sessionStore.sessions.filter((s) => (s.title || '').toLowerCase().includes(k))
-})
+const filteredSessions = computed(() => sessionStore.sessions)
 
 const groupedSessions = computed(() => {
   const now = new Date()
@@ -268,17 +263,6 @@ const handleUserLogout = () => {
         </span>
         <span class="rw-kbd">⌘ N</span>
       </button>
-
-      <!-- Search -->
-      <div class="rw-search">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input
-          v-model="sidebarSearchKeyword"
-          class="rw-search-input"
-          placeholder="搜索对话、包、设备…"
-        />
-        <span class="rw-search-kbd">⌘K</span>
-      </div>
 
       <!-- Nav -->
       <nav class="rw-nav-list">
@@ -621,19 +605,6 @@ const handleUserLogout = () => {
   border-radius: 4px; padding: 1px 5px; line-height: 1.2;
 }
 
-.rw-search {
-  margin: 0 12px 14px; height: 32px;
-  display: flex; align-items: center; gap: 8px;
-  background: var(--rw-canvas);
-  border: 1px solid var(--rw-hairline-strong);
-  border-radius: 8px; padding: 0 10px;
-  color: var(--rw-muted);
-}
-.rw-search-input {
-  flex: 1; background: none; border: none; outline: none;
-  font-size: 13px; color: var(--rw-ink);
-}
-.rw-search-kbd { font-family: var(--rw-mono); font-size: 11px; color: var(--rw-muted-soft); }
 
 .rw-nav-list { padding: 0 8px; display: flex; flex-direction: column; gap: 1px; }
 .rw-nav-item { display: block; text-decoration: none; color: inherit; }
