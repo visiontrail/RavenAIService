@@ -37,6 +37,9 @@ const currentUserEmail = computed(() => userStore.profile?.email || '')
 const currentUserRole = computed(() => (userStore.profile?.role || 'user').toString().toLowerCase())
 const isAdmin = computed(() => isLoggedIn.value && currentUserRole.value === 'admin')
 const userInitial = computed(() => (currentUserName.value || 'U').slice(0, 2).toUpperCase())
+const currentUserStatusText = computed(() =>
+  currentUserEmail.value || (isLoggedIn.value ? '已登录' : '未登录')
+)
 
 const goToAdminConsole = () => {
   showUserMenu.value = false
@@ -353,7 +356,7 @@ const handleUserLogout = () => {
                   {{ currentUserName }}
                   <span v-if="isAdmin" class="rw-role-badge">管理员</span>
                 </div>
-                <div class="rw-user-menu-mail">{{ currentUserEmail || '未登录' }}</div>
+                <div class="rw-user-menu-mail">{{ currentUserStatusText }}</div>
               </div>
             </div>
             <button
@@ -403,8 +406,8 @@ const handleUserLogout = () => {
             <div class="rw-user-meta">
               <div class="rw-user-name">{{ currentUserName }}</div>
               <div class="rw-user-role">
-                <span v-if="isAdmin">管理员 · {{ currentUserEmail || '已登录' }}</span>
-                <span v-else-if="isLoggedIn">{{ currentUserEmail || '已登录' }}</span>
+                <span v-if="isAdmin">管理员 · {{ currentUserStatusText }}</span>
+                <span v-else-if="isLoggedIn">{{ currentUserStatusText }}</span>
                 <span v-else>未登录 · 点击登录</span>
               </div>
             </div>
