@@ -14,6 +14,8 @@ from starlette.types import ASGIApp
 
 logger = logging.getLogger(__name__)
 
+SENSITIVE_HEADER_NAMES = {"authorization", "cookie", "set-cookie"}
+
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """请求日志中间件"""
@@ -95,7 +97,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             "url": str(request.url),
             "path": request.url.path,
             "query_params": dict(request.query_params),
-            "headers": dict(request.headers),
+            "headers": self._sanitize_headers(dict(request.headers)),
             "client_ip": self._get_client_ip(request),
             "user_agent": request.headers.get("user-agent", ""),
             "timestamp": time.time()
@@ -126,9 +128,16 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         return {
             "request_id": request_id,
             "status_code": response.status_code,
-            "headers": dict(response.headers),
+            "headers": self._sanitize_headers(dict(response.headers)),
             "process_time": process_time,
             "timestamp": time.time()
+        }
+
+    def _sanitize_headers(self, headers: dict) -> dict:
+        """Mask credentials before request/response headers are written to logs."""
+        return {
+            key: ("***" if key.lower() in SENSITIVE_HEADER_NAMES else value)
+            for key, value in headers.items()
         }
 
     def _get_client_ip(self, request: Request) -> str:

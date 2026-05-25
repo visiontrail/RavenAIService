@@ -9,24 +9,92 @@ import type {
 } from '@/types'
 
 const USER_TOKEN_KEY = 'raven_user_token'
+const USER_TOKEN_FALLBACK_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
 const getStorage = () => {
   if (typeof window === 'undefined') return undefined
-  return window.localStorage
+  try {
+    return window.localStorage
+  } catch {
+    return undefined
+  }
+}
+
+const decodeBase64Url = (value: string) => {
+  try {
+    const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4)
+    return atob(padded)
+  } catch {
+    return ''
+  }
+}
+
+const getTokenMaxAge = (token: string) => {
+  const payload = token.split('.', 1)[0]
+  const decoded = payload ? decodeBase64Url(payload) : ''
+  const exp = Number(decoded.split(':')[2])
+  if (Number.isFinite(exp) && exp > 0) {
+    return Math.max(0, Math.floor(exp - Date.now() / 1000))
+  }
+  return USER_TOKEN_FALLBACK_MAX_AGE_SECONDS
+}
+
+const getCookieToken = () => {
+  if (typeof document === 'undefined') return ''
+  const prefix = `${USER_TOKEN_KEY}=`
+  const item = document.cookie
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix))
+  if (!item) return ''
+  try {
+    return decodeURIComponent(item.slice(prefix.length))
+  } catch {
+    return item.slice(prefix.length)
+  }
+}
+
+const setCookieToken = (token: string) => {
+  if (typeof document === 'undefined') return
+  const secure = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : ''
+  document.cookie = [
+    `${USER_TOKEN_KEY}=${encodeURIComponent(token)}`,
+    'Path=/',
+    `Max-Age=${getTokenMaxAge(token)}`,
+    'SameSite=Lax',
+    secure,
+  ].filter(Boolean).join('; ')
+}
+
+const clearCookieToken = () => {
+  if (typeof document === 'undefined') return
+  document.cookie = `${USER_TOKEN_KEY}=; Path=/; Max-Age=0; SameSite=Lax`
 }
 
 export const userToken = {
   get(): string {
     const storage = getStorage()
-    return storage?.getItem(USER_TOKEN_KEY) || ''
+    const stored = storage?.getItem(USER_TOKEN_KEY) || ''
+    if (stored) {
+      setCookieToken(stored)
+      return stored
+    }
+    const cookieToken = getCookieToken()
+    if (cookieToken && storage) {
+      storage.setItem(USER_TOKEN_KEY, cookieToken)
+    }
+    return cookieToken
   },
   set(token: string) {
     const storage = getStorage()
     if (storage) storage.setItem(USER_TOKEN_KEY, token)
+    setCookieToken(token)
   },
   clear() {
     const storage = getStorage()
     if (storage) storage.removeItem(USER_TOKEN_KEY)
+    clearCookieToken()
   },
 }
 
