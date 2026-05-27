@@ -98,6 +98,7 @@ class AgentTraceEvent(TypedDict, total=False):
     # lifecycle: run_start
     model: str
     provider: str
+    loaded_skills: List[str]
 
     # lifecycle: run_complete / cancelled / error
     trace_summary: Dict[str, Any]

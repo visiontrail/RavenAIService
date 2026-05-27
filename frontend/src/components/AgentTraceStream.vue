@@ -1,5 +1,16 @@
 <template>
   <div v-if="hasContent" class="agent-trace">
+    <div v-if="loadedSkills.length" class="agent-trace__skills" title="本次 Agent 运行已加载的 Skill">
+      <span class="agent-trace__skills-label">Skills</span>
+      <span
+        v-for="skill in loadedSkills"
+        :key="skill"
+        class="agent-trace__skill-pill"
+      >
+        {{ skill }}
+      </span>
+    </div>
+
     <!-- Terminal collapsed summary: replaces the card list with a single
          row + subtitle. Clicking expands it back to show all cards. -->
     <div v-if="terminal && !summaryExpanded" class="agent-trace__summary">
@@ -88,6 +99,20 @@ const hasContent = computed(() => cards.value.length > 0 || running.value || !!t
 
 const summaryExpanded = ref(false)
 
+const loadedSkills = computed(() => {
+  const names = new Set<string>()
+  for (const event of props.events || []) {
+    const skills = event.type === 'run_start' || event.type === 'system_notice'
+      ? event.loaded_skills
+      : undefined
+    if (!Array.isArray(skills)) continue
+    for (const skill of skills) {
+      if (typeof skill === 'string' && skill.trim()) names.add(skill.trim())
+    }
+  }
+  return Array.from(names)
+})
+
 const cancelling = ref(false)
 watch(terminal, (term: unknown) => {
   if (term) cancelling.value = false
@@ -137,6 +162,36 @@ const summaryLine = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.agent-trace__skills {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.agent-trace__skills-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary, #6b7280);
+}
+
+.agent-trace__skill-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--el-border-color-lighter, #e5e7eb);
+  background: var(--el-fill-color-light, #f5f7fa);
+  color: var(--el-text-color-regular, #4b5563);
+  font-size: 12px;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-trace__summary {

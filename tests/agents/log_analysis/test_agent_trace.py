@@ -134,7 +134,7 @@ def _patch_settings(provider: str = "deepseek"):
     )
 
 
-def _patch_environment():
+def _patch_environment(*, loaded_skills: Optional[List[str]] = None):
     """Patch all the side-effect modules we don't want exercised in unit tests."""
     return [
         patch("app.agents.anthropic_client.build_options", return_value=MagicMock()),
@@ -146,18 +146,21 @@ def _patch_environment():
                 "Question: {question} log_type: {log_type} task_id: {task_id} hints: {hints}",
             ),
         ),
-        patch("app.services.skills_service.materialize_enabled_skills", return_value=[]),
+        patch(
+            "app.services.skills_service.materialize_relevant_enabled_skills",
+            return_value=list(loaded_skills or []),
+        ),
     ]
 
 
-def _run_agent(workspace_ctx, fake_query, *, emitter=None, cancel_event=None):
+def _run_agent(workspace_ctx, fake_query, *, emitter=None, cancel_event=None, loaded_skills=None):
     """Run LogAnalysisAgent.run synchronously, with all SDK dependencies mocked."""
     from app.agents.log_analysis.agent import LogAnalysisAgent
 
     fake_sdk = MagicMock()
     fake_sdk.query = fake_query
 
-    patches = _patch_environment() + [
+    patches = _patch_environment(loaded_skills=loaded_skills) + [
         patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}),
         _patch_settings(),
     ]
@@ -191,6 +194,28 @@ class TestEmitterEventSequence:
         assert captured[0]["model"] == "deepseek-v4-pro"
         assert captured[-1]["type"] == "run_complete"
         assert "trace_summary" in captured[-1]
+
+    def test_loaded_skills_are_emitted_and_returned(self, workspace_ctx):
+        async def fake_query(*args, **kwargs):
+            yield FakeResultMessage(result=_make_good_result_json())
+
+        captured: List[Dict[str, Any]] = []
+        result = _run_agent(
+            workspace_ctx,
+            fake_query,
+            emitter=captured.append,
+            loaded_skills=["smu-baseband-interfaces"],
+        )
+
+        assert result["loaded_skills"] == ["smu-baseband-interfaces"]
+        assert captured[0]["type"] == "run_start"
+        assert captured[0]["loaded_skills"] == ["smu-baseband-interfaces"]
+        skill_events = [
+            ev for ev in captured
+            if ev["type"] == "system_notice" and ev.get("kind") == "skills_loaded"
+        ]
+        assert len(skill_events) == 1
+        assert skill_events[0]["loaded_skills"] == ["smu-baseband-interfaces"]
 
     def test_seq_strictly_monotonic(self, workspace_ctx):
         async def fake_query(*args, **kwargs):

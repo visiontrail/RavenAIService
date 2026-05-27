@@ -72,6 +72,29 @@ AGENT_KEY = "log_analysis"
 TraceEmitter = Callable[[AgentTraceEvent], None]
 
 
+def _build_skill_relevance_query(
+    ctx: WorkspaceContext,
+    task_data: Dict[str, Any],
+) -> str:
+    """Build the text used to select request-relevant user skills.
+
+    Keep this focused on the user's actual question and hints. Generic fields
+    such as ``log_type=oam_antenna`` are intentionally excluded because they can
+    over-match broad domain skills.
+    """
+    parts = [
+        ctx.metadata.get("question"),
+        task_data.get("question"),
+        task_data.get("hints"),
+    ]
+    issue_info = ctx.metadata.get("issue_info")
+    if isinstance(issue_info, dict):
+        parts.append(issue_info.get("issue_description"))
+        parts.append(issue_info.get("service_name"))
+        parts.append(issue_info.get("environment_info"))
+    return "\n".join(str(part) for part in parts if part)
+
+
 def _parse_partial_array(text: str, start: int, decoder: json.JSONDecoder) -> tuple[List[Any], int]:
     """Parse completed items from a possibly truncated JSON array."""
     items: List[Any] = []
@@ -760,15 +783,13 @@ class LogAnalysisAgent:
         )
         if user_selected_repo:
             system_prompt += (
-                "\n\n## User-Selected Project Repository\n"
-                "The user explicitly selected the project repository for this "
-                "run. `task.json` already contains a fully-resolved "
-                "`repo_info` (`clone_url`, `repo_url`, `default_branch`) — "
-                "treat it as the authoritative source and skip metadata.json "
-                "discovery / `project_code` lookup. Proceed directly to "
-                "Step 4 (clone) and Step 5 (investigate). Cloning and using "
-                "the source code is mandatory, as already stated in the "
-                "base workflow.\n"
+                "\n\n## 用户已选定项目仓库\n"
+                "用户已为本次运行显式选择了项目仓库。`task.json` 中已经"
+                "包含完整解析过的 `repo_info`（`clone_url`、`repo_url`、"
+                "`default_branch`）—— 请将其视为权威来源，跳过对 "
+                "metadata.json 的发现与 `project_code` 查询，直接进入"
+                "第 4 步（克隆）与第 5 步（调查）。按基础工作流的规定，"
+                "克隆并使用源代码仍然是强制要求。\n"
             )
 
         user_prompt = render_user_prompt(
@@ -795,27 +816,29 @@ class LogAnalysisAgent:
                 name for name in allowed_tools if name != PROJECT_REPO_MCP_TOOL
             ]
             system_prompt += (
-                "\n\n## Runtime Constraint\n"
-                f"The active provider `{provider}` does not support MCP server tools. "
-                "`mcp__project_repo__lookup_project_repo` is unavailable in this run. "
-                "Use explicit repository fields or `repo_info` from `task.json` / "
-                "`metadata.json` to resolve the repo. Source code consultation is "
-                "still mandatory per the base workflow. If no explicit repository "
-                "info exists anywhere, finish with "
-                '`"status": "error", "error_kind": "project_repo_not_registered"`.'
+                "\n\n## 运行时约束\n"
+                f"当前 provider `{provider}` 不支持 MCP server 工具。"
+                "本次运行中 `mcp__project_repo__lookup_project_repo` 不可用。"
+                "请使用 `task.json` / `metadata.json` 中的显式仓库字段或 "
+                "`repo_info` 来解析仓库。按基础工作流的规定，源代码侧的"
+                "查证依然是强制要求。如果任何地方都不存在显式仓库信息，"
+                "请以 "
+                '`"status": "error", "error_kind": "project_repo_not_registered"` 结束。'
             )
             logger.info(
                 "LogAnalysisAgent: provider=%s does not support MCP; using repo_info fallback only",
                 provider,
             )
 
-        # 物化已启用 Skill 到 cwd/.claude/skills/<name>/，配合 setting_sources=["project"]
-        # 让 Claude Agent SDK 通过官方约定自动加载 Skill
+        # 物化本次请求相关的 Skill 到 cwd/.claude/skills/<name>/，配合
+        # setting_sources=["project"] 让 Claude Agent SDK 按官方约定发现 Skill。
         materialized_skills: List[str] = []
         try:
             from app.services import skills_service
-            materialized_skills = skills_service.materialize_enabled_skills(
-                AGENT_KEY, ctx.temp_dir
+            materialized_skills = skills_service.materialize_relevant_enabled_skills(
+                AGENT_KEY,
+                ctx.temp_dir,
+                query_text=_build_skill_relevance_query(ctx, task_data),
             )
             if materialized_skills:
                 logger.info(
@@ -849,8 +872,20 @@ class LogAnalysisAgent:
                 seq_counter=state.seq_counter,
                 model=effective_model,
                 provider=str(provider),
+                loaded_skills=list(materialized_skills),
             )
         )
+        if materialized_skills:
+            state.emit(
+                build_event(
+                    SYSTEM_NOTICE,
+                    task_id=ctx.task_id,
+                    seq_counter=state.seq_counter,
+                    kind="skills_loaded",
+                    detail=", ".join(materialized_skills),
+                    loaded_skills=list(materialized_skills),
+                )
+            )
 
         try:
             async for message in query(prompt=user_prompt, options=options):
@@ -942,6 +977,7 @@ class LogAnalysisAgent:
             "raw": final_text,
             "duration_seconds": round(duration, 2),
             "token_usage": state.token_usage,
+            "loaded_skills": list(materialized_skills),
         }
 
         if parsed is None:

@@ -18,6 +18,15 @@
           </svg>
           <span>复制链接</span>
         </button>
+        <button class="rw-btn-secondary" :disabled="exportPdfLoading || !logStore.currentLog" @click="handleExportPDF">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="9" y1="15" x2="15" y2="15"/>
+            <line x1="9" y1="11" x2="15" y2="11"/>
+          </svg>
+          <span>{{ exportPdfLoading ? '生成中…' : '导出报告（PDF）' }}</span>
+        </button>
         <button class="rw-btn-primary" :disabled="downloadLoading || !logStore.currentLog" @click="handleDownload">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -465,6 +474,7 @@ const userStore = useUserStore()
 // 响应式变量
 const downloadLoading = ref(false)
 const deleteLoading = ref(false)
+const exportPdfLoading = ref(false)
 const activeVersionCollapse = ref(['version-details'])
 const issueDescriptionEditing = ref(false)
 const issueDescriptionSaving = ref(false)
@@ -1067,6 +1077,345 @@ const handleCopyLink = async () => {
       ElMessage.error('复制失败，请手动复制链接')
     }
     document.body.removeChild(textArea)
+  }
+}
+
+// 导出 PDF 报告：使用 html2pdf.js 直接在浏览器端生成并下载 PDF 文件。
+// 报告内容中刻意剔除 "模型原文" 段落，避免冗余 raw 文本进入正式报告。
+const escapeHtml = (text: string) =>
+  text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+
+const stripModelRawSection = (markdown: string): string => {
+  if (!markdown) return ''
+  // 匹配 "## 模型原文" 一直到下一个二级标题或文末
+  return markdown.replace(/##\s*模型原文[\s\S]*?(?=\n##\s|\n#\s|$)/g, '').trimEnd()
+}
+
+// 生成在 html2canvas 截图前临时挂到 DOM 的报告容器。
+// 所有样式都用 `.pdf-export-root` 作为前缀作用域，避免污染当前页面。
+const PDF_EXPORT_STYLES = `
+.pdf-export-root, .pdf-export-root * { box-sizing: border-box; }
+.pdf-export-root {
+  width: 794px;
+  padding: 32px 36px;
+  font-family: 'PingFang SC', 'Microsoft YaHei', -apple-system, system-ui, sans-serif;
+  color: #171717;
+  background: #ffffff;
+  line-height: 1.6;
+  font-size: 13px;
+}
+.pdf-export-root .report-title {
+  font-size: 22px;
+  margin: 0 0 4px;
+  letter-spacing: -0.3px;
+  font-weight: 600;
+}
+.pdf-export-root .report-meta {
+  color: #777;
+  font-size: 12px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid #e5e5e5;
+  padding-bottom: 12px;
+}
+.pdf-export-root section { margin-bottom: 24px; page-break-inside: avoid; }
+.pdf-export-root h2 {
+  font-size: 15px;
+  margin: 0 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #e5e5e5;
+  letter-spacing: -0.1px;
+  font-weight: 600;
+}
+.pdf-export-root h3 { font-size: 13.5px; margin: 14px 0 6px; font-weight: 600; }
+.pdf-export-root table.info { width: 100%; border-collapse: collapse; }
+.pdf-export-root table.info th,
+.pdf-export-root table.info td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid #f0f0f0;
+  vertical-align: top;
+  font-size: 12.5px;
+}
+.pdf-export-root table.info th {
+  width: 130px;
+  color: #666;
+  font-weight: 500;
+  background: #fafafa;
+}
+.pdf-export-root .issue-box,
+.pdf-export-root .empty-box {
+  padding: 10px 12px;
+  border: 1px solid #eee;
+  border-radius: 6px;
+  background: #fafafa;
+}
+.pdf-export-root .empty-box { color: #999; font-style: italic; }
+.pdf-export-root .ai-meta { font-size: 12px; color: #666; margin-bottom: 8px; }
+.pdf-export-root .ai-meta span { margin-right: 16px; }
+.pdf-export-root ul.recommendations { padding-left: 22px; margin: 8px 0; }
+.pdf-export-root ul.recommendations li { margin-bottom: 4px; }
+.pdf-export-root .md h1,
+.pdf-export-root .md h2,
+.pdf-export-root .md h3,
+.pdf-export-root .md h4 { margin: 1em 0 0.4em; line-height: 1.3; font-weight: 600; }
+.pdf-export-root .md h1 { font-size: 16px; }
+.pdf-export-root .md h2 { font-size: 14.5px; border: none; padding: 0; }
+.pdf-export-root .md h3 { font-size: 13.5px; }
+.pdf-export-root .md p { margin: 0.5em 0; }
+.pdf-export-root .md code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  background: #f5f5f7;
+  border: 1px solid #ececec;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
+.pdf-export-root .md pre {
+  background: #1a1a1a;
+  color: #f5f5f5;
+  padding: 10px 12px;
+  border-radius: 6px;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.pdf-export-root .md pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+}
+.pdf-export-root .md table { width: 100%; border-collapse: collapse; margin: 0.8em 0; }
+.pdf-export-root .md th,
+.pdf-export-root .md td { border: 1px solid #ddd; padding: 4px 8px; font-size: 12.5px; }
+.pdf-export-root .md th { background: #f5f5f7; }
+.pdf-export-root .md ul,
+.pdf-export-root .md ol { padding-left: 1.6em; }
+.pdf-export-root .md blockquote {
+  border-left: 3px solid #d4d4d4;
+  padding-left: 12px;
+  color: #555;
+  margin: 0.6em 0;
+}
+`
+
+const buildPdfFilename = (filename: string, id: string | number): string => {
+  const base = (filename || String(id) || 'report').replace(/\.(zip|tar|gz|log|txt)$/i, '')
+  const date = new Date().toISOString().slice(0, 10)
+  return `日志分析报告_${base}_${date}.pdf`
+}
+
+const handleExportPDF = async () => {
+  if (!logStore.currentLog) return
+  const log = logStore.currentLog
+
+  let iframe: HTMLIFrameElement | null = null
+  try {
+    exportPdfLoading.value = true
+
+    const aiContent = aiAnalysisResult.value?.final_result?.content || ''
+    const aiContentNoRaw = stripModelRawSection(aiContent)
+    const aiSummary = aiAnalysisResult.value?.final_result?.summary || ''
+    const aiRecommendations: string[] = Array.isArray(aiAnalysisResult.value?.final_result?.recommendations)
+      ? aiAnalysisResult.value.final_result.recommendations
+      : []
+    const aiModel = aiAnalysisResult.value?.metadata?.model_used || ''
+    const aiExecTime = aiAnalysisResult.value?.metadata?.execution_time || 0
+
+    const aiSummaryHtml = aiSummary ? renderMarkdown(aiSummary, { wrapperClass: 'md', cleanXml: true }) : ''
+    const aiContentHtml = aiContentNoRaw ? renderMarkdown(aiContentNoRaw, { wrapperClass: 'md', cleanXml: true }) : ''
+    const manualHtml = log.manual_analysis
+      ? renderMarkdown(log.manual_analysis, { wrapperClass: 'md', cleanXml: true })
+      : ''
+
+    const infoRows: Array<[string, string]> = [
+      ['文件名', log.filename || ''],
+      ['原始文件名', log.original_filename || ''],
+      ['文件大小', formatFileSize(log.file_size)],
+      ['日志类型', getLogTypeLabel(log.log_type)],
+      ['处理状态', getStatusLabel(log.status)],
+      ['创建时间', formatDateTime(log.created_at)],
+      ['下载次数', String(log.download_count ?? 0)],
+      ['文件ID', String(log.id)],
+    ]
+    if (log.checksum) infoRows.push(['校验和 (SHA256)', log.checksum])
+
+    const infoRowsHtml = infoRows
+      .filter(([, v]) => v !== '' && v !== undefined && v !== null)
+      .map(([k, v]) => `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`)
+      .join('')
+
+    const title = `日志分析报告 - ${log.filename}`
+    const generatedAt = formatDateTime(new Date().toISOString())
+
+    const innerHtml = `
+<h1 class="report-title">${escapeHtml(title)}</h1>
+<div class="report-meta">生成时间：${escapeHtml(generatedAt)}</div>
+
+<section>
+  <h2>基本信息</h2>
+  <table class="info"><tbody>${infoRowsHtml}</tbody></table>
+</section>
+
+<section>
+  <h2>问题描述</h2>
+  ${log.issue_description
+    ? `<div class="issue-box">${escapeHtml(log.issue_description)}</div>`
+    : `<div class="empty-box">暂无问题描述</div>`}
+</section>
+
+${log.error_message ? `
+<section>
+  <h2>错误信息</h2>
+  <div class="issue-box" style="color:#c0382b;border-color:rgba(192,56,43,0.25);background:rgba(192,56,43,0.04);">${escapeHtml(log.error_message)}</div>
+</section>` : ''}
+
+<section>
+  <h2>AI 分析</h2>
+  ${aiAnalysisResult.value ? `
+    <div class="ai-meta">
+      ${aiModel ? `<span>模型：${escapeHtml(aiModel)}</span>` : ''}
+      ${aiExecTime ? `<span>执行时长：${escapeHtml(String(aiExecTime))} 秒</span>` : ''}
+    </div>
+    ${aiSummaryHtml ? `<h3>摘要</h3>${aiSummaryHtml}` : ''}
+    ${aiContentHtml ? `<h3>详细分析</h3>${aiContentHtml}` : ''}
+    ${aiRecommendations.length ? `<h3>建议</h3><ul class="recommendations">${
+      aiRecommendations.map((r) => `<li>${escapeHtml(r)}</li>`).join('')
+    }</ul>` : ''}
+  ` : `<div class="empty-box">暂无 AI 分析结果</div>`}
+</section>
+
+<section>
+  <h2>人工分析</h2>
+  ${manualHtml || `<div class="empty-box">暂无人工分析内容</div>`}
+</section>
+`
+
+    // 在隔离的 iframe 中渲染报告，避免主文档中的 Tailwind v4 oklch() 颜色
+    // 导致 html2canvas 渲染空白（这是空白 PDF 的根因）。
+    iframe = document.createElement('iframe')
+    iframe.setAttribute('aria-hidden', 'true')
+    // visibility:hidden 仍保留布局，display:none 会导致 0 尺寸截图为空
+    iframe.style.cssText = [
+      'position: fixed',
+      'left: 0',
+      'top: 0',
+      'width: 820px',
+      'height: 100vh',
+      'border: 0',
+      'opacity: 0',
+      'pointer-events: none',
+      'z-index: -1',
+    ].join('; ')
+    document.body.appendChild(iframe)
+
+    const iframeDoc = iframe.contentDocument
+    const iframeWin = iframe.contentWindow
+    if (!iframeDoc || !iframeWin) {
+      throw new Error('无法初始化导出沙箱')
+    }
+
+    iframeDoc.open()
+    iframeDoc.write(`<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>${escapeHtml(title)}</title>
+<style>
+html, body { margin: 0; padding: 0; background: #ffffff; }
+${PDF_EXPORT_STYLES}
+</style>
+</head>
+<body>
+<div class="pdf-export-root" id="pdf-root">${innerHtml}</div>
+</body>
+</html>`)
+    iframeDoc.close()
+
+    // 等待字体/布局就绪
+    await new Promise<void>((resolve) => {
+      if (iframeDoc.readyState === 'complete') {
+        resolve()
+      } else {
+        iframe!.addEventListener('load', () => resolve(), { once: true })
+      }
+    })
+    // 给浏览器一次回流时间，确保子元素尺寸已计算
+    await new Promise((r) => setTimeout(r, 50))
+    if ((iframeDoc as any).fonts?.ready) {
+      try { await (iframeDoc as any).fonts.ready } catch { /* noop */ }
+    }
+
+    const root = iframeDoc.getElementById('pdf-root') as HTMLElement | null
+    if (!root) throw new Error('导出容器未挂载')
+
+    // 并行动态 import，按需加载，不进入主包
+    const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+      import('html2canvas-pro'),
+      import('jspdf'),
+    ])
+
+    const canvas = await html2canvas(root, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+      windowWidth: root.scrollWidth,
+      windowHeight: root.scrollHeight,
+    })
+
+    // A4 纸张毫米 → 像素的换算关系基于 canvas 的实际宽度
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true })
+    const pageWidthMm = pdf.internal.pageSize.getWidth()
+    const pageHeightMm = pdf.internal.pageSize.getHeight()
+    const marginMm = 10
+    const contentWidthMm = pageWidthMm - marginMm * 2
+    const contentHeightMm = pageHeightMm - marginMm * 2
+
+    // canvas 等比缩放到内容宽度后对应的总高度
+    const pxPerMm = canvas.width / contentWidthMm
+    const pageHeightPx = Math.floor(contentHeightMm * pxPerMm)
+
+    let renderedPx = 0
+    const totalPx = canvas.height
+    while (renderedPx < totalPx) {
+      const slicePx = Math.min(pageHeightPx, totalPx - renderedPx)
+      // 把当前页切片绘制到临时 canvas
+      const pageCanvas = document.createElement('canvas')
+      pageCanvas.width = canvas.width
+      pageCanvas.height = slicePx
+      const ctx = pageCanvas.getContext('2d')
+      if (!ctx) throw new Error('Canvas 2D 上下文不可用')
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
+      ctx.drawImage(canvas, 0, -renderedPx)
+
+      const imgData = pageCanvas.toDataURL('image/jpeg', 0.95)
+      const sliceHeightMm = slicePx / pxPerMm
+
+      if (renderedPx > 0) pdf.addPage()
+      pdf.addImage(imgData, 'JPEG', marginMm, marginMm, contentWidthMm, sliceHeightMm)
+
+      renderedPx += slicePx
+    }
+
+    pdf.save(buildPdfFilename(log.filename, log.id))
+    ElMessage.success('PDF 报告已开始下载')
+  } catch (error: any) {
+    console.error('导出报告失败:', error)
+    ElMessage.error(error?.message || '导出报告失败，请稍后重试')
+  } finally {
+    if (iframe && iframe.parentNode) {
+      iframe.parentNode.removeChild(iframe)
+    }
+    exportPdfLoading.value = false
   }
 }
 

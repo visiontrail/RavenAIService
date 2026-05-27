@@ -171,6 +171,53 @@ def test_materialize_enabled_only(isolated_skills_dir, tmp_path):
     assert not (cwd / ".claude" / "skills" / "archived-skill").exists()
 
 
+def test_select_relevant_skills_prefers_request_specific_match(isolated_skills_dir, tmp_path):
+    from app.services import skills_service
+
+    smu_md = (
+        "---\n"
+        "name: smu-baseband-interfaces\n"
+        "description: SMU RS422 baseband file transfer protocol analysis\n"
+        "---\n"
+        "Use for SMU, RS422, baseband, file transfer failures.\n"
+    ).encode("utf-8")
+    antenna_md = (
+        "---\n"
+        "name: ka-phased-array-antenna\n"
+        "description: KA phased array antenna calibration and beam logs\n"
+        "---\n"
+        "Use for antenna calibration, beam position, and phased-array issues.\n"
+    ).encode("utf-8")
+
+    skills_service.install_skill(
+        "log_analysis",
+        zip_bytes=_build_zip({"SKILL.md": smu_md}),
+        source_filename="smu.zip",
+    )
+    skills_service.install_skill(
+        "log_analysis",
+        zip_bytes=_build_zip({"SKILL.md": antenna_md}),
+        source_filename="antenna.zip",
+    )
+
+    selected = skills_service.select_relevant_skill_names(
+        "log_analysis",
+        query_text="从SMU通过RS422发送文件到基带失败，请帮忙分析原因",
+    )
+    assert selected == ["smu-baseband-interfaces"]
+
+    cwd = tmp_path / "agent_cwd_relevant"
+    cwd.mkdir()
+    materialized = skills_service.materialize_relevant_enabled_skills(
+        "log_analysis",
+        cwd,
+        query_text="从SMU通过RS422发送文件到基带失败，请帮忙分析原因",
+    )
+    assert materialized == ["smu-baseband-interfaces"]
+    assert (cwd / ".claude" / "skills" / "smu-baseband-interfaces" / "SKILL.md").is_file()
+    assert not (cwd / ".claude" / "skills" / "ka-phased-array-antenna").exists()
+
+
 def test_unknown_agent_rejected(isolated_skills_dir):
     from app.services import skills_service
     with pytest.raises(skills_service.UnknownAgentError):

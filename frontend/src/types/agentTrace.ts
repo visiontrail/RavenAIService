@@ -37,6 +37,7 @@ export interface RunStartEvent extends BaseTraceEvent {
   type: 'run_start'
   model?: string
   provider?: string
+  loaded_skills?: string[]
 }
 
 export interface RunCompleteEvent extends BaseTraceEvent {
@@ -102,6 +103,7 @@ export interface SystemNoticeEvent extends BaseTraceEvent {
   kind?: string
   subtype?: string
   detail?: string
+  loaded_skills?: string[]
 }
 
 export type AgentTraceEvent =

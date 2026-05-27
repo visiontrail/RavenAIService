@@ -29,7 +29,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,8 @@ MAX_SKILL_EXTRACTED_BYTES = 200 * 1024 * 1024     # 解压总量 ≤ 200 MiB
 MAX_SKILL_FILE_COUNT = 1000                       # 解压条目数上限
 
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_ASCII_TERM_RE = re.compile(r"[a-z0-9][a-z0-9_-]{1,}", re.IGNORECASE)
+_CJK_TERM_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
 _REGISTRY_FILENAME = "_registry.json"
 _STORE_DIRNAME = "store"
 
@@ -303,6 +305,142 @@ def _internal_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
         "updated_at": entry.get("updated_at"),
         "dir_name": entry.get("dir_name") or entry["name"],
     }
+
+
+def _enabled_entries(agent_key: str) -> List[Dict[str, Any]]:
+    """Return enabled registry entries whose on-disk skill directory exists."""
+    store = _store_root(agent_key)
+    entries: List[Dict[str, Any]] = []
+    for entry in _load_registry(agent_key):
+        if not entry.get("enabled", True):
+            continue
+        src = store / entry.get("dir_name", entry.get("name", ""))
+        if not (src / "SKILL.md").is_file():
+            logger.warning(
+                "skill dir missing or invalid, skip: agent=%s name=%s src=%s",
+                agent_key, entry.get("name"), src,
+            )
+            continue
+        entries.append(entry)
+    return entries
+
+
+def _skill_dir_for_entry(agent_key: str, entry: Dict[str, Any]) -> Path:
+    return _store_root(agent_key) / entry.get("dir_name", entry.get("name", ""))
+
+
+def _extract_terms(text: str) -> Set[str]:
+    """Extract lightweight relevance terms from English/code and Chinese text."""
+    lowered = (text or "").lower()
+    terms: Set[str] = set()
+    for term in _ASCII_TERM_RE.findall(lowered):
+        cleaned = term.strip("_-")
+        if len(cleaned) >= 2:
+            terms.add(cleaned)
+            for part in re.split(r"[_-]+", cleaned):
+                if len(part) >= 2:
+                    terms.add(part)
+    for term in _CJK_TERM_RE.findall(lowered):
+        terms.add(term)
+        # Add 2-char shingles so short domain words such as 基带 / 天线 can match.
+        if len(term) > 2:
+            for idx in range(0, len(term) - 1):
+                terms.add(term[idx:idx + 2])
+    return terms
+
+
+def _read_skill_body(skill_dir: Path, max_chars: int = 12000) -> str:
+    try:
+        text = (skill_dir / "SKILL.md").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    # Drop frontmatter; name/description are scored separately with higher weight.
+    text = _FRONTMATTER_RE.sub("", text, count=1)
+    return text[:max_chars]
+
+
+def _score_skill_for_query(
+    *,
+    entry: Dict[str, Any],
+    skill_dir: Path,
+    query_terms: Set[str],
+) -> int:
+    """Simple deterministic skill relevance score.
+
+    The Claude Skill runtime can choose among loaded skills, but loading every
+    enabled skill makes unrelated skills visible to the model. This scorer keeps
+    runtime scope narrow using metadata and the top of SKILL.md.
+    """
+    if not query_terms:
+        return 0
+
+    name_terms = _extract_terms(str(entry.get("name") or ""))
+    description_terms = _extract_terms(str(entry.get("description") or ""))
+    body_terms = _extract_terms(_read_skill_body(skill_dir))
+
+    score = 0
+    for term in query_terms:
+        if term in name_terms:
+            score += 6
+        if term in description_terms:
+            score += 4
+        if term in body_terms:
+            score += 1
+    return score
+
+
+def select_relevant_skill_names(
+    agent_key: str,
+    *,
+    query_text: str,
+    max_skills: int = 3,
+) -> List[str]:
+    """Select enabled skills relevant to the current request.
+
+    If there is no confident match, returns all enabled skills to preserve the
+    previous behavior. Callers that want unconditional loading should continue
+    using ``materialize_enabled_skills``.
+    """
+    entries = _enabled_entries(agent_key)
+    if not entries:
+        return []
+
+    query_terms = _extract_terms(query_text)
+    if not query_terms:
+        return [str(e["name"]) for e in entries]
+
+    scored: List[Tuple[int, Dict[str, Any]]] = []
+    for entry in entries:
+        score = _score_skill_for_query(
+            entry=entry,
+            skill_dir=_skill_dir_for_entry(agent_key, entry),
+            query_terms=query_terms,
+        )
+        scored.append((score, entry))
+
+    scored.sort(key=lambda item: (-item[0], str(item[1].get("name") or "")))
+    best = scored[0][0]
+    if best <= 0:
+        logger.info(
+            "skill relevance: no match for agent=%s query_terms=%s; loading all enabled skills",
+            agent_key,
+            sorted(query_terms)[:20],
+        )
+        return [str(e["name"]) for e in entries]
+
+    threshold = max(2, int(best * 0.65))
+    selected = [
+        str(entry["name"])
+        for score, entry in scored
+        if score >= threshold
+    ][:max_skills]
+    logger.info(
+        "skill relevance selected for agent=%s: %s (best_score=%s)",
+        agent_key,
+        ", ".join(selected) if selected else "-",
+        best,
+    )
+    return selected
 
 
 def install_skill(
@@ -563,7 +701,12 @@ def set_skill_enabled(agent_key: str, skill_id: str, enabled: bool) -> Dict[str,
 
 # ─────────────────────── 物化到 Agent cwd ──────────────────────────
 
-def materialize_enabled_skills(agent_key: str, target_dir: str | Path) -> List[str]:
+def materialize_enabled_skills(
+    agent_key: str,
+    target_dir: str | Path,
+    *,
+    skill_names: Optional[Iterable[str]] = None,
+) -> List[str]:
     """在 target_dir 下创建 .claude/skills/<name>，指向已安装且启用的 Skill。
 
     优先使用 symlink；symlink 失败（不支持/权限）时降级为复制。返回已物化的 Skill 名称列表。
@@ -573,19 +716,13 @@ def materialize_enabled_skills(agent_key: str, target_dir: str | Path) -> List[s
     target = Path(target_dir)
     skills_dir = target / ".claude" / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
+    selected_names = set(skill_names) if skill_names is not None else None
 
     materialized: List[str] = []
-    store = _store_root(agent_key)
-    for entry in _load_registry(agent_key):
-        if not entry.get("enabled", True):
+    for entry in _enabled_entries(agent_key):
+        if selected_names is not None and entry.get("name") not in selected_names:
             continue
-        src = store / entry.get("dir_name", entry.get("name", ""))
-        if not (src / "SKILL.md").is_file():
-            logger.warning(
-                "skill dir missing or invalid, skip: agent=%s name=%s src=%s",
-                agent_key, entry.get("name"), src,
-            )
-            continue
+        src = _skill_dir_for_entry(agent_key, entry)
         dst = skills_dir / entry["name"]
         if dst.exists() or dst.is_symlink():
             try:
@@ -607,3 +744,21 @@ def materialize_enabled_skills(agent_key: str, target_dir: str | Path) -> List[s
         materialized.append(entry["name"])
 
     return materialized
+
+
+def materialize_relevant_enabled_skills(
+    agent_key: str,
+    target_dir: str | Path,
+    *,
+    query_text: str,
+    max_skills: int = 3,
+) -> List[str]:
+    """Select request-relevant enabled skills, then materialize only those."""
+    selected = select_relevant_skill_names(
+        agent_key,
+        query_text=query_text,
+        max_skills=max_skills,
+    )
+    if not selected:
+        return []
+    return materialize_enabled_skills(agent_key, target_dir, skill_names=selected)
