@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from app.tools.archive_tool import SUPPORTED_ARCHIVE_EXTS  # noqa: F401 – re-exported for callers
+
 logger = logging.getLogger(__name__)
 
 
@@ -124,10 +126,8 @@ def _extract_archive(archive_path: Path, dest: Path, max_bytes: int) -> None:
         _extract_zip(archive_path, dest, max_bytes)
     elif suffix == ".7z":
         _extract_7z(archive_path, dest, max_bytes)
-    elif archive_path.suffix.lower() in (".gz", ".tgz"):
-        _extract_tar(archive_path, dest, max_bytes)
     else:
-        # Fallback: try tarfile then zipfile
+        # Fallback: try tarfile (covers .gz and other compressed tars) then zip
         try:
             _extract_tar(archive_path, dest, max_bytes)
         except tarfile.TarError:

@@ -447,10 +447,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import type { FormInstance } from 'element-plus'
 import { useLogStore } from '../stores/logs'
-import { 
-  formatFileSize, 
+import {
+  formatFileSize,
   formatDateTime,
-  downloadFile 
+  downloadFile,
+  copyToClipboard
 } from '../utils'
 import { logApi, projectRepoApi } from '../api'
 import type { ProjectRepoOption } from '../api'
@@ -1061,22 +1062,11 @@ const handleSaveManualAnalysis = async () => {
 
 // 复制链接
 const handleCopyLink = async () => {
-  try {
-    await navigator.clipboard.writeText(window.location.href)
+  const success = await copyToClipboard(window.location.href)
+  if (success) {
     ElMessage.success('链接已复制到剪贴板')
-  } catch (error) {
-    // 降级方案
-    const textArea = document.createElement('textarea')
-    textArea.value = window.location.href
-    document.body.appendChild(textArea)
-    textArea.select()
-    try {
-      document.execCommand('copy')
-      ElMessage.success('链接已复制到剪贴板')
-    } catch (err) {
-      ElMessage.error('复制失败，请手动复制链接')
-    }
-    document.body.removeChild(textArea)
+  } else {
+    ElMessage.error('复制失败，请手动复制链接')
   }
 }
 
@@ -1308,7 +1298,7 @@ ${log.error_message ? `
       'left: 0',
       'top: 0',
       'width: 820px',
-      'height: 100vh',
+      'height: 20000px',
       'border: 0',
       'opacity: 0',
       'pointer-events: none',
@@ -1356,19 +1346,28 @@ ${PDF_EXPORT_STYLES}
     const root = iframeDoc.getElementById('pdf-root') as HTMLElement | null
     if (!root) throw new Error('导出容器未挂载')
 
+    // 将 iframe 高度收缩到内容实际高度，确保 html2canvas 的窗口尺寸精确
+    const fullContentHeight = root.scrollHeight
+    iframe.style.height = `${fullContentHeight + 20}px`
+    await new Promise((r) => setTimeout(r, 80))
+
     // 并行动态 import，按需加载，不进入主包
     const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
       import('html2canvas-pro'),
       import('jspdf'),
     ])
 
+    const captureWidth = root.scrollWidth
+    const captureHeight = root.scrollHeight
     const canvas = await html2canvas(root, {
       scale: 2,
       useCORS: true,
       backgroundColor: '#ffffff',
       logging: false,
-      windowWidth: root.scrollWidth,
-      windowHeight: root.scrollHeight,
+      width: captureWidth,
+      height: captureHeight,
+      windowWidth: captureWidth,
+      windowHeight: captureHeight,
     })
 
     // A4 纸张毫米 → 像素的换算关系基于 canvas 的实际宽度
@@ -1716,8 +1715,12 @@ ${aiAnalysisResult.value.final_result.content}
 ${aiAnalysisResult.value.final_result.recommendations.join('\n')}
     `.trim()
     
-    await navigator.clipboard.writeText(resultText)
-    ElMessage.success('分析结果已复制到剪贴板')
+    const success = await copyToClipboard(resultText)
+    if (success) {
+      ElMessage.success('分析结果已复制到剪贴板')
+    } else {
+      ElMessage.error('复制失败，请手动复制')
+    }
   } catch (error) {
     console.error('复制失败:', error)
     ElMessage.error('复制失败，请手动复制')
@@ -1794,8 +1797,12 @@ const shareAnalysisResult = async () => {
       ElMessage.success('分享成功')
     } else {
       // 降级到复制链接
-      await navigator.clipboard.writeText(window.location.href)
-      ElMessage.success('链接已复制到剪贴板')
+      const copied = await copyToClipboard(window.location.href)
+      if (copied) {
+        ElMessage.success('链接已复制到剪贴板')
+      } else {
+        ElMessage.error('复制失败，请手动复制链接')
+      }
     }
   } catch (error: any) {
     if (error?.name !== 'AbortError') {

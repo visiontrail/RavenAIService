@@ -98,6 +98,7 @@ import {
   Brain,
 } from 'lucide-vue-next'
 import { renderMarkdown, cleanContent } from '../utils/markdownRenderer'
+import { copyToClipboard } from '../utils'
 
 interface Props {
   result?: any
@@ -170,10 +171,10 @@ const copyResult = async () => {
     return
   }
 
-  try {
-    await navigator.clipboard.writeText(text)
+  const success = await copyToClipboard(text)
+  if (success) {
     ElMessage.success('分析结果已复制到剪贴板')
-  } catch {
+  } else {
     ElMessage.error('复制失败，请手动复制')
   }
 }

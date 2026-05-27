@@ -1,50 +1,39 @@
-"""T04任务专用文件上传验证器
-支持tar.gz格式验证、magic number检查、1GB大小限制等
+"""日志归档文件上传验证器
+支持所有 SUPPORTED_ARCHIVE_EXTS 格式的 magic number 校验、1GB 大小限制等。
 """
 
-import os
 import re
-import gzip
-import tarfile
 import hashlib
 from typing import List, Tuple, Optional
 from pathlib import Path
 from fastapi import UploadFile
 
-from app.config import settings
 from app.exceptions import (
     UnsupportedFileTypeError,
     FileSizeExceededError,
     ValidationError,
-    FileUploadError
 )
+from app.tools.archive_tool import SUPPORTED_ARCHIVE_EXTS, check_archive_magic
 
 
-# T04任务要求：1GB文件大小限制
-T04_MAX_FILE_SIZE = 1024 * 1024 * 1024  # 1GB
+# 1GB 文件大小限制
+T04_MAX_FILE_SIZE = 1024 * 1024 * 1024
 
-# tar.gz文件的magic number
-GZIP_MAGIC_NUMBERS = [
-    b'\x1f\x8b',  # gzip magic number
-]
-
-# tar文件的magic number (在gzip解压后检查)
-TAR_MAGIC_NUMBERS = [
-    b'ustar\x00',  # POSIX tar format
-    b'ustar  \x00',  # GNU tar format
-]
-
-# 安全文件名正则表达式 - 支持.tar.gz和.tgz格式
-SAFE_FILENAME_PATTERN_TAR_GZ = re.compile(r'^[a-zA-Z0-9._\-\s()\[\]{}]+\.tar\.gz$')
-SAFE_FILENAME_PATTERN_TGZ = re.compile(r'^[a-zA-Z0-9._\-\s()\[\]{}]+\.tgz$')
+# 安全文件名基础字符集
+_SAFE_NAME_BASE = r'[a-zA-Z0-9._\-\s()\[\]{}]+'
+# 按扩展名长度降序排，确保 .tar.gz 先于 .gz 匹配
+_EXT_PATTERN = '(' + '|'.join(
+    re.escape(ext)
+    for ext in sorted(SUPPORTED_ARCHIVE_EXTS, key=len, reverse=True)
+) + ')'
+SAFE_FILENAME_PATTERN = re.compile(r'^' + _SAFE_NAME_BASE + _EXT_PATTERN + r'$')
 
 
 class T04FileUploadValidator:
-    """T04任务专用文件上传验证器"""
-    
+    """日志归档文件上传验证器，支持所有 SUPPORTED_ARCHIVE_EXTS 格式。"""
+
     def __init__(self):
         self.max_file_size = T04_MAX_FILE_SIZE
-        self.required_extension = '.tar.gz'
     
     async def validate_upload_files(self, files: List[UploadFile]) -> Tuple[bool, str]:
         """验证多个上传文件
@@ -94,34 +83,33 @@ class T04FileUploadValidator:
             return False, str(e)
     
     def _validate_filename(self, filename: str):
-        """验证文件名安全性"""
+        """验证文件名安全性。"""
         if not filename:
             raise ValidationError("文件名不能为空")
-        
-        # 检查文件名长度
+
         if len(filename) > 255:
             raise ValidationError("文件名长度不能超过255个字符")
-        
-        # 检查路径遍历攻击
+
         if '..' in filename or '/' in filename or '\\' in filename:
             raise ValidationError("文件名不能包含路径分隔符")
-        
-        # 检查危险字符和文件格式
-        filename_lower = filename.lower()
-        if not (SAFE_FILENAME_PATTERN_TAR_GZ.match(filename) or SAFE_FILENAME_PATTERN_TGZ.match(filename)):
-            raise ValidationError("文件名包含不安全的字符或格式不正确，只支持.tar.gz和.tgz格式")
-        
-        # 检查隐藏文件
+
         if filename.startswith('.'):
             raise ValidationError("不支持隐藏文件")
-    
+
+        if not SAFE_FILENAME_PATTERN.match(filename):
+            supported = ', '.join(sorted(SUPPORTED_ARCHIVE_EXTS))
+            raise ValidationError(
+                f"文件名包含不安全的字符或格式不正确，支持的格式：{supported}"
+            )
+
     def _validate_file_format(self, filename: str):
-        """验证文件格式（只允许tar.gz和tgz）"""
-        filename_lower = filename.lower()
-        if not (filename_lower.endswith('.tar.gz') or filename_lower.endswith('.tgz')):
+        """验证文件格式是否在支持列表内。"""
+        fn = filename.lower()
+        suffixes = "".join(Path(fn).suffixes)
+        if suffixes not in SUPPORTED_ARCHIVE_EXTS:
             raise UnsupportedFileTypeError(
-                filename.split('.')[-1] if '.' in filename else 'unknown',
-                ['.tar.gz', '.tgz']
+                suffixes or (filename.split('.')[-1] if '.' in filename else 'unknown'),
+                sorted(SUPPORTED_ARCHIVE_EXTS),
             )
     
     async def _validate_file_size(self, file: UploadFile):
@@ -143,50 +131,19 @@ class T04FileUploadValidator:
             raise ValidationError("文件不能为空")
     
     async def _validate_file_integrity(self, file: UploadFile):
-        """验证文件完整性（magic number检查）"""
-        # 重置文件指针
+        """按文件扩展名校验 magic number。"""
         await file.seek(0)
-        
-        # 读取文件头部用于magic number检查
-        header = await file.read(512)  # 读取足够的字节进行检查
-        
-        # 重置文件指针
+        # 读取足够覆盖所有格式的 magic（tar 的 ustar 在偏移 257，加上 5 字节）
+        header = await file.read(512)
         await file.seek(0)
-        
+
         if len(header) < 2:
             raise ValidationError("文件损坏：文件太小")
-        
-        # 检查gzip magic number
-        if not header.startswith(GZIP_MAGIC_NUMBERS[0]):
-            raise ValidationError("文件损坏：不是有效的gzip文件")
-        
-        # 尝试验证tar.gz文件的完整性
-        try:
-            # 重置文件指针并读取完整内容
-            await file.seek(0)
-            content = await file.read()
-            await file.seek(0)
-            
-            # 验证gzip解压
-            try:
-                decompressed = gzip.decompress(content[:1024])  # 只解压前1KB用于验证
-            except Exception:
-                raise ValidationError("文件损坏：gzip解压失败")
-            
-            # 检查tar magic number
-            tar_magic_found = False
-            for magic in TAR_MAGIC_NUMBERS:
-                if magic in decompressed:
-                    tar_magic_found = True
-                    break
-            
-            if not tar_magic_found:
-                raise ValidationError("文件损坏：不是有效的tar文件")
-                
-        except ValidationError:
-            raise
-        except Exception as e:
-            raise ValidationError(f"文件完整性验证失败: {str(e)}")
+
+        fn = file.filename or ""
+        ext = "".join(Path(fn.lower()).suffixes)
+        if not check_archive_magic(header, ext):
+            raise ValidationError(f"文件损坏：magic number 与扩展名 {ext!r} 不匹配")
     
     def determine_log_type_from_filename(self, filename: str) -> str:
         """根据文件名判断日志类型
@@ -211,41 +168,34 @@ class T04FileUploadValidator:
             return 'oam_antenna'
     
     def sanitize_filename(self, filename: str) -> str:
-        """安全化文件名
-        
-        Args:
-            filename: 原始文件名
-            
-        Returns:
-            str: 安全化后的文件名
-        """
+        """安全化文件名，保留原始扩展名。"""
         if not filename:
             return "unnamed_file.tar.gz"
-        
+
         # 移除路径
         filename = filename.split('/')[-1].split('\\')[-1]
-        
-        # 确保以.tar.gz结尾
-        if not filename.lower().endswith('.tar.gz'):
-            if '.' in filename:
-                base_name = filename.rsplit('.', 1)[0]
-            else:
-                base_name = filename
-            filename = base_name + '.tar.gz'
-        
+
+        # 提取支持的扩展名（按长度降序匹配，确保 .tar.gz 先于 .gz）
+        fn_lower = filename.lower()
+        ext = ""
+        for candidate in sorted(SUPPORTED_ARCHIVE_EXTS, key=len, reverse=True):
+            if fn_lower.endswith(candidate):
+                ext = candidate
+                break
+        if not ext:
+            ext = ".tar.gz"
+
+        base_name = filename[: len(filename) - len(ext)]
+
         # 替换不安全字符
-        filename = re.sub(r'[^\w.\-\s()\[\]{}]', '_', filename)
-        
-        # 移除多余的空格和下划线
-        filename = re.sub(r'[_\s]+', '_', filename).strip('_')
-        
-        # 限制长度
-        if len(filename) > 255:
-            base_name = filename[:-7]  # 移除.tar.gz
-            max_base_length = 255 - 7  # 为.tar.gz预留空间
-            filename = base_name[:max_base_length] + '.tar.gz'
-        
-        return filename
+        base_name = re.sub(r'[^\w.\-\s()\[\]{}]', '_', base_name)
+        base_name = re.sub(r'[_\s]+', '_', base_name).strip('_')
+
+        # 限制总长度
+        max_base = 255 - len(ext)
+        base_name = base_name[:max_base]
+
+        return base_name + ext
     
     async def calculate_file_checksum(self, file: UploadFile, algorithm: str = 'sha256') -> str:
         """计算文件校验和

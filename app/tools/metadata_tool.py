@@ -1,9 +1,8 @@
 """
-Metadata extraction tool for large log packages (tar.gz / zip).
+Metadata extraction tool for large log packages (tar.gz / zip / 7z).
 Reads archive headers without full decompression and emits structured XML.
 """
 import os
-import io
 import json
 import tarfile
 import zipfile
@@ -12,9 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.agents.xml_utils import wrap_file_list, wrap_metadata
-
-
-SUPPORTED_ARCHIVE_EXTS = {".tar.gz", ".tgz", ".zip"}
+from app.tools.archive_tool import SUPPORTED_ARCHIVE_EXTS, guess_archive_type
 
 
 def _is_in_allowed_root(path: str) -> bool:
@@ -24,22 +21,6 @@ def _is_in_allowed_root(path: str) -> bool:
         return os.path.commonpath([abs_path, abs_root]) == abs_root
     except Exception:
         return False
-
-
-def _guess_archive_type(path: str) -> Optional[str]:
-    if path.endswith((".tar.gz", ".tgz")):
-        return "tar"
-    if path.endswith(".zip"):
-        return "zip"
-    # Fallback using signature checks
-    try:
-        if tarfile.is_tarfile(path):
-            return "tar"
-        if zipfile.is_zipfile(path):
-            return "zip"
-    except Exception:
-        pass
-    return None
 
 
 def _list_tar_members(path: str) -> List[Dict[str, str]]:
@@ -137,15 +118,17 @@ def get_log_package_metadata(path: str) -> Dict[str, str]:
     if not os.path.exists(path):
         raise FileNotFoundError(path)
 
-    a_type = _guess_archive_type(path)
+    a_type = guess_archive_type(path)
     if a_type is None:
         raise ValueError("Unsupported archive format")
 
     file_list: List[Dict[str, str]]
     if a_type == "tar":
         file_list = _list_tar_members(path)
-    else:
+    elif a_type == "zip":
         file_list = _list_zip_members(path)
+    else:
+        raise ValueError(f"Header-only listing is not supported for this archive format: {path}")
 
     meta = _derive_package_metadata(file_list, source=os.path.basename(path))
 
@@ -186,14 +169,16 @@ def get_log_package_metadata_xml(path: str) -> str:
     if not os.path.exists(path):
         raise FileNotFoundError(path)
 
-    a_type = _guess_archive_type(path)
+    a_type = guess_archive_type(path)
     if a_type is None:
         raise ValueError("Unsupported archive format")
 
     if a_type == "tar":
         file_list = _list_tar_members(path)
-    else:
+    elif a_type == "zip":
         file_list = _list_zip_members(path)
+    else:
+        raise ValueError(f"Header-only listing is not supported for this archive format: {path}")
 
     meta = _derive_package_metadata(file_list, source=os.path.basename(path))
 

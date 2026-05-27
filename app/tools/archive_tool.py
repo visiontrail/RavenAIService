@@ -6,13 +6,25 @@ import os
 import tarfile
 import zipfile
 import uuid
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from app.config import settings
 from app.agents.xml_utils import wrap_file_list, wrap_metadata, wrap_document
 from app.tools.fs_tools import safe_listdir
 
-SUPPORTED_ARCHIVE_EXTS = {".tar.gz", ".tgz", ".zip"}
+SUPPORTED_ARCHIVE_EXTS = {".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar", ".zip", ".7z"}
+
+# (magic_bytes, byte_offset) for each supported extension
+ARCHIVE_MAGIC: Dict[str, Tuple[bytes, int]] = {
+    ".tar.gz":  (b"\x1f\x8b", 0),
+    ".tgz":     (b"\x1f\x8b", 0),
+    ".tar.bz2": (b"BZh", 0),
+    ".tar.xz":  (b"\xfd7zXZ\x00", 0),
+    ".zip":     (b"PK\x03\x04", 0),
+    ".7z":      (b"7z\xbc\xaf\x27\x1c", 0),
+    ".tar":     (b"ustar", 257),
+}
 
 
 def _is_in_allowed_root(path: str) -> bool:
@@ -24,11 +36,25 @@ def _is_in_allowed_root(path: str) -> bool:
         return False
 
 
-def _guess_archive_type(path: str) -> Optional[str]:
-    if path.endswith((".tar.gz", ".tgz")):
+def check_archive_magic(header: bytes, ext: str) -> bool:
+    """Return True if header bytes match the expected magic for the given extension."""
+    info = ARCHIVE_MAGIC.get(ext.lower())
+    if info is None:
+        return False
+    magic, offset = info
+    end = offset + len(magic)
+    return len(header) >= end and header[offset:end] == magic
+
+
+def guess_archive_type(path: str) -> Optional[str]:
+    """Detect archive type ('tar', 'zip', '7z') from extension, falling back to content inspection."""
+    suffix = "".join(Path(path).suffixes).lower()
+    if suffix in (".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar"):
         return "tar"
-    if path.endswith(".zip"):
+    if suffix == ".zip":
         return "zip"
+    if suffix == ".7z":
+        return "7z"
     try:
         if tarfile.is_tarfile(path):
             return "tar"
@@ -85,9 +111,24 @@ def _safe_extract_zip(src: str, dest: str) -> None:
                 out.write(f.read())
 
 
+def _safe_extract_7z(src: str, dest: str) -> None:
+    try:
+        import py7zr
+    except ImportError as exc:
+        raise RuntimeError("py7zr is required to extract .7z archives") from exc
+    with py7zr.SevenZipFile(src, mode="r") as sz:
+        for name, bio in sz.read().items():
+            if bio is None:
+                continue
+            target = _safe_join(dest, name)
+            Path(target).parent.mkdir(parents=True, exist_ok=True)
+            Path(target).write_bytes(bio.read())
+
+
 def compute_extract_root(archive_path: str) -> str:
     base = os.path.basename(archive_path)
-    name = base.replace(".tar.gz", "").replace(".tgz", "").replace(".zip", "")
+    suffixes = "".join(Path(base).suffixes)
+    name = base[: -len(suffixes)] if suffixes else base.rsplit(".", 1)[0]
     unique = uuid.uuid4().hex[:8]
     extract_base = os.path.join(settings.agent_root_dir, "_extracted")
     _ensure_dir(extract_base)
@@ -102,7 +143,7 @@ def safe_extract_archive(archive_path: str, dest_root: Optional[str] = None) -> 
     if not os.path.exists(archive_path):
         raise FileNotFoundError(archive_path)
 
-    a_type = _guess_archive_type(archive_path)
+    a_type = guess_archive_type(archive_path)
     if a_type is None:
         raise ValueError("Unsupported archive format")
 
@@ -111,8 +152,10 @@ def safe_extract_archive(archive_path: str, dest_root: Optional[str] = None) -> 
 
     if a_type == "tar":
         _safe_extract_tar(archive_path, dest)
-    else:
+    elif a_type == "zip":
         _safe_extract_zip(archive_path, dest)
+    else:
+        _safe_extract_7z(archive_path, dest)
 
     return dest
 
