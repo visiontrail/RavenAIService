@@ -120,6 +120,14 @@ export const userApi = {
   login: (username: string, password: string): Promise<ApiResponse<UserAuthPayload>> =>
     userClient.post('/api/v1/users/auth/login', { username, password }),
 
+  register: (payload: {
+    username: string
+    password: string
+    display_name?: string | null
+    email?: string | null
+  }): Promise<ApiResponse<UserAuthPayload>> =>
+    userClient.post('/api/v1/users/auth/register', payload),
+
   me: (): Promise<ApiResponse<UserProfile>> => userClient.get('/api/v1/users/auth/me'),
 
   listSessions: (): Promise<ApiResponse<ChatSessionSummary[]>> =>

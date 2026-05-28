@@ -19,6 +19,7 @@ import {
 } from '@/stores/conversationRuns'
 import AgentTraceStream from '@/components/AgentTraceStream.vue'
 import { projectRepoApi, type ProjectRepoOption } from '@/api'
+import { downloadFile } from '@/utils'
 
 type MentionOption =
   | { type: 'agent'; id: string; name: string; description?: string; agentType: 'package-manager' | 'log-analysis' }
@@ -39,6 +40,8 @@ const logAnalysisAgentOption: MentionOption = {
   agentType: 'log-analysis',
   description: '上传日志包并调用 Log Analysis Agent，保留工作区支持追问'
 }
+
+const acceptedLogArchiveTypes = '.zip,.tar,.tgz,.gz,.tar.gz,.tar.bz2,.bz2,.tar.xz,.xz,.7z,.rar'
 
 const userStore = useUserStore()
 const appStore = useAppStore()
@@ -266,6 +269,76 @@ const deleteCurrentSession = async () => {
     console.error('删除会话失败', error)
     appStore.showNotification({ title: '删除失败', type: 'error' })
   }
+}
+
+const padDatePart = (value: number) => String(value).padStart(2, '0')
+
+const formatExportDateTime = (date: Date) => {
+  const year = date.getFullYear()
+  const month = padDatePart(date.getMonth() + 1)
+  const day = padDatePart(date.getDate())
+  const hour = padDatePart(date.getHours())
+  const minute = padDatePart(date.getMinutes())
+  const second = padDatePart(date.getSeconds())
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`
+}
+
+const formatExportFileStamp = (date: Date) =>
+  formatExportDateTime(date).replace(/[-:]/g, '').replace(' ', '-')
+
+const sanitizeMarkdownFilename = (name: string) => {
+  const cleaned = name
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80)
+  return cleaned || 'RavenAI-对话'
+}
+
+const messageSpeakerName = (role: ChatEntry['role']) => {
+  if (role === 'user') return currentUserName.value
+  if (role === 'ai') return 'RAVENAI'
+  return '系统'
+}
+
+const buildConversationMarkdown = (exportedAt: Date) => {
+  const title = currentChatTitle.value || 'RavenAI 对话'
+  const lines: string[] = [
+    `# ${title}`,
+    '',
+    `- 导出时间：${formatExportDateTime(exportedAt)}`,
+    `- 会话 ID：${effectiveSessionId.value || '本地新对话'}`,
+    `- 消息数：${chatHistory.value.length}`,
+    '',
+    '---',
+  ]
+
+  chatHistory.value.forEach((message, index) => {
+    const content = (message.content || '').trim() || '（空消息）'
+    lines.push(
+      '',
+      `## ${index + 1}. ${messageSpeakerName(message.role)}`,
+      '',
+      content,
+    )
+  })
+
+  return `${lines.join('\n').trimEnd()}\n`
+}
+
+const exportCurrentConversationMarkdown = () => {
+  showTopMoreMenu.value = false
+  if (!chatHistory.value.length) {
+    appStore.showNotification({ title: '暂无可导出的消息', type: 'warning' })
+    return
+  }
+
+  const exportedAt = new Date()
+  const markdown = buildConversationMarkdown(exportedAt)
+  const filename = `${sanitizeMarkdownFilename(currentChatTitle.value || 'RavenAI-对话')}-${formatExportFileStamp(exportedAt)}.md`
+  const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
+  downloadFile(blob, filename)
+  appStore.showNotification({ title: 'Markdown 已导出', type: 'success' })
 }
 
 const mentionOptions = computed<MentionOption[]>(() => {
@@ -820,7 +893,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M16 6l-4-4-4 4M12 2v14"/></svg>
               分享对话
             </button>
-            <button class="rw-menu-item" @click="showTopMoreMenu = false">
+            <button class="rw-menu-item" @click="exportCurrentConversationMarkdown">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 15v-6l3 3 3-3v6M17 9v6M14 12l3 3 3-3"/></svg>
               导出 Markdown
             </button>
@@ -1008,7 +1081,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             ref="logFileInputRef"
             class="rw-file-input"
             type="file"
-            accept=".zip,.tar,.tgz,.gz,.tar.gz,.tar.bz2,.bz2"
+            :accept="acceptedLogArchiveTypes"
             @change="handleLogFileChange"
           />
           <button

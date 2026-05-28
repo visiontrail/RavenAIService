@@ -58,7 +58,14 @@ const openRowMenuId = ref<string | null>(null)
 const lang = ref<'zh' | 'en'>('zh')
 
 const showLoginModal = ref(false)
-const loginForm = reactive({ username: '', password: '' })
+const authMode = ref<'login' | 'register'>('login')
+const loginForm = reactive({
+  username: '',
+  password: '',
+  displayName: '',
+  email: '',
+  confirmPassword: '',
+})
 const isLoggingIn = ref(false)
 
 const userMenuRef = ref<HTMLElement | null>(null)
@@ -76,6 +83,11 @@ const userInitial = computed(() => (currentUserName.value || 'U').slice(0, 2).to
 const currentUserStatusText = computed(() =>
   currentUserEmail.value || (isLoggedIn.value ? '已登录' : '未登录')
 )
+
+const openAuthModal = (mode: 'login' | 'register' = 'login') => {
+  authMode.value = mode
+  showLoginModal.value = true
+}
 
 const goToAdminConsole = () => {
   showUserMenu.value = false
@@ -203,6 +215,31 @@ const deleteSession = async (id: string) => {
   }
 }
 
+const resetAuthForm = () => {
+  loginForm.username = ''
+  loginForm.password = ''
+  loginForm.displayName = ''
+  loginForm.email = ''
+  loginForm.confirmPassword = ''
+}
+
+const closeAuthModal = () => {
+  showLoginModal.value = false
+  resetAuthForm()
+}
+
+const switchAuthMode = (mode: 'login' | 'register') => {
+  authMode.value = mode
+  loginForm.password = ''
+  loginForm.confirmPassword = ''
+}
+
+const parseAuthError = (error: any, fallback: string) => {
+  const detail = error?.response?.data?.detail || error?.response?.data?.message
+  if (typeof detail === 'string') return detail
+  return error?.message || fallback
+}
+
 const handleUserLogin = async () => {
   if (!loginForm.username || !loginForm.password) {
     appStore.showNotification({ title: '请输入用户名和密码', type: 'warning' })
@@ -215,19 +252,60 @@ const handleUserLogin = async () => {
     userStore.setToken(resp.data.token)
     userStore.setProfile(resp.data.user)
     appStore.showNotification({ title: '登录成功', type: 'success' })
-    showLoginModal.value = false
-    loginForm.username = ''
-    loginForm.password = ''
+    closeAuthModal()
     await sessionStore.load()
   } catch (error: any) {
     appStore.showNotification({
       title: '登录失败',
-      message: error?.message || '请检查账号密码',
+      message: parseAuthError(error, '请检查账号密码'),
       type: 'error',
     })
   } finally {
     isLoggingIn.value = false
   }
+}
+
+const handleUserRegister = async () => {
+  if (!loginForm.username.trim() || !loginForm.password) {
+    appStore.showNotification({ title: '请输入用户名和密码', type: 'warning' })
+    return
+  }
+  if (loginForm.password.length < 6) {
+    appStore.showNotification({ title: '密码至少 6 位', type: 'warning' })
+    return
+  }
+  if (loginForm.password !== loginForm.confirmPassword) {
+    appStore.showNotification({ title: '两次输入的密码不一致', type: 'warning' })
+    return
+  }
+  isLoggingIn.value = true
+  try {
+    const resp = await userApi.register({
+      username: loginForm.username.trim(),
+      password: loginForm.password,
+      display_name: loginForm.displayName.trim() || null,
+      email: loginForm.email.trim() || null,
+    })
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || '注册失败')
+    userStore.setToken(resp.data.token)
+    userStore.setProfile(resp.data.user)
+    appStore.showNotification({ title: '注册成功', type: 'success' })
+    closeAuthModal()
+    await sessionStore.load()
+  } catch (error: any) {
+    appStore.showNotification({
+      title: '注册失败',
+      message: parseAuthError(error, '请稍后重试'),
+      type: 'error',
+    })
+  } finally {
+    isLoggingIn.value = false
+  }
+}
+
+const handleAuthSubmit = () => {
+  if (authMode.value === 'register') return handleUserRegister()
+  return handleUserLogin()
 }
 
 const handleUserLogout = () => {
@@ -306,7 +384,10 @@ const handleUserLogout = () => {
         <template v-if="!isLoggedIn">
           <div class="rw-login-hint">
             <div class="rw-login-hint-title">登录可同步历史对话</div>
-            <button class="rw-login-link" @click="showLoginModal = true">立即登录 →</button>
+            <div class="rw-login-actions">
+              <button class="rw-login-link" @click="openAuthModal('login')">立即登录</button>
+              <button class="rw-login-link" @click="openAuthModal('register')">注册账户</button>
+            </div>
           </div>
         </template>
         <template v-else-if="sessionStore.loading">
@@ -422,7 +503,7 @@ const handleUserLogout = () => {
             <div class="rw-menu-divider"/>
             <button
               class="rw-user-menu-item"
-              @click="isLoggedIn ? handleUserLogout() : (showUserMenu = false, showLoginModal = true)"
+              @click="isLoggedIn ? handleUserLogout() : (showUserMenu = false, openAuthModal('login'))"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
               {{ isLoggedIn ? '退出登录' : '立即登录' }}
@@ -455,31 +536,53 @@ const handleUserLogout = () => {
     </main>
 
     <!-- Login modal -->
-    <div v-if="showLoginModal" class="rw-modal-backdrop" @click.self="showLoginModal = false">
+    <div v-if="showLoginModal" class="rw-modal-backdrop" @click.self="closeAuthModal">
       <div class="rw-modal">
         <div class="rw-modal-head">
           <div>
-            <h3 class="rw-modal-title">登录账户</h3>
-            <p class="rw-modal-sub">登录可同步历史对话</p>
+            <h3 class="rw-modal-title">{{ authMode === 'register' ? '注册账户' : '登录账户' }}</h3>
+            <p class="rw-modal-sub">{{ authMode === 'register' ? '创建账户后自动登录' : '登录可同步历史对话' }}</p>
           </div>
-          <button class="rw-modal-close" @click="showLoginModal = false" aria-label="关闭">
+          <button class="rw-modal-close" @click="closeAuthModal" aria-label="关闭">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
           </button>
         </div>
-        <form class="rw-modal-form" @submit.prevent="handleUserLogin">
+        <div class="rw-auth-tabs" role="tablist" aria-label="账户操作">
+          <button type="button" :class="{ active: authMode === 'login' }" @click="switchAuthMode('login')">登录</button>
+          <button type="button" :class="{ active: authMode === 'register' }" @click="switchAuthMode('register')">注册</button>
+        </div>
+        <form class="rw-modal-form" @submit.prevent="handleAuthSubmit">
           <label class="rw-form-field">
             <span class="rw-form-label">用户名</span>
             <input v-model="loginForm.username" type="text" class="rw-input" placeholder="输入用户名" autocomplete="username" />
           </label>
+          <label v-if="authMode === 'register'" class="rw-form-field">
+            <span class="rw-form-label">展示名称</span>
+            <input v-model="loginForm.displayName" type="text" class="rw-input" placeholder="可选" autocomplete="name" />
+          </label>
+          <label v-if="authMode === 'register'" class="rw-form-field">
+            <span class="rw-form-label">邮箱</span>
+            <input v-model="loginForm.email" type="email" class="rw-input" placeholder="可选" autocomplete="email" />
+          </label>
           <label class="rw-form-field">
             <span class="rw-form-label">密码</span>
-            <input v-model="loginForm.password" type="password" class="rw-input" placeholder="输入密码" autocomplete="current-password" />
+            <input
+              v-model="loginForm.password"
+              type="password"
+              class="rw-input"
+              placeholder="输入密码"
+              :autocomplete="authMode === 'register' ? 'new-password' : 'current-password'"
+            />
+          </label>
+          <label v-if="authMode === 'register'" class="rw-form-field">
+            <span class="rw-form-label">确认密码</span>
+            <input v-model="loginForm.confirmPassword" type="password" class="rw-input" placeholder="再次输入密码" autocomplete="new-password" />
           </label>
           <div class="rw-modal-actions">
             <button type="submit" class="rw-btn-primary" :disabled="isLoggingIn">
-              {{ isLoggingIn ? '登录中…' : '立即登录' }}
+              {{ isLoggingIn ? (authMode === 'register' ? '注册中…' : '登录中…') : (authMode === 'register' ? '注册并登录' : '立即登录') }}
             </button>
-            <button type="button" class="rw-btn-ghost" @click="showLoginModal = false">取消</button>
+            <button type="button" class="rw-btn-ghost" @click="closeAuthModal">取消</button>
           </div>
         </form>
       </div>
@@ -647,8 +750,9 @@ const handleUserLogout = () => {
   border-radius: 8px;
 }
 .rw-login-hint-title { font-size: 12.5px; font-weight: 600; color: var(--rw-ink); }
+.rw-login-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
 .rw-login-link {
-  margin-top: 4px; font-size: 12px; color: var(--rw-ink);
+  font-size: 12px; color: var(--rw-ink);
   text-decoration: underline; text-underline-offset: 2px;
   text-decoration-color: var(--rw-hairline-strong);
 }
@@ -819,6 +923,27 @@ const handleUserLogout = () => {
 .rw-modal-sub { font-size: 12px; color: var(--rw-muted); margin: 4px 0 0; }
 .rw-modal-close { width: 28px; height: 28px; border-radius: 6px; display: grid; place-items: center; color: var(--rw-body); }
 .rw-modal-close:hover { background: var(--rw-surface-strong); color: var(--rw-ink); }
+.rw-auth-tabs {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  background: var(--rw-surface-strong);
+  border-radius: 8px;
+}
+.rw-auth-tabs button {
+  height: 30px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--rw-body);
+}
+.rw-auth-tabs button.active {
+  background: var(--rw-canvas);
+  color: var(--rw-ink);
+  box-shadow: 0 1px 2px rgba(0,0,0,.08);
+}
 .rw-modal-form { margin-top: 18px; display: flex; flex-direction: column; gap: 14px; }
 .rw-form-field { display: flex; flex-direction: column; gap: 6px; }
 .rw-form-label { font-size: 12px; color: var(--rw-body); font-weight: 500; }

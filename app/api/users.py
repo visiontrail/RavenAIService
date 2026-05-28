@@ -10,7 +10,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import get_db
@@ -90,8 +90,49 @@ def require_admin(credentials: HTTPAuthorizationCredentials = Depends(admin_bear
 class UserLoginRequest(BaseModel):
     """登录请求"""
 
-    username: str
-    password: str
+    username: str = Field(..., min_length=1, max_length=128)
+    password: str = Field(..., min_length=1, max_length=256)
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def normalize_username(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        username = value.strip()
+        if not username:
+            raise ValueError("用户名不能为空")
+        return username
+
+
+class UserRegisterRequest(BaseModel):
+    """普通用户注册请求"""
+
+    username: str = Field(..., min_length=3, max_length=128)
+    password: str = Field(..., min_length=6, max_length=256)
+    display_name: Optional[str] = Field(None, max_length=128)
+    email: Optional[str] = Field(None, max_length=255)
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def normalize_username(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        username = value.strip()
+        if not username:
+            raise ValueError("用户名不能为空")
+        if any(ch.isspace() for ch in username):
+            raise ValueError("用户名不能包含空白字符")
+        return username
+
+    @field_validator("display_name", "email", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return normalized or None
 
 
 @router.post("/auth/login", response_model=UserAuthResponse)
@@ -106,6 +147,27 @@ async def user_login(payload: UserLoginRequest, db: AsyncSession = Depends(get_d
     token, expires_at = user_auth_manager.issue_token(user.id, user.username)
     return UserAuthResponse(
         message="登录成功",
+        data=UserAuthPayload(
+            token=token,
+            expires_at=expires_at,
+            user=UserProfile.model_validate(user, from_attributes=True),
+        ),
+    )
+
+
+@router.post("/auth/register", response_model=UserAuthResponse, status_code=201)
+async def user_register(payload: UserRegisterRequest, db: AsyncSession = Depends(get_db)) -> UserAuthResponse:
+    user = await user_service.create_user(
+        db,
+        username=payload.username,
+        password=payload.password,
+        display_name=payload.display_name,
+        email=payload.email,
+        role="user",
+    )
+    token, expires_at = user_auth_manager.issue_token(user.id, user.username)
+    return UserAuthResponse(
+        message="注册成功",
         data=UserAuthPayload(
             token=token,
             expires_at=expires_at,
