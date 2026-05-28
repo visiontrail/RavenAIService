@@ -81,6 +81,8 @@ const targetDeviceId = ref<string | null>(null)
 const targetDeviceName = ref<string | null>(null)
 const targetAgent = ref<{ id: string; name: string; agentType: 'package-manager' | 'log-analysis' } | null>(null)
 const selectedLogFile = ref<File | null>(null)
+const isLogFileDragOver = ref(false)
+let logFileDragDepth = 0
 
 const showTopMoreMenu = ref(false)
 
@@ -511,14 +513,47 @@ const triggerLogFilePicker = () => {
   logFileInputRef.value?.click()
 }
 
+const selectLogFile = (file: File) => {
+  selectedLogFile.value = file
+  setTargetAgent(logAnalysisAgentOption)
+  ensureProjectRepoOptions()
+}
+
 const handleLogFileChange = (event: Event) => {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0] || null
   if (file) {
-    selectedLogFile.value = file
-    setTargetAgent(logAnalysisAgentOption)
+    selectLogFile(file)
   }
   input.value = ''
+}
+
+const isFileDragEvent = (event: DragEvent) =>
+  Array.from(event.dataTransfer?.types || []).includes('Files')
+
+const handleLogFileDragEnter = (event: DragEvent) => {
+  if (isSending.value || !isFileDragEvent(event)) return
+  logFileDragDepth += 1
+  isLogFileDragOver.value = true
+}
+
+const handleLogFileDragOver = (event: DragEvent) => {
+  if (isSending.value || !isFileDragEvent(event) || !event.dataTransfer) return
+  event.dataTransfer.dropEffect = 'copy'
+}
+
+const handleLogFileDragLeave = (event: DragEvent) => {
+  if (!isFileDragEvent(event)) return
+  logFileDragDepth = Math.max(0, logFileDragDepth - 1)
+  if (logFileDragDepth === 0) isLogFileDragOver.value = false
+}
+
+const handleLogFileDrop = (event: DragEvent) => {
+  logFileDragDepth = 0
+  isLogFileDragOver.value = false
+  if (isSending.value) return
+  const file = event.dataTransfer?.files?.[0] || null
+  if (file) selectLogFile(file)
 }
 
 const togglePackageAgent = () => {
@@ -996,6 +1031,11 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
       <div
         ref="inputAreaRef"
         class="rw-composer"
+        :class="{ 'is-log-drag-over': isLogFileDragOver }"
+        @dragenter.prevent="handleLogFileDragEnter"
+        @dragover.prevent="handleLogFileDragOver"
+        @dragleave.prevent="handleLogFileDragLeave"
+        @drop.prevent="handleLogFileDrop"
       >
         <!-- Mention dropdown -->
         <div
@@ -1411,6 +1451,11 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
   position: relative;
 }
 .rw-composer:focus-within { border-color: var(--rw-ink); }
+.rw-composer.is-log-drag-over {
+  border-color: var(--rw-ink);
+  background: var(--rw-surface-strong);
+  box-shadow: 0 0 0 3px rgba(23, 23, 23, .08), 0 8px 24px rgba(0,0,0,.08);
+}
 .rw-textarea {
   width: 100%; min-height: 50px;
   border: none; outline: none; resize: none;
