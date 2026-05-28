@@ -16,6 +16,8 @@ redis>=5.0.0
 kombu>=5.3.0
 
 # Additional utilities for file processing
+py7zr>=0.21.0
+rarfile>=4.2
 
 # Agent framework and LLM clients
 claude-agent-sdk>=0.1

@@ -1,5 +1,5 @@
 """
-Metadata extraction tool for large log packages (tar.gz / zip / 7z).
+Metadata extraction tool for large log packages (tar.gz / zip / 7z / rar).
 Reads archive headers without full decompression and emits structured XML.
 """
 import os
@@ -53,6 +53,26 @@ def _list_zip_members(path: str) -> List[Dict[str, str]]:
     return files
 
 
+def _list_rar_members(path: str) -> List[Dict[str, str]]:
+    try:
+        import rarfile
+    except ImportError as exc:
+        raise RuntimeError("rarfile is required to inspect .rar archives") from exc
+
+    files: List[Dict[str, str]] = []
+    with rarfile.RarFile(path, "r") as rf:
+        for info in rf.infolist():
+            if info.isdir():
+                continue
+            mtime = getattr(info, "mtime", None)
+            files.append({
+                "path": info.filename,
+                "size": int(getattr(info, "file_size", 0) or 0),
+                "modified": mtime.isoformat() + "Z" if mtime else "",
+            })
+    return files
+
+
 def _extract_metadata_json(path: str) -> Optional[Dict[str, Any]]:
     """Try to locate and parse metadata.json inside the archive without full extraction."""
     # Try ZIP first
@@ -75,6 +95,18 @@ def _extract_metadata_json(path: str) -> Optional[Dict[str, Any]]:
                 if extracted is not None:
                     content = extracted.read().decode("utf-8", errors="ignore")
                     return json.loads(content)
+    except Exception:
+        pass
+    # RAR
+    try:
+        import rarfile
+        if path.endswith(".rar") or rarfile.is_rarfile(path):
+            with rarfile.RarFile(path, "r") as rf:
+                meta_info = next((i for i in rf.infolist() if not i.isdir() and i.filename.endswith("metadata.json")), None)
+                if meta_info:
+                    with rf.open(meta_info) as f:
+                        content = f.read().decode("utf-8", errors="ignore")
+                        return json.loads(content)
     except Exception:
         pass
     return None
@@ -127,6 +159,8 @@ def get_log_package_metadata(path: str) -> Dict[str, str]:
         file_list = _list_tar_members(path)
     elif a_type == "zip":
         file_list = _list_zip_members(path)
+    elif a_type == "rar":
+        file_list = _list_rar_members(path)
     else:
         raise ValueError(f"Header-only listing is not supported for this archive format: {path}")
 
@@ -177,6 +211,8 @@ def get_log_package_metadata_xml(path: str) -> str:
         file_list = _list_tar_members(path)
     elif a_type == "zip":
         file_list = _list_zip_members(path)
+    elif a_type == "rar":
+        file_list = _list_rar_members(path)
     else:
         raise ValueError(f"Header-only listing is not supported for this archive format: {path}")
 

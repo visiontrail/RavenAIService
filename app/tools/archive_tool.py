@@ -7,22 +7,27 @@ import tarfile
 import zipfile
 import uuid
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 from app.config import settings
 from app.agents.xml_utils import wrap_file_list, wrap_metadata, wrap_document
 from app.tools.fs_tools import safe_listdir
 
-SUPPORTED_ARCHIVE_EXTS = {".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar", ".zip", ".7z"}
+SUPPORTED_ARCHIVE_EXTS = {".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar", ".zip", ".7z", ".rar"}
 
 # (magic_bytes, byte_offset) for each supported extension
-ARCHIVE_MAGIC: Dict[str, Tuple[bytes, int]] = {
+ArchiveMagic = Union[Tuple[bytes, int], List[Tuple[bytes, int]]]
+ARCHIVE_MAGIC: Dict[str, ArchiveMagic] = {
     ".tar.gz":  (b"\x1f\x8b", 0),
     ".tgz":     (b"\x1f\x8b", 0),
     ".tar.bz2": (b"BZh", 0),
     ".tar.xz":  (b"\xfd7zXZ\x00", 0),
     ".zip":     (b"PK\x03\x04", 0),
     ".7z":      (b"7z\xbc\xaf\x27\x1c", 0),
+    ".rar": [
+        (b"Rar!\x1a\x07\x00", 0),      # RAR 1.5-4.x
+        (b"Rar!\x1a\x07\x01\x00", 0),  # RAR 5.x
+    ],
     ".tar":     (b"ustar", 257),
 }
 
@@ -41,13 +46,16 @@ def check_archive_magic(header: bytes, ext: str) -> bool:
     info = ARCHIVE_MAGIC.get(ext.lower())
     if info is None:
         return False
-    magic, offset = info
-    end = offset + len(magic)
-    return len(header) >= end and header[offset:end] == magic
+    candidates = info if isinstance(info, list) else [info]
+    for magic, offset in candidates:
+        end = offset + len(magic)
+        if len(header) >= end and header[offset:end] == magic:
+            return True
+    return False
 
 
 def guess_archive_type(path: str) -> Optional[str]:
-    """Detect archive type ('tar', 'zip', '7z') from extension, falling back to content inspection."""
+    """Detect archive type from extension, falling back to content inspection."""
     suffix = "".join(Path(path).suffixes).lower()
     if suffix in (".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar"):
         return "tar"
@@ -55,11 +63,19 @@ def guess_archive_type(path: str) -> Optional[str]:
         return "zip"
     if suffix == ".7z":
         return "7z"
+    if suffix == ".rar":
+        return "rar"
     try:
         if tarfile.is_tarfile(path):
             return "tar"
         if zipfile.is_zipfile(path):
             return "zip"
+        try:
+            import rarfile
+            if rarfile.is_rarfile(path):
+                return "rar"
+        except ImportError:
+            pass
     except Exception:
         pass
     return None
@@ -125,6 +141,32 @@ def _safe_extract_7z(src: str, dest: str) -> None:
             Path(target).write_bytes(bio.read())
 
 
+def _safe_extract_rar(src: str, dest: str) -> None:
+    try:
+        import rarfile
+    except ImportError as exc:
+        raise RuntimeError("rarfile is required to extract .rar archives") from exc
+
+    with rarfile.RarFile(src, mode="r") as rf:
+        for info in rf.infolist():
+            name = info.filename
+            if not name or name.endswith("/") or info.isdir():
+                _ensure_dir(_safe_join(dest, name))
+                continue
+            is_symlink = getattr(info, "is_symlink", None)
+            if callable(is_symlink) and is_symlink():
+                continue
+            target = _safe_join(dest, name)
+            parent = os.path.dirname(target)
+            _ensure_dir(parent)
+            with rf.open(info) as f, open(target, "wb") as out:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+
+
 def compute_extract_root(archive_path: str) -> str:
     base = os.path.basename(archive_path)
     suffixes = "".join(Path(base).suffixes)
@@ -154,8 +196,10 @@ def safe_extract_archive(archive_path: str, dest_root: Optional[str] = None) -> 
         _safe_extract_tar(archive_path, dest)
     elif a_type == "zip":
         _safe_extract_zip(archive_path, dest)
-    else:
+    elif a_type == "7z":
         _safe_extract_7z(archive_path, dest)
+    else:
+        _safe_extract_rar(archive_path, dest)
 
     return dest
 

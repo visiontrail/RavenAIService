@@ -102,7 +102,7 @@ async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
 
         metadata_dict = None
 
-        # 支持 .zip 与 tar 家族（.tar, .tgz, .tar.gz, 等）
+        # 支持 .zip、.rar 与 tar 家族（.tar, .tgz, .tar.gz, 等）
         suffix_lower = file_path.suffix.lower()
         name_lower = file_path.name.lower()
 
@@ -114,6 +114,19 @@ async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
                     meta_name = next((n for n in zf.namelist() if n.endswith("metadata.json") and not n.endswith("/")), None)
                     if meta_name:
                         with zf.open(meta_name) as f:
+                            content = f.read().decode('utf-8', errors='ignore')
+                            metadata_dict = json.loads(content)
+            except Exception:
+                metadata_dict = None
+
+        # RAR
+        if metadata_dict is None and suffix_lower == ".rar":
+            try:
+                import rarfile
+                with rarfile.RarFile(file_path, "r") as rf:
+                    meta_info = next((i for i in rf.infolist() if not i.isdir() and i.filename.endswith("metadata.json")), None)
+                    if meta_info:
+                        with rf.open(meta_info) as f:
                             content = f.read().decode('utf-8', errors='ignore')
                             metadata_dict = json.loads(content)
             except Exception:
@@ -324,14 +337,14 @@ async def upload_log(
 
 @router.post("/upload-t04", status_code=201)
 async def upload_t04_logs(
-    files: List[UploadFile] = File(..., description="要上传的tar.gz日志文件列表")
+    files: List[UploadFile] = File(..., description="要上传的日志归档文件列表")
 ):
     """
-    T04任务：上传tar.gz格式的日志文件
+    T04任务：上传日志归档文件
     
     支持功能：
     - 多文件同时上传
-    - 只允许tar.gz格式文件
+    - 允许系统支持的日志归档格式
     - 文件大小限制1GB
     - 文件完整性验证（magic number检查）
     - 根据文件名自动判断日志类型（包含"stack"为协议栈日志）

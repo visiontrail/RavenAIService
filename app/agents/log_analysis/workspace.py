@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from app.config import settings
 from app.tools.archive_tool import SUPPORTED_ARCHIVE_EXTS  # noqa: F401 – re-exported for callers
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,14 @@ def _find_metadata_json(logs_dir: Path) -> Optional[Path]:
     for p in logs_dir.rglob("metadata.json"):
         return p
     return None
+
+
+def _safe_output_path(dest: Path, name: str) -> Path:
+    target = (dest / name).resolve()
+    base = dest.resolve()
+    if base != target and base not in target.parents:
+        raise WorkspaceError(f"Unsafe archive member path: {name}")
+    return target
 
 
 def _extract_tar(archive_path: Path, dest: Path, max_bytes: int) -> None:
@@ -118,6 +127,43 @@ def _extract_7z(archive_path: Path, dest: Path, max_bytes: int) -> None:
             out.write_bytes(data)
 
 
+def _extract_rar(archive_path: Path, dest: Path, max_bytes: int) -> None:
+    try:
+        import rarfile
+    except ImportError as exc:
+        raise WorkspaceError("rarfile is required to extract .rar archives") from exc
+
+    extracted = 0
+    try:
+        with rarfile.RarFile(archive_path, mode="r") as rf:
+            for info in rf.infolist():
+                name = info.filename
+                if not name or name.endswith("/") or info.isdir():
+                    continue
+                is_symlink = getattr(info, "is_symlink", None)
+                if callable(is_symlink) and is_symlink():
+                    continue
+                file_size = int(getattr(info, "file_size", 0) or 0)
+                extracted += file_size
+                if extracted > max_bytes:
+                    raise WorkspaceExtractTooLarge(
+                        f"Extraction aborted: cumulative size {extracted} bytes "
+                        f"exceeds limit {max_bytes} bytes"
+                    )
+                out = _safe_output_path(dest, name)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                with rf.open(info) as src, out.open("wb") as dst:
+                    while True:
+                        chunk = src.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        dst.write(chunk)
+    except WorkspaceExtractTooLarge:
+        raise
+    except rarfile.Error as exc:
+        raise WorkspaceError(f"Failed to extract .rar archive: {exc}") from exc
+
+
 def _extract_archive(archive_path: Path, dest: Path, max_bytes: int) -> None:
     suffix = "".join(archive_path.suffixes).lower()
     if suffix in (".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar"):
@@ -126,6 +172,8 @@ def _extract_archive(archive_path: Path, dest: Path, max_bytes: int) -> None:
         _extract_zip(archive_path, dest, max_bytes)
     elif suffix == ".7z":
         _extract_7z(archive_path, dest, max_bytes)
+    elif suffix == ".rar":
+        _extract_rar(archive_path, dest, max_bytes)
     else:
         # Fallback: try tarfile (covers .gz and other compressed tars) then zip
         try:
@@ -153,8 +201,6 @@ def prepare(log_record: Any, *, require_metadata: bool = True) -> WorkspaceConte
         WorkspaceExtractTooLarge: 解压超限
         MissingMetadataJsonError: require_metadata=True 且解压后找不到 metadata.json
     """
-    from app.config import settings
-
     archive_path_str = getattr(log_record, "archive_path", None) or getattr(log_record, "file_path", None)
     if not archive_path_str:
         raise MissingArchiveError(

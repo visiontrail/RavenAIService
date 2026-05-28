@@ -20,7 +20,7 @@ from app.exceptions import (
 SUPPORTED_LOG_EXTENSIONS = [
     '.log', '.txt', '.out', '.err', '.trace',
     '.json', '.xml', '.csv', '.tsv',
-    '.gz', '.zip', '.tar', '.bz2', '.tgz'
+    '.gz', '.zip', '.tar', '.bz2', '.tgz', '.rar'
 ]
 
 SUPPORTED_MIME_TYPES = [
@@ -31,6 +31,8 @@ SUPPORTED_MIME_TYPES = [
     'text/xml',
     'application/gzip',
     'application/zip',
+    'application/vnd.rar',
+    'application/x-rar-compressed',
     'application/x-tar',
     'application/x-bzip2',
     'application/octet-stream'  # 允许二进制文件，但会进一步验证扩展名

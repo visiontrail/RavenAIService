@@ -5,9 +5,11 @@ from __future__ import annotations
 import io
 import json
 import os
+import sys
 import tarfile
 import tempfile
 import zipfile
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -147,6 +149,83 @@ class TestPrepare:
         with patch("app.agents.log_analysis.workspace.settings", mock_settings):
             with pytest.raises(MissingMetadataJsonError):
                 prepare(record)
+
+    def test_rar_extraction_ok_with_size_bound(self, tmp_path, monkeypatch):
+        from app.agents.log_analysis.workspace import _extract_rar
+
+        class FakeRarInfo:
+            def __init__(self, filename: str, data: bytes):
+                self.filename = filename
+                self.data = data
+                self.file_size = len(data)
+
+            def isdir(self):
+                return False
+
+        class FakeRarFile:
+            members = [
+                FakeRarInfo("logs/metadata.json", json.dumps({"project_code": "rar"}).encode()),
+                FakeRarInfo("logs/app.log", b"rar log content"),
+            ]
+
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def infolist(self):
+                return self.members
+
+            def open(self, info):
+                return io.BytesIO(info.data)
+
+        fake_rarfile = SimpleNamespace(RarFile=FakeRarFile, Error=Exception)
+        monkeypatch.setitem(sys.modules, "rarfile", fake_rarfile)
+
+        dest = tmp_path / "out"
+        dest.mkdir()
+        _extract_rar(tmp_path / "sample.rar", dest, 1024)
+
+        assert (dest / "logs" / "metadata.json").exists()
+        assert (dest / "logs" / "app.log").read_bytes() == b"rar log content"
+
+    def test_rar_extraction_too_large(self, tmp_path, monkeypatch):
+        from app.agents.log_analysis.workspace import WorkspaceExtractTooLarge, _extract_rar
+
+        class FakeRarInfo:
+            filename = "big.log"
+            file_size = 100
+
+            def isdir(self):
+                return False
+
+        class FakeRarFile:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def infolist(self):
+                return [FakeRarInfo()]
+
+            def open(self, _info):
+                return io.BytesIO(b"x" * 100)
+
+        fake_rarfile = SimpleNamespace(RarFile=FakeRarFile, Error=Exception)
+        monkeypatch.setitem(sys.modules, "rarfile", fake_rarfile)
+
+        dest = tmp_path / "out"
+        dest.mkdir()
+        with pytest.raises(WorkspaceExtractTooLarge):
+            _extract_rar(tmp_path / "sample.rar", dest, 10)
 
 
 class TestCleanup:
