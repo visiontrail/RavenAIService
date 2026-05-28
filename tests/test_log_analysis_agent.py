@@ -189,6 +189,23 @@ def _patch_skills():
 
 # ─────────────────────── Tests ─────────────────────────────────────
 
+def test_render_user_prompt_includes_workspace_dir():
+    from app.agents.log_analysis.prompts import render_user_prompt
+
+    prompt = render_user_prompt(
+        'Workspace root: {workspace_dir}\nRead: {"file_path":"task.json"}\nQuestion: {question}',
+        task_id="task-1",
+        workspace_dir="/app/temp/code_repos/task-1",
+        question="What failed?",
+        log_type="generic",
+        hints="",
+    )
+
+    assert "Workspace root: /app/temp/code_repos/task-1" in prompt
+    assert '{"file_path":"task.json"}' in prompt
+    assert "/data/task" not in prompt
+
+
 class TestLogAnalysisAgentRun:
     @pytest.mark.asyncio
     async def test_successful_run_parses_json(self, workspace_ctx):

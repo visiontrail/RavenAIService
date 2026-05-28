@@ -553,6 +553,10 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
               role: item.role as ChatRole,
               content: item.content || '',
               kind: item.role === 'user' ? 'user' : 'answer',
+              traceEvents: Array.isArray(item.trace_events)
+                ? (item.trace_events as AgentTraceEvent[])
+                : undefined,
+              traceRunning: item.run_status === 'running',
             }))
           }
         } catch (err) {

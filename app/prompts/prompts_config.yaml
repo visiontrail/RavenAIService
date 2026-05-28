@@ -39,6 +39,27 @@ claude_agent_log_analysis:
       仓库执行 `git -C repo status`、`git -C repo log`、`rg ... repo`
       以及常规的文件读取命令。
 
+      ## 路径规则（非常重要）
+      当前工作目录就是上面的 `<workspace>`。所有文件读取与搜索都必须
+      基于当前工作目录中的真实文件：
+
+      - 第一次读取任务文件时，Read 工具参数必须优先使用
+        `{"file_path":"task.json"}`。
+      - 读取任务文件时也可以使用运行时提示中给出的
+        `<workspace>/task.json` 绝对路径，但绝不能把它改写成
+        `temp/code_repos/<task_id>/task.json` 这种相对路径；当前目录
+        已经是 `<workspace>`，再加此前缀会得到不存在的嵌套路径。
+      - 搜索日志归档时使用 `logs/...`，或使用运行时提示中给出的
+        `<workspace>/logs/...` 绝对路径。Glob 工具参数优先使用
+        `{"pattern":"logs/**/metadata.json"}`。
+      - 克隆 / 检查源码时使用 `repo/...`，或使用运行时提示中给出的
+        `<workspace>/repo/...` 绝对路径。
+      - 绝不要使用 `/data/task/task.json`、`/data/task/logs`、
+        `/workspace`、`temp/code_repos/<task_id>/task.json` 等猜测路径；
+        这些不是本系统准备的工作区路径，或不是相对于当前目录的有效路径。
+      - 如果你对位置有疑问，先执行 `pwd` 或 `ls -la` 确认当前目录，
+        不要先尝试外部绝对路径。
+
       ## 可用工具
       - Read、Grep、Glob   —— 读取与搜索文件
       - Bash               —— 在临时工作目录中执行 shell 命令；可用 git、rg、jq 等常见工具
@@ -74,11 +95,24 @@ claude_agent_log_analysis:
       如果 `question` 为空或仅有空白字符，将其视为用户在问
       "请给出这份日志的概览"，并使用 `question_type = "qa"`。
 
-      ### 第 1 步 —— 定位 metadata.json（尽力而为）
-      使用 `Glob("logs/**/metadata.json")` 或
-      `find logs -name metadata.json` 定位该文件，然后用 `Read` 读取。
-      如果没有 metadata.json 也没关系 —— 用户可能已经显式选择了项目，
-      权威的仓库信息会在 `task.json` 中（见第 2 步）。
+      ### 第 1 步 —— 读取 task.json（必须）
+      首先读取当前工作目录下的 `task.json`。Read 工具的第一次调用
+      应为 `{"file_path":"task.json"}`。不要读取
+      `/data/task/task.json`，也不要读取
+      `temp/code_repos/<task_id>/task.json`。如果运行时提示提供了
+      `Workspace root`，也可以读取 `<Workspace root>/task.json`
+      这个完整绝对路径。
+
+      如果 `task.json` 中存在 `repo_info`，尤其是
+      `source: "user_selected_project_repo"`，请将其视为权威仓库来源，
+      不要再为了仓库解析去搜索 metadata.json，直接进入第 2 步的
+      仓库信息提取与第 4 步克隆。
+
+      如果 `task.json` 中没有权威 `repo_info`，再定位 metadata.json
+      （尽力而为）：优先读取 `logs/metadata.json`；若不存在，再使用
+      `find logs -name metadata.json -print -quit` 或
+      `Glob("logs/**/metadata.json")` 定位并读取。没有 metadata.json
+      也没关系 —— 可能仍可从 `task.json` 其他字段解析仓库信息。
 
       ### 第 2 步 —— 提取仓库信息（强制）
       无论问题类型如何，解析仓库都是**每一次运行的强制要求**。必须做
@@ -239,12 +273,16 @@ claude_agent_log_analysis:
 
     user_prompt_template: |
       Task ID: {task_id}
+      Workspace root: {workspace_dir}
       Question: {question}
       Log type hint: {log_type}
       Hints: {hints}
 
       请使用工作目录中的日志**和**源代码仓库来回答上述问题。首先执行
-      第 0 步：对问题进行分类。第 2–4 步（解析仓库信息 → 克隆 →
+      第 0 步：对问题进行分类，然后读取 `task.json`。注意：
+      `Workspace root` 就是当前任务工作区；不要读取 `/data/task/task.json`
+      或 `temp/code_repos/<task_id>/task.json`，也不要搜索 `/data/task/logs`。
+      第一次 Read 调用优先使用 `{"file_path":"task.json"}`。第 2–4 步（解析仓库信息 → 克隆 →
       使用代码）是每次运行的**强制**步骤 —— 即使是 `qa` / `search`
       / `stats` / `meta` 类问题也不得跳过。然后只调查回答该问题所
       需要的内容，并尽可能在证据中同时引用日志行与代码位置。如果日志

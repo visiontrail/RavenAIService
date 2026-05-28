@@ -802,6 +802,19 @@ class LogAnalysisAgent:
 
         log_type = ctx.metadata.get("log_type")
         system_prompt, user_prompt_template = get_prompts(log_type)
+        system_prompt += (
+            "\n\n## 当前运行工作区\n"
+            f"本次运行的当前工作目录是 `{ctx.temp_dir}`。"
+            f"`task.json` 的真实路径是 `{ctx.task_json_path}`，"
+            f"日志目录是 `{ctx.logs_dir}`，源码目录是 `{ctx.repo_dir}`。"
+            "读取文件和搜索时只使用这些路径或它们的相对路径 "
+            "(`task.json`、`logs/...`、`repo/...`)。"
+            "第一次 Read 调用请使用 `{\"file_path\":\"task.json\"}`。"
+            "不要尝试 `/data/task/task.json`、`/data/task/logs`，"
+            "也不要尝试 `temp/code_repos/<task_id>/task.json` 这种相对路径；"
+            "当前工作目录已经是任务目录。"
+            "如果路径不确定，先用 `pwd` / `ls -la` 确认当前目录。\n"
+        )
 
         task_data: Dict[str, Any] = {}
         try:
@@ -836,6 +849,7 @@ class LogAnalysisAgent:
         user_prompt = render_user_prompt(
             user_prompt_template,
             task_id=ctx.task_id,
+            workspace_dir=ctx.temp_dir,
             question=ctx.metadata.get("question") or task_data.get("question", ""),
             log_type=ctx.metadata.get("log_type") or task_data.get("log_type"),
             hints=task_data.get("hints", ""),

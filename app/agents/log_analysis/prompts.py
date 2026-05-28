@@ -52,13 +52,19 @@ def render_user_prompt(
     user_prompt_template: str,
     *,
     task_id: str,
+    workspace_dir: str = "",
     question: str,
     log_type: Optional[str],
     hints: str,
 ) -> str:
-    return user_prompt_template.format(
-        task_id=task_id,
-        question=question,
-        log_type=log_type or "generic",
-        hints=hints or "",
-    )
+    replacements = {
+        "task_id": task_id,
+        "workspace_dir": workspace_dir,
+        "question": question,
+        "log_type": log_type or "generic",
+        "hints": hints or "",
+    }
+    rendered = user_prompt_template
+    for key, value in replacements.items():
+        rendered = rendered.replace(f"{{{key}}}", str(value))
+    return rendered

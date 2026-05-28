@@ -386,4 +386,8 @@ export interface ChatMessageRecord {
   content: string
   created_at: string
   updated_at: string
+  run_id?: string | null
+  run_status?: string | null
+  run_agent_kind?: string | null
+  trace_events?: unknown[] | null
 }

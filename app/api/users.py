@@ -5,14 +5,17 @@ User authentication, management, and chat history APIs.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import get_db
 from app.models.user import (
+    ChatAgentRun,
     ChatMessageRecord,
     ChatMessagesResponse,
     ChatSessionListResponse,
@@ -266,9 +269,42 @@ async def get_chat_messages(
         session_id=session_id,
         limit=limit,
     )
+    runs_result = await db.execute(
+        select(ChatAgentRun)
+        .where(
+            ChatAgentRun.user_id == current_user.id,
+            ChatAgentRun.session_id == session_id,
+            ChatAgentRun.trace_events_json.is_not(None),
+        )
+        .order_by(ChatAgentRun.finished_at.asc(), ChatAgentRun.started_at.asc())
+    )
+    unmatched_runs = list(runs_result.scalars().all())
+    messages: list[ChatMessageRecord] = []
+    for record in records:
+        message = ChatMessageRecord.model_validate(record, from_attributes=True)
+        if record.role == "ai" and record.content:
+            matched_index: int | None = None
+            for idx, run in enumerate(unmatched_runs):
+                if (run.answer or "") == record.content:
+                    matched_index = idx
+                    break
+            if matched_index is not None:
+                run = unmatched_runs.pop(matched_index)
+                trace_events = None
+                try:
+                    parsed = json.loads(run.trace_events_json or "[]")
+                    if isinstance(parsed, list):
+                        trace_events = parsed
+                except Exception:  # noqa: BLE001
+                    trace_events = None
+                message.run_id = run.id
+                message.run_status = run.status
+                message.run_agent_kind = run.agent_kind
+                message.trace_events = trace_events
+        messages.append(message)
     return ChatMessagesResponse(
         message="ok",
-        data=[ChatMessageRecord.model_validate(r, from_attributes=True) for r in records],
+        data=messages,
     )
 
 

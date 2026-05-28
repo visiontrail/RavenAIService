@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
@@ -334,6 +334,10 @@ class ChatMessageRecord(BaseModel):
     content: str
     created_at: datetime
     updated_at: datetime
+    run_id: Optional[str] = None
+    run_status: Optional[str] = None
+    run_agent_kind: Optional[str] = None
+    trace_events: Optional[list[dict[str, Any]]] = None
 
 
 class UserAuthResponse(BaseResponse):

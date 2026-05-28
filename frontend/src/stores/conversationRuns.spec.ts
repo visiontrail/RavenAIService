@@ -246,6 +246,56 @@ describe('conversationRuns store', () => {
     expect(store.localRunningSessionIds).toEqual([])
   })
 
+  it('restores persisted trace events from DB history after page refresh', async () => {
+    const store = useConversationRunsStore()
+    const traceEvents = [
+      traceEvent('run-a', 'session-a', 1, 'run_start'),
+      traceEvent('run-a', 'session-a', 2, 'thinking_start'),
+      {
+        ...traceEvent('run-a', 'session-a', 3, 'thinking_delta'),
+        text_chunk: '分析日志结构',
+      },
+      {
+        ...traceEvent('run-a', 'session-a', 4, 'thinking_end'),
+        text: '分析日志结构',
+      },
+      traceEvent('run-a', 'session-a', 5, 'run_complete'),
+    ]
+
+    vi.spyOn(userApi, 'fetchMessages').mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'msg-user-a',
+          session_id: 'session-a',
+          role: 'user',
+          content: '请分析日志',
+          created_at: '2026-05-25T10:00:00.000Z',
+          updated_at: '2026-05-25T10:00:00.000Z',
+        },
+        {
+          id: 'msg-ai-a',
+          session_id: 'session-a',
+          role: 'ai',
+          content: '分析完成',
+          created_at: '2026-05-25T10:01:00.000Z',
+          updated_at: '2026-05-25T10:01:00.000Z',
+          run_id: 'run-a',
+          run_status: 'succeeded',
+          run_agent_kind: 'log_analysis',
+          trace_events: traceEvents,
+        },
+      ],
+    } as any)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 404 })))
+
+    const state = await store.loadSession('session-a', { isLoggedIn: true, authToken: 'token', force: true })
+    const answer = state.messages.find((m: ChatEntry) => m.id === 'msg-ai-a')
+
+    expect(answer?.traceEvents?.map((e: AgentTraceEvent) => e.seq)).toEqual([1, 2, 3, 4, 5])
+    expect(answer?.traceRunning).toBe(false)
+  })
+
   it('returns from loadSession after restoring a running snapshot without waiting for stream terminal', async () => {
     const store = useConversationRunsStore()
     const openStream = openSseResponse([
