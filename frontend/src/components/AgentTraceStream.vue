@@ -47,7 +47,7 @@
         v-for="card in cards"
         :key="card.stepId"
         :card="card"
-        :display-name="toolDisplay.resolve(card.toolName)"
+        :display-name="toolDisplay.resolve(card.toolName, card.toolInput)"
       />
 
       <div v-if="running && cards.length === 0" class="agent-trace__placeholder">
