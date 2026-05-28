@@ -7,31 +7,45 @@
       { 'trace-card--collapsed': collapsed },
     ]"
   >
-    <button
-      type="button"
-      class="trace-card__header"
-      :aria-expanded="!collapsed"
-      @click="toggle"
-    >
-      <span class="trace-card__icon" aria-hidden="true">
-        <Loader2 v-if="card.status === 'running'" class="trace-card__icon-svg trace-card__icon-svg--spin" />
-        <Check v-else-if="card.status === 'ok'" class="trace-card__icon-svg" />
-        <X v-else-if="card.status === 'error'" class="trace-card__icon-svg" />
-        <Ban v-else-if="card.status === 'cancelled'" class="trace-card__icon-svg" />
-      </span>
-      <span class="trace-card__label">
-        <span class="trace-card__title">{{ headerTitle }}</span>
-        <span v-if="headerSubtitle" class="trace-card__subtitle">{{ headerSubtitle }}</span>
-      </span>
-      <span v-if="card.durationSeconds !== undefined" class="trace-card__duration">
-        {{ card.durationSeconds.toFixed(1) }}s
-      </span>
-      <ChevronDown
-        class="trace-card__chevron"
-        :class="{ 'trace-card__chevron--open': !collapsed }"
-        aria-hidden="true"
-      />
-    </button>
+    <div class="trace-card__header">
+      <button
+        type="button"
+        class="trace-card__toggle"
+        :aria-expanded="!collapsed"
+        @click="toggle"
+      >
+        <span class="trace-card__icon" aria-hidden="true">
+          <Loader2 v-if="card.status === 'running'" class="trace-card__icon-svg trace-card__icon-svg--spin" />
+          <Check v-else-if="card.status === 'ok'" class="trace-card__icon-svg" />
+          <X v-else-if="card.status === 'error'" class="trace-card__icon-svg" />
+          <Ban v-else-if="card.status === 'cancelled'" class="trace-card__icon-svg" />
+        </span>
+        <span class="trace-card__label">
+          <span class="trace-card__title">{{ headerTitle }}</span>
+          <span v-if="headerSubtitle" class="trace-card__subtitle">{{ headerSubtitle }}</span>
+        </span>
+        <span v-if="card.durationSeconds !== undefined" class="trace-card__duration">
+          {{ card.durationSeconds.toFixed(1) }}s
+        </span>
+        <ChevronDown
+          class="trace-card__chevron"
+          :class="{ 'trace-card__chevron--open': !collapsed }"
+          aria-hidden="true"
+        />
+      </button>
+      <button
+        v-if="!collapsed"
+        type="button"
+        class="trace-card__copy"
+        :class="{ 'trace-card__copy--copied': copied }"
+        :title="copyLabel"
+        :aria-label="copyLabel"
+        @click="copyCardContent"
+      >
+        <Check v-if="copied" class="trace-card__copy-icon" aria-hidden="true" />
+        <Copy v-else class="trace-card__copy-icon" aria-hidden="true" />
+      </button>
+    </div>
     <div v-if="!collapsed" class="trace-card__body">
       <div v-if="card.kind === 'tool'" class="trace-card__tool-body">
         <div v-if="card.toolInput" class="trace-card__section">
@@ -63,8 +77,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { Ban, Check, ChevronDown, Loader2, X } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { Ban, Check, ChevronDown, Copy, Loader2, X } from 'lucide-vue-next'
 import type { TraceCard, TraceCardStatus } from '@/composables/useAgentTraceStream'
 
 const props = defineProps<{
@@ -77,6 +91,8 @@ const props = defineProps<{
 // sticks until the component is destroyed.
 const userTouched = ref(false)
 const collapsed = ref(props.card.status === 'running' ? false : true)
+const copied = ref(false)
+let copiedTimer: number | undefined
 
 watch(
   () => props.card.status,
@@ -89,6 +105,10 @@ watch(
     }
   },
 )
+
+onBeforeUnmount(() => {
+  if (copiedTimer !== undefined) window.clearTimeout(copiedTimer)
+})
 
 function toggle() {
   userTouched.value = true
@@ -146,6 +166,50 @@ const effectiveOutput = computed(() => {
   if (props.card.output) return props.card.output
   return props.card.outputExcerpt || ''
 })
+
+const copyLabel = computed(() => (copied.value ? '已复制' : '复制'))
+
+const copyText = computed(() => {
+  if (props.card.kind === 'thinking') {
+    return ['Thinking', props.card.thinkingText].filter(Boolean).join('\n\n')
+  }
+
+  const sections = [headerTitle.value]
+  if (formattedInput.value) sections.push(`输入\n${formattedInput.value}`)
+  if (effectiveOutput.value) sections.push(`输出\n${effectiveOutput.value}`)
+  return sections.filter(Boolean).join('\n\n')
+})
+
+async function copyToClipboard(text: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.top = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
+}
+
+async function copyCardContent() {
+  const text = copyText.value.trim()
+  if (!text) return
+
+  await copyToClipboard(text)
+  copied.value = true
+  if (copiedTimer !== undefined) window.clearTimeout(copiedTimer)
+  copiedTimer = window.setTimeout(() => {
+    copied.value = false
+    copiedTimer = undefined
+  }, 1200)
+}
 </script>
 
 <style scoped>
@@ -180,7 +244,20 @@ const effectiveOutput = computed(() => {
 .trace-card__header {
   display: flex;
   align-items: center;
+  width: 100%;
+  background: transparent;
+}
+
+.trace-card__header:hover {
+  background: var(--el-fill-color-light, #f5f7fa);
+}
+
+.trace-card__toggle {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
   gap: 8px;
+  min-width: 0;
   width: 100%;
   padding: 8px 12px;
   background: transparent;
@@ -191,8 +268,38 @@ const effectiveOutput = computed(() => {
   color: inherit;
 }
 
-.trace-card__header:hover {
-  background: var(--el-fill-color-light, #f5f7fa);
+.trace-card__copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 8px;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--el-text-color-secondary, #6b7280);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.trace-card__copy:hover {
+  background: var(--el-bg-color, #ffffff);
+  border-color: var(--el-border-color-light, #dcdfe6);
+  color: var(--el-text-color-primary, #111827);
+}
+
+.trace-card__copy--copied {
+  color: #10b981;
+}
+
+.trace-card__copy-icon {
+  width: 14px;
+  height: 14px;
 }
 
 .trace-card__icon {
