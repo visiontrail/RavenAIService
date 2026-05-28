@@ -130,6 +130,14 @@ def _compose_system_prompt(base: str, override: Optional[str]) -> str:
     return "\n\n".join(parts) if parts else ""
 
 
+async def _single_user_prompt_stream(prompt: str) -> AsyncIterator[Dict[str, Any]]:
+    """Yield one SDK streaming user message for callbacks such as ``can_use_tool``."""
+    yield {
+        "type": "user",
+        "message": {"role": "user", "content": prompt},
+    }
+
+
 def _resolve_device(target_device_id: str) -> Any:
     """同步入口：拉取 ``DeviceInfo``。失败时返回 ``None`` 让调用方走 graceful path。"""
     from app.services.device_link_service import device_link_manager
@@ -378,7 +386,8 @@ class DeviceAgent:
 
             async def _drive() -> None:
                 try:
-                    async for message in sdk_query(prompt=user_prompt, options=options):
+                    prompt_stream = _single_user_prompt_stream(user_prompt)
+                    async for message in sdk_query(prompt=prompt_stream, options=options):
                         _emit_for_message(message, state=state)
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("DeviceAgent: SDK query failed: %s", exc)

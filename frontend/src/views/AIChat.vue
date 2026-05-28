@@ -889,8 +889,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
       <div class="rw-topbar-right">
         <button class="rw-model-pill" type="button">
           <span class="rw-model-dot"></span>
-          Raven-Sat <span class="mono">1.2</span>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          {{ devices.filter(d => d.status === 'online').length }} 在线 / {{ devices.length || 0 }} 台设备
         </button>
         <div class="rw-top-more-wrap">
           <button
@@ -957,7 +956,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
       <div v-if="isWelcomeMode" class="rw-welcome">
         <div class="rw-welcome-badge">
           <span class="rw-dot-success"></span>
-          Raven-Sat 1.2 · 已连接 {{ devices.filter(d => d.status === 'online').length }} / {{ devices.length || 0 }} 设备
+          {{ devices.filter(d => d.status === 'online').length }} 台在线 / {{ devices.length || 0 }} 台设备
         </div>
         <h1 class="rw-welcome-title">
           {{ welcomeGreeting }}，{{ currentUserName }}。<br/>今天想做哪件事？

@@ -95,9 +95,11 @@ async def chat_stream_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_optional_user),
 ):
-    """Create a new DeviceAgent run or subscribe to the session's active run.
+    """Create a new agent run or subscribe to the session's active run.
 
     Behaviour:
+    - ``agent_type="device"`` routes to DeviceAgent; default (None/empty) routes
+      to GeneralAgent (system usage assistant, small/fast model).
     - ``message`` non-empty and no active run for session: create a new
       :class:`ChatRunJob`, persist the user message + ``chat_agent_runs`` row,
       then subscribe to the run's SSE buffer.
@@ -107,25 +109,21 @@ async def chat_stream_endpoint(
     - ``message`` empty and no active run: 400.
     """
     logger.info(
-        "chat/stream: session=%s msg_len=%d remember=%s device=%s",
+        "chat/stream: session=%s msg_len=%d remember=%s device=%s agent_type=%s",
         request.session_id,
         len(request.message or ""),
         request.remember,
         request.target_device_id,
+        request.agent_type,
     )
 
     session_id = request.session_id or str(uuid.uuid4())
     message_text = (request.message or "").strip()
 
-    # Resolve owner_scope once for both resume + create paths. We pass a
-    # throwaway Response object so anonymous Set-Cookie writes can be lifted
-    # onto the StreamingResponse below.
     cookie_carrier = Response()
     owner_scope = resolve_owner_scope(http_request, cookie_carrier, current_user)
 
     def _carry_cookies(target: StreamingResponse) -> StreamingResponse:
-        # Forward any Set-Cookie headers from owner_scope resolution onto the
-        # outgoing SSE response so the browser pins the anon scope.
         for raw in cookie_carrier.raw_headers:
             name = raw[0].decode("latin-1") if isinstance(raw[0], bytes) else raw[0]
             value = raw[1].decode("latin-1") if isinstance(raw[1], bytes) else raw[1]
@@ -133,7 +131,7 @@ async def chat_stream_endpoint(
                 target.raw_headers.append((b"set-cookie", value.encode("latin-1")))
         return target
 
-    # Resume path: empty message → subscribe to the session's active run.
+    # Resume path: empty message -> subscribe to the session's active run.
     if not message_text:
         job = chat_run_service.get_active_job_for_session(owner_scope, session_id)
         if job is None:
@@ -142,7 +140,6 @@ async def chat_stream_endpoint(
                 detail="message 为空且该会话无运行中的 run，无法订阅",
             )
         async def _resume_stream():
-            # Prepend a ``session`` frame so legacy clients can update routing.
             yield ai_chat_service._sse_event(  # noqa: SLF001
                 {"event": "session", "session_id": session_id, "run_id": job.run_id}
             )
@@ -160,37 +157,45 @@ async def chat_stream_endpoint(
         request, session_id, db, current_user
     )
 
+    use_device_agent = (request.agent_type or "").strip().lower() == "device"
+
     try:
-        job = await chat_run_service.start_device_run(
-            db=db,
-            user=current_user,
-            owner_scope=owner_scope,
-            session_id=session_id,
-            user_message=request.message,
-            target_device_id=request.target_device_id or "",
-            target_device_name=request.target_device_name,
-            history=history,
-            system_prompt_override=request.system_prompt,
-            remember=request.remember,
-        )
+        if use_device_agent:
+            job = await chat_run_service.start_device_run(
+                db=db,
+                user=current_user,
+                owner_scope=owner_scope,
+                session_id=session_id,
+                user_message=request.message,
+                target_device_id=request.target_device_id or "",
+                target_device_name=request.target_device_name,
+                history=history,
+                system_prompt_override=request.system_prompt,
+                remember=request.remember,
+            )
+        else:
+            job = await chat_run_service.start_general_run(
+                db=db,
+                user=current_user,
+                owner_scope=owner_scope,
+                session_id=session_id,
+                user_message=request.message,
+                history=history,
+                system_prompt_override=request.system_prompt,
+                remember=request.remember,
+            )
     except HTTPException:
-        # Surface 409 / 403 etc. to the client directly.
         raise
     except Exception as exc:  # noqa: BLE001
-        logger.exception("chat/stream: start_device_run failed: %s", exc)
+        logger.exception("chat/stream: start run failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    # Commit the request DB session so the user message + ChatAgentRun row are
-    # durable before subscribers start reading. The background task uses a
-    # fresh session for terminal persistence.
     try:
         await db.commit()
     except Exception as exc:  # noqa: BLE001
         logger.warning("chat/stream: db commit failed: %s", exc)
 
     async def _stream():
-        # Backward-compat: emit a ``session`` frame first so existing clients can
-        # update routing before run-scoped events arrive.
         yield ai_chat_service._sse_event(  # noqa: SLF001
             {"event": "session", "session_id": job.session_id, "run_id": job.run_id}
         )

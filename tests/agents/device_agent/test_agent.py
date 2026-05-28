@@ -17,6 +17,7 @@ from app.agents.device_agent.agent import (
     DeviceAgent,
     DeviceAgentContext,
     _format_history_block,
+    _single_user_prompt_stream,
 )
 
 
@@ -102,6 +103,20 @@ class TestFormatHistoryBlock:
             10,
         )
         assert out == "[user] ok"
+
+
+@pytest.mark.asyncio
+async def test_single_user_prompt_stream_uses_sdk_streaming_shape():
+    stream = _single_user_prompt_stream("hello")
+    assert hasattr(stream, "__aiter__")
+
+    messages = [message async for message in stream]
+    assert messages == [
+        {
+            "type": "user",
+            "message": {"role": "user", "content": "hello"},
+        }
+    ]
 
 
 # ─────────────────────── DeviceAgent.run_stream ────────────────────

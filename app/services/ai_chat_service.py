@@ -1,4 +1,4 @@
-"""AI 对话服务：基于 DeviceAgent (Claude Agent SDK) 与持久化会话历史。"""
+"""AI 对话服务：基于 DeviceAgent / GeneralAgent (Claude Agent SDK) 与持久化会话历史。"""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.device_agent.agent import DeviceAgent, DeviceAgentContext
 from app.agents.device_agent.permissions import PermissionBroker
+from app.agents.general_agent.agent import GeneralAgent, GeneralAgentContext
 from app.config import settings
 from app.models.chat import ChatMessage, ChatRequest, ChatResponse
 from app.models.user import User
@@ -201,6 +202,12 @@ class AIChatService(BaseService):
             or "unknown"
         )
 
+    # ──────────────── agent routing ────────────────
+
+    @staticmethod
+    def _is_device_agent(payload: ChatRequest) -> bool:
+        return (payload.agent_type or "").strip().lower() == "device"
+
     # ──────────────── chat (non-streaming) ────────────────
 
     async def chat(
@@ -209,28 +216,37 @@ class AIChatService(BaseService):
         db: Optional[AsyncSession] = None,
         user: Optional[User] = None,
     ) -> ChatResponse:
-        logger.info("AIChatService.chat: session=%s remember=%s device=%s",
-                    payload.session_id, payload.remember, payload.target_device_id)
+        logger.info("AIChatService.chat: session=%s remember=%s device=%s agent_type=%s",
+                    payload.session_id, payload.remember, payload.target_device_id,
+                    payload.agent_type)
 
         session_id = payload.session_id or str(uuid.uuid4())
         history = await self._prepare_history(payload, session_id, db, user)
         is_new_session = len(history) == 0
 
-        ctx = DeviceAgentContext(
-            session_id=session_id,
-            user_message=payload.message,
-            target_device_id=payload.target_device_id or "",
-            target_device_name=payload.target_device_name,
-            history=history,
-            system_prompt_override=payload.system_prompt,
-            broker_registry=self.permission_broker_registry,
-        )
+        if self._is_device_agent(payload):
+            ctx = DeviceAgentContext(
+                session_id=session_id,
+                user_message=payload.message,
+                target_device_id=payload.target_device_id or "",
+                target_device_name=payload.target_device_name,
+                history=history,
+                system_prompt_override=payload.system_prompt,
+                broker_registry=self.permission_broker_registry,
+            )
+            events, answer_text, model = await DeviceAgent().run(ctx)
+        else:
+            ctx_general = GeneralAgentContext(
+                session_id=session_id,
+                user_message=payload.message,
+                history=history,
+                system_prompt_override=payload.system_prompt,
+            )
+            events, answer_text, model = await GeneralAgent().run(ctx_general)
 
-        events, answer_text, model = await DeviceAgent().run(ctx)
         if not model:
             model = self._effective_model()
 
-        # Build the messages list for the response: original history + this turn.
         messages = _history_to_chat_messages(history) + [
             ChatMessage(role="user", content=payload.message),
             ChatMessage(role="ai", content=answer_text),
@@ -266,32 +282,41 @@ class AIChatService(BaseService):
         db: Optional[AsyncSession] = None,
         user: Optional[User] = None,
     ) -> AsyncIterator[str]:
-        logger.info("AIChatService.chat_stream: session=%s remember=%s device=%s",
-                    payload.session_id, payload.remember, payload.target_device_id)
+        logger.info("AIChatService.chat_stream: session=%s remember=%s device=%s agent_type=%s",
+                    payload.session_id, payload.remember, payload.target_device_id,
+                    payload.agent_type)
 
         session_id = payload.session_id or str(uuid.uuid4())
         history = await self._prepare_history(payload, session_id, db, user)
         is_new_session = len(history) == 0
 
-        # Notify front-end of the session id first so it can update routing.
         yield self._sse_event({"event": "session", "session_id": session_id})
 
-        ctx = DeviceAgentContext(
-            session_id=session_id,
-            user_message=payload.message,
-            target_device_id=payload.target_device_id or "",
-            target_device_name=payload.target_device_name,
-            history=history,
-            system_prompt_override=payload.system_prompt,
-            broker_registry=self.permission_broker_registry,
-        )
+        if self._is_device_agent(payload):
+            ctx = DeviceAgentContext(
+                session_id=session_id,
+                user_message=payload.message,
+                target_device_id=payload.target_device_id or "",
+                target_device_name=payload.target_device_name,
+                history=history,
+                system_prompt_override=payload.system_prompt,
+                broker_registry=self.permission_broker_registry,
+            )
+            agent_stream = DeviceAgent().run_stream(ctx)
+        else:
+            ctx_general = GeneralAgentContext(
+                session_id=session_id,
+                user_message=payload.message,
+                history=history,
+                system_prompt_override=payload.system_prompt,
+            )
+            agent_stream = GeneralAgent().run_stream(ctx_general)
 
-        agent = DeviceAgent()
         answer_text = ""
         model = ""
 
         try:
-            async for ev in agent.run_stream(ctx):
+            async for ev in agent_stream:
                 if not isinstance(ev, dict):
                     continue
                 event_type = ev.get("type")
@@ -305,12 +330,10 @@ class AIChatService(BaseService):
                     if isinstance(final_text, str):
                         answer_text = final_text
                     elif isinstance(final_text, dict):
-                        # ``coerce_excerpt`` may return ``{"text": "...", "truncated": ...}``.
                         text_val = final_text.get("text")
                         if isinstance(text_val, str):
                             answer_text = text_val
 
-                # SSE payload: drop the trace ``type`` and re-emit it as ``event``.
                 payload_out: Dict[str, Any] = {
                     k: v for k, v in ev.items() if k != "type"
                 }

@@ -22,6 +22,10 @@ class ChatRequest(BaseModel):
     target_device_id: Optional[str] = Field(None, description="可选的目标设备ID，用于设备联动")
     target_device_name: Optional[str] = Field(None, description="可选的目标设备名称，用于设备联动提示")
     remember: bool = Field(True, description="是否将本轮对话写入服务端内存会话")
+    agent_type: Optional[str] = Field(
+        None,
+        description="Agent 类型：'device' 使用设备联动 Agent，None/空 使用默认通用 Agent",
+    )
 
 
 class ChatResponse(BaseResponse):

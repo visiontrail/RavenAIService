@@ -29,7 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.device_agent.permissions import PermissionBroker
-from app.models.user import ChatAgentRun
+from app.models.user import ChatAgentRun, User
 
 logger = logging.getLogger(__name__)
 
@@ -685,6 +685,201 @@ class ChatRunService:
                 exc,
                 exc_info=True,
             )
+
+    # ---- start / drive GeneralAgent runs ---------------------------------
+
+    async def start_general_run(
+        self,
+        *,
+        db: AsyncSession,
+        user: Optional[User],
+        owner_scope: str,
+        session_id: str,
+        user_message: str,
+        history: List[Dict[str, str]],
+        system_prompt_override: Optional[str] = None,
+        remember: bool = True,
+    ) -> ChatRunJob:
+        """Create a new GeneralAgent run and start its background task."""
+        from app.services.chat_history_service import chat_history_service
+
+        self._evict_finished()
+
+        existing = self.get_active_job_for_session(owner_scope, session_id)
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": "该会话已有运行中的 agent run",
+                    "active_run_id": existing.run_id,
+                },
+            )
+
+        run_id = str(uuid.uuid4())
+        request_payload = {
+            "system_prompt_override": system_prompt_override,
+            "remember": remember,
+        }
+
+        if remember and user is not None:
+            try:
+                await chat_history_service.append_message(
+                    db,
+                    user_id=user.id,
+                    session_id=session_id,
+                    role="user",
+                    content=user_message,
+                )
+                row = ChatAgentRun(
+                    id=run_id,
+                    session_id=session_id,
+                    user_id=user.id,
+                    owner_scope=owner_scope,
+                    agent_kind="general",
+                    status=RUN_STATUS_RUNNING,
+                    user_message=user_message,
+                    request_json=json.dumps(request_payload, ensure_ascii=False),
+                    started_at=datetime.utcnow(),
+                )
+                db.add(row)
+                await db.flush()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "chat_run: failed to persist initial general run row run_id=%s: %s",
+                    run_id,
+                    exc,
+                )
+
+        job = ChatRunJob(
+            run_id=run_id,
+            session_id=session_id,
+            user_id=getattr(user, "id", None),
+            owner_scope=owner_scope,
+            agent_kind="general",
+            status=RUN_STATUS_RUNNING,
+            started_at=time.monotonic(),
+            user_message=user_message,
+            request_payload=request_payload,
+        )
+        self._jobs[run_id] = job
+        self._active_by_owner_session[(owner_scope, session_id)] = run_id
+
+        ctx_kwargs = {
+            "session_id": session_id,
+            "user_message": user_message,
+            "history": history,
+            "system_prompt_override": system_prompt_override,
+            "run_id": run_id,
+            "owner_scope": owner_scope,
+            "remember": remember,
+        }
+        job.task = asyncio.create_task(self._run_general_job(job, ctx_kwargs))
+        job.append_event(
+            {
+                "event": "run_start_pending",
+                "run_id": run_id,
+                "session_id": session_id,
+                "agent_kind": "general",
+            }
+        )
+        return job
+
+    async def _run_general_job(
+        self, job: ChatRunJob, ctx_kwargs: Dict[str, Any]
+    ) -> None:
+        """Background task: drive GeneralAgent.run_stream to completion."""
+        from app.agents.general_agent.agent import GeneralAgent, GeneralAgentContext
+
+        run_id = job.run_id
+        session_id = job.session_id
+        remember = bool(ctx_kwargs.pop("remember", True))
+        ctx = GeneralAgentContext(**ctx_kwargs)
+
+        last_event: Optional[Dict[str, Any]] = None
+        try:
+            async for ev in GeneralAgent().run_stream(ctx):
+                if not isinstance(ev, dict):
+                    continue
+                ev_type = ev.get("type")
+                if not ev_type:
+                    continue
+                job.append_trace(ev)
+                last_event = ev
+
+                if ev_type == "run_start":
+                    model_value = ev.get("model")
+                    if model_value:
+                        job.model = str(model_value)
+                if ev_type == "run_complete":
+                    final_text = ev.get("final_text")
+                    if isinstance(final_text, str):
+                        job.answer = final_text
+
+                payload_out: Dict[str, Any] = {
+                    k: v for k, v in ev.items() if k != "type"
+                }
+                payload_out["event"] = ev_type
+                payload_out["run_id"] = run_id
+                payload_out["session_id"] = session_id
+                job.append_event(payload_out)
+            terminal_status = RUN_STATUS_SUCCEEDED
+            terminal_error: Optional[str] = None
+            if isinstance(last_event, dict) and last_event.get("type") == "error":
+                terminal_status = RUN_STATUS_FAILED
+                terminal_error = str(last_event.get("message") or "agent error")
+        except asyncio.CancelledError:
+            logger.info("chat_run: general run cancelled run_id=%s", run_id)
+            terminal_status = RUN_STATUS_CANCELLED
+            terminal_error = "用户取消"
+            job.append_event(
+                {
+                    "event": "cancelled",
+                    "run_id": run_id,
+                    "session_id": session_id,
+                    "message": terminal_error,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("chat_run: general run failed run_id=%s", run_id)
+            terminal_status = RUN_STATUS_FAILED
+            terminal_error = str(exc)
+            job.append_event(
+                {
+                    "event": "error",
+                    "run_id": run_id,
+                    "session_id": session_id,
+                    "message": terminal_error,
+                }
+            )
+
+        job.mark_status(terminal_status, error=terminal_error)
+        await self._persist_terminal(job, terminal_status, remember=remember)
+        history = ctx_kwargs.get("history") or []
+        composed_messages: List[Dict[str, Any]] = [
+            {"role": str(m.get("role", "user")), "content": str(m.get("content", ""))}
+            for m in history
+            if isinstance(m, dict)
+        ]
+        if job.user_message:
+            composed_messages.append({"role": "user", "content": job.user_message})
+        if job.answer:
+            composed_messages.append({"role": "ai", "content": job.answer})
+        job.append_event(
+            {
+                "event": "done",
+                "run_id": run_id,
+                "session_id": session_id,
+                "status": terminal_status,
+                "answer": job.answer,
+                "model": job.model,
+                "error": job.error,
+                "trace_truncated": job.trace_truncated,
+                "messages": composed_messages,
+            }
+        )
+        key = (job.owner_scope, session_id)
+        if self._active_by_owner_session.get(key) == run_id:
+            self._active_by_owner_session.pop(key, None)
 
     # ---- subscribe -------------------------------------------------------
 
