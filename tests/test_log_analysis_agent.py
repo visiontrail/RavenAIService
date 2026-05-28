@@ -101,6 +101,20 @@ async def _fake_query_truncated_json_prefix(*args, **kwargs) -> AsyncIterator[An
     ))
 
 
+async def _fake_query_truncated_after_answer(*args, **kwargs) -> AsyncIterator[Any]:
+    yield FakeResultMessage(result=(
+        "我已掌握完整的证据链。现在输出最终分析结果。\n"
+        "```json\n"
+        "{\n"
+        '  "status": "ok",\n'
+        '  "question_type": "root_cause",\n'
+        '  "answer": "## 重构失败原因分析\\n\\n根因是版本缓存未在重构成功后失效。",\n'
+        '  "recommended_actions": [\n'
+        '    "重构成功后清理 g_upfVersionCached",\n'
+        '    "审查 xw_upf_reconfig.sh 的幂等性'
+    ))
+
+
 async def _fake_query_not_registered(*args, **kwargs) -> AsyncIterator[Any]:
     yield FakeAssistantMessage(
         tool_uses=[FakeToolUse(name="mcp__project_repo__lookup_project_repo", input={"project_code": "foo"})]
@@ -291,6 +305,29 @@ class TestLogAnalysisAgentRun:
         ]
         assert result["recommended_actions"] == []
         assert result["related_keywords"] == []
+
+    @pytest.mark.asyncio
+    async def test_truncated_json_with_answer_but_missing_optional_fields_is_recovered(self, workspace_ctx):
+        from app.agents.log_analysis.agent import LogAnalysisAgent
+
+        fake_sdk = MagicMock()
+        fake_sdk.query = _fake_query_truncated_after_answer
+
+        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), _patch_skills(), \
+             patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
+             patch("app.config.settings", MagicMock(
+                 anthropic_model="deepseek-v4-pro",
+                 anthropic_provider="deepseek",
+                 anthropic_request_timeout_seconds=600,
+             )):
+            result = await LogAnalysisAgent().run(workspace_ctx)
+
+        assert result["status"] == "ok"
+        assert result["parse_warning"] == "incomplete_json_recovered"
+        assert result["question_type"] == "root_cause"
+        assert "版本缓存未在重构成功后失效" in result["answer"]
+        assert result["severity"] == "info"
+        assert result["recommended_actions"] == ["重构成功后清理 g_upfVersionCached"]
 
     @pytest.mark.asyncio
     async def test_project_repo_not_registered(self, workspace_ctx):

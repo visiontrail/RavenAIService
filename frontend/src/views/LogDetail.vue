@@ -610,13 +610,52 @@ const normalizeAIAnalysisResult = (raw: any) => {
     other: '其他',
   }
 
+  const extractJsonStringField = (text: string, field: string): string => {
+    const source = text || ''
+    const key = `"${field}"`
+    const keyIndex = source.indexOf(key)
+    if (keyIndex < 0) return ''
+    const colonIndex = source.indexOf(':', keyIndex + key.length)
+    if (colonIndex < 0) return ''
+    let quoteIndex = colonIndex + 1
+    while (quoteIndex < source.length && /\s/.test(source[quoteIndex])) quoteIndex += 1
+    if (source[quoteIndex] !== '"') return ''
+
+    let escaped = false
+    for (let i = quoteIndex + 1; i < source.length; i += 1) {
+      const char = source[i]
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (char === '\\') {
+        escaped = true
+        continue
+      }
+      if (char === '"') {
+        try {
+          return JSON.parse(source.slice(quoteIndex, i + 1))
+        } catch {
+          return source.slice(quoteIndex + 1, i)
+        }
+      }
+    }
+    return ''
+  }
+
+  const extractAnswerFromRaw = (rawText: unknown): string => {
+    if (typeof rawText !== 'string' || !rawText.trim()) return ''
+    return extractJsonStringField(rawText, 'answer') || extractJsonStringField(rawText, 'summary')
+  }
+
   const buildV2Markdown = (r: any): string => {
     const parts: string[] = []
     const qType: string = typeof r?.question_type === 'string' ? r.question_type : ''
     const isRootCause = qType === 'root_cause'
 
     // 主回答优先 —— V3 新增 answer 字段直接回应用户问题
-    const answer: string = typeof r?.answer === 'string' ? r.answer.trim() : ''
+    const answer: string = (typeof r?.answer === 'string' ? r.answer.trim() : '')
+      || (r?.status === 'schema_mismatch' ? extractAnswerFromRaw(r?.raw).trim() : '')
     if (answer) {
       const label = QUESTION_TYPE_LABEL[qType] || '回答'
       parts.push(`## 回答（${label}）\n\n${answer}`)
@@ -652,12 +691,13 @@ const normalizeAIAnalysisResult = (raw: any) => {
     if (Array.isArray(r?.related_keywords) && r.related_keywords.length) {
       parts.push(`## 关键词\n\n${r.related_keywords.map((k: string) => `\`${k}\``).join(' ')}`)
     }
-    // 兜底：模型原始文本（含 fenced JSON 之外的解释性内容）
+    // 兜底：schema_mismatch 不直接展示半截原始 JSON，避免把模型契约失败暴露给用户。
+    if (parts.length === 0 && r?.status === 'schema_mismatch') {
+      return '模型返回内容不完整，且未能提取出可展示的回答。'
+    }
+    // 兜底：仅在没有任何结构化内容时保留原始文本，兼容旧数据。
     if (parts.length === 0 && typeof r?.raw === 'string' && r.raw.trim()) {
       return r.raw
-    }
-    if (typeof r?.raw === 'string' && r.raw.trim()) {
-      parts.push(`## 模型原文\n\n${r.raw}`)
     }
     return parts.join('\n\n')
   }
@@ -670,9 +710,11 @@ const normalizeAIAnalysisResult = (raw: any) => {
 
   if (isV2Flat) {
     content = buildV2Markdown(raw)
+    const recoveredAnswer = raw?.status === 'schema_mismatch' ? extractAnswerFromRaw(raw?.raw).trim() : ''
     // V3：优先使用直接回答用户问题的 answer 字段作为概览
     summary = (raw?.answer && String(raw.answer).trim())
       || raw?.summary
+      || recoveredAnswer
       || ''
     executionTime = Number(raw?.duration_seconds ?? 0)
     modelUsed = raw?.model || 'unknown'
@@ -697,8 +739,14 @@ const normalizeAIAnalysisResult = (raw: any) => {
 
   // 状态归一化：V2 的 "ok" 应映射为前端的 "completed"
   const rawStatus = raw?.status
+  const schemaMismatchHasAnswer = rawStatus === 'schema_mismatch' && (
+    (typeof raw?.answer === 'string' && raw.answer.trim()) ||
+    (typeof raw?.summary === 'string' && raw.summary.trim()) ||
+    extractAnswerFromRaw(raw?.raw).trim()
+  )
   const normalizedStatus =
     rawStatus === 'ok' ? 'completed' :
+    schemaMismatchHasAnswer ? 'completed' :
     rawStatus === 'error' ? 'failed' :
     (rawStatus || 'completed')
 

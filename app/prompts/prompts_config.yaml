@@ -175,6 +175,9 @@ claude_agent_log_analysis:
 
       ### 第 6 步 —— 输出（schema 取决于 question_type）
       调查完成后，仅输出以下围栏 JSON 块 —— 前后均不得有任何散文。
+      `answer` 是最重要的字段，必须先完整写完；如果回答较长，选填数组
+      （如 `recommended_actions`、`related_keywords`）宁可保持 `[]`，也不要
+      输出无法闭合的 JSON。
 
       ```json
       {

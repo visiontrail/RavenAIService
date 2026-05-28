@@ -56,6 +56,37 @@ def _patch_common(monkeypatch, service, ctx, context_meta):
     )
 
 
+def test_format_agent_result_recovers_answer_without_raw_json():
+    service = LogAnalysisChatService()
+    raw = (
+        "```json\n"
+        "{\n"
+        '  "status": "ok",\n'
+        '  "question_type": "root_cause",\n'
+        '  "answer": "根因是 UPF 版本缓存未失效。",\n'
+        '  "recommended_actions": ["重置缓存", "审查脚本'
+    )
+
+    rendered = service._format_agent_result(
+        {
+            "status": "schema_mismatch",
+            "model": "deepseek-v4-flash",
+            "raw": raw,
+            "root_cause_hypotheses": [],
+            "recommended_actions": [],
+            "related_keywords": [],
+        },
+        question="为什么重构失败？",
+        context_meta={"filename": "oam.tgz"},
+    )
+
+    assert "状态：`ok`" in rendered
+    assert "根因是 UPF 版本缓存未失效" in rendered
+    assert "schema_mismatch" not in rendered
+    assert "## 原始输出" not in rendered
+    assert "```json" not in rendered
+
+
 @pytest.mark.asyncio
 async def test_log_analysis_stream_sends_elapsed_status_while_agent_runs(monkeypatch, tmp_path):
     ctx = _make_ctx(tmp_path)

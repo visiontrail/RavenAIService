@@ -222,6 +222,47 @@ def _validate_result_schema(data: Dict[str, Any]) -> bool:
     return bool(data.get("answer") or data.get("summary"))
 
 
+def extract_recoverable_result_fields(text: str) -> Dict[str, Any]:
+    """Best-effort extraction for model outputs with a truncated JSON tail.
+
+    The model contract is still fenced JSON, but some providers occasionally
+    end a turn after emitting a valid prefix. When the important user-facing
+    fields are already complete, keep them instead of surfacing raw broken JSON.
+    """
+    parsed = _extract_fenced_json(text)
+    if not isinstance(parsed, dict):
+        return {}
+
+    answer = parsed.get("answer")
+    summary = parsed.get("summary")
+    if not isinstance(answer, str) or not answer.strip():
+        answer = summary if isinstance(summary, str) else ""
+    if not isinstance(summary, str):
+        summary = ""
+    if not str(answer or summary).strip():
+        return {}
+
+    recovered: Dict[str, Any] = {
+        "status": parsed.get("status") if isinstance(parsed.get("status"), str) else "ok",
+        "question_type": _normalize_question_type(parsed.get("question_type")),
+        "answer": str(answer or "").strip(),
+        "summary": summary.strip(),
+        "severity": parsed.get("severity") if isinstance(parsed.get("severity"), str) else "info",
+        "root_cause_hypotheses": parsed.get("root_cause_hypotheses")
+        if isinstance(parsed.get("root_cause_hypotheses"), list)
+        else [],
+        "recommended_actions": parsed.get("recommended_actions")
+        if isinstance(parsed.get("recommended_actions"), list)
+        else [],
+        "related_keywords": parsed.get("related_keywords")
+        if isinstance(parsed.get("related_keywords"), list)
+        else [],
+    }
+    if isinstance(parsed.get("error_kind"), str) and parsed.get("error_kind"):
+        recovered["error_kind"] = parsed["error_kind"]
+    return recovered
+
+
 _VALID_QUESTION_TYPES = {"root_cause", "qa", "search", "stats", "meta", "other"}
 
 
@@ -998,6 +1039,34 @@ class LogAnalysisAgent:
             }
 
         if not _validate_result_schema(parsed):
+            recovered = extract_recoverable_result_fields(final_text)
+            if recovered:
+                logger.warning(
+                    "LogAnalysisAgent: result JSON incomplete; recovered user-facing answer"
+                )
+                recovered_status = recovered.get("status", "ok")
+                recovered_error_kind = recovered.get("error_kind")
+                if recovered_error_kind:
+                    recovered_status = "error"
+                return {
+                    "engine": "claude-agent-sdk",
+                    "model": effective_model,
+                    "schema_version": 3,
+                    "status": recovered_status,
+                    "error_kind": recovered_error_kind,
+                    "question_type": recovered.get("question_type", "other"),
+                    "answer": recovered.get("answer", ""),
+                    "summary": recovered.get("summary", ""),
+                    "severity": recovered.get("severity", "info"),
+                    "root_cause_hypotheses": _strip_confidence_fields(
+                        recovered.get("root_cause_hypotheses", [])
+                    ),
+                    "recommended_actions": recovered.get("recommended_actions", []),
+                    "related_keywords": recovered.get("related_keywords", []),
+                    "parse_warning": "incomplete_json_recovered",
+                    **common_extra,
+                }
+
             logger.warning("LogAnalysisAgent: result JSON missing required fields, schema_mismatch")
             return {
                 "engine": "claude-agent-sdk",

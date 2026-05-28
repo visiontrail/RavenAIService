@@ -23,7 +23,7 @@ from fastapi import UploadFile
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.log_analysis.agent import LogAnalysisAgent
+from app.agents.log_analysis.agent import LogAnalysisAgent, extract_recoverable_result_fields
 from app.agents.log_analysis.workspace import WorkspaceContext, cleanup, prepare
 from app.config import settings
 from app.models.chat import ChatMessage
@@ -1001,13 +1001,20 @@ class LogAnalysisChatService:
         duration = result.get("duration_seconds")
         answer = str(result.get("answer") or result.get("summary") or "").strip()
         summary = str(result.get("summary") or "").strip()
+        raw = result.get("raw")
+        recovered = {}
+        if not answer and status == "schema_mismatch" and isinstance(raw, str) and raw.strip():
+            recovered = extract_recoverable_result_fields(raw)
+            answer = str(recovered.get("answer") or recovered.get("summary") or "").strip()
+            summary = str(recovered.get("summary") or summary or "").strip()
+        display_status = "ok" if recovered and answer else status
 
         lines: List[str] = [
             "**日志分析 Agent** 已完成本轮分析。",
             "",
             f"- 日志包：`{filename}`",
             f"- 问题：{question}",
-            f"- 状态：`{status}`",
+            f"- 状态：`{display_status}`",
             f"- 模型：`{model}`" + (f"，耗时：{duration}s" if duration is not None else ""),
             "- 上下文：已保留本次解压日志与代码工作区，可在当前对话继续追问。",
         ]
@@ -1018,7 +1025,7 @@ class LogAnalysisChatService:
         if answer:
             lines.extend(["", "## 回答", answer])
         elif status == "schema_mismatch":
-            lines.extend(["", "## 回答", "模型返回未命中结构化 JSON，我保留了原始输出供排查。"])
+            lines.extend(["", "## 回答", "模型返回内容不完整，且未能提取出可展示的回答。"])
 
         if summary and summary != answer:
             lines.extend(["", "## 摘要", summary])
@@ -1050,10 +1057,6 @@ class LogAnalysisChatService:
             rendered = " ".join(f"`{str(keyword)}`" for keyword in keywords if str(keyword).strip())
             if rendered:
                 lines.extend(["", "## 关键词", rendered])
-
-        raw = result.get("raw")
-        if status == "schema_mismatch" and isinstance(raw, str) and raw.strip():
-            lines.extend(["", "## 原始输出", "```text", raw.strip()[:4000], "```"])
 
         return "\n".join(lines).strip()
 
