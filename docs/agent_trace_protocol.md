@@ -14,7 +14,7 @@ Every event is a flat object with at minimum:
 
 | Field        | Type    | Description                                                                 |
 | ------------ | ------- | --------------------------------------------------------------------------- |
-| `type`       | string  | One of the 11 event types listed below.                                     |
+| `type`       | string  | One of the 12 event types listed below.                                     |
 | `task_id`    | string  | Identifies the agent run. Chat uses `session_id`; Celery uses Celery task ID. |
 | `seq`        | integer | Monotonic, starts at 1, never repeats within one run. Used for ordering & de-dup. |
 | `timestamp`  | float   | Epoch seconds, 6 decimal places.                                            |
@@ -35,6 +35,7 @@ keys gracefully.
 | `thinking_start`  | `step_id`                                                                                                                    | Thinking blocks share the same `step_id` namespace as tool steps but a different kind. |
 | `thinking_delta`  | `step_id`, `text_chunk`                                                                                                      | `text_chunk` is ≤ 4 KB UTF-8.                                                          |
 | `thinking_end`    | `step_id`, `text`, `duration_seconds`                                                                                        | `text` is the full thinking text (≤ 4 KB excerpt).                                     |
+| `answer_delta`    | `text_chunk`, `step_id` (optional)                                                                                           | Incremental chunk of the assistant's **final answer body** (≤ 4 KB UTF-8). Concatenating every `answer_delta.text_chunk` of a run in `seq` order MUST equal `run_complete.final_text` (under the same masking). Distinct from `thinking_delta` (folded reasoning) and `step_delta` (tool output). |
 | `system_notice`   | `kind`, `subtype`, `detail`                                                                                                  | Used for `heartbeat`, `cancel_requested`, SDK system messages, etc.                    |
 
 ### Invariants
@@ -49,6 +50,12 @@ keys gracefully.
   Python helper `mask_input` walks tool inputs recursively.
 - A terminal event (`run_complete` / `cancelled` / `error`) is always
   emitted exactly once, and is always the last event for that run.
+- `answer_delta` events are produced only when the active provider
+  supports SDK chunked streaming (`include_partial_messages`). When it
+  does not, the run emits **no** `answer_delta` and the client falls
+  back to rendering `run_complete.final_text` in one shot. Either way
+  `run_complete.final_text` is the authoritative full answer body and
+  is used for persistence and reconnect replay correction.
 
 ## Trace summary
 
@@ -74,7 +81,9 @@ A minimal happy path showing one `Bash` call followed by completion:
 {"type":"step_delta","task_id":"job-7","seq":3,"timestamp":1747700000.220,"step_id":"3f...","output_chunk":"total 0\nfile-a\n"}
 {"type":"step_delta","task_id":"job-7","seq":4,"timestamp":1747700000.240,"step_id":"3f...","output_chunk":"file-b\n"}
 {"type":"step_end","task_id":"job-7","seq":5,"timestamp":1747700000.260,"step_id":"3f...","status":"ok","duration_seconds":0.16,"output_excerpt":"total 0\nfile-a\nfile-b\n"}
-{"type":"run_complete","task_id":"job-7","seq":6,"timestamp":1747700000.320,"trace_summary":{"thought_duration_seconds":0.32,"tool_call_count":1,"thinking_chars":0}}
+{"type":"answer_delta","task_id":"job-7","seq":6,"timestamp":1747700000.300,"text_chunk":"目录下"}
+{"type":"answer_delta","task_id":"job-7","seq":7,"timestamp":1747700000.310,"text_chunk":"有两个文件。"}
+{"type":"run_complete","task_id":"job-7","seq":8,"timestamp":1747700000.320,"final_text":"目录下有两个文件。","trace_summary":{"thought_duration_seconds":0.32,"tool_call_count":1,"thinking_chars":0}}
 ```
 
 A cancellation always produces the two-step pattern:

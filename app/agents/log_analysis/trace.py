@@ -43,6 +43,7 @@ EventType = Literal[
     "thinking_start",
     "thinking_delta",
     "thinking_end",
+    "answer_delta",
     "system_notice",
     "error",
 ]
@@ -58,6 +59,7 @@ STEP_END = "step_end"
 THINKING_START = "thinking_start"
 THINKING_DELTA = "thinking_delta"
 THINKING_END = "thinking_end"
+ANSWER_DELTA = "answer_delta"
 SYSTEM_NOTICE = "system_notice"
 ERROR = "error"
 
@@ -86,7 +88,7 @@ class AgentTraceEvent(TypedDict, total=False):
     status: Literal["ok", "error"]
     duration_seconds: float
 
-    # thinking_* events
+    # thinking_* events (text_chunk also carries answer_delta increments)
     text_chunk: str
     text: str
 
@@ -217,6 +219,33 @@ def coerce_excerpt(text: str, max_bytes: int = DEFAULT_EXCERPT_MAX_BYTES) -> str
 def new_step_id() -> str:
     """Mint a UUIDv4 string used to correlate start/delta/end events."""
     return str(uuid.uuid4())
+
+
+def extract_text_delta(event: Any) -> Optional[str]:
+    """Extract an assistant answer-text increment from a raw SDK ``StreamEvent``.
+
+    ``StreamEvent.event`` carries the native Anthropic stream event dict. The
+    final answer body is streamed as ``content_block_delta`` events whose
+    ``delta.type == "text_delta"``. We translate only those into
+    ``answer_delta``; thinking increments (``thinking_delta``), tool-input
+    increments (``input_json_delta``) and signature deltas are ignored here so
+    ``answer_delta`` strictly mirrors the user-facing answer body.
+
+    Returns the increment text, or ``None`` when ``event`` is not a text delta.
+    """
+    if not isinstance(event, dict):
+        return None
+    if event.get("type") != "content_block_delta":
+        return None
+    delta = event.get("delta")
+    if not isinstance(delta, dict):
+        return None
+    if delta.get("type") != "text_delta":
+        return None
+    text = delta.get("text")
+    if not isinstance(text, str) or not text:
+        return None
+    return text
 
 
 def build_event(

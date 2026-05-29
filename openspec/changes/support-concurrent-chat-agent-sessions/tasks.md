@@ -82,7 +82,7 @@
 - [~] 10.1 后端测试集：`tests/api/test_chat_happy_path.py`、DeviceAgent tests、HITL tests、LogAnalysis chat stream tests 通过 — `test_chat_happy_path.py` 与其它 26 个 chat 测试全部通过（含 `_run_device_job` 的 `done` payload 补回 `messages` 字段）；`test_chat_hitl_integration.py::test_chat_stream_full_hitl_flow`、`test_log_analysis_chat_stream_trace.py` 中 2 个 reconnect-replay 用例在主分支上即已超时失败，与本变更无关，单独跟踪
 - [x] 10.2 新增并发集成测试：两个不同 session 同时 fake agent run，总耗时证明并发而非串行等待 — `tests/api/test_chat_concurrent_runs.py::test_two_sessions_run_concurrently_without_event_crosstalk`
 - [x] 10.3 前端 `vue-tsc --noEmit` 通过
-- [ ] 10.4 前端手测：A 会话发消息后切 B；侧边栏 A 转圈；B 可发消息；回 A 完整恢复内容
+- [x] 10.4 前端手测：A 会话发消息后切 B；侧边栏 A 转圈；B 可发消息；回 A 完整恢复内容
 - [ ] 10.5 手测 HITL：A 会话弹权限确认时切 B；回 A 弹窗仍在，可 allow/deny 并继续
 - [x] 10.6 文档更新：`DEPLOY_USAGE.md` 补充多会话后台 run、stale run、工作区隔离和并发限制说明
 

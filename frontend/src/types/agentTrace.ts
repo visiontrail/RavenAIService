@@ -15,6 +15,7 @@ export type AgentTraceEventType =
   | 'thinking_start'
   | 'thinking_delta'
   | 'thinking_end'
+  | 'answer_delta'
   | 'system_notice'
   | 'error'
 
@@ -98,6 +99,18 @@ export interface ThinkingEndEvent extends BaseTraceEvent {
   duration_seconds?: number
 }
 
+/**
+ * Incremental chunk of the assistant's final answer body. Concatenating
+ * every `answer_delta.text_chunk` of a run in `seq` order equals
+ * `run_complete.final_text` (under the same masking). Distinct from
+ * `thinking_delta` (folded reasoning) and `step_delta` (tool output).
+ */
+export interface AnswerDeltaEvent extends BaseTraceEvent {
+  type: 'answer_delta'
+  text_chunk: string
+  step_id?: string
+}
+
 export interface SystemNoticeEvent extends BaseTraceEvent {
   type: 'system_notice'
   kind?: string
@@ -117,6 +130,7 @@ export type AgentTraceEvent =
   | ThinkingStartEvent
   | ThinkingDeltaEvent
   | ThinkingEndEvent
+  | AnswerDeltaEvent
   | SystemNoticeEvent
 
 export type TerminalEventType = 'run_complete' | 'cancelled' | 'error'

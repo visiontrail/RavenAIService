@@ -451,4 +451,85 @@ describe('conversationRuns store', () => {
     expect(userMsgs).toHaveLength(1)
     expect(userMsgs[0].id).toBe('msg-user-a')
   })
+
+  // -- answer_delta incremental rendering ----------------------------------
+
+  const answerDelta = (
+    runId: string,
+    sessionId: string,
+    seq: number,
+    textChunk: string,
+  ): Record<string, unknown> => ({
+    event: 'answer_delta',
+    type: 'answer_delta',
+    run_id: runId,
+    session_id: sessionId,
+    seq,
+    timestamp: seq,
+    text_chunk: textChunk,
+  })
+
+  it('appends answer_delta chunks and clears the thinking placeholder on first delta', () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
+
+    const answer = state.messages.find((m: ChatEntry) => m.id === 'run:run-a:assistant')
+    expect(answer?.content).toBe('正在思考...')
+
+    store.applyEventToState(state, answerDelta('run-a', 'session-a', 2, '根据'))
+    expect(answer?.content).toBe('根据')
+    store.applyEventToState(state, answerDelta('run-a', 'session-a', 3, '日志分析，'))
+    store.applyEventToState(state, answerDelta('run-a', 'session-a', 4, '根因是…'))
+    expect(answer?.content).toBe('根据日志分析，根因是…')
+    // answer_delta is prose, not a trace step.
+    expect(answer?.traceEvents?.some((e: AgentTraceEvent) => e.type === 'answer_delta')).toBeFalsy()
+  })
+
+  it('dedupes answer_delta by seq on replay so no characters repeat', () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
+
+    store.applyEventToState(state, answerDelta('run-a', 'session-a', 2, 'AB'))
+    store.applyEventToState(state, answerDelta('run-a', 'session-a', 3, 'CD'))
+    // Replayed duplicates with the same seq must be dropped.
+    store.applyEventToState(state, answerDelta('run-a', 'session-a', 2, 'AB'))
+    store.applyEventToState(state, answerDelta('run-a', 'session-a', 3, 'CD'))
+
+    const answer = state.messages.find((m: ChatEntry) => m.id === 'run:run-a:assistant')
+    expect(answer?.content).toBe('ABCD')
+  })
+
+  it('corrects the bubble to final_text on run_complete after streaming deltas', () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
+    store.applyEventToState(state, answerDelta('run-a', 'session-a', 2, '根据日志'))
+
+    store.applyEventToState(state, {
+      ...traceEvent('run-a', 'session-a', 3, 'run_complete'),
+      final_text: '根据日志分析，根因是失锁。',
+    })
+
+    const answer = state.messages.find((m: ChatEntry) => m.id === 'run:run-a:assistant')
+    expect(answer?.content).toBe('根据日志分析，根因是失锁。')
+    expect(state.runStatus).toBe('succeeded')
+    expect(answer?.traceRunning).toBe(false)
+  })
+
+  it('falls back to whole-segment final_text render when no answer_delta arrives', () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
+
+    const answer = state.messages.find((m: ChatEntry) => m.id === 'run:run-a:assistant')
+    expect(answer?.content).toBe('正在思考...')
+
+    store.applyEventToState(state, {
+      ...traceEvent('run-a', 'session-a', 2, 'run_complete'),
+      final_text: '整段渲染的答复。',
+    })
+    expect(answer?.content).toBe('整段渲染的答复。')
+  })
 })

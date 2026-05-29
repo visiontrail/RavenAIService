@@ -269,6 +269,27 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       return
     }
 
+    // Final-answer body increment. Emitted by all three agents when the
+    // provider supports partial streaming. Appended live to the assistant
+    // bubble; `run_complete.final_text` later does the authoritative
+    // correction (see run_complete handling below). Dedup by `(run_id, seq)`
+    // is already handled above. We deliberately do NOT push this into
+    // `traceEvents` — it is answer prose, not a trace step.
+    if (type === 'answer_delta') {
+      const chunk = typeof payload?.text_chunk === 'string' ? payload.text_chunk : ''
+      if (!chunk) return
+      const target = ensureAnswerMessage(state, answerId)
+      // First delta clears the "正在思考..." placeholder before appending.
+      if (target.content === '正在思考...') {
+        target.content = chunk.replace(/^\s+/, '')
+      } else {
+        target.content += chunk
+      }
+      target.kind = 'answer'
+      target.traceRunning = true
+      return
+    }
+
     if (typeof type === 'string' && DEVICE_TRACE_TYPES.has(type)) {
       const target = ensureAnswerMessage(state, answerId)
       if (!target.traceEvents) target.traceEvents = []
@@ -278,6 +299,11 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         target.traceEvents.push(trace as unknown as AgentTraceEvent)
       }
       if (type === 'run_complete') {
+        // Authoritative correction: `final_text` is the de-sensitised /
+        // trimmed full answer. Overwrite whatever the `answer_delta` stream
+        // accumulated so the rendered bubble matches the persisted text. When
+        // no `answer_delta` arrived this run (e.g. provider downgrade), this is
+        // also the whole-segment render path — behaviour identical to before.
         const finalText = (payload as any)?.final_text
         if (typeof finalText === 'string' && finalText.trim()) target.content = finalText.trimStart()
         state.runStatus = 'succeeded'

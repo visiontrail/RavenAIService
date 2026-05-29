@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, nextTick, ref, watch } from 'vue'
 import { deviceLinkApi } from '@/api/deviceLink'
-import { searchPackagesByAgent, getRavenPackageDetail, ravenBaseUrl } from '@/api/raven'
+import {
+  streamPackagesAgentSearch,
+  getRavenPackageDetail,
+  ravenBaseUrl,
+} from '@/api/raven'
 import { userApi } from '@/api/user'
 import type {
   DeviceInfo,
   PackageAgentSearchResponse,
+  PackageAgentTraceEvent,
   RavenPackage,
 } from '@/types'
 import { renderMarkdown } from '@/utils/markdownRenderer'
@@ -648,8 +653,11 @@ const handleInput = (event: Event) => updateMentionState(event)
 const extractPackageQuery = (content: string) => content.replace(/@重构包配置管理员/g, '').trim()
 
 const runPackageAgent = async (content: string, sid: string, state: ReturnType<typeof runsStore.ensureState>) => {
-  // Synchronous package-agent path — doesn't go through ChatRunService, so we
-  // mutate the per-session state directly.
+  // Streaming package-agent path. Trace + ``answer_delta`` events flow through
+  // the same ``conversationRuns`` render pipeline as Device / log-analysis so
+  // the bubble updates live instead of stalling on "正在思考...". The terminal
+  // ``final`` event carries the structured result, which we use to render the
+  // recommended-package cards and persist the exchange.
   const query = extractPackageQuery(content)
   const answerId = state.currentAnswerId
   const targetMessage = answerId ? state.messages.find((m) => m.id === answerId) : null
@@ -658,9 +666,15 @@ const runPackageAgent = async (content: string, sid: string, state: ReturnType<t
     targetMessage.content = '请描述需要查找的重构包需求，例如型号、版本或用途。'
     return
   }
-  try {
-    const { data } = await searchPackagesByAgent(query)
-    if (!data) throw new Error('智能搜索返回为空')
+  if (!targetMessage.traceEvents) targetMessage.traceEvents = []
+
+  const ac = new AbortController()
+  state.subscription = ac
+
+  let finalData: PackageAgentSearchResponse | null = null
+
+  const handleFinal = async (data: PackageAgentSearchResponse) => {
+    finalData = data
     const recommendedIds = data.recommended_package_ids || []
     const recommendedPackages: RavenPackage[] = []
     for (const id of recommendedIds) {
@@ -671,19 +685,55 @@ const runPackageAgent = async (content: string, sid: string, state: ReturnType<t
         console.warn('拉取推荐包详情失败', id, err)
       }
     }
-    const aiContent = formatPackageAgentAnswer(data, recommendedPackages, query)
-    targetMessage.content = aiContent
-    if (isLoggedIn.value) {
+    // Authoritative correction: replace the streamed prose with the formatted
+    // answer (recommended-package cards + links).
+    targetMessage.content = formatPackageAgentAnswer(data, recommendedPackages, query)
+    targetMessage.traceRunning = false
+  }
+
+  try {
+    await streamPackagesAgentSearch(query, {
+      sessionId: sid,
+      signal: ac.signal,
+      onEvent: (event: PackageAgentTraceEvent) => {
+        if (event?.type === 'final') {
+          // Handled after the stream resolves so the structured answer wins
+          // over the run_complete final_text. Detail fetches are async, so we
+          // stash the payload and await it once the stream closes.
+          finalData = (event as { data: PackageAgentSearchResponse }).data
+          return
+        }
+        // Forward trace + answer_delta to the unified renderer.
+        runsStore.applyEventToState(state, event)
+      },
+      onError: (err) => {
+        console.warn('重构包流式事件解析失败', err)
+      },
+    })
+    if (finalData) {
+      await handleFinal(finalData)
+    } else if (targetMessage.content === '正在思考...') {
+      targetMessage.content = '（无回复内容）'
+    }
+    targetMessage.traceRunning = false
+    state.runStatus = 'succeeded'
+
+    if (isLoggedIn.value && finalData) {
       try {
-        await userApi.saveMessages(sid, content, aiContent, content.slice(0, 60))
+        await userApi.saveMessages(sid, content, targetMessage.content, content.slice(0, 60))
         await sessionStore.load()
       } catch (error: any) {
         console.warn('保存重构包配置管理员对话失败', error)
       }
     }
   } catch (error: any) {
+    if (error?.name === 'AbortError') return
     console.error('重构包配置管理员调用失败', error)
     targetMessage.content = `重构包配置管理员调用失败：${error?.message || String(error)}`
+    targetMessage.traceRunning = false
+    state.runStatus = 'failed'
+  } finally {
+    if (state.subscription === ac) state.subscription = null
   }
 }
 
@@ -796,8 +846,8 @@ const sendMessage = async () => {
         throw err
       }
     } else if (shouldUsePackageAgent) {
-      // Package agent: append local user + placeholder, then call the
-      // synchronous REST endpoint.
+      // Package agent: append local user + placeholder, then open the SSE
+      // stream. Trace + answer_delta render through the unified pipeline.
       state.messages.push({
         id: generateUUID(),
         role: 'user',
@@ -811,13 +861,18 @@ const sendMessage = async () => {
         role: 'ai',
         content: '正在思考...',
         kind: 'answer',
+        traceEvents: [],
+        traceRunning: true,
       })
       state.isSending = true
+      state.runStatus = 'running'
+      state.runAgentKind = 'package'
       try {
         await runPackageAgent(outgoingContent, sid, state)
       } finally {
         state.isSending = false
         state.currentAnswerId = null
+        state.runAgentKind = null
       }
     } else {
       // DeviceAgent — fully delegated to the run store.

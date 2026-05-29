@@ -7,6 +7,7 @@ this agent unchanged.
 
 from app.agents.log_analysis.trace import (
     AgentTraceEvent,
+    ANSWER_DELTA,
     CANCELLED,
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_EXCERPT_MAX_BYTES,
@@ -25,6 +26,7 @@ from app.agents.log_analysis.trace import (
     coerce_chunk,
     coerce_excerpt,
     derive_tool_trace,
+    extract_text_delta,
     mask_input,
     mask_tokens,
     new_step_id,
@@ -34,6 +36,7 @@ from app.agents.log_analysis.trace import (
 
 __all__ = [
     "AgentTraceEvent",
+    "ANSWER_DELTA",
     "CANCELLED",
     "DEFAULT_CHUNK_MAX_BYTES",
     "DEFAULT_EXCERPT_MAX_BYTES",
@@ -52,6 +55,7 @@ __all__ = [
     "coerce_chunk",
     "coerce_excerpt",
     "derive_tool_trace",
+    "extract_text_delta",
     "mask_input",
     "mask_tokens",
     "new_step_id",

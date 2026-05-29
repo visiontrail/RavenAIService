@@ -64,6 +64,12 @@ class ProviderProfile:
     supports_mcp_server_tools: bool
     thinking_budget_tokens_effective: bool
     disable_parallel_tool_use_effective: bool
+    # Whether the upstream supports SDK chunked streaming
+    # (``include_partial_messages`` → native ``content_block_delta`` events).
+    # When False, callers requesting partial streaming are silently degraded:
+    # no ``answer_delta`` is produced and the client falls back to
+    # ``run_complete.final_text``.
+    supports_partial_streaming: bool = False
     notes: str = ""
 
 
@@ -78,6 +84,7 @@ PROVIDER_PROFILES: Dict[str, ProviderProfile] = {
         supports_mcp_server_tools=True,
         thinking_budget_tokens_effective=True,
         disable_parallel_tool_use_effective=True,
+        supports_partial_streaming=True,
         notes="Anthropic 官方端点，能力全开",
     ),
     "deepseek": ProviderProfile(
@@ -93,6 +100,8 @@ PROVIDER_PROFILES: Dict[str, ProviderProfile] = {
         supports_mcp_server_tools=True,
         thinking_budget_tokens_effective=False,
         disable_parallel_tool_use_effective=False,
+        # Anthropic 兼容端点支持标准 SSE 流式（content_block_delta），可发 answer_delta。
+        supports_partial_streaming=True,
         notes="DeepSeek Anthropic 兼容端点；不支持图像/文档输入与 thinking budget；"
         "支持标准 tool use（含 SDK 进程内 MCP server）",
     ),
@@ -142,6 +151,7 @@ def build_options(
     model: Optional[str] = None,
     max_tokens: Optional[int] = None,
     request_timeout_seconds: Optional[int] = None,
+    include_partial_messages: bool = True,
 ) -> Any:
     """构建 ClaudeAgentOptions，按 caller override → Settings → provider profile 优先级解析参数。
 
@@ -297,5 +307,20 @@ def build_options(
 
     if request_timeout_seconds is not None:
         options_kwargs["request_timeout_seconds"] = request_timeout_seconds
+
+    # Chunked streaming: enables native content_block_delta events so agents
+    # can translate the assistant answer body into incremental answer_delta
+    # trace events. Silently degrade on providers that don't support it.
+    if include_partial_messages:
+        if profile.supports_partial_streaming:
+            options_kwargs["include_partial_messages"] = True
+        else:
+            logger.info(
+                "Provider '%s' does not support partial streaming "
+                "(supports_partial_streaming=False); include_partial_messages "
+                "not set — answer_delta will not be emitted, clients fall back "
+                "to run_complete.final_text.",
+                provider_name,
+            )
 
     return _instantiate_options(ClaudeAgentOptions, options_kwargs)

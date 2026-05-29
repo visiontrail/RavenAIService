@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app.agents.log_analysis.trace import (
     AgentTraceEvent,
+    ANSWER_DELTA,
     CANCELLED,
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_EXCERPT_MAX_BYTES,
@@ -39,6 +40,7 @@ from app.agents.log_analysis.trace import (
     coerce_chunk,
     coerce_excerpt,
     derive_tool_trace,
+    extract_text_delta,
     mask_input,
     mask_tokens,
     new_step_id,
@@ -488,6 +490,33 @@ def _emit_thinking_or_text(state: _RunState, text: str) -> None:
     )
 
 
+def _emit_answer_delta_from_stream(state: _RunState, message: Any) -> bool:
+    """Translate a partial-streaming ``StreamEvent`` into ``answer_delta``.
+
+    Returns ``True`` when ``message`` was a ``StreamEvent`` (handled here),
+    so the caller can short-circuit the regular message dispatch. Only
+    ``content_block_delta`` events with a ``text_delta`` produce output;
+    thinking / tool-input increments on the same channel are ignored.
+    """
+    event = getattr(message, "event", None)
+    if not isinstance(event, dict):
+        return False
+    text = extract_text_delta(event)
+    if text is None:
+        return True  # was a StreamEvent, just not a text increment
+    masked = mask_tokens(text)
+    for chunk in coerce_chunk(masked, DEFAULT_CHUNK_MAX_BYTES):
+        state.emit(
+            build_event(
+                ANSWER_DELTA,
+                task_id=state.task_id,
+                seq_counter=state.seq_counter,
+                text_chunk=chunk,
+            )
+        )
+    return True
+
+
 def _resolve_step_id_for_result(
     state: _RunState,
     tool_use_id: Optional[str],
@@ -604,6 +633,15 @@ def _emit_for_message(message: Any, *, state: _RunState) -> None:
       - sets ``state.final_text`` on terminal ResultMessage
       - writes structured workflow logs (legacy behaviour preserved)
     """
+    # StreamEvent (include_partial_messages): native content_block_delta
+    # increments. Has an ``event`` dict and no ``content`` list — translate
+    # answer text increments into answer_delta and short-circuit.
+    if getattr(message, "content", None) is None and isinstance(
+        getattr(message, "event", None), dict
+    ):
+        _emit_answer_delta_from_stream(state, message)
+        return
+
     content = getattr(message, "content", None)
     if isinstance(content, list) and content:
         for block in content:

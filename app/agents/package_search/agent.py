@@ -30,6 +30,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 from app.agents.package_search.trace import (
     AgentTraceEvent,
+    ANSWER_DELTA,
     DEFAULT_CHUNK_MAX_BYTES,
     DEFAULT_EXCERPT_MAX_BYTES,
     ERROR,
@@ -47,6 +48,7 @@ from app.agents.package_search.trace import (
     coerce_chunk,
     coerce_excerpt,
     derive_tool_trace,
+    extract_text_delta,
     mask_input,
     mask_tokens,
     new_step_id,
@@ -335,7 +337,40 @@ def _emit_for_content_block(state: _RunState, block: Any) -> None:
         _emit_thinking_or_text(state, str(text))
 
 
+def _emit_answer_delta_from_stream(state: _RunState, message: Any) -> bool:
+    """Translate a partial-streaming ``StreamEvent`` into ``answer_delta``.
+
+    Returns ``True`` when ``message`` was a ``StreamEvent`` (handled here).
+    Only ``content_block_delta`` text increments produce output.
+    """
+    event = getattr(message, "event", None)
+    if not isinstance(event, dict):
+        return False
+    text = extract_text_delta(event)
+    if text is None:
+        return True
+    masked = mask_tokens(text)
+    for chunk in coerce_chunk(masked, DEFAULT_CHUNK_MAX_BYTES):
+        state.emit(
+            build_event(
+                ANSWER_DELTA,
+                task_id=state.task_id,
+                seq_counter=state.seq_counter,
+                text_chunk=chunk,
+            )
+        )
+    return True
+
+
 def _emit_for_message(message: Any, *, state: _RunState) -> None:
+    # StreamEvent (include_partial_messages): has an ``event`` dict and no
+    # ``content`` list — translate answer text increments into answer_delta.
+    if getattr(message, "content", None) is None and isinstance(
+        getattr(message, "event", None), dict
+    ):
+        _emit_answer_delta_from_stream(state, message)
+        return
+
     content = getattr(message, "content", None)
     if isinstance(content, list) and content:
         for block in content:
