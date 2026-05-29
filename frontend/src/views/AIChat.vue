@@ -486,13 +486,17 @@ const isFileDragEvent = (event: DragEvent) =>
   Array.from(event.dataTransfer?.types || []).includes('Files')
 
 const handleLogFileDragEnter = (event: DragEvent) => {
-  if (isSending.value || !isFileDragEvent(event)) return
+  if (isSending.value || isPackageAgentSelected.value || !isFileDragEvent(event)) return
   logFileDragDepth += 1
   isLogFileDragOver.value = true
 }
 
 const handleLogFileDragOver = (event: DragEvent) => {
-  if (isSending.value || !isFileDragEvent(event) || !event.dataTransfer) return
+  if (!isFileDragEvent(event) || !event.dataTransfer) return
+  if (isSending.value || isPackageAgentSelected.value) {
+    event.dataTransfer.dropEffect = 'none'
+    return
+  }
   event.dataTransfer.dropEffect = 'copy'
 }
 
@@ -505,7 +509,7 @@ const handleLogFileDragLeave = (event: DragEvent) => {
 const handleLogFileDrop = (event: DragEvent) => {
   logFileDragDepth = 0
   isLogFileDragOver.value = false
-  if (isSending.value) return
+  if (isSending.value || isPackageAgentSelected.value) return
   const file = event.dataTransfer?.files?.[0] || null
   if (file) selectLogFile(file)
 }
@@ -1049,7 +1053,13 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
         ></textarea>
 
         <div class="rw-composer-row">
-          <button class="rw-mini-btn" title="附加日志包" aria-label="附加日志包" @click="triggerLogFilePicker">
+          <button
+            class="rw-mini-btn"
+            :disabled="isPackageAgentSelected"
+            :title="isPackageAgentSelected ? '检索重构包模式下不支持附件上传' : '附加日志包'"
+            aria-label="附加日志包"
+            @click="triggerLogFilePicker"
+          >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11.5-9.5 9.5a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5L9.5 18.5a2 2 0 0 1-3-3L15 7"/></svg>
           </button>
           <input
@@ -1462,6 +1472,8 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
   background: none; border: none; cursor: pointer;
 }
 .rw-mini-btn:hover { background: var(--rw-surface-strong); color: var(--rw-ink); }
+.rw-mini-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.rw-mini-btn:disabled:hover { background: none; color: var(--rw-body); }
 .rw-file-input { display: none; }
 .rw-tool-chip {
   height: 28px; padding: 0 11px;
