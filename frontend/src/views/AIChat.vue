@@ -26,20 +26,21 @@ import AgentTraceStream from '@/components/AgentTraceStream.vue'
 import { projectRepoApi, type ProjectRepoOption } from '@/api'
 import { downloadFile } from '@/utils'
 
-type MentionOption =
-  | { type: 'agent'; id: string; name: string; description?: string; agentType: 'package-manager' | 'log-analysis' }
-  | { type: 'device'; id: string; name: string; status: DeviceInfo['status']; device: DeviceInfo }
+type AgentOption = {
+  id: string
+  name: string
+  description?: string
+  agentType: 'package-manager' | 'log-analysis'
+}
 
-const packageAgentOption: MentionOption = {
-  type: 'agent',
+const packageAgentOption: AgentOption = {
   id: 'package-manager',
   name: '重构包配置管理员',
   agentType: 'package-manager',
   description: '调用重构包智能搜索，返回详情、下载链接与重构提示词'
 }
 
-const logAnalysisAgentOption: MentionOption = {
-  type: 'agent',
+const logAnalysisAgentOption: AgentOption = {
   id: 'log-analysis',
   name: '日志分析',
   agentType: 'log-analysis',
@@ -68,7 +69,8 @@ const inputMessage = ref('')
 const chatContainerRef = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const inputAreaRef = ref<HTMLElement | null>(null)
-const mentionDropdownRef = ref<HTMLElement | null>(null)
+const deviceMenuRef = ref<HTMLElement | null>(null)
+const deviceMenuBtnRef = ref<HTMLElement | null>(null)
 const topMoreMenuRef = ref<HTMLElement | null>(null)
 const topMoreBtnRef = ref<HTMLElement | null>(null)
 const logFileInputRef = ref<HTMLInputElement | null>(null)
@@ -76,11 +78,8 @@ const logFileInputRef = ref<HTMLInputElement | null>(null)
 const devices = ref<DeviceInfo[]>([])
 const isLoadingDevices = ref(false)
 
-const mentionVisible = ref(false)
-const mentionKeyword = ref('')
-const mentionSelectedIndex = ref(0)
-const mentionOptionRefs = ref<(HTMLElement | null)[]>([])
-const mentionStart = ref<number | null>(null)
+const deviceMenuVisible = ref(false)
+const deviceKeyword = ref('')
 
 const targetDeviceId = ref<string | null>(null)
 const targetDeviceName = ref<string | null>(null)
@@ -158,17 +157,16 @@ const handleClickOutside = (event: MouseEvent) => {
     showTopMoreMenu.value = false
   }
 
-  if (mentionVisible.value && mentionDropdownRef.value && inputAreaRef.value &&
-      !mentionDropdownRef.value.contains(target) && !inputAreaRef.value.contains(target)) {
-    mentionVisible.value = false
-    mentionKeyword.value = ''
-    mentionStart.value = null
+  if (deviceMenuVisible.value && deviceMenuRef.value && deviceMenuBtnRef.value &&
+      !deviceMenuRef.value.contains(target) && !deviceMenuBtnRef.value.contains(target)) {
+    deviceMenuVisible.value = false
   }
 }
 
 const handleKey = (e: KeyboardEvent) => {
   if (e.key === 'Escape') {
     showTopMoreMenu.value = false
+    deviceMenuVisible.value = false
   }
 }
 
@@ -250,7 +248,7 @@ const resetPanel = () => {
   loadedSessionId.value = null
   localSessionId.value = null
   inputMessage.value = ''
-  resetMentionState()
+  deviceMenuVisible.value = false
   nextTick(() => textareaRef.value?.focus())
 }
 
@@ -348,35 +346,19 @@ const exportCurrentConversationMarkdown = () => {
   appStore.showNotification({ title: 'Markdown 已导出', type: 'success' })
 }
 
-const mentionOptions = computed<MentionOption[]>(() => {
-  const deviceOptions: MentionOption[] = devices.value
+const sortedDevices = computed<DeviceInfo[]>(() =>
+  devices.value
     .slice()
-    .sort((a, b) => (a.status === b.status ? 0 : a.status === 'online' ? -1 : 1))
-    .map((device) => ({
-      type: 'device',
-      id: device.id,
-      name: device.name || device.id,
-      status: device.status,
-      device,
-    }))
-  return [packageAgentOption, logAnalysisAgentOption, ...deviceOptions]
-})
+    .sort((a, b) => (a.status === b.status ? 0 : a.status === 'online' ? -1 : 1)),
+)
 
-const filteredMentionOptions = computed(() => {
-  const keyword = mentionKeyword.value.trim().toLowerCase()
-  const list = mentionOptions.value
+const filteredDeviceOptions = computed<DeviceInfo[]>(() => {
+  const keyword = deviceKeyword.value.trim().toLowerCase()
+  const list = sortedDevices.value
   if (!keyword) return list
-  return list.filter((option) => `${option.name} ${option.id}`.toLowerCase().includes(keyword))
-})
-
-watch(filteredMentionOptions, (list) => {
-  if (mentionSelectedIndex.value >= list.length) mentionSelectedIndex.value = 0
-  mentionOptionRefs.value = []
-})
-
-watch(mentionSelectedIndex, (idx) => {
-  const el = mentionOptionRefs.value[idx]
-  if (el?.scrollIntoView) el.scrollIntoView({ block: 'nearest' })
+  return list.filter((device) =>
+    `${device.name || ''} ${device.id}`.toLowerCase().includes(keyword),
+  )
 })
 
 const targetAgentName = computed(() => targetAgent.value?.name || null)
@@ -385,14 +367,7 @@ const isLogAnalysisAgentSelected = computed(() =>
   targetAgent.value?.agentType === 'log-analysis' || !!selectedLogFile.value
 )
 
-const resetMentionState = () => {
-  mentionVisible.value = false
-  mentionKeyword.value = ''
-  mentionSelectedIndex.value = 0
-  mentionStart.value = null
-}
-
-const setTargetAgent = (option: MentionOption & { type: 'agent' }) => {
+const setTargetAgent = (option: AgentOption) => {
   targetAgent.value = { id: option.id, name: option.name, agentType: option.agentType }
   targetDeviceId.value = null
   targetDeviceName.value = null
@@ -457,53 +432,27 @@ const formatPackageAgentAnswer = (
   return lines.join('\n')
 }
 
-const updateMentionState = (event?: Event) => {
-  const value = inputMessage.value
-  const target = (event?.target as HTMLTextAreaElement | null) || textareaRef.value
-  const cursor = target?.selectionStart ?? value.length
-  const lastAt = value.lastIndexOf('@', cursor - 1)
-  if (lastAt === -1) { resetMentionState(); return }
-  const afterAt = value.slice(lastAt + 1, cursor)
-  if (afterAt.includes(' ') || afterAt.includes('\n') || afterAt.includes('\t')) {
-    resetMentionState(); return
+const toggleDeviceMenu = () => {
+  if (isSending.value) return
+  deviceMenuVisible.value = !deviceMenuVisible.value
+  if (deviceMenuVisible.value) {
+    deviceKeyword.value = ''
+    showTopMoreMenu.value = false
+    if (!devices.value.length && !isLoadingDevices.value) fetchDevices()
+    nextTick(() => deviceMenuRef.value?.querySelector('input')?.focus?.())
   }
-  mentionVisible.value = true
-  mentionKeyword.value = afterAt
-  mentionSelectedIndex.value = 0
-  mentionStart.value = lastAt
 }
 
-const setMentionOptionRef = (el: unknown, idx: number) => {
-  mentionOptionRefs.value[idx] = el instanceof HTMLElement ? el : null
+const selectDevice = (device: DeviceInfo) => {
+  targetDeviceId.value = device.id
+  targetDeviceName.value = device.name || device.id
+  // 设备操作与重构包 / 日志分析 Agent 互斥
+  clearTargetAgent()
+  selectedLogFile.value = null
+  deviceMenuVisible.value = false
 }
 
-const applyMentionSelection = (option: MentionOption) => {
-  if (option.type === 'device') {
-    targetDeviceId.value = option.id
-    targetDeviceName.value = option.name
-    targetAgent.value = null
-  } else {
-    setTargetAgent(option)
-  }
-
-  const value = inputMessage.value
-  const cursor = textareaRef.value?.selectionStart ?? value.length
-  if (mentionStart.value !== null) {
-    const before = value.slice(0, mentionStart.value)
-    const after = value.slice(cursor)
-    const insertion = `@${option.name} `
-    inputMessage.value = `${before}${insertion}${after}`
-    nextTick(() => {
-      const pos = before.length + insertion.length
-      textareaRef.value?.setSelectionRange(pos, pos)
-    })
-  } else {
-    const insertion = `@${option.name} `
-    inputMessage.value = value ? `${value} ${insertion}` : insertion
-  }
-  resetMentionState()
-}
-
+const isDeviceSelected = computed(() => !!targetDeviceId.value)
 const clearTargetDevice = () => { targetDeviceId.value = null; targetDeviceName.value = null }
 const clearTargetAgent = () => {
   targetAgent.value = null
@@ -623,32 +572,11 @@ const submitPermissionDecision = async (
 }
 
 const handleKeydown = (event: KeyboardEvent) => {
-  if (mentionVisible.value && filteredMentionOptions.value.length > 0) {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      mentionSelectedIndex.value = (mentionSelectedIndex.value + 1) % filteredMentionOptions.value.length
-      return
-    }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      mentionSelectedIndex.value = (mentionSelectedIndex.value - 1 + filteredMentionOptions.value.length) % filteredMentionOptions.value.length
-      return
-    }
-    if (event.key === 'Enter' || event.key === 'Tab') {
-      event.preventDefault()
-      const option = filteredMentionOptions.value[mentionSelectedIndex.value]
-      if (option) applyMentionSelection(option)
-      return
-    }
-  }
-  if (event.key === 'Escape' && mentionVisible.value) { resetMentionState(); return }
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
     sendMessage()
   }
 }
-
-const handleInput = (event: Event) => updateMentionState(event)
 
 const extractPackageQuery = (content: string) => content.replace(/@重构包配置管理员/g, '').trim()
 
@@ -821,7 +749,7 @@ const sendMessage = async () => {
     : state.messages.map((msg) => ({ role: msg.role, content: msg.content }))
 
   inputMessage.value = ''
-  resetMentionState()
+  deviceMenuVisible.value = false
 
   try {
     if (shouldUseLogAnalysisAgent) {
@@ -1091,52 +1019,6 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
         @dragleave.prevent="handleLogFileDragLeave"
         @drop.prevent="handleLogFileDrop"
       >
-        <!-- Mention dropdown -->
-        <div
-          v-if="mentionVisible"
-          ref="mentionDropdownRef"
-          class="rw-mention"
-        >
-          <div class="rw-mention-head">
-            <span>选择目标（设备、重构包或日志分析）</span>
-            <span class="rw-mention-hint">输入 @ 或名称过滤</span>
-          </div>
-          <div v-if="isLoadingDevices" class="rw-mention-empty">设备列表加载中…</div>
-          <div v-else-if="!filteredMentionOptions.length" class="rw-mention-empty">暂无匹配的目标</div>
-          <template v-else>
-            <button
-              v-for="(option, idx) in filteredMentionOptions"
-              :key="`${option.type}-${option.id}`"
-              type="button"
-              class="rw-mention-row"
-              :class="{ active: idx === mentionSelectedIndex }"
-              :ref="(el) => setMentionOptionRef(el, idx)"
-              @mousedown.prevent="applyMentionSelection(option)"
-              @mouseenter="mentionSelectedIndex = idx"
-            >
-              <template v-if="option.type === 'device'">
-                <span class="rw-status-dot" :class="option.status === 'online' ? 'online' : 'offline'"></span>
-                <div class="rw-mention-meta">
-                  <div class="rw-mention-title">
-                    {{ option.name }}
-                    <span class="rw-mention-tag">{{ option.status === 'online' ? '在线' : '离线' }}</span>
-                  </div>
-                  <div class="rw-mention-sub">ID: {{ option.id }}</div>
-                </div>
-              </template>
-              <template v-else>
-                <span class="rw-mention-agent-ico">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>
-                </span>
-                <div class="rw-mention-meta">
-                  <div class="rw-mention-title">{{ option.name }}</div>
-                  <div class="rw-mention-sub">{{ option.description || '智能搜索重构包' }}</div>
-                </div>
-              </template>
-            </button>
-          </template>
-        </div>
-
         <!-- Target chip -->
         <div v-if="targetAgentName || targetDeviceName" class="rw-target-chip">
           <span class="rw-target-label">当前目标</span>
@@ -1161,10 +1043,9 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
           v-model="inputMessage"
           ref="textareaRef"
           class="rw-textarea"
-          placeholder="给 RavenAI 说点什么，或粘贴一段日志…（输入 @ 选择设备、重构包或日志分析）"
+          placeholder="给 RavenAI 说点什么，或粘贴一段日志…"
           rows="2"
           @keydown="handleKeydown"
-          @input="handleInput"
         ></textarea>
 
         <div class="rw-composer-row">
@@ -1194,6 +1075,60 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h16"/><circle cx="18" cy="12" r="1.4"/></svg>
             日志分析
           </button>
+          <div class="rw-device-wrap">
+            <button
+              ref="deviceMenuBtnRef"
+              class="rw-tool-chip"
+              :class="{ active: isDeviceSelected || deviceMenuVisible }"
+              type="button"
+              aria-haspopup="listbox"
+              :aria-expanded="deviceMenuVisible"
+              @click="toggleDeviceMenu"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="11" rx="1.5"/><path d="M8 21h8M12 17v4"/><circle cx="7" cy="11" r="0.4" fill="currentColor"/></svg>
+              设备操作
+              <svg class="rw-chip-caret" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div
+              v-if="deviceMenuVisible"
+              ref="deviceMenuRef"
+              class="rw-device-menu"
+              role="listbox"
+            >
+              <div class="rw-device-search">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+                <input
+                  v-model="deviceKeyword"
+                  type="text"
+                  placeholder="搜索设备名称或 ID…"
+                  @keydown.stop
+                />
+              </div>
+              <div v-if="isLoadingDevices" class="rw-device-empty">设备列表加载中…</div>
+              <div v-else-if="!filteredDeviceOptions.length" class="rw-device-empty">暂无匹配的设备</div>
+              <template v-else>
+                <button
+                  v-for="device in filteredDeviceOptions"
+                  :key="device.id"
+                  type="button"
+                  class="rw-device-row"
+                  :class="{ active: device.id === targetDeviceId }"
+                  role="option"
+                  :aria-selected="device.id === targetDeviceId"
+                  @click="selectDevice(device)"
+                >
+                  <span class="rw-status-dot" :class="device.status === 'online' ? 'online' : 'offline'"></span>
+                  <div class="rw-device-meta">
+                    <div class="rw-device-title">
+                      {{ device.name || device.id }}
+                      <span class="rw-device-tag">{{ device.status === 'online' ? '在线' : '离线' }}</span>
+                    </div>
+                    <div class="rw-device-sub">ID: {{ device.id }}</div>
+                  </div>
+                </button>
+              </template>
+            </div>
+          </div>
           <select
             v-if="isLogAnalysisAgentSelected"
             v-model="selectedProjectRepoId"
@@ -1603,25 +1538,32 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
   text-align: center; font-family: var(--rw-mono);
 }
 
-/* Mention */
-.rw-mention {
-  position: absolute; left: 14px; right: 14px;
-  bottom: calc(100% + 6px);
+/* Device operation dropdown */
+.rw-device-wrap { position: relative; display: inline-flex; }
+.rw-chip-caret { margin-left: 1px; opacity: .65; }
+.rw-device-menu {
+  position: absolute; left: 0;
+  bottom: calc(100% + 8px);
+  width: 280px; max-height: 300px; overflow: auto;
   background: var(--rw-canvas);
   border: 1px solid var(--rw-hairline-strong);
   border-radius: 12px;
-  max-height: 260px; overflow: auto;
   box-shadow: 0 12px 32px rgba(0,0,0,.12), 0 2px 6px rgba(0,0,0,.04);
   z-index: 30;
 }
-.rw-mention-head {
-  padding: 10px 14px; border-bottom: 1px solid var(--rw-hairline);
-  font-size: 12.5px; color: var(--rw-body);
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+.rw-device-search {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-bottom: 1px solid var(--rw-hairline);
+  color: var(--rw-muted);
+  position: sticky; top: 0; background: var(--rw-canvas); z-index: 1;
 }
-.rw-mention-hint { font-size: 11px; color: var(--rw-muted); }
-.rw-mention-empty { padding: 12px 14px; font-size: 12.5px; color: var(--rw-muted); }
-.rw-mention-row {
+.rw-device-search input {
+  flex: 1; min-width: 0; border: none; outline: none; background: transparent;
+  font-size: 12.5px; color: var(--rw-ink); font-family: var(--rw-sans);
+}
+.rw-device-search input::placeholder { color: var(--rw-muted); }
+.rw-device-empty { padding: 12px 14px; font-size: 12.5px; color: var(--rw-muted); }
+.rw-device-row {
   display: flex; align-items: center; gap: 10px;
   width: 100%; padding: 10px 14px;
   text-align: left;
@@ -1629,28 +1571,24 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
   background: none; border-left: none; border-right: none; border-top: none;
   cursor: pointer;
 }
-.rw-mention-row:last-child { border-bottom: none; }
-.rw-mention-row:hover, .rw-mention-row.active { background: var(--rw-hairline-soft); }
+.rw-device-row:last-child { border-bottom: none; }
+.rw-device-row:hover { background: var(--rw-hairline-soft); }
+.rw-device-row.active { background: var(--rw-surface-strong); }
 .rw-status-dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; }
 .rw-status-dot.online { background: var(--rw-success); }
 .rw-status-dot.offline { background: var(--rw-muted-soft); }
-.rw-mention-agent-ico {
-  width: 28px; height: 28px; border-radius: 8px;
-  background: var(--rw-surface-strong); color: var(--rw-ink);
-  display: grid; place-items: center; flex-shrink: 0;
-}
-.rw-mention-meta { flex: 1; min-width: 0; }
-.rw-mention-title {
+.rw-device-meta { flex: 1; min-width: 0; }
+.rw-device-title {
   font-size: 13.5px; font-weight: 600; color: var(--rw-ink);
   display: flex; align-items: center; gap: 6px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.rw-mention-tag {
+.rw-device-tag {
   font-family: var(--rw-mono); font-size: 10.5px;
   text-transform: uppercase; color: var(--rw-muted);
   font-weight: 500;
 }
-.rw-mention-sub { font-size: 12px; color: var(--rw-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rw-device-sub { font-size: 12px; color: var(--rw-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Target chip */
 .rw-target-chip {
@@ -1673,15 +1611,15 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
 
 /* Scrollbar */
 .rw-scroll::-webkit-scrollbar,
-.rw-mention::-webkit-scrollbar { width: 10px; height: 10px; }
+.rw-device-menu::-webkit-scrollbar { width: 10px; height: 10px; }
 .rw-scroll::-webkit-scrollbar-track,
-.rw-mention::-webkit-scrollbar-track { background: transparent; }
+.rw-device-menu::-webkit-scrollbar-track { background: transparent; }
 .rw-scroll::-webkit-scrollbar-thumb,
-.rw-mention::-webkit-scrollbar-thumb {
+.rw-device-menu::-webkit-scrollbar-thumb {
   background: #e6e6ea; border-radius: 999px; border: 2px solid var(--rw-canvas);
 }
 .rw-scroll::-webkit-scrollbar-thumb:hover,
-.rw-mention::-webkit-scrollbar-thumb:hover { background: var(--rw-muted-soft); }
+.rw-device-menu::-webkit-scrollbar-thumb:hover { background: var(--rw-muted-soft); }
 
 /* DeviceAgent HITL modal */
 .rw-hitl-backdrop {
