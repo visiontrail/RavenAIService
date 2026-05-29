@@ -25,7 +25,12 @@ const runsStore = useConversationRunsStore()
 const runningSessionIds = computed(() => {
   const ids = new Set<string>()
   for (const s of sessionStore.sessions) {
-    if (s.run_status === 'running') ids.add(s.id)
+    const localState = runsStore.bySession[s.id]
+    const locallyFinished =
+      localState &&
+      !localState.isSending &&
+      ['succeeded', 'failed', 'cancelled', 'stale'].includes(localState.runStatus)
+    if (s.run_status === 'running' && !locallyFinished) ids.add(s.id)
   }
   for (const id of runsStore.localRunningSessionIds) ids.add(id)
   return ids
@@ -414,11 +419,13 @@ const handleUserLogout = () => {
               <span class="rw-chat-row-text">{{ session.title || '未命名对话' }}</span>
               <span
                 v-if="isSessionRunning(session.id)"
-                class="rw-row-spinner"
-                title="正在运行"
-                aria-label="正在运行"
+                class="rw-row-thinking"
+                title="正在思考"
+                aria-label="正在思考"
               >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+                <span></span>
+                <span></span>
+                <span></span>
               </span>
               <button
                 class="rw-row-more"
@@ -783,15 +790,23 @@ const handleUserLogout = () => {
 .rw-row-more.visible { visibility: visible; }
 .rw-row-more:hover { background: var(--rw-hairline-strong); }
 
-.rw-row-spinner {
-  display: inline-grid; place-items: center;
+.rw-row-thinking {
+  display: inline-flex; align-items: center; justify-content: center; gap: 2px;
   width: 16px; height: 16px;
   color: var(--rw-muted);
   flex-shrink: 0;
-  animation: rw-row-spin 1s linear infinite;
 }
-.rw-row-spinner svg { display: block; }
-@keyframes rw-row-spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+.rw-row-thinking span {
+  width: 3px; height: 3px; border-radius: 999px;
+  background: currentColor;
+  animation: rw-row-thinking-dot 1.05s ease-in-out infinite;
+}
+.rw-row-thinking span:nth-child(2) { animation-delay: .14s; }
+.rw-row-thinking span:nth-child(3) { animation-delay: .28s; }
+@keyframes rw-row-thinking-dot {
+  0%, 72%, 100% { opacity: .35; transform: translateY(0); }
+  36% { opacity: 1; transform: translateY(-2px); }
+}
 
 .rw-row-menu {
   position: absolute; top: 100%; right: 4px; margin-top: 2px;

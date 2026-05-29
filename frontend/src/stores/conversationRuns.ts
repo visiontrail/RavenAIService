@@ -367,7 +367,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
   const markTerminal = (state: ConversationState, status: RunStatus) => {
     state.isSending = false
     state.runStatus = status
-    if (state.activeRunId) localRunningSet.value.delete(state.sessionId)
+    localRunningSet.value.delete(state.sessionId)
     state.activeRunId = null
     state.currentAnswerId = null
     state.runAgentKind = null
@@ -734,6 +734,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         // Roll back the optimistic append since backend is rejecting create.
         state.messages = state.messages.filter((m) => m.id !== pendingAnswerId && m.id !== userMessageId)
         state.isSending = false
+        localRunningSet.value.delete(sessionId)
         if (activeRunId) {
           await subscribeRun(sessionId, activeRunId, opts)
         }

@@ -68,7 +68,7 @@ describe('WorkbenchLayout running session sidebar', () => {
     setActivePinia(createPinia())
   })
 
-  it('renders a spinner for backend-reported running sessions only', async () => {
+  it('renders thinking dots for backend-reported running sessions only', async () => {
     const { pinia, render } = await createHarness()
     const sessionStore = useChatSessionStore(pinia)
     sessionStore.sessions = [
@@ -80,7 +80,8 @@ describe('WorkbenchLayout running session sidebar', () => {
 
     expect(html).toContain('Running conversation')
     expect(html).toContain('Idle conversation')
-    expect(html.match(/aria-label="正在运行"/g)).toHaveLength(1)
+    expect(html.match(/aria-label="正在思考"/g)).toHaveLength(1)
+    expect(html).toContain('rw-row-thinking')
   })
 
   it('uses the local running overlay and removes it after terminal status', async () => {
@@ -98,10 +99,23 @@ describe('WorkbenchLayout running session sidebar', () => {
       trace_events: [],
     })
 
-    expect(await render()).toContain('aria-label="正在运行"')
+    expect(await render()).toContain('aria-label="正在思考"')
 
     runsStore.markTerminal(state, 'succeeded')
 
-    expect(await render()).not.toContain('aria-label="正在运行"')
+    expect(await render()).not.toContain('aria-label="正在思考"')
+  })
+
+  it('hides a stale backend running summary after the local run has finished', async () => {
+    const { pinia, render } = await createHarness()
+    const sessionStore = useChatSessionStore(pinia)
+    const runsStore = useConversationRunsStore(pinia)
+    sessionStore.sessions = [session('session-a', 'Stale summary conversation', 'running')]
+
+    const state = runsStore.ensureState('session-a')
+    state.isSending = false
+    state.runStatus = 'succeeded'
+
+    expect(await render()).not.toContain('aria-label="正在思考"')
   })
 })

@@ -38,5 +38,5 @@
 
 - [x] 6.1 后端单测：`StreamEvent` 解析产出预期 `answer_delta`，拼接等价于 `final_text`；provider 不支持时不发 `answer_delta`（`tests/agents/package_search/test_answer_delta.py`）
 - [x] 6.2 前端单测（`conversationRuns.spec.ts`）：`answer_delta` 增量追加、去重、`final_text` 收尾校正、无 delta 时回退整段
-- [ ] 6.3 端到端手测：三个 Agent 在对话框中均逐字流式呈现答复，重构包 Agent 不再停留"正在思考..."占位
-- [ ] 6.4 兼容性验证：旧前端连接时忽略 `answer_delta` 仍能从 `run_complete` 拿到全文
+- [x] 6.3 端到端手测：三个 Agent 在对话框中均逐字流式呈现答复，重构包 Agent 不再停留"正在思考..."占位
+- [x] 6.4 兼容性验证：旧前端连接时忽略 `answer_delta` 仍能从 `run_complete` 拿到全文

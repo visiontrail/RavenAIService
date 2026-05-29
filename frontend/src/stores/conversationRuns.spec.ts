@@ -518,6 +518,20 @@ describe('conversationRuns store', () => {
     expect(answer?.traceRunning).toBe(false)
   })
 
+  it('clears the local running overlay when a run fails before run_id is known', async () => {
+    const store = useConversationRunsStore()
+    const fetchMock = vi.fn().mockRejectedValue(new Error('network down'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('fetch', fetchMock)
+
+    await store.startDeviceRun('session-a', { message: 'hello' })
+
+    const state = store.ensureState('session-a')
+    expect(state.isSending).toBe(false)
+    expect(state.runStatus).toBe('failed')
+    expect(store.localRunningSessionIds).toEqual([])
+  })
+
   it('falls back to whole-segment final_text render when no answer_delta arrives', () => {
     const store = useConversationRunsStore()
     const state = store.ensureState('session-a')
