@@ -4,6 +4,10 @@ import type { RouteRecordRaw } from 'vue-router'
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
+    redirect: '/workbench',
+  },
+  {
+    path: '/',
     component: () => import('../layouts/WorkbenchLayout.vue'),
     children: [
       {

@@ -51,8 +51,10 @@
       />
 
       <div v-if="running && cards.length === 0" class="agent-trace__placeholder">
-        <Loader2 class="agent-trace__placeholder-icon" />
-        <span>Agent 启动中…</span>
+        <span class="agent-trace__placeholder-label">思考中</span>
+        <span class="agent-trace__placeholder-dots" aria-hidden="true">
+          <span /><span /><span />
+        </span>
       </div>
 
       <div v-if="running && props.onCancel" class="agent-trace__actions">
@@ -71,7 +73,7 @@
 
 <script setup lang="ts">
 import { computed, ref, toRef, watch } from 'vue'
-import { AlertTriangle, Ban, Check, ChevronDown, Loader2 } from 'lucide-vue-next'
+import { AlertTriangle, Ban, Check, ChevronDown } from 'lucide-vue-next'
 import type { AgentTraceEvent, TraceSummary } from '@/types/agentTrace'
 import { useAgentTraceStream } from '@/composables/useAgentTraceStream'
 import { useToolDisplayName, type ToolNameMap } from '@/composables/useToolDisplayName'
@@ -262,20 +264,38 @@ const summaryLine = computed(() => {
 .agent-trace__placeholder {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   color: var(--el-text-color-secondary, #6b7280);
   font-size: 13px;
   padding: 6px 4px;
 }
 
-.agent-trace__placeholder-icon {
-  width: 14px;
-  height: 14px;
-  animation: agent-trace-spin 0.9s linear infinite;
+.agent-trace__placeholder-label {
+  font-weight: 500;
 }
 
-@keyframes agent-trace-spin {
-  to { transform: rotate(360deg); }
+.agent-trace__placeholder-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.agent-trace__placeholder-dots span {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background-color: currentColor;
+  animation: agent-trace-bounce 1.2s ease-in-out infinite;
+}
+
+.agent-trace__placeholder-dots span:nth-child(1) { animation-delay: 0s; }
+.agent-trace__placeholder-dots span:nth-child(2) { animation-delay: 0.2s; }
+.agent-trace__placeholder-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes agent-trace-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-4px); opacity: 1; }
 }
 
 .agent-trace__actions {
