@@ -138,6 +138,7 @@ def build_options(
     system_prompt: str,
     allowed_tools: List[str],
     cwd: str,
+    disallowed_tools: Optional[List[str]] = None,
     max_turns: Optional[int] = None,
     permission_mode: Optional[str] = None,
     add_dirs: Optional[List[str]] = None,
@@ -283,6 +284,9 @@ def build_options(
             "ANTHROPIC_BASE_URL": effective_base_url,
         },
     }
+
+    if disallowed_tools:
+        options_kwargs["disallowed_tools"] = list(disallowed_tools)
 
     if add_dirs:
         options_kwargs["add_dirs"] = add_dirs

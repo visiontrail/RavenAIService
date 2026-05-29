@@ -39,6 +39,19 @@ def _fake_query_factory(answer_text: str):
     return _q
 
 
+def _fake_query_turn_limit_factory(partial_text: str):
+    """Yield some text, then raise the SDK's max-turns error (recoverable)."""
+
+    async def _q(*, prompt, options):  # noqa: ARG001
+        if partial_text:
+            yield _FakeAssistantMessage(partial_text)
+        raise Exception(
+            "Claude Code returned an error result: Reached maximum number of turns (4)"
+        )
+
+    return _q
+
+
 # ─────────────────────── _format_history_block ────────────────────
 
 
@@ -121,6 +134,52 @@ async def test_run_returns_tuple(monkeypatch):
     assert final_text == "回答内容"
     assert model == "test-model"
     assert len(events) == 2
+
+
+@pytest.mark.asyncio
+async def test_run_stream_recovers_from_turn_limit(monkeypatch):
+    """达到最大轮次时不应整体失败，应回退到已产出的文本。"""
+    fake_query = _fake_query_turn_limit_factory("根据已了解的信息，部分回答如下…")
+
+    monkeypatch.setattr("claude_agent_sdk.query", fake_query)
+    monkeypatch.setattr("app.config.settings.anthropic_provider", "anthropic")
+    monkeypatch.setattr("app.config.settings.anthropic_api_key", "sk-test")
+    monkeypatch.setattr("app.config.settings.anthropic_small_fast_model", "test-model")
+
+    ctx = GeneralAgentContext(session_id="sess-general-3", user_message="一个技术问题")
+
+    events: List[Dict[str, Any]] = []
+    async for ev in GeneralAgent().run_stream(ctx):
+        events.append(ev)
+
+    types = [e["type"] for e in events]
+    assert "error" not in types
+    assert types[-1] == "run_complete"
+    assert "部分回答" in events[-1]["final_text"]
+
+
+@pytest.mark.asyncio
+async def test_run_stream_turn_limit_uses_fallback_when_empty(monkeypatch):
+    """达到最大轮次且无有效文本时，使用兜底引导回答。"""
+    fake_query = _fake_query_turn_limit_factory("")
+
+    monkeypatch.setattr("claude_agent_sdk.query", fake_query)
+    monkeypatch.setattr("app.config.settings.anthropic_provider", "anthropic")
+    monkeypatch.setattr("app.config.settings.anthropic_api_key", "sk-test")
+    monkeypatch.setattr("app.config.settings.anthropic_small_fast_model", "test-model")
+
+    ctx = GeneralAgentContext(session_id="sess-general-4", user_message="不相关的通用问题")
+
+    events: List[Dict[str, Any]] = []
+    async for ev in GeneralAgent().run_stream(ctx):
+        events.append(ev)
+
+    types = [e["type"] for e in events]
+    assert "error" not in types
+    assert types[-1] == "run_complete"
+    final = events[-1]["final_text"]
+    assert "系统使用助手" in final
+    assert "日志分析" in final
 
 
 @pytest.mark.asyncio

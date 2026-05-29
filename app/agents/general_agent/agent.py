@@ -43,6 +43,50 @@ SYSTEM_PROMPT = """\
 # Sentinel pushed into the event queue to signal "no more events".
 _SENTINEL: Any = object()
 
+# 这是一个纯对话 Agent，不应使用任何工具。但 claude-agent-sdk 的 ``allowed_tools``
+# 只是「自动批准」列表，并不会限制内置工具的可用性；叠加 ``bypassPermissions`` 后，
+# CLI 自带的 Read/Bash/Grep 等工具仍可被模型调用。面对不相关的技术问题时，模型会
+# 反复尝试用工具「检索/求证」，直至耗尽 max_turns 并由 SDK 抛错。故显式禁用全部内置
+# 工具，使其只能直接以文本作答（单轮完成）。
+_DISABLED_TOOLS: List[str] = [
+    "Bash",
+    "BashOutput",
+    "KillBash",
+    "Edit",
+    "MultiEdit",
+    "Write",
+    "Read",
+    "NotebookEdit",
+    "NotebookRead",
+    "Glob",
+    "Grep",
+    "LS",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+    "TodoWrite",
+    "ExitPlanMode",
+]
+
+# 当模型未能产出有效文本（例如仍触达轮次上限）时使用的兜底回答。
+_FALLBACK_ANSWER = (
+    "我是 Raven AI 的系统使用助手，主要帮助你了解和使用本系统的各项功能。"
+    "你的问题可能超出了系统使用范围，或需要更专门的能力支持：\n"
+    "- 如需进行设备操作，请选择「设备操作」功能。\n"
+    "- 如需进行日志分析，请选择「日志分析」功能。\n"
+    "- 如需查询包信息，请选择「检索包」功能。\n"
+    "请告诉我你想了解的系统功能，我会尽力帮助你。"
+)
+
+
+def _is_recoverable_turn_limit(exc: Exception) -> bool:
+    """SDK 因达到最大轮次而抛出的「错误结果」属于可恢复情况。
+
+    这类场景下模型通常已生成部分文本，应当回退到已收集内容而非整体失败。
+    """
+    msg = str(exc).lower()
+    return "maximum number of turns" in msg or "max turns" in msg
+
 
 @dataclass
 class GeneralAgentContext:
@@ -151,11 +195,13 @@ class GeneralAgent:
             getattr(settings, "anthropic_small_fast_request_timeout_seconds", 30)
         )
 
+        answer_text = ""
         try:
             with tempfile.TemporaryDirectory(prefix="general-agent-") as tmpdir:
                 options = build_options(
                     system_prompt=system_prompt,
                     allowed_tools=[],
+                    disallowed_tools=_DISABLED_TOOLS,
                     cwd=tmpdir,
                     max_turns=4,
                     permission_mode="bypassPermissions",
@@ -164,15 +210,24 @@ class GeneralAgent:
                     request_timeout_seconds=timeout_s,
                 )
 
+                # 收集到外层列表，确保即便 SDK 在中途抛错也能保留已产出的消息。
                 collected: list[Any] = []
 
-                async def _drive() -> list[Any]:
-                    msgs: list[Any] = []
+                async def _drive() -> None:
                     async for message in sdk_query(prompt=user_prompt, options=options):
-                        msgs.append(message)
-                    return msgs
+                        collected.append(message)
 
-                collected = await asyncio.wait_for(_drive(), timeout=max(timeout_s + 5, 10))
+                try:
+                    await asyncio.wait_for(_drive(), timeout=max(timeout_s + 5, 10))
+                except Exception as exc:  # noqa: BLE001
+                    # 达到最大轮次属于可恢复：回退到已收集到的文本，避免整体失败。
+                    if _is_recoverable_turn_limit(exc):
+                        logger.warning(
+                            "GeneralAgent: SDK 达到最大轮次，回退到已生成文本: %s", exc
+                        )
+                    else:
+                        raise
+
                 answer_text = _extract_text_from_messages(collected)
 
         except AnthropicConfigurationError as exc:
@@ -200,6 +255,12 @@ class GeneralAgent:
                 "message": str(exc),
             }
             return
+
+        if not answer_text.strip():
+            logger.warning(
+                "GeneralAgent: 模型未产出有效文本，使用兜底回答 (session=%s)", session_id
+            )
+            answer_text = _FALLBACK_ANSWER
 
         yield {
             "type": "run_complete",
