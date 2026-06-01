@@ -242,6 +242,10 @@ watch(isLoggedIn, async (loggedIn) => {
   }
 })
 
+watch(() => appStore.loginModalRequest, (val) => {
+  if (val.seq > 0) openAuthModal(val.mode)
+})
+
 const handleSelectSession = (session: ChatSessionSummary) => {
   openRowMenuId.value = null
   sessionStore.selectSession(session.id)

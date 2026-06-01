@@ -30,6 +30,7 @@ const isAuthenticated = ref(false)
 const isLoggingIn = ref(false)
 const loadingReleases = ref(false)
 const releases = ref<ReleaseItem[]>([])
+const releaseLoadError = ref('')
 const deletingId = ref('')
 const uploadDialogVisible = ref(false)
 const uploading = ref(false)
@@ -53,6 +54,11 @@ const parseErrorMessage = (err: any): string => {
   if (err?.response?.data?.message) return err.response.data.message
   if (err?.message) return err.message
   return '操作失败'
+}
+
+const normalizeReleaseList = (data: unknown): ReleaseItem[] => {
+  if (Array.isArray(data)) return data as ReleaseItem[]
+  return []
 }
 
 const formatBytes = (bytes: number): string => {
@@ -104,12 +110,16 @@ const toggleNavVisibility = () => appStore.toggleAdminSidebar()
 const fetchReleases = async () => {
   if (!isAuthenticated.value) return
   loadingReleases.value = true
+  releaseLoadError.value = ''
   try {
     const resp = await releasesAdminApi.list()
     if (!resp?.success) throw new Error(resp?.message || '获取列表失败')
-    releases.value = resp.data || []
+    releases.value = normalizeReleaseList(resp.data)
   } catch (err: any) {
-    appStore.showNotification({ title: '加载失败', message: parseErrorMessage(err), type: 'error' })
+    const message = parseErrorMessage(err)
+    releaseLoadError.value = message
+    releases.value = []
+    appStore.showNotification({ title: '加载失败', message, type: 'error' })
   } finally {
     loadingReleases.value = false
   }
@@ -335,7 +345,10 @@ onMounted(() => bootstrap())
           <div class="flex items-center justify-between">
             <div>
               <h2 class="text-lg font-semibold text-slate-900">App Release 列表</h2>
-              <p class="text-sm text-slate-500 mt-0.5">管理各平台安装包的上传与发布</p>
+              <p v-if="releaseLoadError" class="text-sm text-rose-600 mt-0.5">
+                {{ releaseLoadError }}
+              </p>
+              <p v-else class="text-sm text-slate-500 mt-0.5">管理各平台安装包的上传与发布</p>
             </div>
             <div class="flex items-center gap-2">
               <button
@@ -359,69 +372,87 @@ onMounted(() => bootstrap())
 
         <!-- Platform Groups -->
         <div
-          v-for="platform in ['linux', 'macos', 'windows']"
-          :key="platform"
-          class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"
+          v-if="releaseLoadError"
+          class="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 text-center"
         >
-          <div class="platform-header flex items-center gap-3 px-5 py-3 border-b border-slate-100">
-            <span class="text-xl">{{ PLATFORM_ICONS[platform] }}</span>
-            <div>
-              <span class="font-semibold text-slate-900">{{ PLATFORM_LABELS[platform] }}</span>
-              <span class="ml-2 text-xs text-slate-500">{{ groupedReleases[platform].length }} 个版本</span>
+          <h3 class="text-base font-semibold text-slate-900">Release 内容暂时无法加载</h3>
+          <p class="text-sm text-slate-500 mt-2">{{ releaseLoadError }}</p>
+          <button
+            class="mt-4 px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition"
+            :disabled="loadingReleases"
+            @click="fetchReleases"
+          >
+            <RefreshCw :size="15" />
+            <span>{{ loadingReleases ? '同步中…' : '重新加载' }}</span>
+          </button>
+        </div>
+
+        <template v-else>
+          <div
+            v-for="platform in ['linux', 'macos', 'windows']"
+            :key="platform"
+            class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"
+          >
+            <div class="platform-header flex items-center gap-3 px-5 py-3 border-b border-slate-100">
+              <span class="text-xl">{{ PLATFORM_ICONS[platform] }}</span>
+              <div>
+                <span class="font-semibold text-slate-900">{{ PLATFORM_LABELS[platform] }}</span>
+                <span class="ml-2 text-xs text-slate-500">{{ groupedReleases[platform].length }} 个版本</span>
+              </div>
+            </div>
+
+            <div v-if="!groupedReleases[platform].length" class="px-5 py-8 text-center text-sm text-slate-400">
+              暂无 {{ PLATFORM_LABELS[platform] }} 版本，点击右上角"上传 Release"添加
+            </div>
+
+            <div v-else class="release-table-wrapper overflow-x-auto">
+              <table class="min-w-full text-sm text-slate-700">
+                <thead>
+                  <tr class="border-b border-slate-100 bg-slate-50">
+                    <th class="py-2.5 pl-5 pr-4 text-left font-semibold text-slate-600">版本</th>
+                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">文件名</th>
+                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">大小</th>
+                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">下载数</th>
+                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">上传时间</th>
+                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">备注</th>
+                    <th class="py-2.5 pr-5 text-left font-semibold text-slate-600">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="item in groupedReleases[platform]"
+                    :key="item.id"
+                    class="border-b border-slate-50 hover:bg-slate-50/60 transition-colors"
+                  >
+                    <td class="py-3 pl-5 pr-4 font-medium text-slate-900">
+                      <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-cyan-50 text-cyan-700 text-xs font-semibold border border-cyan-100">
+                        v{{ item.version }}
+                      </span>
+                    </td>
+                    <td class="py-3 pr-4 text-slate-600 font-mono text-xs max-w-[200px] truncate" :title="item.filename">
+                      {{ item.filename }}
+                    </td>
+                    <td class="py-3 pr-4 text-slate-500">{{ formatBytes(item.file_size) }}</td>
+                    <td class="py-3 pr-4 text-slate-500">{{ item.download_count }}</td>
+                    <td class="py-3 pr-4 text-slate-500 whitespace-nowrap">{{ formatTimestamp(item.created_at) }}</td>
+                    <td class="py-3 pr-4 text-slate-400 text-xs max-w-[160px] truncate" :title="item.description || ''">
+                      {{ item.description || '—' }}
+                    </td>
+                    <td class="py-3 pr-5">
+                      <button
+                        class="text-xs px-3 py-1 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-50 transition"
+                        :disabled="deletingId === item.id"
+                        @click="deleteRelease(item)"
+                      >
+                        {{ deletingId === item.id ? '删除中…' : '删除' }}
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
-
-          <div v-if="!groupedReleases[platform].length" class="px-5 py-8 text-center text-sm text-slate-400">
-            暂无 {{ PLATFORM_LABELS[platform] }} 版本，点击右上角"上传 Release"添加
-          </div>
-
-          <div v-else class="release-table-wrapper overflow-x-auto">
-            <table class="min-w-full text-sm text-slate-700">
-              <thead>
-                <tr class="border-b border-slate-100 bg-slate-50">
-                  <th class="py-2.5 pl-5 pr-4 text-left font-semibold text-slate-600">版本</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">文件名</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">大小</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">下载数</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">上传时间</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">备注</th>
-                  <th class="py-2.5 pr-5 text-left font-semibold text-slate-600">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="item in groupedReleases[platform]"
-                  :key="item.id"
-                  class="border-b border-slate-50 hover:bg-slate-50/60 transition-colors"
-                >
-                  <td class="py-3 pl-5 pr-4 font-medium text-slate-900">
-                    <span class="inline-flex items-center px-2 py-0.5 rounded-full bg-cyan-50 text-cyan-700 text-xs font-semibold border border-cyan-100">
-                      v{{ item.version }}
-                    </span>
-                  </td>
-                  <td class="py-3 pr-4 text-slate-600 font-mono text-xs max-w-[200px] truncate" :title="item.filename">
-                    {{ item.filename }}
-                  </td>
-                  <td class="py-3 pr-4 text-slate-500">{{ formatBytes(item.file_size) }}</td>
-                  <td class="py-3 pr-4 text-slate-500">{{ item.download_count }}</td>
-                  <td class="py-3 pr-4 text-slate-500 whitespace-nowrap">{{ formatTimestamp(item.created_at) }}</td>
-                  <td class="py-3 pr-4 text-slate-400 text-xs max-w-[160px] truncate" :title="item.description || ''">
-                    {{ item.description || '—' }}
-                  </td>
-                  <td class="py-3 pr-5">
-                    <button
-                      class="text-xs px-3 py-1 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-50 transition"
-                      :disabled="deletingId === item.id"
-                      @click="deleteRelease(item)"
-                    >
-                      {{ deletingId === item.id ? '删除中…' : '删除' }}
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
+        </template>
       </section>
     </main>
 

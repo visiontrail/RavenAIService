@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.users import get_optional_user
+from app.api.users import get_current_user, get_optional_user
 from app.models.chat import ChatRequest, ChatResponse
 from app.models.database import get_db
 from app.services.ai_chat_service import ai_chat_service
@@ -76,7 +76,7 @@ logger = logging.getLogger(__name__)
 async def chat_endpoint(
     request: ChatRequest,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_optional_user),
+    current_user=Depends(get_current_user),
 ) -> ChatResponse:
     logger.info("=" * 80)
     logger.info("接收到 AI 对话请求")
@@ -98,7 +98,7 @@ async def chat_stream_endpoint(
     request: ChatRequest,
     http_request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_optional_user),
+    current_user=Depends(get_current_user),
 ):
     """Create a new agent run or subscribe to the session's active run.
 
@@ -462,7 +462,7 @@ async def log_analysis_stream_endpoint(
     ),
     file: Optional[UploadFile] = File(None, description="可选日志包附件"),
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_optional_user),
+    current_user=Depends(get_current_user),
 ):
     logger.info("=" * 80)
     logger.info("接收到主对话日志分析请求")
@@ -542,7 +542,7 @@ async def project_expert_stream_endpoint(
         description="项目仓库注册表 ID。新会话必填，用作权威项目身份来源。",
     ),
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_optional_user),
+    current_user=Depends(get_current_user),
 ):
     logger.info("=" * 80)
     logger.info("接收到主对话项目专家请求")

@@ -40,6 +40,10 @@ PROMPT_FUNCTION_META: Dict[str, Dict[str, str]] = {
         "name": "设备对话",
         "description": "Claude Agent SDK 驱动的设备联动对话提示词",
     },
+    "claude_agent_project_expert": {
+        "name": "项目专家",
+        "description": "Claude Agent SDK 驱动的项目源码问答提示词",
+    },
     "chat": {
         "name": "AI 对话",
         "description": "AI 对话相关提示词",
@@ -54,6 +58,10 @@ PROMPT_AGENT_META: Dict[Tuple[str, str], Dict[str, str]] = {
     ("claude_agent_device", "default"): {
         "name": "默认设备对话 Agent",
         "description": "面向已链接设备的通用对话场景，模型直接选择设备 MCP 工具与参数",
+    },
+    ("claude_agent_project_expert", "generic"): {
+        "name": "通用项目专家 Agent",
+        "description": "面向已登记项目的源码答疑场景，按用户选择的项目仓库克隆代码并回答问题",
     },
 }
 
@@ -223,6 +231,14 @@ def _invalidate_prompt_caches() -> None:
         from app.agents.device_agent import prompts as device_agent_prompts
 
         device_agent_prompts.reset_cache()
+    except Exception:
+        pass
+    # Same for the project expert agent prompt cache.
+    try:
+        from app.agents.project_expert import prompts as project_expert_prompts
+
+        if hasattr(project_expert_prompts, "_PROMPTS_CACHE"):
+            project_expert_prompts._PROMPTS_CACHE.clear()  # type: ignore[attr-defined]
     except Exception:
         pass
 

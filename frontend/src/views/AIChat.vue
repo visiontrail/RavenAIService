@@ -515,6 +515,7 @@ const logAnalysisMetadataError = computed(() =>
 )
 
 const sendDisabled = computed(() =>
+  !isLoggedIn.value ||
   isSending.value ||
   (!inputMessage.value.trim() && !selectedLogFile.value) ||
   isProjectRepoRequiredMissing.value ||
@@ -922,6 +923,10 @@ const triggerSessionSummary = (userContent: string, sid: string | null) => {
 }
 
 const sendMessage = async () => {
+  if (!isLoggedIn.value) {
+    appStore.requestLoginModal('login')
+    return
+  }
   // Only block the current session — other sessions running in the
   // background do not affect this one.
   if (currentConversation.value?.isSending) return
@@ -1080,21 +1085,58 @@ const welcomeGreeting = computed(() => {
   return '晚上好'
 })
 
-const capabilityCards = [
-  { icon: 'box', label: '检索重构包',
+type CapabilityCard = {
+  icon: string
+  label: string
+  kind: 'package' | 'device' | 'log'
+  desc: string
+  // 多个同义不同表达，重复点击时循环切换，引导用户填写自己的场景
+  prompts: string[]
+}
+
+const capabilityCards: CapabilityCard[] = [
+  { icon: 'box', label: '检索重构包', kind: 'package',
     desc: '按版本、组件或修复内容找到正确的基带包，并对比 changelog。',
-    prompt: '帮我找一下 V3.2.1 之后修过 LDPC 译码器的基带包。' },
-  { icon: 'device', label: '自然语言控设备',
+    prompts: [
+      '帮我找一个基带包，具体需求是……',
+      '我想检索一个重构包，筛选条件是……',
+      '帮我定位某个版本的基带包，要求是……',
+    ] },
+  { icon: 'device', label: '自然语言控设备', kind: 'device',
     desc: '说人话即可下发参数；下发前会展示差异并请你确认。',
-    prompt: '把 SAT-Node-07 切到 LDPC 闭环回环模式，码率 1/2。' },
-  { icon: 'logs', label: '智能日志分析',
+    prompts: [
+      '帮我把某台设备调整一下，目标状态是……',
+      '我想给设备下发一组参数，具体是……',
+      '请帮我配置一台设备，需求是……',
+    ] },
+  { icon: 'logs', label: '智能日志分析', kind: 'log',
     desc: '粘贴或上传日志，自动定位异常并给出回流建议。',
-    prompt: '分析一下这段失锁告警日志，看看根因和相关提交。' },
+    prompts: [
+      '请分析这个日志包，具体现象是……',
+      '帮我看看这份日志哪里出了问题，现象是……',
+      '这段日志麻烦你诊断一下，表现为……',
+    ] },
 ]
 
-const onPickCapability = (prompt: string) => {
-  inputMessage.value = prompt
-  if (prompt.includes('日志')) setTargetAgent(logAnalysisAgentOption)
+// 记录每张卡片当前展示到第几条表达，重复点击则推进到下一条
+const capabilityVariantIdx: number[] = capabilityCards.map(() => -1)
+// 上次由卡片自动填入的原文，用于判断输入框是否被用户改动过
+const lastInjectedPrompt = ref('')
+
+const onPickCapability = (card: CapabilityCard, i: number) => {
+  if (card.kind === 'log') setTargetAgent(logAnalysisAgentOption)
+  else if (card.kind === 'package') setTargetAgent(packageAgentOption)
+  // 设备操作走独立下拉，不在 AgentOption 体系内，故清除已选中的任何 Agent
+  else clearTargetAgent()
+
+  // 仅当输入框为空、或仍是上次自动填入的原文时才覆盖/循环；用户已改动则保留其内容
+  const untouched = inputMessage.value === '' || inputMessage.value === lastInjectedPrompt.value
+  if (untouched) {
+    const next = (capabilityVariantIdx[i] + 1) % card.prompts.length
+    capabilityVariantIdx[i] = next
+    inputMessage.value = card.prompts[next]
+    lastInjectedPrompt.value = card.prompts[next]
+  }
   nextTick(() => textareaRef.value?.focus())
 }
 
@@ -1198,7 +1240,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             v-for="(c, i) in capabilityCards"
             :key="i"
             class="rw-cap-card"
-            @click="onPickCapability(c.prompt)"
+            @click="onPickCapability(c, i)"
           >
             <div class="rw-cap-label">
               <svg v-if="c.icon === 'logs'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h16"/><circle cx="18" cy="12" r="1.4"/></svg>
@@ -1256,6 +1298,16 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
 
     <!-- Composer -->
     <div class="rw-composer-wrap">
+      <!-- 未登录提示 -->
+      <div v-if="!isLoggedIn" class="rw-composer-alert is-login">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+        <span>
+          AI 功能需要登录后才能使用。
+          <button type="button" class="rw-alert-link" @click="appStore.requestLoginModal('login')">立即登录</button>
+          或
+          <button type="button" class="rw-alert-link" @click="appStore.requestLoginModal('register')">注册账户</button>
+        </span>
+      </div>
       <!-- Log analysis inline warnings — placed above the composer so the input
            box, tool chips and project dropdown stay anchored to the bottom and
            do not shift under the cursor when an alert appears/disappears. -->
@@ -1321,9 +1373,11 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
           v-model="inputMessage"
           ref="textareaRef"
           class="rw-textarea"
-          placeholder="给 RavenAI 说点什么，或粘贴一段日志…"
+          :placeholder="isLoggedIn ? '给 RavenAI 说点什么，或粘贴一段日志…' : '请先登录后再使用 AI 功能'"
           rows="2"
+          :readonly="!isLoggedIn"
           @keydown="handleKeydown"
+          @click="!isLoggedIn && appStore.requestLoginModal('login')"
         ></textarea>
 
         <div class="rw-composer-row">
@@ -1891,6 +1945,13 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
 }
 .rw-composer-alert.is-suggest .rw-alert-link {
   font-weight: 600; margin-left: 2px;
+}
+.rw-composer-alert.is-login {
+  background: #f5f3ff; color: #4c1d95;
+  border: 1px solid #c4b5fd;
+}
+.rw-composer-alert.is-login .rw-alert-link {
+  font-weight: 600;
 }
 .rw-composer-alert code {
   font-family: var(--rw-mono); font-size: 11.5px;

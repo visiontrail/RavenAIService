@@ -11,8 +11,8 @@ const envLogBase =
     ? ((globalThis as any).__VITE_API_BASE_URL__ as string | undefined)
     : undefined)
 const computedBaseURL =
-  normalizeBase(runtimeLogBase) ||
   normalizeBase(envLogBase) ||
+  normalizeBase(runtimeLogBase) ||
   normalizeBase(defaultBase)
 
 export const API_BASE_URL = computedBaseURL

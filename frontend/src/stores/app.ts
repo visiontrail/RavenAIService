@@ -9,6 +9,8 @@ export const useAppStore = defineStore('app', () => {
   const loading = ref(false)
   const notifications = ref<(NotificationOptions & { id: string })[]>([])
   const adminSidebarVisible = ref(getInitialAdminSidebarVisible())
+  // 登录弹窗请求信号：触发 WorkbenchLayout 打开登录框（值为 'login' 或 'register'）
+  const loginModalRequest = ref<{ seq: number; mode: 'login' | 'register' }>({ seq: 0, mode: 'login' })
 
   // 操作
   const setLoading = (value: boolean) => {
@@ -48,11 +50,16 @@ export const useAppStore = defineStore('app', () => {
     setAdminSidebarVisible(!adminSidebarVisible.value)
   }
 
+  const requestLoginModal = (mode: 'login' | 'register' = 'login') => {
+    loginModalRequest.value = { seq: loginModalRequest.value.seq + 1, mode }
+  }
+
   return {
     // 状态
     loading,
     notifications,
     adminSidebarVisible,
+    loginModalRequest,
     // 操作
     setLoading,
     showNotification,
@@ -60,5 +67,6 @@ export const useAppStore = defineStore('app', () => {
     clearNotifications,
     setAdminSidebarVisible,
     toggleAdminSidebar,
+    requestLoginModal,
   }
 })
