@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, reactive, ref } from 'vue'
 import { API_BASE_URL } from '@/api'
 import { userApi } from '@/api/user'
-import { resolveChatPermission } from '@/api/chat'
+import { projectExpertStream, resolveChatPermission } from '@/api/chat'
 import type { AgentTraceEvent } from '@/types/agentTrace'
 import type { ChatMessageRecord } from '@/types'
 
@@ -33,7 +33,7 @@ export type PendingPermission = {
   editingError?: string | null
 }
 
-export type AgentKind = 'device' | 'log_analysis' | 'package'
+export type AgentKind = 'device' | 'log_analysis' | 'project_expert' | 'package'
 
 export type RunStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'stale'
 
@@ -69,6 +69,13 @@ export type StartLogAnalysisPayload = {
   history?: { role: string; content: string }[]
   file?: File | null
   project_repo_id?: number | null
+  remember?: boolean
+}
+
+export type StartProjectExpertPayload = {
+  message: string
+  history?: { role: string; content: string }[]
+  project_repo_id: number
   remember?: boolean
 }
 
@@ -952,6 +959,129 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     }
   }
 
+  /**
+   * Start a Project Expert Agent run. It uses the same trace/SSE renderer as
+   * log-analysis, but requires an explicit project repo and never sends files.
+   */
+  const startProjectExpertRun = async (
+    sessionId: string,
+    payload: StartProjectExpertPayload,
+    opts: { authToken?: string | null } = {},
+  ) => {
+    const state = ensureState(sessionId)
+    if (state.isSending) return
+
+    state.messages.push({
+      id: generateUUID(),
+      role: 'user',
+      content: payload.message,
+      kind: 'user',
+    })
+    const pendingAnswerId = `run:pending:${generateUUID()}:assistant`
+    state.currentAnswerId = pendingAnswerId
+    state.messages.push({
+      id: pendingAnswerId,
+      role: 'ai',
+      content: '正在思考...',
+      kind: 'answer',
+      traceEvents: [],
+      traceRunning: true,
+    })
+    state.isSending = true
+    state.runStatus = 'running'
+    state.runAgentKind = 'project_expert'
+    localRunningSet.value.add(sessionId)
+
+    const ac = new AbortController()
+    state.subscription = ac
+
+    try {
+      const resp = await projectExpertStream({
+        message: payload.message || '',
+        sessionId,
+        history: payload.history,
+        remember: payload.remember ?? true,
+        projectRepoId: payload.project_repo_id,
+        authToken: opts.authToken || null,
+        signal: ac.signal,
+      })
+      if (!resp.ok) {
+        let detail = ''
+        try {
+          const body = await resp.json()
+          detail = body?.detail?.message || body?.detail?.reason || body?.message || ''
+        } catch {
+          // ignore non-JSON error bodies
+        }
+        throw new Error(detail || `HTTP ${resp.status}`)
+      }
+
+      if (!resp.body) throw new Error('响应体为空，无法流式读取')
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder('utf-8')
+      let buffer = ''
+      let terminal = false
+      const processChunk = (chunk: string) => {
+        buffer += chunk
+        let remaining = buffer.replace(/\r\n/g, '\n')
+        while (true) {
+          const idx = remaining.indexOf('\n\n')
+          if (idx === -1) break
+          const raw = remaining.slice(0, idx)
+          remaining = remaining.slice(idx + 2)
+          const trimmed = raw.trim()
+          if (!trimmed.startsWith('data:')) continue
+          const jsonStr = trimmed.replace(/^data:\s*/, '')
+          if (!jsonStr) continue
+          try {
+            const evPayload = JSON.parse(jsonStr)
+            const newRunId = evPayload?.run_id
+            if (newRunId && state.currentAnswerId === pendingAnswerId) {
+              const stableId = `run:${newRunId}:assistant`
+              const target = state.messages.find((m) => m.id === pendingAnswerId)
+              if (target) target.id = stableId
+              state.currentAnswerId = stableId
+            }
+            applyEventToState(state, evPayload)
+            const t = evPayload?.event || evPayload?.type
+            if (t === 'done' || t === 'error' || t === 'run_complete' || t === 'cancelled') {
+              terminal = true
+            }
+          } catch (err) {
+            console.error('解析项目专家流式数据失败', err, jsonStr)
+          }
+        }
+        buffer = remaining
+      }
+      try {
+        while (true) {
+          if (ac.signal.aborted) break
+          const { value, done } = await reader.read()
+          if (value) processChunk(decoder.decode(value, { stream: !done }))
+          if (done) break
+        }
+        if (buffer.trim()) processChunk('\n\n')
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') throw err
+      }
+
+      if (terminal) {
+        markTerminal(state, terminalStatus(state))
+      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return
+      console.error('启动项目专家 run 失败', err)
+      const target = state.messages.find((m) => m.id === state.currentAnswerId)
+      if (target) {
+        target.content = `项目专家调用失败：${err?.message || String(err)}`
+        target.traceRunning = false
+      }
+      markTerminal(state, 'failed')
+    } finally {
+      if (state.subscription === ac) state.subscription = null
+    }
+  }
+
   /** Cancel the currently-running run on this session via the unified endpoint. */
   const cancelActiveRun = async (
     sessionId: string,
@@ -1019,6 +1149,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     subscribeRun,
     startDeviceRun,
     startLogAnalysisRun,
+    startProjectExpertRun,
     cancelActiveRun,
     submitPermission,
     abortSubscription,

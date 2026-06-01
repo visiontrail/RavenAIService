@@ -50,6 +50,12 @@ SUPPORTED_AGENTS: Dict[str, Dict[str, str]] = {
         "framework": "Claude Agent SDK",
         "description": "面向设备联动对话的 Claude Agent SDK 智能体（POST /chat 主入口）",
     },
+    "project_expert": {
+        "key": "project_expert",
+        "name": "ProjectExpertAgent",
+        "framework": "Claude Agent SDK",
+        "description": "基于 Claude Agent SDK 的项目源码答疑智能体（POST /project-expert/stream）",
+    },
 }
 
 # Skill 包硬性限制
