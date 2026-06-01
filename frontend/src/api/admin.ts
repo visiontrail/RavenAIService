@@ -5,6 +5,10 @@ import type {
   AgentSkill,
   AgentSkillAgentInfo,
   ApiResponse,
+  MetricsRawEventsData,
+  MetricsSystemOverview,
+  MetricsUserDetail,
+  MetricsUserListData,
   PromptsConfigData,
   ProjectRepo,
   ProjectRepoPayload,
@@ -13,6 +17,12 @@ import type {
   TestConnectionResult,
   UserProfile,
 } from '@/types'
+
+export interface MetricsTimeRangeParams {
+  from?: string
+  to?: string
+  bucket?: 'hour' | 'day'
+}
 
 const ADMIN_TOKEN_KEY = 'raven_admin_token'
 
@@ -175,6 +185,39 @@ export const adminApi = {
     adminClient.get(`/admin/agents/${agentKey}/skills/${skillId}/file`, {
       params: { path },
     }),
+
+  // ==================== 系统/用户指标 (Metrics) ====================
+
+  metricsOverview: (
+    params?: MetricsTimeRangeParams
+  ): Promise<ApiResponse<MetricsSystemOverview>> =>
+    adminClient.get('/admin/metrics/overview', { params }),
+
+  metricsUsers: (params?: {
+    from?: string
+    to?: string
+    page?: number
+    per_page?: number
+    sort?: string
+  }): Promise<ApiResponse<MetricsUserListData>> =>
+    adminClient.get('/admin/metrics/users', { params }),
+
+  metricsUserDetail: (
+    userId: string,
+    params?: MetricsTimeRangeParams
+  ): Promise<ApiResponse<MetricsUserDetail>> =>
+    adminClient.get(`/admin/metrics/users/${userId}`, { params }),
+
+  metricsEvents: (params?: {
+    from?: string
+    to?: string
+    event_type?: string
+    source?: string
+    user_id?: string
+    page?: number
+    per_page?: number
+  }): Promise<ApiResponse<MetricsRawEventsData>> =>
+    adminClient.get('/admin/metrics/events', { params }),
 }
 
 export default adminApi

@@ -1,0 +1,387 @@
+"""HTTP-level tests for the metrics APIs in ``app/api/admin_metrics.py``.
+
+Covered tasks (openspec/changes/add-system-user-metrics/tasks.md):
+
+- 7.5 admin API: ``/admin/metrics/overview`` aggregation, ``/admin/metrics/users``
+  ranking + sorting, ``/admin/metrics/users/{user_id}`` detail, and
+  ``/admin/metrics/events`` raw-event filtering, including time-bucket output.
+- 7.6 self API: ``/api/v1/users/me/metrics`` returns ONLY the caller's own
+  metrics — a user can never read or infer another user's usage.
+
+These spin up a throwaway SQLite database wired into ``db_manager`` (so the real
+aggregation queries run), seed users / sessions / metric events, and drive the
+routers through a FastAPI ``TestClient`` with the bearer auth dependencies
+overridden.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import tempfile
+import uuid
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+# Import the models package so every table is registered on Base.metadata.
+import app.models  # noqa: F401
+from app.api import admin_metrics
+from app.api.admin import require_admin
+from app.api.users import get_current_user
+from app.config import settings
+from app.models.database import Base, db_manager, get_db
+from app.models.metrics import MetricEvent
+from app.models.user import ChatSession, User
+
+
+# ==================== Fixtures / seeding ====================
+
+
+@pytest.fixture
+def metrics_db():
+    """Point ``db_manager`` at a fresh temp SQLite file with all tables created."""
+    fd, path = tempfile.mkstemp(prefix="metrics-api-db-", suffix=".sqlite")
+    os.close(fd)
+
+    prev_url = settings.database_url
+    prev_engine = db_manager.engine
+    prev_factory = db_manager.session_factory
+
+    settings.database_url = f"sqlite+aiosqlite:///{path}"
+    db_manager.initialize()
+
+    async def _create() -> None:
+        async with db_manager.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    asyncio.run(_create())
+    try:
+        yield
+    finally:
+        asyncio.run(db_manager.close())
+        settings.database_url = prev_url
+        db_manager.engine = prev_engine
+        db_manager.session_factory = prev_factory
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def _seed(objects: List[Any]) -> None:
+    async def _run() -> None:
+        async with db_manager.session_factory() as session:
+            for obj in objects:
+                session.add(obj)
+            await session.commit()
+
+    asyncio.run(_run())
+
+
+def _make_user(username: str, role: str = "user") -> User:
+    return User(
+        id=str(uuid.uuid4()),
+        username=username,
+        display_name=username.title(),
+        password_hash="x",
+        is_active=True,
+        role=role,
+    )
+
+
+def _ai_event(
+    *,
+    user_id: Optional[str],
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    status: str = "succeeded",
+    source: str = "general_agent",
+    agent_kind: str = "general",
+    provider: str = "anthropic",
+    model: str = "claude-sonnet-4-6",
+    error_kind: Optional[str] = None,
+    occurred_at: Optional[datetime] = None,
+    metadata_json: Optional[str] = None,
+) -> MetricEvent:
+    total = input_tokens + output_tokens
+    return MetricEvent(
+        id=str(uuid.uuid4()),
+        idempotency_key=f"ai_usage:test:{uuid.uuid4()}",
+        occurred_at=occurred_at or (datetime.utcnow() - timedelta(hours=1)),
+        event_type="ai_usage",
+        source=source,
+        user_id=user_id,
+        agent_kind=agent_kind,
+        provider=provider,
+        model=model,
+        status=status,
+        error_kind=error_kind,
+        duration_ms=1234,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total,
+        metadata_json=metadata_json,
+    )
+
+
+@pytest.fixture
+def auth_state() -> Dict[str, Any]:
+    """Mutable holder for the user returned by the overridden ``get_current_user``."""
+    return {"user": None}
+
+
+@pytest.fixture
+def app(metrics_db, auth_state) -> FastAPI:
+    application = FastAPI()
+    application.include_router(admin_metrics.admin_router)
+    application.include_router(admin_metrics.self_router)
+
+    # Admin bearer auth -> always pass as a fixed admin principal.
+    application.dependency_overrides[require_admin] = lambda: "admin"
+    # User bearer auth -> whoever the test placed in ``auth_state``.
+    application.dependency_overrides[get_current_user] = lambda: auth_state["user"]
+
+    async def _db():
+        async with db_manager.session_factory() as session:
+            yield session
+
+    application.dependency_overrides[get_db] = _db
+    return application
+
+
+@pytest.fixture
+def client(app: FastAPI) -> TestClient:
+    return TestClient(app)
+
+
+# ==================== 7.5 admin API ====================
+
+
+def test_overview_aggregates_tokens_and_status(client: TestClient) -> None:
+    user = _make_user("alice")
+    _seed([user])
+    _seed(
+        [
+            _ai_event(user_id=user.id, input_tokens=100, output_tokens=50),
+            _ai_event(user_id=user.id, input_tokens=20, output_tokens=10),
+            _ai_event(
+                user_id=user.id,
+                input_tokens=5,
+                output_tokens=0,
+                status="failed",
+                error_kind="provider_error",
+            ),
+        ]
+    )
+
+    resp = client.get("/admin/metrics/overview")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+
+    assert data["tokens"]["total_tokens"] == 185
+    assert data["tokens"]["input_tokens"] == 125
+    assert data["tokens"]["output_tokens"] == 60
+    assert data["invocation_count"] == 3
+    assert data["status_counts"]["succeeded"] == 2
+    assert data["status_counts"]["failed"] == 1
+    assert data["error_count"] == 1
+    # No pricing configured by default → cost is an estimate-less null.
+    assert data["cost_estimated"] is False
+
+    # Time bucket output is present and well-formed.
+    assert data["bucket"] == "day"
+    assert isinstance(data["time_series"], list)
+    assert len(data["time_series"]) >= 1
+    bucket = data["time_series"][0]
+    assert bucket["total_tokens"] >= 1
+    assert "bucket_start" in bucket
+
+
+def test_overview_hour_bucket(client: TestClient) -> None:
+    user = _make_user("bucketeer")
+    _seed([user])
+    _seed([_ai_event(user_id=user.id, input_tokens=10, output_tokens=5)])
+
+    resp = client.get("/admin/metrics/overview", params={"bucket": "hour"})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["bucket"] == "hour"
+
+
+def test_overview_requires_admin(app: FastAPI) -> None:
+    """Without the admin override, the bearer dependency rejects the call."""
+    app.dependency_overrides.pop(require_admin, None)
+    unauth = TestClient(app)
+    resp = unauth.get("/admin/metrics/overview")
+    assert resp.status_code == 401
+
+
+def test_users_list_sorting_and_rows(client: TestClient) -> None:
+    heavy = _make_user("heavy")
+    light = _make_user("light")
+    _seed([heavy, light])
+    _seed(
+        [
+            _ai_event(user_id=heavy.id, input_tokens=1000, output_tokens=500),
+            _ai_event(user_id=light.id, input_tokens=10, output_tokens=5),
+        ]
+    )
+
+    resp = client.get("/admin/metrics/users", params={"sort": "total_tokens"})
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+
+    assert data["sort"] == "total_tokens"
+    assert data["total"] == 2
+    rows = data["rows"]
+    assert len(rows) == 2
+    # Highest token user ranks first.
+    assert rows[0]["user_id"] == heavy.id
+    assert rows[0]["username"] == "heavy"
+    assert rows[0]["total_tokens"] == 1500
+    assert rows[1]["user_id"] == light.id
+    assert rows[0]["total_tokens"] > rows[1]["total_tokens"]
+
+
+def test_users_list_pagination(client: TestClient) -> None:
+    users = [_make_user(f"u{i}") for i in range(3)]
+    _seed(users)
+    _seed(
+        [
+            _ai_event(user_id=u.id, input_tokens=(i + 1) * 100)
+            for i, u in enumerate(users)
+        ]
+    )
+
+    resp = client.get("/admin/metrics/users", params={"page": 1, "per_page": 2})
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["total"] == 3
+    assert data["per_page"] == 2
+    assert len(data["rows"]) == 2
+
+
+def test_user_detail_series_and_events(client: TestClient) -> None:
+    user = _make_user("detail")
+    _seed([user])
+    _seed(
+        [
+            _ai_event(user_id=user.id, input_tokens=100, output_tokens=50),
+            _ai_event(
+                user_id=user.id,
+                input_tokens=0,
+                output_tokens=0,
+                status="failed",
+                error_kind="timeout",
+            ),
+        ]
+    )
+
+    resp = client.get(f"/admin/metrics/users/{user.id}")
+    assert resp.status_code == 200
+    detail = resp.json()["data"]
+
+    assert detail["user_id"] == user.id
+    assert detail["username"] == "detail"
+    assert detail["tokens"]["total_tokens"] == 150
+    assert detail["invocation_count"] == 2
+    assert detail["status_counts"]["succeeded"] == 1
+    assert detail["status_counts"]["failed"] == 1
+    assert len(detail["time_series"]) >= 1
+    assert len(detail["recent_events"]) == 2
+    # Errors-by-kind surfaces the low-cardinality error grouping.
+    kinds = {g["key"] for g in detail["errors_by_kind"]}
+    assert "timeout" in kinds
+
+
+def test_raw_events_filtering(client: TestClient) -> None:
+    user = _make_user("auditee")
+    _seed([user])
+    _seed(
+        [
+            _ai_event(user_id=user.id, source="general_agent", input_tokens=10),
+            _ai_event(user_id=user.id, source="device_agent", input_tokens=20),
+        ]
+    )
+
+    # No filter → both events.
+    resp = client.get("/admin/metrics/events")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["total"] == 2
+
+    # Filter by source → only the matching event.
+    resp = client.get("/admin/metrics/events", params={"source": "device_agent"})
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["total"] == 1
+    assert data["events"][0]["source"] == "device_agent"
+
+
+def test_raw_events_invalid_datetime_is_400(client: TestClient) -> None:
+    resp = client.get("/admin/metrics/events", params={"from": "not-a-date"})
+    assert resp.status_code == 400
+
+
+# ==================== 7.6 self API ====================
+
+
+def test_self_metrics_only_returns_own_usage(client: TestClient, auth_state) -> None:
+    me = _make_user("me")
+    other = _make_user("other")
+    _seed([me, other])
+    _seed(
+        [
+            _ai_event(user_id=me.id, input_tokens=100, output_tokens=50),
+            # Another user's much larger usage must never leak into my summary.
+            _ai_event(user_id=other.id, input_tokens=9000, output_tokens=9000),
+        ]
+    )
+
+    auth_state["user"] = me
+    resp = client.get("/api/v1/users/me/metrics")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+
+    assert data["user_id"] == me.id
+    # Only my 150 tokens — none of the other user's 18000.
+    assert data["tokens"]["total_tokens"] == 150
+    assert data["invocation_count"] == 1
+
+
+def test_self_metrics_switches_with_caller(client: TestClient, auth_state) -> None:
+    """The same endpoint scoped to a different caller returns that caller's data."""
+    me = _make_user("first")
+    other = _make_user("second")
+    _seed([me, other])
+    _seed(
+        [
+            _ai_event(user_id=me.id, input_tokens=100, output_tokens=0),
+            _ai_event(user_id=other.id, input_tokens=7, output_tokens=0),
+        ]
+    )
+
+    auth_state["user"] = other
+    resp = client.get("/api/v1/users/me/metrics")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["user_id"] == other.id
+    assert data["tokens"]["total_tokens"] == 7
+    assert data["invocation_count"] == 1
+
+
+def test_self_metrics_user_with_no_events(client: TestClient, auth_state) -> None:
+    lonely = _make_user("lonely")
+    busy = _make_user("busy")
+    _seed([lonely, busy])
+    _seed([_ai_event(user_id=busy.id, input_tokens=500)])
+
+    auth_state["user"] = lonely
+    resp = client.get("/api/v1/users/me/metrics")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["user_id"] == lonely.id
+    assert data["tokens"]["total_tokens"] == 0
+    assert data["invocation_count"] == 0

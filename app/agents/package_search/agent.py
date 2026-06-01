@@ -55,6 +55,7 @@ from app.agents.package_search.trace import (
     safe_emit,
     summarize,
 )
+from app.agents.usage import accumulate_usage, new_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -130,11 +131,7 @@ def _tool_result_to_text(content: Any) -> str:
 
 
 def _accumulate_token_usage(usage: Any, token_usage: Dict[str, int]) -> None:
-    if not usage:
-        return
-    token_usage["input_tokens"] += getattr(usage, "input_tokens", 0) or 0
-    token_usage["output_tokens"] += getattr(usage, "output_tokens", 0) or 0
-    token_usage["cache_read_tokens"] += getattr(usage, "cache_read_input_tokens", 0) or 0
+    accumulate_usage(usage, token_usage)
 
 
 # ──────────────────────── run state ─────────────────────────
@@ -163,11 +160,7 @@ class _RunState:
         self.active_step_ids: List[str] = []
         self.tool_use_id_to_step: Dict[str, str] = {}
         self.step_started_at: Dict[str, float] = {}
-        self.token_usage: Dict[str, int] = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cache_read_tokens": 0,
-        }
+        self.token_usage: Dict[str, int] = new_token_usage()
         self.final_text: str = ""
 
     def emit(self, event: AgentTraceEvent) -> None:

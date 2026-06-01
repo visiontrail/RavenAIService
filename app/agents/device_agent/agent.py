@@ -426,6 +426,10 @@ class DeviceAgent:
                     task_id=task_id,
                     seq_counter=seq_counter,
                     trace_summary=trace_summary,
+                    model=effective_model,
+                    provider=str(provider),
+                    token_usage=dict(state.token_usage),
+                    duration_seconds=round(time.monotonic() - start_ts, 3),
                     final_text=coerce_excerpt(
                         mask_tokens(final_text),
                         DEFAULT_EXCERPT_MAX_BYTES * 4,

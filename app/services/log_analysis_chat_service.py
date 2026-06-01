@@ -539,6 +539,35 @@ class LogAnalysisChatService:
                 exc,
             )
 
+        # Best-effort AI usage metrics, idempotent on run_id. Covers terminal
+        # success as well as failed/cancelled states (the result still carries
+        # any partial token_usage and the error_kind).
+        try:
+            from app.services import metrics_service
+
+            log_id = job.context_meta.get("log_id")
+            project_repo_id = job.context_meta.get("project_repo_id")
+            await metrics_service.record_agent_run_usage(
+                source="log_analysis_agent",
+                agent_kind="log_analysis",
+                run_id=job.run_id,
+                result=job.result,
+                terminal_status=terminal_status,
+                provider=settings.anthropic_provider,
+                user_id=str(job.user_id) if job.user_id is not None else None,
+                owner_scope=job.owner_scope or None,
+                session_id=job.session_id,
+                task_id=job.task_id,
+                log_id=str(log_id) if log_id is not None else None,
+                project_repo_id=str(project_repo_id) if project_repo_id is not None else None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "log-analysis chat: metrics record skipped run_id=%s: %s",
+                job.run_id,
+                exc,
+            )
+
         if db_manager.session_factory is None:
             return
         try:
@@ -946,7 +975,12 @@ class LogAnalysisChatService:
                 from app.services.ai_chat_service import ai_chat_service
 
                 title = await asyncio.wait_for(
-                    ai_chat_service.generate_session_title(user_content, answer),
+                    ai_chat_service.generate_session_title(
+                        user_content,
+                        answer,
+                        user_id=str(user_id) if user_id is not None else None,
+                        session_id=session_id,
+                    ),
                     timeout=8,
                 )
                 if title:

@@ -96,6 +96,15 @@ class ChatRunJob:
     model: str = ""
     error: Optional[str] = None
     workspace_path: Optional[str] = None
+    # AI usage captured from the agent's terminal ``run_complete`` event, used
+    # by ``_persist_terminal`` to record an idempotent metric event. Defaults
+    # leave token counts at 0 so error/cancel terminals still record an
+    # invocation with status metadata (tasks 3.4 / 3.9).
+    token_usage: Optional[Dict[str, int]] = None
+    provider: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    trace_summary: Optional[Dict[str, Any]] = None
+    error_kind: Optional[str] = None
     # GeneralAgent 的结构化路由建议（device|log_analysis|package_search|
     # project_expert），无建议时为 None。其它 agent_kind 不设置。
     suggested_agent_type: Optional[str] = None
@@ -262,6 +271,74 @@ class ChatRunService:
             "user_message": job.user_message,
             "suggested_agent_type": job.suggested_agent_type,
         }
+
+    # ---- usage capture ---------------------------------------------------
+
+    @staticmethod
+    def _capture_run_usage(job: ChatRunJob, event: Dict[str, Any]) -> None:
+        """Pull AI usage fields off an agent trace event onto the job.
+
+        Called for ``run_start`` (provider/model), ``run_complete`` (tokens,
+        duration, trace summary) and ``error`` (error_kind) events. Best-effort:
+        each field is only overwritten when the event actually carries it, so a
+        later terminal event never clobbers an earlier provider/model.
+        """
+        usage = event.get("token_usage")
+        if isinstance(usage, dict):
+            job.token_usage = {k: int(v or 0) for k, v in usage.items()}
+        model = event.get("model")
+        if isinstance(model, str) and model:
+            job.model = model
+        provider = event.get("provider")
+        if isinstance(provider, str) and provider:
+            job.provider = provider
+        duration = event.get("duration_seconds")
+        if isinstance(duration, (int, float)):
+            job.duration_seconds = float(duration)
+        trace_summary = event.get("trace_summary")
+        if isinstance(trace_summary, dict):
+            job.trace_summary = trace_summary
+        error_kind = event.get("error_kind")
+        if isinstance(error_kind, str) and error_kind:
+            job.error_kind = error_kind
+
+    async def _record_terminal_metrics(
+        self, job: ChatRunJob, terminal_status: str
+    ) -> None:
+        """Best-effort, idempotent AI-usage metric for a chat agent run.
+
+        Covers both ``general`` and ``device`` agent kinds (task 3.4) and every
+        terminal status — succeeded / failed / cancelled / stale all record an
+        invocation with whatever tokens were captured (task 3.9). Never raises.
+        """
+        try:
+            from app.services import metrics_service
+
+            agent_kind = job.agent_kind or "general"
+            result = {
+                "token_usage": job.token_usage,
+                "model": job.model or None,
+                "provider": job.provider,
+                "duration_seconds": job.duration_seconds,
+                "trace_summary": job.trace_summary,
+                "trace_events": job.trace_events,
+                "error_kind": job.error_kind,
+            }
+            await metrics_service.record_agent_run_usage(
+                source=f"{agent_kind}_agent",
+                agent_kind=agent_kind,
+                run_id=job.run_id,
+                result=result,
+                terminal_status=terminal_status,
+                provider=job.provider,
+                user_id=str(job.user_id) if job.user_id is not None else None,
+                owner_scope=job.owner_scope or None,
+                session_id=job.session_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "chat_run: metrics record skipped run_id=%s: %s", job.run_id, exc
+            )
 
     # ---- persistence helpers --------------------------------------------
 
@@ -502,12 +579,14 @@ class ChatRunService:
                     model_value = ev.get("model")
                     if model_value:
                         job.model = str(model_value)
+                    self._capture_run_usage(job, ev)
                     if not job.workspace_path:
                         # The agent does not currently emit workspace_path; the
                         # prepare_session helper builds a deterministic path
                         # under <base>/device_agent/<session>/<run_id>/.
                         pass
                 if ev_type == RUN_COMPLETE:
+                    self._capture_run_usage(job, ev)
                     final_text = ev.get("final_text")
                     if isinstance(final_text, str):
                         job.answer = final_text
@@ -515,6 +594,8 @@ class ChatRunService:
                         text_val = final_text.get("text")
                         if isinstance(text_val, str):
                             job.answer = text_val
+                if ev_type == ERROR:
+                    self._capture_run_usage(job, ev)
                 if ev_type == "tool_permission_request":
                     rid = str(ev.get("request_id") or "")
                     if rid:
@@ -610,6 +691,10 @@ class ChatRunService:
         """
         from app.models.database import db_manager
         from app.services.chat_history_service import chat_history_service
+
+        # Record AI usage first; it opens its own short transaction and must run
+        # independent of (and never block) the assistant-message persistence.
+        await self._record_terminal_metrics(job, terminal_status)
 
         if db_manager.session_factory is None:
             logger.warning("chat_run: db not initialized; skipping terminal persistence")
@@ -814,13 +899,17 @@ class ChatRunService:
                     model_value = ev.get("model")
                     if model_value:
                         job.model = str(model_value)
+                    self._capture_run_usage(job, ev)
                 if ev_type == "run_complete":
+                    self._capture_run_usage(job, ev)
                     final_text = ev.get("final_text")
                     if isinstance(final_text, str):
                         job.answer = final_text
                     suggested = ev.get("suggested_agent_type")
                     if isinstance(suggested, str) and suggested:
                         job.suggested_agent_type = suggested
+                if ev_type == "error":
+                    self._capture_run_usage(job, ev)
 
                 payload_out: Dict[str, Any] = {
                     k: v for k, v in ev.items() if k != "type"

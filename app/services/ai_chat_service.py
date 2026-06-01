@@ -139,10 +139,20 @@ class AIChatService(BaseService):
         )
 
     async def generate_session_title(
-        self, user_content: str, ai_content: str
+        self,
+        user_content: str,
+        ai_content: str,
+        *,
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> Optional[str]:
         """Public wrapper used by other services / API endpoints."""
-        return await _generate_title_external(user_content, ai_content)
+        return await _generate_title_external(
+            user_content,
+            ai_content,
+            user_id=user_id,
+            session_id=session_id,
+        )
 
     async def _try_generate_and_update_session_title(
         self,
@@ -166,7 +176,12 @@ class AIChatService(BaseService):
 
         try:
             session_title = await asyncio.wait_for(
-                _generate_title_external(user_content, answer_text),
+                _generate_title_external(
+                    user_content,
+                    answer_text,
+                    user_id=str(user.id) if getattr(user, "id", None) is not None else None,
+                    session_id=session_id,
+                ),
                 timeout=8,
             )
         except asyncio.TimeoutError:

@@ -35,6 +35,12 @@ export const adminNavItems = [
     path: '/admin/model-settings',
     description: '配置轻量级模型（会话摘要、标题生成等）',
   },
+  {
+    key: 'metrics',
+    label: '数据指标',
+    path: '/admin/metrics',
+    description: '查看 Token 用量、调用统计与业务活动',
+  },
 ] as const
 
 export type AdminNavItem = (typeof adminNavItems)[number]
@@ -45,6 +51,7 @@ export const resolveAdminNavKey = (path: string) => {
   if (path.startsWith('/admin/project-repos')) return 'project-repos'
   if (path.startsWith('/admin/agent-skills')) return 'agent-skills'
   if (path.startsWith('/admin/model-settings')) return 'model-settings'
+  if (path.startsWith('/admin/metrics')) return 'metrics'
   if (path.startsWith('/admin')) return 'prompts'
   return ''
 }

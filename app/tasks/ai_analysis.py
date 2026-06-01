@@ -816,6 +816,26 @@ def run_ai_analysis_task(
             result=analysis_result, finished_at=datetime.utcnow(), task_id=task_id,
         )
 
+        # Best-effort AI usage metrics for the standalone (Celery) analysis path.
+        # This is a system task with no authenticated user; idempotent on task/log id.
+        try:
+            from app.services import metrics_service
+
+            metrics_service.record_agent_run_usage_sync(
+                source="log_analysis_agent",
+                agent_kind="log_analysis",
+                result=analysis_result,
+                provider=settings.anthropic_provider,
+                task_id=str(task_id) if task_id else None,
+                log_id=str(log_id),
+                owner_scope="system:ai_analysis",
+                idempotency_key=f"ai_usage:log_task:{task_id or log_id}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "ai_analysis: metrics record skipped log_id=%s: %s", log_id, exc
+            )
+
         logger.info(
             "AI analysis complete: log_id=%s status=%s engine=%s model=%s "
             "duration=%.1fs qtype=%s answer_len=%d summary_len=%d raw_len=%d "

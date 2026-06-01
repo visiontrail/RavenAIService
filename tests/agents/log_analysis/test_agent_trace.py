@@ -195,6 +195,28 @@ class TestEmitterEventSequence:
         assert captured[-1]["type"] == "run_complete"
         assert "trace_summary" in captured[-1]
 
+    def test_dict_usage_payload_is_accumulated(self, workspace_ctx):
+        async def fake_query(*args, **kwargs):
+            yield FakeContentMessage(
+                content=[FakeTextBlock(_make_good_result_json())],
+                usage={
+                    "prompt_tokens": 41,
+                    "completion_tokens": 13,
+                    "cache_read_input_tokens": 17,
+                    "cache_creation_input_tokens": 3,
+                },
+            )
+            yield FakeResultMessage(result=_make_good_result_json())
+
+        result = _run_agent(workspace_ctx, fake_query)
+
+        assert result["token_usage"] == {
+            "input_tokens": 41,
+            "output_tokens": 13,
+            "cache_read_tokens": 17,
+            "cache_write_tokens": 3,
+        }
+
     def test_loaded_skills_are_emitted_and_returned(self, workspace_ctx):
         async def fake_query(*args, **kwargs):
             yield FakeResultMessage(result=_make_good_result_json())

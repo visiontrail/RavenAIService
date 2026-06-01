@@ -224,6 +224,7 @@ class GeneralAgent:
 
     async def run_stream(self, ctx: GeneralAgentContext) -> AsyncIterator[Dict[str, Any]]:
         from app.agents.anthropic_client import AnthropicConfigurationError, build_options
+        from app.agents.usage import accumulate_usage, new_token_usage
         from app.config import settings
 
         try:
@@ -238,11 +239,14 @@ class GeneralAgent:
 
         model = _resolve_small_fast_model()
         effective_model = model or "unknown"
+        provider = str(settings.anthropic_provider)
+        start_ts = time.monotonic()
 
         yield {
             "type": "run_start",
             "task_id": run_id,
             "model": effective_model,
+            "provider": provider,
             "agent_key": AGENT_KEY,
         }
 
@@ -261,6 +265,7 @@ class GeneralAgent:
         )
 
         answer_text = ""
+        token_usage = new_token_usage()
         try:
             with tempfile.TemporaryDirectory(prefix="general-agent-") as tmpdir:
                 options = build_options(
@@ -281,6 +286,7 @@ class GeneralAgent:
                 async def _drive() -> None:
                     async for message in sdk_query(prompt=user_prompt, options=options):
                         collected.append(message)
+                        accumulate_usage(getattr(message, "usage", None), token_usage)
 
                 try:
                     await asyncio.wait_for(_drive(), timeout=max(timeout_s + 5, 10))
@@ -337,6 +343,9 @@ class GeneralAgent:
             "task_id": run_id,
             "final_text": answer_text,
             "model": effective_model,
+            "provider": provider,
+            "token_usage": dict(token_usage),
+            "duration_seconds": round(time.monotonic() - start_ts, 3),
             "suggested_agent_type": suggested_agent,
         }
 

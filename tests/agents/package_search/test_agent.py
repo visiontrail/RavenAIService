@@ -145,6 +145,35 @@ def test_run_parses_fenced_json_and_validates_ids(stub_service, stub_options):
     assert warnings == []
 
 
+def test_run_accumulates_dict_usage_payload(stub_service, stub_options):
+    """Claude-compatible providers may expose SDK usage as a plain dict."""
+    answer_text = (
+        "```json\n"
+        '{"recommended_package_ids": ["pkg-real-1"], "relevant_package_ids": []}\n'
+        "```\n"
+    )
+    messages = [
+        _Message(
+            [_TextBlock(answer_text)],
+            usage={
+                "prompt_tokens": 33,
+                "completion_tokens": 7,
+                "cache_read_input_tokens": 11,
+                "cache_creation_input_tokens": 5,
+            },
+        ),
+    ]
+    agent = _make_agent(messages)
+    result = asyncio.run(agent.run("find katx"))
+
+    assert result["usage"] == {
+        "input_tokens": 33,
+        "output_tokens": 7,
+        "cache_read_tokens": 11,
+        "cache_write_tokens": 5,
+    }
+
+
 def test_run_filters_invalid_ids_and_emits_warning(stub_service, stub_options):
     answer_text = (
         "```json\n"

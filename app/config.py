@@ -100,6 +100,31 @@ class Settings(BaseSettings):
     # 运行期可由 Admin 调整的轻量级模型设置持久化文件
     runtime_settings_path: str = "data/runtime_settings.json"
 
+    # Metrics 成本估算价格配置（可选）。默认空表示不估价，成本字段返回 null。
+    # 格式：{"<provider>": {"<model>": {"input_per_million": 3.0,
+    #        "output_per_million": 15.0, "cache_read_per_million": 0.3,
+    #        "cache_write_per_million": 3.75}}}
+    # 单价单位为“每 100 万 token 的美元价格”。
+    ai_metrics_pricing_json: Optional[str] = None
+
+    def get_ai_metrics_pricing(self) -> dict:
+        """解析 ai_metrics_pricing_json，返回 provider->model->token_type 价格映射。
+
+        解析失败或未配置时返回空 dict（即不估价）。永不抛出。
+        """
+        import json
+
+        raw = self.ai_metrics_pricing_json
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:  # noqa: BLE001
+            pass
+        return {}
+
     @field_validator("anthropic_provider")
     @classmethod
     def validate_anthropic_provider(cls, v: str) -> str:

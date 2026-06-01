@@ -103,6 +103,33 @@ async def test_generate_session_title_uses_llm_output_when_available(monkeypatch
     assert out == "排查网络问题"
 
 
+@pytest.mark.asyncio
+async def test_generate_session_title_forwards_usage_context(monkeypatch):
+    seen = {}
+
+    async def _ok(prompt, **kwargs):  # noqa: ARG001
+        seen.update(kwargs)
+        return "排查网络问题"
+
+    monkeypatch.setattr(tg, "_run_query", _ok)
+    monkeypatch.setattr(
+        "app.services.prompts_config_service.get_chat_title_prompt_template",
+        lambda: "U:{user_content}\nA:{ai_content}\nN:{max_length}",
+    )
+
+    out = await tg.generate_session_title(
+        "用户问网络",
+        "助手回答",
+        max_length=16,
+        user_id="user-1",
+        session_id="session-1",
+    )
+
+    assert out == "排查网络问题"
+    assert seen["user_id"] == "user-1"
+    assert seen["session_id"] == "session-1"
+
+
 def test_normalize_title_strips_quotes_and_punctuation():
     """The helper that post-processes LLM output must strip surrounding noise."""
     assert tg._normalize_title('  "排查网络问题。" ', 16) == "排查网络问题"

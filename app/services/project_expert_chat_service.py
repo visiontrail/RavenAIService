@@ -484,6 +484,37 @@ class ProjectExpertChatService:
                 exc,
             )
 
+        # Best-effort AI usage metrics, idempotent on run_id. Project repository
+        # metadata is attached when available (project_code is allowlisted).
+        try:
+            from app.services import metrics_service
+
+            project_repo_id = job.context_meta.get("project_repo_id")
+            project_code = job.context_meta.get("project_code")
+            extra_metadata = (
+                {"project_code": str(project_code)} if project_code else None
+            )
+            await metrics_service.record_agent_run_usage(
+                source="project_expert_agent",
+                agent_kind="project_expert",
+                run_id=job.run_id,
+                result=job.result,
+                terminal_status=terminal_status,
+                provider=settings.anthropic_provider,
+                user_id=str(job.user_id) if job.user_id is not None else None,
+                owner_scope=job.owner_scope or None,
+                session_id=job.session_id,
+                task_id=job.task_id,
+                project_repo_id=str(project_repo_id) if project_repo_id is not None else None,
+                extra_metadata=extra_metadata,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "project-expert chat: metrics record skipped run_id=%s: %s",
+                job.run_id,
+                exc,
+            )
+
         if db_manager.session_factory is None:
             return
         try:
@@ -813,7 +844,12 @@ class ProjectExpertChatService:
                 from app.services.ai_chat_service import ai_chat_service
 
                 title = await asyncio.wait_for(
-                    ai_chat_service.generate_session_title(user_content, answer),
+                    ai_chat_service.generate_session_title(
+                        user_content,
+                        answer,
+                        user_id=str(user_id) if user_id is not None else None,
+                        session_id=session_id,
+                    ),
                     timeout=8,
                 )
                 if title:

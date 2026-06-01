@@ -7,14 +7,30 @@ import time
 import json
 import logging
 import uuid
-from typing import Callable
+from typing import Callable, Optional
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
+from app.utils.metrics import record_http_request
+
 logger = logging.getLogger(__name__)
 
 SENSITIVE_HEADER_NAMES = {"authorization", "cookie", "set-cookie"}
+
+
+def _route_template(request: Request) -> str:
+    """Return the matched route template (e.g. ``/api/v1/logs/{log_id}``).
+
+    Using the template instead of the raw path keeps the Prometheus ``route``
+    label low-cardinality (design Decision 2). Unmatched paths (404s) collapse
+    to ``unmatched`` rather than leaking the raw, high-cardinality URL.
+    """
+    route = request.scope.get("route")
+    template = getattr(route, "path", None)
+    if isinstance(template, str) and template:
+        return template
+    return "unmatched"
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -68,13 +84,21 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             # 添加响应头
             response.headers["X-Request-ID"] = request_id
             response.headers["X-Process-Time"] = str(process_time)
-            
+
+            # 记录 Prometheus HTTP 指标（使用路由模板，低基数；从不抛出）
+            record_http_request(
+                method=request.method,
+                route=_route_template(request),
+                status_code=response.status_code,
+                duration_seconds=process_time,
+            )
+
             return response
-            
+
         except Exception as e:
             # 计算处理时间
             process_time = time.time() - start_time
-            
+
             # 记录错误信息
             error_info = {
                 "request_id": request_id,
@@ -82,9 +106,17 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 "error_type": type(e).__name__,
                 "process_time": process_time
             }
-            
+
             logger.error(f"Request failed: {json.dumps(error_info, ensure_ascii=False)}")
-            
+
+            # 未处理异常按 500 计入 Prometheus，再重新抛出交由异常处理器
+            record_http_request(
+                method=request.method,
+                route=_route_template(request),
+                status_code=500,
+                duration_seconds=process_time,
+            )
+
             # 重新抛出异常
             raise e
 

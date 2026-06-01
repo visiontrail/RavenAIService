@@ -393,3 +393,182 @@ export interface ChatMessageRecord {
   run_agent_kind?: string | null
   trace_events?: unknown[] | null
 }
+
+// ==================== 系统/用户指标 (Metrics) ====================
+
+export interface MetricsTokenBreakdown {
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  total_tokens: number
+}
+
+export interface MetricsStatusCounts {
+  succeeded: number
+  failed: number
+  cancelled: number
+  stale: number
+  timeout: number
+  other: number
+}
+
+export interface MetricsTimeSeriesBucket {
+  bucket_start: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  total_tokens: number
+  invocation_count: number
+  success_count: number
+  failure_count: number
+}
+
+export interface MetricsGroupCount {
+  key: string | null
+  invocation_count: number
+  total_tokens: number
+}
+
+export interface MetricsChatActivitySummary {
+  total_users: number
+  active_users: number
+  chat_session_count: number
+  chat_message_count: number
+  run_counts_by_status: Record<string, number>
+}
+
+export interface MetricsLogActivitySummary {
+  upload_count: number
+  uploaded_bytes: number
+  counts_by_log_type: Record<string, number>
+  counts_by_status: Record<string, number>
+  ai_analysis_counts: Record<string, number>
+}
+
+export interface MetricsPackageActivitySummary {
+  package_count: number
+  total_bytes: number
+  counts_by_type: Record<string, number>
+  activity_counts: Record<string, number>
+  search_count: number
+}
+
+export interface MetricsDeviceActivitySummary {
+  counts_by_state: Record<string, number>
+}
+
+export interface MetricsSystemOverview {
+  from_time: string
+  to_time: string
+  bucket: string
+  tokens: MetricsTokenBreakdown
+  estimated_cost_usd: number | null
+  cost_estimated: boolean
+  invocation_count: number
+  status_counts: MetricsStatusCounts
+  error_count: number
+  duration_ms_avg: number | null
+  duration_ms_p95: number | null
+  invocations_by_source: MetricsGroupCount[]
+  invocations_by_agent_kind: MetricsGroupCount[]
+  invocations_by_provider: MetricsGroupCount[]
+  invocations_by_model: MetricsGroupCount[]
+  invocations_by_status: MetricsGroupCount[]
+  time_series: MetricsTimeSeriesBucket[]
+  chat: MetricsChatActivitySummary
+  logs: MetricsLogActivitySummary
+  packages: MetricsPackageActivitySummary
+  devices: MetricsDeviceActivitySummary
+}
+
+export interface MetricsUserRow {
+  user_id: string
+  username: string | null
+  display_name: string | null
+  role: string | null
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  total_tokens: number
+  estimated_cost_usd: number | null
+  run_count: number
+  success_count: number
+  failure_count: number
+  message_count: number
+  last_active_at: string | null
+  top_agent_kind: string | null
+}
+
+export interface MetricsUserListData {
+  from_time: string
+  to_time: string
+  page: number
+  per_page: number
+  total: number
+  sort: string
+  rows: MetricsUserRow[]
+}
+
+export interface MetricsRawEvent {
+  id: string
+  idempotency_key: string
+  occurred_at: string
+  event_type: string
+  source: string
+  user_id: string | null
+  owner_scope: string | null
+  session_id: string | null
+  run_id: string | null
+  task_id: string | null
+  log_id: string | null
+  project_repo_id: string | null
+  agent_kind: string | null
+  provider: string | null
+  model: string | null
+  status: string | null
+  error_kind: string | null
+  duration_ms: number | null
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  total_tokens: number
+  cost_microusd: number | null
+  metadata: Record<string, unknown> | null
+}
+
+export interface MetricsUserDetail {
+  user_id: string
+  username: string | null
+  display_name: string | null
+  role: string | null
+  from_time: string
+  to_time: string
+  bucket: string
+  tokens: MetricsTokenBreakdown
+  estimated_cost_usd: number | null
+  cost_estimated: boolean
+  invocation_count: number
+  status_counts: MetricsStatusCounts
+  message_count: number
+  last_active_at: string | null
+  invocations_by_source: MetricsGroupCount[]
+  invocations_by_agent_kind: MetricsGroupCount[]
+  invocations_by_provider: MetricsGroupCount[]
+  invocations_by_model: MetricsGroupCount[]
+  errors_by_kind: MetricsGroupCount[]
+  time_series: MetricsTimeSeriesBucket[]
+  recent_events: MetricsRawEvent[]
+}
+
+export interface MetricsRawEventsData {
+  from_time: string
+  to_time: string
+  page: number
+  per_page: number
+  total: number
+  events: MetricsRawEvent[]
+}

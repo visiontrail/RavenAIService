@@ -479,7 +479,12 @@ async def save_messages(
     if (session.message_count or 0) <= 2:
         try:
             session_title = await asyncio.wait_for(
-                ai_chat_service.generate_session_title(payload.user_content, payload.ai_content),
+                ai_chat_service.generate_session_title(
+                    payload.user_content,
+                    payload.ai_content,
+                    user_id=str(current_user.id),
+                    session_id=session_id,
+                ),
                 timeout=8,
             )
             if session_title:

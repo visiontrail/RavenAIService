@@ -145,6 +145,30 @@ class LogService(BaseCRUDService[LogRecord]):
             # 这样可以避免Celery worker无法找到记录的竞态条件
             await db.commit()
             logger.info(f"LogService - 数据库记录已提交: ID={file_id}")
+
+            # 记录日志上传业务事件（best-effort，绝不影响上传流程）。
+            # 文件内容/路径不入库；仅记录低敏的 log_type/status，字节数走 Prometheus。
+            try:
+                from app.services import metrics_service
+                from app.utils import metrics as prom
+
+                log_type_value = getattr(request.log_type, "value", str(request.log_type))
+                status_value = getattr(initial_status, "value", str(initial_status))
+                await metrics_service.record_business_event(
+                    event_type="log_activity",
+                    source="log_upload",
+                    idempotency_key=f"log_activity:upload:{file_id}",
+                    status=status_value,
+                    log_id=file_id,
+                    metadata={"log_type": log_type_value},
+                )
+                prom.record_log_upload(
+                    log_type=log_type_value,
+                    status=status_value,
+                    uploaded_bytes=file_size,
+                )
+            except Exception as metrics_exc:  # noqa: BLE001
+                logger.debug(f"LogService - 上传指标记录失败（已忽略）: {metrics_exc}")
             
             # 检查是否为协议栈日志，如果是则自动触发处理
             # OAM天线日志已经标记为完成，无需额外处理

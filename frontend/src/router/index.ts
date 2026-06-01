@@ -154,6 +154,14 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/admin/metrics',
+    name: 'AdminMetrics',
+    component: () => import('../views/AdminMetrics.vue'),
+    meta: {
+      title: '数据指标',
+    },
+  },
+  {
     path: '/:pathMatch(.*)*',
     component: () => import('../layouts/WorkbenchLayout.vue'),
     children: [
