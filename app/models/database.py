@@ -4,7 +4,7 @@
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import String, DateTime, Integer, Text, Enum as SQLEnum, UUID, event
+from sqlalchemy import String, DateTime, Integer, Text, Enum as SQLEnum, UUID, event, inspect, text
 from datetime import datetime
 from typing import AsyncGenerator
 import logging
@@ -117,7 +117,53 @@ class DatabaseManager:
             
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-    
+            # ``create_all`` only creates missing *tables*; it never adds new
+            # columns to tables that already exist. Since this project manages
+            # schema via ``create_all`` at startup (alembic migrations are not
+            # run at runtime), additive columns must be backfilled here so an
+            # existing database stays in sync with the ORM models.
+            await conn.run_sync(self._ensure_additive_columns)
+
+    @staticmethod
+    def _ensure_additive_columns(conn) -> None:
+        """Backfill columns that were added to existing tables over time.
+
+        Idempotent and dialect-aware (SQLite / PostgreSQL). Each entry maps a
+        table to the columns that may be missing on older databases, with the
+        ``ALTER TABLE ADD COLUMN`` type clause per dialect.
+        """
+        dialect = conn.dialect.name
+        is_sqlite = dialect == "sqlite"
+
+        # column_name -> {"sqlite": <ddl>, "default": <ddl for others>}
+        additive: dict[str, dict[str, dict[str, str]]] = {
+            "chat_sessions": {
+                "is_pinned": {
+                    "sqlite": "BOOLEAN NOT NULL DEFAULT 0",
+                    "default": "BOOLEAN NOT NULL DEFAULT FALSE",
+                },
+                "pinned_at": {
+                    "sqlite": "DATETIME",
+                    "default": "TIMESTAMP",
+                },
+            },
+        }
+
+        inspector = inspect(conn)
+        existing_tables = set(inspector.get_table_names())
+        for table, columns in additive.items():
+            if table not in existing_tables:
+                continue
+            present = {col["name"] for col in inspector.get_columns(table)}
+            for column, ddl in columns.items():
+                if column in present:
+                    continue
+                type_clause = ddl["sqlite"] if is_sqlite else ddl["default"]
+                conn.execute(
+                    text(f"ALTER TABLE {table} ADD COLUMN {column} {type_clause}")
+                )
+                logger.info("已为表 %s 补充缺失列: %s", table, column)
+
     async def drop_tables(self):
         """删除所有表"""
         if not self.engine:

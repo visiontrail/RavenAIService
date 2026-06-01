@@ -75,7 +75,6 @@ const isLoggingIn = ref(false)
 
 const userMenuRef = ref<HTMLElement | null>(null)
 const userButtonRef = ref<HTMLElement | null>(null)
-const rowMenuRef = ref<HTMLElement | null>(null)
 
 const isLoggedIn = computed(() => userStore.isAuthenticated)
 const currentUserName = computed(() =>
@@ -122,6 +121,7 @@ const groupedSessions = computed(() => {
   const yesterday = today - 24 * 60 * 60 * 1000
   const weekStart = today - 7 * 24 * 60 * 60 * 1000
 
+  const pinned: ChatSessionSummary[] = []
   const groups: { label: string; items: ChatSessionSummary[] }[] = [
     { label: '今天', items: [] },
     { label: '昨天', items: [] },
@@ -130,13 +130,20 @@ const groupedSessions = computed(() => {
   ]
 
   for (const s of filteredSessions.value) {
+    if (s.is_pinned) {
+      pinned.push(s)
+      continue
+    }
     const t = s.last_message_at ? new Date(s.last_message_at).getTime() : 0
     if (t >= today) groups[0].items.push(s)
     else if (t >= yesterday) groups[1].items.push(s)
     else if (t >= weekStart) groups[2].items.push(s)
     else groups[3].items.push(s)
   }
-  return groups.filter((g) => g.items.length > 0)
+  const ordered = pinned.length
+    ? [{ label: '置顶', items: pinned }, ...groups]
+    : groups
+  return ordered.filter((g) => g.items.length > 0)
 })
 
 const handleClickOutside = (event: MouseEvent) => {
@@ -147,8 +154,14 @@ const handleClickOutside = (event: MouseEvent) => {
     showUserMenu.value = false
   }
 
-  if (openRowMenuId.value && rowMenuRef.value && !rowMenuRef.value.contains(target)) {
-    openRowMenuId.value = null
+  // The row menu lives inside a v-for, so `rowMenuRef` resolves to an array and
+  // `.contains()` can't be used reliably. Detect outside clicks via `closest()`
+  // against the menu and its trigger button instead.
+  if (openRowMenuId.value) {
+    const el = target instanceof Element ? target : (target as Node).parentElement
+    if (!el?.closest('.rw-row-menu') && !el?.closest('.rw-row-more')) {
+      openRowMenuId.value = null
+    }
   }
 }
 
@@ -203,6 +216,23 @@ const startNewChat = () => {
 const reloadSessions = async () => {
   try { await sessionStore.load() } catch {
     appStore.showNotification({ title: '同步会话失败', type: 'error' })
+  }
+}
+
+const togglePinSession = async (session: ChatSessionSummary) => {
+  openRowMenuId.value = null
+  const wasPinned = Boolean(session.is_pinned)
+  try {
+    const ok = await sessionStore.togglePin(session.id)
+    if (ok) {
+      appStore.showNotification({
+        title: wasPinned ? '已取消置顶' : '已置顶对话',
+        type: 'success',
+      })
+    }
+  } catch (error) {
+    console.error('置顶操作失败', error)
+    appStore.showNotification({ title: '操作失败', type: 'error' })
   }
 }
 
@@ -437,7 +467,6 @@ const handleUserLogout = () => {
               </button>
               <div
                 v-if="openRowMenuId === session.id"
-                ref="rowMenuRef"
                 class="rw-row-menu"
                 @click.stop
               >
@@ -445,9 +474,9 @@ const handleUserLogout = () => {
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16zM14 6l4 4"/></svg>
                   重命名对话
                 </button>
-                <button class="rw-menu-item" @click="openRowMenuId = null">
+                <button class="rw-menu-item" @click="togglePinSession(session)">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M9 8h6l2 6H7zM12 14v8"/></svg>
-                  置顶对话
+                  {{ session.is_pinned ? '取消置顶' : '置顶对话' }}
                 </button>
                 <div class="rw-menu-divider"/>
                 <button class="rw-menu-item is-danger" @click="deleteSession(session.id)">

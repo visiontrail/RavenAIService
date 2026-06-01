@@ -38,5 +38,5 @@
 - [x] 6.2 测试首轮克隆 / 后续复用 `repo/.git` 不重复克隆；trace 与 `task.json` 不含明文 git token（断言 `mask_tokens` 生效）
 - [x] 6.3 service 测试：`project_repo_id` 必填校验、会话工作区复用、中途换项目 `system_notice`、取消、`/result` 轮询
 - [x] 6.4 API 契约测试：`/project-expert/stream` 无 `file` 参数、SSE 事件类型与 Log Analysis 一致；缺 `project_repo_id` 返回 `project_repo_required`
-- [ ] 6.5 交叉回归：确认改动未影响 `log_analysis` / DeviceAgent / GeneralAgent / PackageSearch 既有测试（复用 `log_analysis.trace` 的耦合回归）
+- [x] 6.5 交叉回归：确认改动未影响 `log_analysis` / DeviceAgent / GeneralAgent / PackageSearch 既有测试（复用 `log_analysis.trace` 的耦合回归）
 - [x] 6.6 `openspec validate add-project-expert-agent` 通过；手动跑通一次"选项目 → 提问 → 克隆 → 回答 → 追问复用"端到端

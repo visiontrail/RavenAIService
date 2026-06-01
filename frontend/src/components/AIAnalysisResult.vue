@@ -39,7 +39,7 @@
 
       </div>
 
-      <div class="markdown-panel" v-html="renderedMarkdown"></div>
+      <div class="markdown-panel" ref="markdownPanel" v-html="renderedMarkdown"></div>
 
       <div class="metadata-line" v-if="result.metadata">
         <span v-if="typeof result.metadata.execution_time === 'number'">执行时长：{{ formatDuration(result.metadata.execution_time) }}</span>
@@ -85,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   CheckCircle,
@@ -164,8 +164,39 @@ const formatDuration = (seconds: number) => {
   return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分钟`
 }
 
+const markdownPanel = ref<HTMLElement | null>(null)
+
+// 获取用户在分析结果面板内选中的文本，若无有效选区则返回空字符串
+const getSelectedTextInPanel = (): string => {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+    return ''
+  }
+
+  const panel = markdownPanel.value
+  if (!panel) return ''
+
+  // 确保选区与分析结果面板有交集，避免复制到面板外的内容
+  let intersectsPanel = false
+  for (let i = 0; i < selection.rangeCount; i++) {
+    const range = selection.getRangeAt(i)
+    if (
+      panel.contains(range.commonAncestorContainer) ||
+      range.intersectsNode(panel)
+    ) {
+      intersectsPanel = true
+      break
+    }
+  }
+  if (!intersectsPanel) return ''
+
+  return selection.toString().trim()
+}
+
 const copyResult = async () => {
-  const text = cleanContent(rawMarkdown.value)
+  const selectedText = getSelectedTextInPanel()
+  const isSelection = !!selectedText
+  const text = isSelection ? selectedText : cleanContent(rawMarkdown.value)
   if (!text) {
     ElMessage.warning('暂无可复制内容')
     return
@@ -173,7 +204,7 @@ const copyResult = async () => {
 
   const success = await copyToClipboard(text)
   if (success) {
-    ElMessage.success('分析结果已复制到剪贴板')
+    ElMessage.success(isSelection ? '选中内容已复制到剪贴板' : '分析结果已复制到剪贴板')
   } else {
     ElMessage.error('复制失败，请手动复制')
   }

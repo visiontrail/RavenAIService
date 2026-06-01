@@ -361,6 +361,8 @@ export interface ChatSessionSummary {
   message_count: number
   created_at: string
   updated_at: string
+  is_pinned?: boolean
+  pinned_at?: string | null
   active_run_id?: string | null
   run_status?: string | null
   run_agent_kind?: string | null

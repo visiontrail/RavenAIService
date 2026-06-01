@@ -133,7 +133,12 @@ class ChatHistoryService(BaseService):
         result = await db.execute(
             select(ChatSession)
             .where(ChatSession.user_id == user_id, ChatSession.is_deleted == False)  # noqa: E712
-            .order_by(ChatSession.last_message_at.desc(), ChatSession.created_at.desc())
+            .order_by(
+                ChatSession.is_pinned.desc(),
+                ChatSession.pinned_at.desc(),
+                ChatSession.last_message_at.desc(),
+                ChatSession.created_at.desc(),
+            )
         )
         return result.scalars().all()
 
@@ -177,6 +182,22 @@ class ChatHistoryService(BaseService):
         if not session:
             return False
         session.title = self._title_from_hint(title, fallback=session.title)
+        await db.flush()
+        return True
+
+    async def set_session_pinned(
+        self,
+        db: AsyncSession,
+        *,
+        user_id: str,
+        session_id: str,
+        pinned: bool,
+    ) -> bool:
+        session = await self._get_session(db, user_id, session_id, include_deleted=False)
+        if not session:
+            return False
+        session.is_pinned = pinned
+        session.pinned_at = datetime.utcnow() if pinned else None
         await db.flush()
         return True
 

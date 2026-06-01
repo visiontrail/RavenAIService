@@ -386,6 +386,34 @@ async def delete_chat_session(
     )
 
 
+class PinSessionRequest(BaseModel):
+    """置顶/取消置顶请求"""
+
+    pinned: bool = True
+
+
+@router.patch("/chat-sessions/{session_id}/pin", response_model=ChatSessionListResponse)
+async def pin_chat_session(
+    session_id: str,
+    payload: PinSessionRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatSessionListResponse:
+    updated = await chat_history_service.set_session_pinned(
+        db,
+        user_id=current_user.id,
+        session_id=session_id,
+        pinned=payload.pinned,
+    )
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
+    sessions = await chat_history_service.list_sessions(db, current_user.id)
+    return ChatSessionListResponse(
+        message="已置顶" if payload.pinned else "已取消置顶",
+        data=[ChatSessionSummary.model_validate(s, from_attributes=True) for s in sessions],
+    )
+
+
 class SaveMessagesRequest(BaseModel):
     """保存消息请求"""
 

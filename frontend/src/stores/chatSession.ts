@@ -49,6 +49,18 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     return false
   }
 
+  const togglePin = async (id: string) => {
+    const target = sessions.value.find((s) => s.id === id)
+    if (!target) return false
+    const nextPinned = !target.is_pinned
+    const resp = await userApi.pinSession(id, nextPinned)
+    if (resp?.success && Array.isArray(resp.data)) {
+      sessions.value = resp.data
+      return true
+    }
+    return false
+  }
+
   const setSelected = (id: string | null) => {
     selectedSessionId.value = id
   }
@@ -93,6 +105,7 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     selectSession,
     startNewChat,
     removeSession,
+    togglePin,
     setSelected,
     upsertSessionTitle,
   }

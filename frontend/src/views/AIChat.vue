@@ -285,6 +285,34 @@ const deleteCurrentSession = async () => {
   }
 }
 
+const currentSessionPinned = computed(() => {
+  const id = sessionStore.selectedSessionId
+  if (!id) return false
+  return Boolean(sessionStore.sessions.find((s) => s.id === id)?.is_pinned)
+})
+
+const toggleCurrentPin = async () => {
+  showTopMoreMenu.value = false
+  const id = sessionStore.selectedSessionId
+  if (!id) {
+    appStore.showNotification({ title: '请先保存对话后再置顶', type: 'warning' })
+    return
+  }
+  const wasPinned = currentSessionPinned.value
+  try {
+    const ok = await sessionStore.togglePin(id)
+    if (ok) {
+      appStore.showNotification({
+        title: wasPinned ? '已取消置顶' : '已置顶对话',
+        type: 'success',
+      })
+    }
+  } catch (error) {
+    console.error('置顶操作失败', error)
+    appStore.showNotification({ title: '操作失败', type: 'error' })
+  }
+}
+
 const padDatePart = (value: number) => String(value).padStart(2, '0')
 
 const formatExportDateTime = (date: Date) => {
@@ -1072,9 +1100,9 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16zM14 6l4 4"/></svg>
               重命名对话 <span class="rw-kbd-right">F2</span>
             </button>
-            <button class="rw-menu-item" @click="showTopMoreMenu = false">
+            <button class="rw-menu-item" @click="toggleCurrentPin">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M9 8h6l2 6H7zM12 14v8"/></svg>
-              固定到顶部
+              {{ currentSessionPinned ? '取消置顶' : '固定到顶部' }}
             </button>
 
             <div class="rw-menu-divider"/>

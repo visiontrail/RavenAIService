@@ -119,6 +119,17 @@ class ChatSession(Base, TimestampMixin):
         default=False,
         comment="是否已删除",
     )
+    is_pinned: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="是否置顶",
+    )
+    pinned_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime,
+        nullable=True,
+        comment="置顶时间",
+    )
 
     user: Mapped["User"] = relationship("User", back_populates="chat_sessions")
     messages: Mapped[list["ChatMessage"]] = relationship(
@@ -313,6 +324,8 @@ class ChatSessionSummary(BaseModel):
     message_count: int
     created_at: datetime
     updated_at: datetime
+    is_pinned: bool = False
+    pinned_at: Optional[datetime] = None
     # Optional overlay of the currently active (or most recently active running)
     # chat agent run, used by the sidebar to render running spinners and by the
     # frontend to resume in-flight conversations.
