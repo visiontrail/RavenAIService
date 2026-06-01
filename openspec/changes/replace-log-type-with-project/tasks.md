@@ -1,66 +1,66 @@
-## 1. Database Migration
+## 1. 数据库迁移
 
-- [ ] 1.1 Create Alembic migration: add nullable `project_id` integer FK column to `log_records` referencing `project_repo.id` with `ON DELETE SET NULL`
-- [ ] 1.2 Seed "full" project entry in `project_repo` table (`project_code='full'`, `project_name='Full Log'`, `repo_url=''`, `enabled=true`) if not already present
-- [ ] 1.3 Backfill `project_id` for all existing `log_records` by mapping `log_type` enum values to corresponding `project_repo.project_code` entries
-- [ ] 1.4 Drop `log_type` column and `logtype` PostgreSQL enum type
-- [ ] 1.5 Write downgrade migration that re-adds `log_type` column and backfills from `project_id`
+- [ ] 1.1 创建 Alembic 迁移：在 `log_records` 表中添加可空 `project_id` 整型外键列，引用 `project_repo.id`，设置 `ON DELETE SET NULL`
+- [ ] 1.2 在 `project_repo` 表中预置 "full" 项目条目（`project_code='full'`、`project_name='Full Log'`、`repo_url=''`、`enabled=true`），如果尚不存在
+- [ ] 1.3 通过将 `log_type` 枚举值映射到对应的 `project_repo.project_code` 条目，回填所有现有 `log_records` 的 `project_id`
+- [ ] 1.4 删除 `log_type` 列和 `logtype` PostgreSQL 枚举类型
+- [ ] 1.5 编写降级迁移，重新添加 `log_type` 列并从 `project_id` 回填
 
-## 2. Backend Models
+## 2. 后端模型
 
-- [ ] 2.1 Remove `LogType` enum class from `app/models/log.py`
-- [ ] 2.2 Replace `log_type` mapped column with `project_id` nullable FK column in `LogRecord`
-- [ ] 2.3 Update `LogFileInfo` Pydantic model: remove `log_type`, add `project_id`, `project_code`, `project_name`
-- [ ] 2.4 Update `LogUploadRequest` Pydantic model: remove `log_type`, add optional `project_code` and `project_id`
-- [ ] 2.5 Update `LogListRequest` Pydantic model: remove `log_type` filter, add optional `project_id` filter
+- [ ] 2.1 从 `app/models/log.py` 中移除 `LogType` 枚举类
+- [ ] 2.2 将 `LogRecord` 中的 `log_type` 映射列替换为可空 `project_id` 外键列
+- [ ] 2.3 更新 `LogFileInfo` Pydantic 模型：移除 `log_type`，添加 `project_id`、`project_code`、`project_name`
+- [ ] 2.4 更新 `LogUploadRequest` Pydantic 模型：移除 `log_type`，添加可选的 `project_code` 和 `project_id`
+- [ ] 2.5 更新 `LogListRequest` Pydantic 模型：移除 `log_type` 过滤器，添加可选的 `project_id` 过滤器
 
-## 3. Backend Services
+## 3. 后端服务
 
-- [ ] 3.1 Replace `_infer_log_type_from_filename()` in `app/api/logs.py` with `infer_project_from_filename()` that resolves to a `ProjectRepo` entry
-- [ ] 3.2 Replace `_infer_log_type_from_components()` with equivalent project-based resolution
-- [ ] 3.3 Update `LogService.create_log()` to accept and store `project_id` instead of `log_type`
-- [ ] 3.4 Update `LogService.get_logs()` to filter by `project_id` instead of `log_type`
-- [ ] 3.5 Update `LogService._record_to_info()` to populate `project_code` and `project_name` by joining with `project_repo`
-- [ ] 3.6 Update OAM-specific logic (status/progress defaults) to check `project_code == 'oam_antenna'` via project lookup instead of `log_type == LogType.OAM_ANTENNA`
+- [ ] 3.1 将 `app/api/logs.py` 中的 `_infer_log_type_from_filename()` 替换为 `infer_project_from_filename()`，解析到 `ProjectRepo` 条目
+- [ ] 3.2 将 `_infer_log_type_from_components()` 替换为等效的基于项目的解析
+- [ ] 3.3 更新 `LogService.create_log()` 以接受和存储 `project_id` 而非 `log_type`
+- [ ] 3.4 更新 `LogService.get_logs()` 以按 `project_id` 而非 `log_type` 过滤
+- [ ] 3.5 更新 `LogService._record_to_info()` 以通过与 `project_repo` 关联填充 `project_code` 和 `project_name`
+- [ ] 3.6 更新 OAM 特有逻辑（状态/进度默认值），通过项目查找检查 `project_code == 'oam_antenna'` 而非 `log_type == LogType.OAM_ANTENNA`
 
-## 4. Upload API Endpoints
+## 4. 上传 API 端点
 
-- [ ] 4.1 Update `POST /api/v1/logs/upload` endpoint: replace `log_type` form field with optional `project_code`/`project_id`, implement resolution logic (explicit → inferred → NULL)
-- [ ] 4.2 Update `POST /api/v1/logs/upload-simple` endpoint with same changes
-- [ ] 4.3 Update `POST /api/v1/logs/upload-t04-batch` endpoint: replace log_type inference with project-based resolution, add optional `project_code` default parameter
-- [ ] 4.4 Update `GET /api/v1/logs` endpoint: replace `log_type` query parameter with `project_id` filter
+- [ ] 4.1 更新 `POST /api/v1/logs/upload` 端点：将 `log_type` 表单字段替换为可选的 `project_code`/`project_id`，实现解析逻辑（显式 → 推断 → NULL）
+- [ ] 4.2 更新 `POST /api/v1/logs/upload-simple` 端点，进行相同变更
+- [ ] 4.3 更新 `POST /api/v1/logs/upload-t04-batch` 端点：将 log_type 推断替换为基于项目的解析，添加可选的 `project_code` 默认参数
+- [ ] 4.4 更新 `GET /api/v1/logs` 端点：将 `log_type` 查询参数替换为 `project_id` 过滤器
 
-## 5. AI Analysis Pipeline
+## 5. AI 分析流水线
 
-- [ ] 5.1 Update `_resolve_project_code_for_analysis()` in `app/tasks/ai_analysis.py` to use `project_id` FK lookup instead of `log_type`-based resolution
-- [ ] 5.2 Update `_bind_query_to_workspace()` to pass `project_id` instead of `log_type` in workspace metadata
-- [ ] 5.3 Update `app/tasks/log_processing.py` to reference `project_id` instead of `log_type` in logging and status logic
-- [ ] 5.4 Update `app/agents/log_analysis/workspace.py` context building to use `project_id`/`project_code`
-- [ ] 5.5 Update `app/agents/log_analysis/prompts.py` `get_prompts()` to accept `project_code` string instead of `log_type`
-- [ ] 5.6 Update `app/agents/log_analysis/agent.py` references from `log_type` to `project_code`/`project_id`
-- [ ] 5.7 Update `app/utils/file_upload_validator.py` `determine_log_type_from_filename()` to return project_code string or remove in favor of centralized inference
+- [ ] 5.1 更新 `app/tasks/ai_analysis.py` 中的 `_resolve_project_code_for_analysis()`，使用 `project_id` 外键查找而非基于 `log_type` 的解析
+- [ ] 5.2 更新 `_bind_query_to_workspace()`，在工作空间元数据中传递 `project_id` 而非 `log_type`
+- [ ] 5.3 更新 `app/tasks/log_processing.py`，在日志记录和状态逻辑中引用 `project_id` 而非 `log_type`
+- [ ] 5.4 更新 `app/agents/log_analysis/workspace.py` 上下文构建，使用 `project_id`/`project_code`
+- [ ] 5.5 更新 `app/agents/log_analysis/prompts.py` 的 `get_prompts()`，接受 `project_code` 字符串而非 `log_type`
+- [ ] 5.6 更新 `app/agents/log_analysis/agent.py` 中从 `log_type` 到 `project_code`/`project_id` 的引用
+- [ ] 5.7 更新 `app/utils/file_upload_validator.py` 的 `determine_log_type_from_filename()`，返回 project_code 字符串或移除该函数，改用集中式推断
 
-## 6. Admin API
+## 6. 管理 API
 
-- [ ] 6.1 Update `DELETE /admin/project-repos/{id}` to check for associated `LogRecord` rows and return HTTP 409 if found (unless `force=true`)
-- [ ] 6.2 Allow `repo_url` empty string in `project_repo` for categorization-only projects
+- [ ] 6.1 更新 `DELETE /admin/project-repos/{id}`，检查关联的 `LogRecord` 行，如果存在则返回 HTTP 409（除非 `force=true`）
+- [ ] 6.2 允许 `project_repo` 中 `repo_url` 为空字符串，以支持仅用于分类的项目
 
-## 7. Frontend
+## 7. 前端
 
-- [ ] 7.1 Update `frontend/src/types/index.ts`: replace `log_type` field with `project_id`, `project_code`, `project_name`
-- [ ] 7.2 Update `frontend/src/stores/logs.ts`: replace `log_type` filter with `project_id` filter
-- [ ] 7.3 Update `frontend/src/api/index.ts`: replace `log_type` query parameter with `project_id`
-- [ ] 7.4 Update `frontend/src/views/LogList.vue`: replace hardcoded log-type dropdown with dynamic project selector from `GET /api/v1/project-repos`, update table column and pill display
-- [ ] 7.5 Update `frontend/src/views/LogDetail.vue`: replace log type label/pill with project name display
-- [ ] 7.6 Update `frontend/src/views/AdminPrompts.vue`: remove `log_type_keys` references if applicable
-- [ ] 7.7 Handle `project_id=null` display as "Unclassified" in both list and detail views
+- [ ] 7.1 更新 `frontend/src/types/index.ts`：将 `log_type` 字段替换为 `project_id`、`project_code`、`project_name`
+- [ ] 7.2 更新 `frontend/src/stores/logs.ts`：将 `log_type` 过滤器替换为 `project_id` 过滤器
+- [ ] 7.3 更新 `frontend/src/api/index.ts`：将 `log_type` 查询参数替换为 `project_id`
+- [ ] 7.4 更新 `frontend/src/views/LogList.vue`：将硬编码的日志类型下拉菜单替换为从 `GET /api/v1/project-repos` 获取的动态项目选择器，更新表格列和标签显示
+- [ ] 7.5 更新 `frontend/src/views/LogDetail.vue`：将日志类型标签替换为项目名称显示
+- [ ] 7.6 更新 `frontend/src/views/AdminPrompts.vue`：移除 `log_type_keys` 引用（如适用）
+- [ ] 7.7 处理 `project_id=null` 的情况，在列表和详情视图中显示为"未分类"
 
-## 8. Tests
+## 8. 测试
 
-- [ ] 8.1 Update `tests/test_log_analysis_agent.py` to use `project_id` instead of `log_type`
-- [ ] 8.2 Update `tests/test_ai_analysis_repo_injection.py` to use project-based resolution
-- [ ] 8.3 Update `tests/test_workspace.py` to use `project_id` in workspace context
-- [ ] 8.4 Add test for `infer_project_from_filename()` with known and unknown patterns
-- [ ] 8.5 Add test for upload API with `project_code`, `project_id`, and no-project scenarios
-- [ ] 8.6 Add test for log list filtering by `project_id` including NULL filter
-- [ ] 8.7 Add test for admin delete protection (409 when logs reference the project)
+- [ ] 8.1 更新 `tests/test_log_analysis_agent.py`，使用 `project_id` 替代 `log_type`
+- [ ] 8.2 更新 `tests/test_ai_analysis_repo_injection.py`，使用基于项目的解析
+- [ ] 8.3 更新 `tests/test_workspace.py`，在工作空间上下文中使用 `project_id`
+- [ ] 8.4 为 `infer_project_from_filename()` 添加测试，覆盖已知和未知模式
+- [ ] 8.5 为上传 API 添加测试，覆盖 `project_code`、`project_id` 和无项目场景
+- [ ] 8.6 为按 `project_id` 过滤日志列表添加测试，包括 NULL 过滤
+- [ ] 8.7 为管理员删除保护添加测试（当日志引用项目时返回 409）
