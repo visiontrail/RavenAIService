@@ -385,10 +385,71 @@ const isLogFileUploadDisabled = computed(() =>
 const isProjectRepoRequiredMissing = computed(() =>
   isProjectExpertAgentSelected.value && selectedProjectRepoId.value === null
 )
+
+// ZIP inspection: read central directory to check if metadata.json is present
+const zipMetadataCheckResult = ref<boolean | null>(null) // null=unknown/non-zip, true=present, false=absent
+
+async function checkZipForMetadata(file: File): Promise<boolean | null> {
+  if (!file.name.toLowerCase().endsWith('.zip')) return null
+  try {
+    const maxTail = Math.min(file.size, 22 + 65535)
+    const tailBuf = await file.slice(file.size - maxTail).arrayBuffer()
+    const tail = new DataView(tailBuf)
+    let eocdPos = -1
+    for (let i = tailBuf.byteLength - 22; i >= 0; i--) {
+      if (tail.getUint32(i, true) === 0x06054b50) { eocdPos = i; break }
+    }
+    if (eocdPos < 0) return null
+    const cdSize = tail.getUint32(eocdPos + 12, true)
+    const cdOff  = tail.getUint32(eocdPos + 16, true)
+    if (cdOff + cdSize > file.size) return null
+    const cdBuf = await file.slice(cdOff, cdOff + cdSize).arrayBuffer()
+    const cd = new DataView(cdBuf)
+    const dec = new TextDecoder('utf-8', { fatal: false })
+    let p = 0
+    while (p + 46 <= cdBuf.byteLength) {
+      if (cd.getUint32(p, true) !== 0x02014b50) break
+      const fnLen  = cd.getUint16(p + 28, true)
+      const extLen = cd.getUint16(p + 30, true)
+      const cmtLen = cd.getUint16(p + 32, true)
+      if (p + 46 + fnLen > cdBuf.byteLength) break
+      const name = dec.decode(new Uint8Array(cdBuf, p + 46, fnLen))
+      if (name === 'metadata.json' || name.endsWith('/metadata.json')) return true
+      p += 46 + fnLen + extLen + cmtLen
+    }
+    return false
+  } catch { return null }
+}
+
+watch(selectedLogFile, async (file) => {
+  zipMetadataCheckResult.value = null
+  if (file) zipMetadataCheckResult.value = await checkZipForMetadata(file)
+})
+
+// Warning: log-analysis agent active but no file attached in the composer.
+// Only relevant before the first submission — once the conversation already
+// has messages, a log-analysis request has been sent and follow-up questions
+// don't need a new attachment. This also prevents the reminder from
+// re-appearing after send, when the composer's file selection is cleared.
+const logAnalysisNoAttachmentWarning = computed(() =>
+  targetAgent.value?.agentType === 'log-analysis' &&
+  !selectedLogFile.value &&
+  chatHistory.value.length === 0
+)
+
+// Error: ZIP file has no metadata.json and no project manually selected → cannot identify project
+const logAnalysisMetadataError = computed(() =>
+  isLogAnalysisAgentSelected.value &&
+  !!selectedLogFile.value &&
+  zipMetadataCheckResult.value === false &&
+  selectedProjectRepoId.value === null
+)
+
 const sendDisabled = computed(() =>
   isSending.value ||
   (!inputMessage.value.trim() && !selectedLogFile.value) ||
-  isProjectRepoRequiredMissing.value
+  isProjectRepoRequiredMissing.value ||
+  logAnalysisMetadataError.value
 )
 
 const setTargetAgent = (option: AgentOption) => {
@@ -1074,6 +1135,22 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
 
     <!-- Composer -->
     <div class="rw-composer-wrap">
+      <!-- Log analysis inline warnings — placed above the composer so the input
+           box, tool chips and project dropdown stay anchored to the bottom and
+           do not shift under the cursor when an alert appears/disappears. -->
+      <div v-if="logAnalysisMetadataError" class="rw-composer-alert is-error">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span>
+          日志包中未找到 <code>metadata.json</code>，无法自动识别项目。请在下方「关联项目」下拉菜单中手动选择关联项目，或更换包含 <code>metadata.json</code> 的日志包后重试。
+        </span>
+      </div>
+      <div v-else-if="logAnalysisNoAttachmentWarning" class="rw-composer-alert is-warn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span>
+          <strong>日志分析</strong> 需要上传日志压缩包作为附件，支持格式：<code>.zip</code> <code>.tar</code> <code>.tgz</code> <code>.gz</code> <code>.tar.gz</code> <code>.tar.bz2</code> <code>.bz2</code> <code>.tar.xz</code> <code>.xz</code> <code>.7z</code> <code>.rar</code>。如需直接提问，可切换至
+          <button type="button" class="rw-alert-link" @click="toggleProjectExpertAgent">项目专家</button>。
+        </span>
+      </div>
       <div
         ref="inputAreaRef"
         class="rw-composer"
@@ -1100,6 +1177,14 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             aria-label="清除目标"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+
+        <div v-if="selectedLogFile" class="rw-file-chip rw-file-chip--above">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11.5-9.5 9.5a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5L9.5 18.5a2 2 0 0 1-3-3L15 7"/></svg>
+          <span>{{ selectedLogFile.name }}</span>
+          <button type="button" aria-label="移除附件" @click="clearSelectedLogFile">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
           </button>
         </div>
 
@@ -1232,24 +1317,12 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
               {{ repo.project_name }}（{{ repo.project_code }}）
             </option>
           </select>
-          <div v-if="selectedLogFile" class="rw-file-chip">
-            <span>{{ selectedLogFile.name }}</span>
-            <button type="button" aria-label="移除附件" @click="clearSelectedLogFile">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
-            </button>
-          </div>
           <button
-            v-if="activeTraceAgentSessionId"
-            class="rw-cancel-btn"
-            :disabled="cancelInFlight"
-            type="button"
-            :title="cancelInFlight ? '正在取消...' : '取消当前任务'"
-            @click="cancelActiveTraceAgent"
+            class="rw-send-btn"
+            :disabled="activeTraceAgentSessionId ? cancelInFlight : sendDisabled"
+            :title="activeTraceAgentSessionId ? (cancelInFlight ? '正在取消...' : '取消当前任务') : ''"
+            @click="activeTraceAgentSessionId ? cancelActiveTraceAgent() : sendMessage()"
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
-            {{ cancelInFlight ? '取消中…' : '取消任务' }}
-          </button>
-          <button class="rw-send-btn" :disabled="sendDisabled" @click="sendMessage">
             <svg v-if="isSending" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="spin"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
             <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 19 5l-3 15-5-7-6-1Z"/></svg>
           </button>
@@ -1571,6 +1644,12 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
   color: var(--rw-muted); background: none; border: none; cursor: pointer;
 }
 .rw-file-chip button:hover { background: var(--rw-hairline-strong); color: var(--rw-ink); }
+.rw-file-chip--above {
+  max-width: 100%; align-self: flex-start;
+  border: 1px solid var(--rw-hairline-strong);
+  background: var(--rw-canvas);
+  padding: 0 8px 0 8px;
+}
 
 .rw-project-select {
   height: 28px; max-width: 220px; padding: 0 26px 0 10px;
@@ -1622,6 +1701,30 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
   max-width: 820px; margin: 8px auto 0;
   font-size: 11.5px; color: var(--rw-muted);
   text-align: center; font-family: var(--rw-mono);
+}
+
+.rw-composer-alert {
+  display: flex; align-items: flex-start; gap: 8px;
+  max-width: 820px; margin: 0 auto 8px;
+  padding: 9px 12px; border-radius: 8px;
+  font-size: 12.5px; line-height: 1.55;
+}
+.rw-composer-alert.is-warn {
+  background: #fffbeb; color: #92400e;
+  border: 1px solid #fcd34d;
+}
+.rw-composer-alert.is-error {
+  background: #fef2f2; color: #991b1b;
+  border: 1px solid #fca5a5;
+}
+.rw-composer-alert code {
+  font-family: var(--rw-mono); font-size: 11.5px;
+  background: rgba(0,0,0,.06); border-radius: 3px; padding: 1px 4px;
+}
+.rw-alert-link {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: inherit; text-decoration: underline; font-size: inherit;
+  font-family: inherit;
 }
 
 /* Device operation dropdown */

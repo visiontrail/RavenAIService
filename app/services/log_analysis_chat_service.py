@@ -24,7 +24,14 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.log_analysis.agent import LogAnalysisAgent, extract_recoverable_result_fields
-from app.agents.log_analysis.workspace import WorkspaceContext, cleanup, prepare
+from app.agents.log_analysis.workspace import (
+    MissingArchiveError,
+    MissingMetadataJsonError,
+    WorkspaceContext,
+    WorkspaceExtractTooLarge,
+    cleanup,
+    prepare,
+)
 from app.config import settings
 from app.models.chat import ChatMessage
 from app.models.log import LogLevel, LogMetadata, LogStatus, LogType, LogUploadRequest
@@ -267,9 +274,69 @@ class LogAnalysisChatService:
                 ctx.task_id,
                 ctx.temp_dir,
             )
+        except MissingMetadataJsonError as exc:
+            logger.info(
+                "log-analysis chat: archive missing metadata.json session_id=%s: %s",
+                effective_session_id,
+                exc,
+            )
+            yield self._sse_event(
+                {
+                    "event": "error",
+                    "reason": "missing_metadata",
+                    "message": (
+                        "这个日志包里没有找到 metadata.json，我无法自动识别它属于哪个项目。"
+                        "请在输入框上方的「关联项目」下拉菜单中手动选择对应项目后重新发送，"
+                        "或更换一个包含 metadata.json 的日志包。"
+                    ),
+                }
+            )
+            return
+        except MissingArchiveError as exc:
+            logger.warning(
+                "log-analysis chat: archive unreadable session_id=%s: %s",
+                effective_session_id,
+                exc,
+            )
+            yield self._sse_event(
+                {
+                    "event": "error",
+                    "reason": "missing_archive",
+                    "message": (
+                        "这个日志包好像读取不到内容，可能上传未完成或文件已损坏。"
+                        "请重新上传日志包后再试一次。"
+                    ),
+                }
+            )
+            return
+        except WorkspaceExtractTooLarge as exc:
+            logger.warning(
+                "log-analysis chat: archive too large session_id=%s: %s",
+                effective_session_id,
+                exc,
+            )
+            yield self._sse_event(
+                {
+                    "event": "error",
+                    "reason": "archive_too_large",
+                    "message": (
+                        "这个日志包解压后体积超出了分析上限。"
+                        "请精简日志内容或拆分后再上传。"
+                    ),
+                }
+            )
+            return
         except Exception as exc:  # noqa: BLE001
             logger.error("log-analysis chat stream failed to start job: %s", exc, exc_info=True)
-            yield self._sse_event({"event": "error", "message": str(exc)})
+            yield self._sse_event(
+                {
+                    "event": "error",
+                    "message": (
+                        "抱歉，准备日志分析工作区时遇到了问题，暂时无法完成分析。"
+                        "请稍后重试；若反复出现，请联系管理员。"
+                    ),
+                }
+            )
             return
 
         try:

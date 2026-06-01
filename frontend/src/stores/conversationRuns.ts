@@ -365,7 +365,11 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       else if (state.runStatus !== 'cancelled' && state.runStatus !== 'failed') state.runStatus = 'succeeded'
       target.traceRunning = false
     } else if (type === 'error') {
-      target.content = `调用后端失败：${payload?.message || '未知错误'}`
+      // The backend already returns a user-facing, friendly message for known
+      // cases (e.g. missing metadata.json). Render it verbatim; only fall back
+      // to a generic friendly line when no message was provided.
+      const backendMsg = typeof payload?.message === 'string' ? payload.message.trim() : ''
+      target.content = backendMsg || '抱歉，处理这条请求时遇到了问题，请稍后重试。'
       state.runStatus = 'failed'
       target.traceRunning = false
     }
@@ -950,7 +954,9 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       console.error('启动日志分析 run 失败', err)
       const target = state.messages.find((m) => m.id === state.currentAnswerId)
       if (target) {
-        target.content = `日志分析调用失败：${err?.message || String(err)}`
+        // Transport-level failure (network / non-2xx). Keep it friendly and
+        // actionable rather than surfacing the raw error string.
+        target.content = '抱歉，日志分析服务暂时无法连接，请检查网络后稍后重试。'
         target.traceRunning = false
       }
       markTerminal(state, 'failed')
