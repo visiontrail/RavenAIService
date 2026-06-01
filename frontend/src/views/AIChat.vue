@@ -30,7 +30,7 @@ type AgentOption = {
   id: string
   name: string
   description?: string
-  agentType: 'package-manager' | 'log-analysis'
+  agentType: 'package-manager' | 'log-analysis' | 'project-expert'
 }
 
 const packageAgentOption: AgentOption = {
@@ -45,6 +45,13 @@ const logAnalysisAgentOption: AgentOption = {
   name: '日志分析',
   agentType: 'log-analysis',
   description: '上传日志包并调用 Log Analysis Agent，保留工作区支持追问'
+}
+
+const projectExpertAgentOption: AgentOption = {
+  id: 'project-expert',
+  name: '项目专家',
+  agentType: 'project-expert',
+  description: '选择已登记项目后直接提问，复用项目源码工作区支持追问'
 }
 
 const acceptedLogArchiveTypes = '.zip,.tar,.tgz,.gz,.tar.gz,.tar.bz2,.bz2,.tar.xz,.xz,.7z,.rar'
@@ -83,7 +90,7 @@ const deviceKeyword = ref('')
 
 const targetDeviceId = ref<string | null>(null)
 const targetDeviceName = ref<string | null>(null)
-const targetAgent = ref<{ id: string; name: string; agentType: 'package-manager' | 'log-analysis' } | null>(null)
+const targetAgent = ref<AgentOption | null>(null)
 const selectedLogFile = ref<File | null>(null)
 const isLogFileDragOver = ref(false)
 let logFileDragDepth = 0
@@ -118,9 +125,11 @@ const currentPermission = computed<PendingPermission | null>(() =>
 )
 const permissionDecisionInFlight = ref(false)
 // Sidebar cancel button only when the current session has an active run.
-const activeLogAnalysisSessionId = computed(() => {
+const activeTraceAgentSessionId = computed(() => {
   const s = currentConversation.value
-  return s && s.runStatus === 'running' && s.runAgentKind === 'log_analysis' ? s.sessionId : null
+  return s && s.runStatus === 'running' && (
+    s.runAgentKind === 'log_analysis' || s.runAgentKind === 'project_expert'
+  ) ? s.sessionId : null
 })
 
 // 关联项目（用于在日志分析 Agent 中显式指定项目身份；留空则回退到 metadata.json）
@@ -363,15 +372,30 @@ const filteredDeviceOptions = computed<DeviceInfo[]>(() => {
 
 const targetAgentName = computed(() => targetAgent.value?.name || null)
 const isPackageAgentSelected = computed(() => targetAgent.value?.agentType === 'package-manager')
+const isProjectExpertAgentSelected = computed(() => targetAgent.value?.agentType === 'project-expert')
 const isLogAnalysisAgentSelected = computed(() =>
   targetAgent.value?.agentType === 'log-analysis' || !!selectedLogFile.value
 )
+const isProjectRepoSelectVisible = computed(() =>
+  isLogAnalysisAgentSelected.value || isProjectExpertAgentSelected.value
+)
+const isLogFileUploadDisabled = computed(() =>
+  isPackageAgentSelected.value || isProjectExpertAgentSelected.value
+)
+const isProjectRepoRequiredMissing = computed(() =>
+  isProjectExpertAgentSelected.value && selectedProjectRepoId.value === null
+)
+const sendDisabled = computed(() =>
+  isSending.value ||
+  (!inputMessage.value.trim() && !selectedLogFile.value) ||
+  isProjectRepoRequiredMissing.value
+)
 
 const setTargetAgent = (option: AgentOption) => {
-  targetAgent.value = { id: option.id, name: option.name, agentType: option.agentType }
+  targetAgent.value = option
   targetDeviceId.value = null
   targetDeviceName.value = null
-  if (option.agentType === 'log-analysis') {
+  if (option.agentType === 'log-analysis' || option.agentType === 'project-expert') {
     ensureProjectRepoOptions()
   }
 }
@@ -461,7 +485,7 @@ const clearTargetAgent = () => {
 const clearSelectedLogFile = () => { selectedLogFile.value = null }
 
 const triggerLogFilePicker = () => {
-  if (isSending.value) return
+  if (isSending.value || isLogFileUploadDisabled.value) return
   setTargetAgent(logAnalysisAgentOption)
   ensureProjectRepoOptions()
   logFileInputRef.value?.click()
@@ -486,14 +510,14 @@ const isFileDragEvent = (event: DragEvent) =>
   Array.from(event.dataTransfer?.types || []).includes('Files')
 
 const handleLogFileDragEnter = (event: DragEvent) => {
-  if (isSending.value || isPackageAgentSelected.value || !isFileDragEvent(event)) return
+  if (isSending.value || isLogFileUploadDisabled.value || !isFileDragEvent(event)) return
   logFileDragDepth += 1
   isLogFileDragOver.value = true
 }
 
 const handleLogFileDragOver = (event: DragEvent) => {
   if (!isFileDragEvent(event) || !event.dataTransfer) return
-  if (isSending.value || isPackageAgentSelected.value) {
+  if (isSending.value || isLogFileUploadDisabled.value) {
     event.dataTransfer.dropEffect = 'none'
     return
   }
@@ -509,7 +533,7 @@ const handleLogFileDragLeave = (event: DragEvent) => {
 const handleLogFileDrop = (event: DragEvent) => {
   logFileDragDepth = 0
   isLogFileDragOver.value = false
-  if (isSending.value || isPackageAgentSelected.value) return
+  if (isSending.value || isLogFileUploadDisabled.value) return
   const file = event.dataTransfer?.files?.[0] || null
   if (file) selectLogFile(file)
 }
@@ -529,6 +553,16 @@ const toggleLogAnalysisAgent = () => {
     return
   }
   setTargetAgent(logAnalysisAgentOption)
+  ensureProjectRepoOptions()
+}
+
+const toggleProjectExpertAgent = () => {
+  if (isProjectExpertAgentSelected.value) {
+    clearTargetAgent()
+    return
+  }
+  selectedLogFile.value = null
+  setTargetAgent(projectExpertAgentOption)
   ensureProjectRepoOptions()
 }
 
@@ -669,7 +703,7 @@ const runPackageAgent = async (content: string, sid: string, state: ReturnType<t
   }
 }
 
-const cancelLogAnalysis = async () => {
+const cancelActiveTraceAgent = async () => {
   const sid = effectiveSessionId.value
   if (!sid || cancelInFlight.value) return
   cancelInFlight.value = true
@@ -729,18 +763,32 @@ const sendMessage = async () => {
     triggerSessionSummary(content, sid)
   }
 
+  const shouldUseProjectExpertAgent =
+    isProjectExpertAgentSelected.value || content.includes(`@${projectExpertAgentOption.name}`)
+
   const shouldUseLogAnalysisAgent =
-    isLogAnalysisAgentSelected.value || content.includes(`@${logAnalysisAgentOption.name}`) || !!fileForRequest
+    !shouldUseProjectExpertAgent &&
+    (isLogAnalysisAgentSelected.value || content.includes(`@${logAnalysisAgentOption.name}`) || !!fileForRequest)
 
   const shouldUsePackageAgent =
+    !shouldUseProjectExpertAgent &&
     !shouldUseLogAnalysisAgent &&
     (isPackageAgentSelected.value || content.includes(`@${packageAgentOption.name}`))
 
+  if (shouldUseProjectExpertAgent && !isProjectExpertAgentSelected.value) {
+    setTargetAgent(projectExpertAgentOption)
+  }
   if (shouldUseLogAnalysisAgent && targetAgent.value?.agentType !== 'log-analysis') {
     setTargetAgent(logAnalysisAgentOption)
   }
   if (shouldUsePackageAgent && !isPackageAgentSelected.value) {
     setTargetAgent(packageAgentOption)
+  }
+
+  if (shouldUseProjectExpertAgent && selectedProjectRepoId.value === null) {
+    ensureProjectRepoOptions()
+    appStore.showNotification({ title: '请先选择关联项目', type: 'warning' })
+    return
   }
 
   const outgoingContent = content || '请分析这个日志包。'
@@ -756,7 +804,19 @@ const sendMessage = async () => {
   deviceMenuVisible.value = false
 
   try {
-    if (shouldUseLogAnalysisAgent) {
+    if (shouldUseProjectExpertAgent) {
+      selectedLogFile.value = null
+      await runsStore.startProjectExpertRun(
+        sid,
+        {
+          message: outgoingContent,
+          history: historyPayload,
+          project_repo_id: selectedProjectRepoId.value as number,
+          remember: true,
+        },
+        { authToken },
+      )
+    } else if (shouldUseLogAnalysisAgent) {
       const fileSnapshot = fileForRequest
       // Clear the file from the composer; runLogAnalysisRun will append the
       // user message with attachment info.
@@ -998,7 +1058,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
                 class="rw-ai-trace"
                 :events="msg.traceEvents || []"
                 :running="!!msg.traceRunning"
-                :on-cancel="msg.traceRunning ? cancelLogAnalysis : undefined"
+                :on-cancel="msg.traceRunning ? cancelActiveTraceAgent : undefined"
               />
               <template v-if="msg.content === '正在思考...'">
                 <div v-if="!msg.traceRunning" class="rw-thinking">正在思考…</div>
@@ -1055,8 +1115,8 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
         <div class="rw-composer-row">
           <button
             class="rw-mini-btn"
-            :disabled="isPackageAgentSelected"
-            :title="isPackageAgentSelected ? '检索重构包模式下不支持附件上传' : '附加日志包'"
+            :disabled="isLogFileUploadDisabled"
+            :title="isLogFileUploadDisabled ? '当前智能体不支持附件上传' : '附加日志包'"
             aria-label="附加日志包"
             @click="triggerLogFilePicker"
           >
@@ -1069,22 +1129,6 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             :accept="acceptedLogArchiveTypes"
             @change="handleLogFileChange"
           />
-          <button
-            class="rw-tool-chip"
-            :class="{ active: isPackageAgentSelected }"
-            @click="togglePackageAgent"
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>
-            检索重构包
-          </button>
-          <button
-            class="rw-tool-chip"
-            :class="{ active: isLogAnalysisAgentSelected }"
-            @click="toggleLogAnalysisAgent"
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h16"/><circle cx="18" cy="12" r="1.4"/></svg>
-            日志分析
-          </button>
           <div class="rw-device-wrap">
             <button
               ref="deviceMenuBtnRef"
@@ -1139,17 +1183,46 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
               </template>
             </div>
           </div>
+          <button
+            class="rw-tool-chip"
+            :class="{ active: isPackageAgentSelected }"
+            @click="togglePackageAgent"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>
+            检索重构包
+          </button>
+          <button
+            class="rw-tool-chip"
+            :class="{ active: isLogAnalysisAgentSelected }"
+            @click="toggleLogAnalysisAgent"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h16"/><circle cx="18" cy="12" r="1.4"/></svg>
+            日志分析
+          </button>
+          <button
+            class="rw-tool-chip"
+            :class="{ active: isProjectExpertAgentSelected }"
+            @click="toggleProjectExpertAgent"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V6.75A2.75 2.75 0 0 1 6.75 4H20v13H6.75A2.75 2.75 0 0 0 4 19.5Z"/><path d="M8 8h8M8 12h6"/></svg>
+            项目专家
+          </button>
           <select
-            v-if="isLogAnalysisAgentSelected"
+            v-if="isProjectRepoSelectVisible"
             v-model="selectedProjectRepoId"
             class="rw-project-select"
+            :class="{ required: isProjectRepoRequiredMissing }"
             :disabled="projectRepoOptionsLoading"
             :title="projectRepoOptionsLoading
               ? '加载项目列表中…'
-              : '可选：选择关联项目；留空则后端从日志包内 metadata.json 自动识别'"
+              : isProjectExpertAgentSelected
+                ? '必选：项目专家需要一个已登记项目'
+                : '可选：选择关联项目；留空则后端从日志包内 metadata.json 自动识别'"
           >
             <option :value="null">
-              {{ projectRepoOptionsLoading ? '加载项目中…' : '关联项目（自动识别）' }}
+              {{ projectRepoOptionsLoading
+                ? '加载项目中…'
+                : isProjectExpertAgentSelected ? '选择关联项目（必选）' : '关联项目（自动识别）' }}
             </option>
             <option
               v-for="repo in projectRepoOptions"
@@ -1166,17 +1239,17 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             </button>
           </div>
           <button
-            v-if="activeLogAnalysisSessionId"
+            v-if="activeTraceAgentSessionId"
             class="rw-cancel-btn"
             :disabled="cancelInFlight"
             type="button"
-            :title="cancelInFlight ? '正在取消...' : '取消当前日志分析'"
-            @click="cancelLogAnalysis"
+            :title="cancelInFlight ? '正在取消...' : '取消当前任务'"
+            @click="cancelActiveTraceAgent"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
-            {{ cancelInFlight ? '取消中…' : '取消分析' }}
+            {{ cancelInFlight ? '取消中…' : '取消任务' }}
           </button>
-          <button class="rw-send-btn" :disabled="(!inputMessage.trim() && !selectedLogFile) || isSending" @click="sendMessage">
+          <button class="rw-send-btn" :disabled="sendDisabled" @click="sendMessage">
             <svg v-if="isSending" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="spin"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
             <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 19 5l-3 15-5-7-6-1Z"/></svg>
           </button>
@@ -1512,6 +1585,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
 }
 .rw-project-select:hover { border-color: var(--rw-ink); }
 .rw-project-select:disabled { opacity: .6; cursor: not-allowed; }
+.rw-project-select.required { border-color: var(--rw-danger, #b91c1c); }
 
 .rw-cancel-btn {
   height: 32px; padding: 0 10px; border-radius: 8px;
