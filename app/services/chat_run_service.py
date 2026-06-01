@@ -96,6 +96,9 @@ class ChatRunJob:
     model: str = ""
     error: Optional[str] = None
     workspace_path: Optional[str] = None
+    # GeneralAgent 的结构化路由建议（device|log_analysis|package_search|
+    # project_expert），无建议时为 None。其它 agent_kind 不设置。
+    suggested_agent_type: Optional[str] = None
     updated_at: float = field(default_factory=time.monotonic)
     finished_at: Optional[float] = None
     trace_truncated: bool = False
@@ -257,6 +260,7 @@ class ChatRunService:
             "workspace_path": job.workspace_path,
             "trace_truncated": job.trace_truncated,
             "user_message": job.user_message,
+            "suggested_agent_type": job.suggested_agent_type,
         }
 
     # ---- persistence helpers --------------------------------------------
@@ -814,6 +818,9 @@ class ChatRunService:
                     final_text = ev.get("final_text")
                     if isinstance(final_text, str):
                         job.answer = final_text
+                    suggested = ev.get("suggested_agent_type")
+                    if isinstance(suggested, str) and suggested:
+                        job.suggested_agent_type = suggested
 
                 payload_out: Dict[str, Any] = {
                     k: v for k, v in ev.items() if k != "type"
@@ -875,6 +882,7 @@ class ChatRunService:
                 "error": job.error,
                 "trace_truncated": job.trace_truncated,
                 "messages": composed_messages,
+                "suggested_agent_type": job.suggested_agent_type,
             }
         )
         key = (job.owner_scope, session_id)

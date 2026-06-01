@@ -461,6 +461,58 @@ const setTargetAgent = (option: AgentOption) => {
   }
 }
 
+// ── GeneralAgent 路由建议（suggested_agent_type）的展示与一键切换 ──
+// 当用户未选专门 Agent、通用 Agent 判定请求更适合某个专门 Agent 时，后端会回带
+// suggested_agent_type；这里给出醒目提示并支持一键切换（设备操作走独立入口，
+// 仅文字引导）。
+const SUGGESTED_AGENT_LABELS: Record<string, string> = {
+  device: '设备操作',
+  log_analysis: '日志分析',
+  package_search: '重构包配置管理员',
+  project_expert: '项目专家',
+}
+
+const suggestedAgentType = computed(() => currentConversation.value?.suggestedAgentType || null)
+
+// 用户已经切到对应 Agent 后无需再提示。
+const suggestedAgentAlreadySelected = computed(() => {
+  const key = suggestedAgentType.value
+  const at = targetAgent.value?.agentType
+  return (
+    (key === 'log_analysis' && at === 'log-analysis') ||
+    (key === 'package_search' && at === 'package-manager') ||
+    (key === 'project_expert' && at === 'project-expert')
+  )
+})
+
+const suggestedAgentLabel = computed(() => {
+  const key = suggestedAgentType.value
+  if (!key || suggestedAgentAlreadySelected.value) return null
+  return SUGGESTED_AGENT_LABELS[key] || null
+})
+
+// 设备操作通过独立下拉选择，不在 AgentOption 体系内，故不提供一键切换。
+const suggestedAgentSwitchable = computed(() => {
+  const key = suggestedAgentType.value
+  return key === 'log_analysis' || key === 'package_search' || key === 'project_expert'
+})
+
+const chooseSuggestedAgent = () => {
+  switch (suggestedAgentType.value) {
+    case 'log_analysis':
+      setTargetAgent(logAnalysisAgentOption)
+      break
+    case 'package_search':
+      setTargetAgent(packageAgentOption)
+      break
+    case 'project_expert':
+      setTargetAgent(projectExpertAgentOption)
+      break
+    default:
+      break
+  }
+}
+
 const renderAiMessage = (content: string) =>
   renderMarkdown(content || '', { wrapperClass: 'markdown-content text-ink' })
 
@@ -1138,6 +1190,14 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
       <!-- Log analysis inline warnings — placed above the composer so the input
            box, tool chips and project dropdown stay anchored to the bottom and
            do not shift under the cursor when an alert appears/disappears. -->
+      <!-- GeneralAgent 路由建议：提示用户该请求需切换到对应专门 Agent。 -->
+      <div v-if="suggestedAgentLabel" class="rw-composer-alert is-suggest">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+        <span>
+          该请求需要使用 <strong>{{ suggestedAgentLabel }}</strong> 才能处理，请先在上方选择对应 Agent 后再发送你的请求。
+          <button v-if="suggestedAgentSwitchable" type="button" class="rw-alert-link" @click="chooseSuggestedAgent">切换到{{ suggestedAgentLabel }}</button>
+        </span>
+      </div>
       <div v-if="logAnalysisMetadataError" class="rw-composer-alert is-error">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
         <span>
@@ -1716,6 +1776,13 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
 .rw-composer-alert.is-error {
   background: #fef2f2; color: #991b1b;
   border: 1px solid #fca5a5;
+}
+.rw-composer-alert.is-suggest {
+  background: #eff6ff; color: #1e40af;
+  border: 1px solid #93c5fd;
+}
+.rw-composer-alert.is-suggest .rw-alert-link {
+  font-weight: 600; margin-left: 2px;
 }
 .rw-composer-alert code {
   font-family: var(--rw-mono); font-size: 11.5px;

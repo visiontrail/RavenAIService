@@ -45,6 +45,12 @@ export type ConversationState = {
   activeRunId: string | null
   runStatus: RunStatus
   runAgentKind: AgentKind | null
+  /**
+   * GeneralAgent 的结构化路由建议（device|log_analysis|package_search|
+   * project_expert）。非空时表示用户最新请求更适合用对应专门 Agent，前端据此
+   * 给出醒目提示与一键切换。每开始新一轮 run 重置为 null。
+   */
+  suggestedAgentType: string | null
   pendingPermissions: PendingPermission[]
   /** Map of `${runId}:${seq}` -> 1 so replayed frames are deduped. */
   seenSeq: Record<string, number>
@@ -160,6 +166,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         activeRunId: null,
         runStatus: 'idle',
         runAgentKind: null,
+        suggestedAgentType: null,
         pendingPermissions: [],
         seenSeq: {},
         currentAnswerId: null,
@@ -192,6 +199,21 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     else state.messages.splice(idx, 0, entry)
   }
 
+  // Specialist agents GeneralAgent may route the user to. Unknown values are
+  // ignored so a future backend key can't crash the panel.
+  const VALID_SUGGESTED_AGENTS = new Set([
+    'device',
+    'log_analysis',
+    'package_search',
+    'project_expert',
+  ])
+
+  const applySuggestedAgent = (state: ConversationState, raw: unknown) => {
+    if (typeof raw === 'string' && VALID_SUGGESTED_AGENTS.has(raw)) {
+      state.suggestedAgentType = raw
+    }
+  }
+
   // ---- event application --------------------------------------------------
 
   const applyEventToState = (state: ConversationState, payload: any) => {
@@ -211,6 +233,8 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     if (eventRunId && !state.activeRunId) {
       state.activeRunId = eventRunId
       state.runStatus = 'running'
+      // New run starts: clear any prior agent-routing suggestion.
+      state.suggestedAgentType = null
       if (!state.currentAnswerId) {
         state.currentAnswerId = `run:${eventRunId}:assistant`
       }
@@ -313,6 +337,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         // also the whole-segment render path — behaviour identical to before.
         const finalText = (payload as any)?.final_text
         if (typeof finalText === 'string' && finalText.trim()) target.content = finalText.trimStart()
+        applySuggestedAgent(state, (payload as any)?.suggested_agent_type)
         state.runStatus = 'succeeded'
         target.traceRunning = false
       } else if (type === 'cancelled') {
@@ -358,6 +383,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     } else if (type === 'done') {
       if (typeof payload?.answer === 'string' && payload.answer) target.content = payload.answer.trimStart()
       else if (!target.content || target.content === '正在思考...') target.content = '（无回复内容）'
+      applySuggestedAgent(state, payload?.suggested_agent_type)
       const resultStatus = String(payload?.result?.status || '').toLowerCase()
       if (resultStatus === 'cancelled') state.runStatus = 'cancelled'
       else if (resultStatus === 'stale') state.runStatus = 'stale'
@@ -403,6 +429,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     state.activeRunId = runId
     state.runStatus = (snapshot.status || 'running') as RunStatus
     state.runAgentKind = (snapshot.agent_kind || null) as AgentKind | null
+    applySuggestedAgent(state, snapshot.suggested_agent_type)
     state.currentAnswerId = `run:${runId}:assistant`
     if (state.runStatus === 'running') {
       state.isSending = true

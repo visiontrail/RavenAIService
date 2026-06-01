@@ -11,6 +11,8 @@ from app.agents.general_agent.agent import (
     GeneralAgent,
     GeneralAgentContext,
     SYSTEM_PROMPT,
+    VALID_SUGGESTED_AGENTS,
+    _extract_suggested_agent,
     _format_history_block,
     _resolve_small_fast_model,
 )
@@ -184,7 +186,211 @@ async def test_run_stream_turn_limit_uses_fallback_when_empty(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_system_prompt_contains_key_guidance():
-    """The system prompt mentions Raven AI and restricts scope."""
+    """The system prompt mentions Raven AI, all four specialist agents, and the marker."""
     assert "Raven AI" in SYSTEM_PROMPT
     assert "设备操作" in SYSTEM_PROMPT
     assert "日志分析" in SYSTEM_PROMPT
+    assert "检索包" in SYSTEM_PROMPT
+    assert "项目专家" in SYSTEM_PROMPT
+    # The structured marker contract must be described to the model.
+    assert "SUGGESTED_AGENT" in SYSTEM_PROMPT
+    for key in VALID_SUGGESTED_AGENTS:
+        assert key in SYSTEM_PROMPT
+
+
+# ─────────────────────── _extract_suggested_agent ─────────────────
+
+
+class TestExtractSuggestedAgent:
+    def test_trailing_marker_parsed_and_stripped(self):
+        text = "该需求需要使用「日志分析」，请先在上方选择。\n[[SUGGESTED_AGENT:log_analysis]]"
+        clean, suggested = _extract_suggested_agent(text)
+        assert suggested == "log_analysis"
+        assert "SUGGESTED_AGENT" not in clean
+        assert clean.endswith("请先在上方选择。")
+
+    def test_none_marker_yields_no_suggestion(self):
+        clean, suggested = _extract_suggested_agent("系统使用说明……\n[[SUGGESTED_AGENT:none]]")
+        assert suggested is None
+        assert "SUGGESTED_AGENT" not in clean
+
+    def test_missing_marker_safe(self):
+        clean, suggested = _extract_suggested_agent("没有标记的普通回答")
+        assert suggested is None
+        assert clean == "没有标记的普通回答"
+
+    def test_illegal_key_safe(self):
+        clean, suggested = _extract_suggested_agent("答案\n[[SUGGESTED_AGENT:banana]]")
+        assert suggested is None
+        assert "SUGGESTED_AGENT" not in clean
+
+    def test_case_insensitive_and_whitespace(self):
+        clean, suggested = _extract_suggested_agent("答案 [[ suggested_agent : Device ]]")
+        assert suggested == "device"
+        assert "suggested_agent" not in clean.lower()
+
+    def test_multiple_markers_all_stripped_last_wins(self):
+        text = "x[[SUGGESTED_AGENT:device]]y\n[[SUGGESTED_AGENT:package_search]]"
+        clean, suggested = _extract_suggested_agent(text)
+        assert suggested == "package_search"
+        assert "SUGGESTED_AGENT" not in clean
+
+    def test_empty_text(self):
+        clean, suggested = _extract_suggested_agent("")
+        assert clean == ""
+        assert suggested is None
+
+
+# ─────────────────────── suggestion propagation ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_stream_emits_suggested_agent(monkeypatch):
+    """A B-class answer with a marker surfaces suggested_agent_type and a clean body."""
+    fake_query = _fake_query_factory(
+        "该需求需要使用「检索包」，请先在上方选择对应 Agent。\n[[SUGGESTED_AGENT:package_search]]"
+    )
+    monkeypatch.setattr("claude_agent_sdk.query", fake_query)
+    monkeypatch.setattr("app.config.settings.anthropic_provider", "anthropic")
+    monkeypatch.setattr("app.config.settings.anthropic_api_key", "sk-test")
+    monkeypatch.setattr("app.config.settings.anthropic_small_fast_model", "test-model")
+
+    ctx = GeneralAgentContext(session_id="sess-suggest-1", user_message="查一下 xxx 包最新版本")
+
+    events: List[Dict[str, Any]] = []
+    async for ev in GeneralAgent().run_stream(ctx):
+        events.append(ev)
+
+    complete = events[-1]
+    assert complete["type"] == "run_complete"
+    assert complete["suggested_agent_type"] == "package_search"
+    assert "SUGGESTED_AGENT" not in complete["final_text"]
+
+
+@pytest.mark.asyncio
+async def test_run_stream_none_suggestion_for_system_question(monkeypatch):
+    """An A-class answer (with none marker) yields suggested_agent_type=None."""
+    fake_query = _fake_query_factory("你可以在左侧打开日志分析功能……\n[[SUGGESTED_AGENT:none]]")
+    monkeypatch.setattr("claude_agent_sdk.query", fake_query)
+    monkeypatch.setattr("app.config.settings.anthropic_provider", "anthropic")
+    monkeypatch.setattr("app.config.settings.anthropic_api_key", "sk-test")
+    monkeypatch.setattr("app.config.settings.anthropic_small_fast_model", "test-model")
+
+    ctx = GeneralAgentContext(session_id="sess-suggest-2", user_message="日志分析怎么用？")
+
+    events: List[Dict[str, Any]] = []
+    async for ev in GeneralAgent().run_stream(ctx):
+        events.append(ev)
+
+    complete = events[-1]
+    assert complete["suggested_agent_type"] is None
+    assert "SUGGESTED_AGENT" not in complete["final_text"]
+
+
+@pytest.mark.asyncio
+async def test_fallback_clears_suggestion(monkeypatch):
+    """When the model produces no usable text, fall back with no suggestion."""
+    fake_query = _fake_query_turn_limit_factory("")
+    monkeypatch.setattr("claude_agent_sdk.query", fake_query)
+    monkeypatch.setattr("app.config.settings.anthropic_provider", "anthropic")
+    monkeypatch.setattr("app.config.settings.anthropic_api_key", "sk-test")
+    monkeypatch.setattr("app.config.settings.anthropic_small_fast_model", "test-model")
+
+    ctx = GeneralAgentContext(session_id="sess-suggest-3", user_message="不相关问题")
+
+    events: List[Dict[str, Any]] = []
+    async for ev in GeneralAgent().run_stream(ctx):
+        events.append(ev)
+
+    complete = events[-1]
+    assert complete["suggested_agent_type"] is None
+    assert "项目专家" in complete["final_text"]
+
+
+# ─────────────────────── service-layer propagation ────────────────
+
+
+@pytest.mark.asyncio
+async def test_ai_chat_service_returns_suggested_agent(monkeypatch):
+    """ChatResponse.suggested_agent_type is populated from the run_complete event."""
+    from app.models.chat import ChatRequest
+    from app.services.ai_chat_service import ai_chat_service
+
+    async def fake_run(self, ctx):  # noqa: ANN001, ARG001
+        events = [
+            {"type": "run_start", "model": "m"},
+            {
+                "type": "run_complete",
+                "final_text": "请先选择日志分析",
+                "suggested_agent_type": "log_analysis",
+            },
+        ]
+        return events, "请先选择日志分析", "m"
+
+    monkeypatch.setattr(
+        "app.agents.general_agent.agent.GeneralAgent.run", fake_run
+    )
+
+    resp = await ai_chat_service.chat(
+        ChatRequest(message="分析这份日志为什么报错", remember=False),
+        db=None,
+        user=None,
+    )
+    assert resp.suggested_agent_type == "log_analysis"
+
+
+@pytest.mark.asyncio
+async def test_chat_run_service_general_done_carries_suggestion(monkeypatch):
+    """The general run's done frame + snapshot carry suggested_agent_type."""
+    import time
+
+    from app.services.chat_run_service import (
+        ChatRunJob,
+        RUN_STATUS_RUNNING,
+        chat_run_service,
+    )
+
+    async def fake_stream(self, ctx):  # noqa: ANN001, ARG001
+        yield {"type": "run_start", "model": "m"}
+        yield {
+            "type": "run_complete",
+            "final_text": "请先选择项目专家",
+            "suggested_agent_type": "project_expert",
+        }
+
+    monkeypatch.setattr(
+        "app.agents.general_agent.agent.GeneralAgent.run_stream", fake_stream
+    )
+    # Skip terminal DB persistence.
+    monkeypatch.setattr(
+        "app.models.database.db_manager.session_factory", None, raising=False
+    )
+
+    job = ChatRunJob(
+        run_id="rid-suggest",
+        session_id="sid-suggest",
+        user_id=None,
+        owner_scope="anon:test",
+        agent_kind="general",
+        status=RUN_STATUS_RUNNING,
+        started_at=time.monotonic(),
+        user_message="这个项目的鉴权在哪里实现",
+        request_payload={},
+    )
+    ctx_kwargs = {
+        "session_id": "sid-suggest",
+        "user_message": "这个项目的鉴权在哪里实现",
+        "history": [],
+        "system_prompt_override": None,
+        "run_id": "rid-suggest",
+        "owner_scope": "anon:test",
+        "remember": False,
+    }
+
+    await chat_run_service._run_general_job(job, ctx_kwargs)  # noqa: SLF001
+
+    assert job.suggested_agent_type == "project_expert"
+    done_frames = [e for e in job.events if e.get("event") == "done"]
+    assert done_frames and done_frames[-1]["suggested_agent_type"] == "project_expert"
+    snapshot = chat_run_service._snapshot_payload(job)  # noqa: SLF001
+    assert snapshot["suggested_agent_type"] == "project_expert"

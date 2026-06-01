@@ -546,4 +546,50 @@ describe('conversationRuns store', () => {
     })
     expect(answer?.content).toBe('整段渲染的答复。')
   })
+
+  // -- suggested_agent_type routing hint -----------------------------------
+
+  it('captures suggested_agent_type from run_complete and resets on next run', () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
+    store.applyEventToState(state, {
+      ...traceEvent('run-a', 'session-a', 2, 'run_complete'),
+      final_text: '该需求需要使用项目专家。',
+      suggested_agent_type: 'project_expert',
+    })
+    expect(state.suggestedAgentType).toBe('project_expert')
+
+    // A brand-new run latches a new run_id and clears the stale suggestion.
+    state.activeRunId = null
+    store.applyEventToState(state, traceEvent('run-b', 'session-a', 1, 'run_start'))
+    expect(state.suggestedAgentType).toBe(null)
+  })
+
+  it('ignores unknown suggested_agent_type values', () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
+    store.applyEventToState(state, {
+      ...traceEvent('run-a', 'session-a', 2, 'run_complete'),
+      final_text: '答复',
+      suggested_agent_type: 'totally_unknown',
+    })
+    expect(state.suggestedAgentType).toBe(null)
+  })
+
+  it('reads suggested_agent_type from the done frame', () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
+    store.applyEventToState(state, {
+      event: 'done',
+      run_id: 'run-a',
+      session_id: 'session-a',
+      status: 'succeeded',
+      answer: '请先选择日志分析。',
+      suggested_agent_type: 'log_analysis',
+    })
+    expect(state.suggestedAgentType).toBe('log_analysis')
+  })
 })

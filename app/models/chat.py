@@ -35,3 +35,10 @@ class ChatResponse(BaseResponse):
     model: Optional[str] = Field(None, description="实际使用的模型名称")
     messages: List[ChatMessage] = Field(default_factory=list, description="包含本轮在内的对话消息")
     usage: Optional[Dict[str, Any]] = Field(None, description="可选的Token用量统计")
+    suggested_agent_type: Optional[str] = Field(
+        None,
+        description=(
+            "通用 Agent 给出的路由建议：device|log_analysis|package_search|"
+            "project_expert，表示该请求更适合用对应专门 Agent；无建议时为 None"
+        ),
+    )

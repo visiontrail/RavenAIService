@@ -208,6 +208,16 @@ class AIChatService(BaseService):
     def _is_device_agent(payload: ChatRequest) -> bool:
         return (payload.agent_type or "").strip().lower() == "device"
 
+    @staticmethod
+    def _suggested_agent_from_events(events: List[Dict[str, Any]]) -> Optional[str]:
+        """Pull ``suggested_agent_type`` out of the GeneralAgent run_complete event."""
+        for ev in events:
+            if isinstance(ev, dict) and ev.get("type") == "run_complete":
+                suggested = ev.get("suggested_agent_type")
+                if isinstance(suggested, str) and suggested:
+                    return suggested
+        return None
+
     # ──────────────── chat (non-streaming) ────────────────
 
     async def chat(
@@ -224,6 +234,7 @@ class AIChatService(BaseService):
         history = await self._prepare_history(payload, session_id, db, user)
         is_new_session = len(history) == 0
 
+        suggested_agent_type: Optional[str] = None
         if self._is_device_agent(payload):
             ctx = DeviceAgentContext(
                 session_id=session_id,
@@ -243,6 +254,7 @@ class AIChatService(BaseService):
                 system_prompt_override=payload.system_prompt,
             )
             events, answer_text, model = await GeneralAgent().run(ctx_general)
+            suggested_agent_type = self._suggested_agent_from_events(events)
 
         if not model:
             model = self._effective_model()
@@ -272,6 +284,7 @@ class AIChatService(BaseService):
             model=model,
             messages=messages,
             message="ok",
+            suggested_agent_type=suggested_agent_type,
         )
 
     # ──────────────── chat (streaming, SSE) ────────────────
@@ -314,6 +327,7 @@ class AIChatService(BaseService):
 
         answer_text = ""
         model = ""
+        suggested_agent_type: Optional[str] = None
 
         try:
             async for ev in agent_stream:
@@ -333,6 +347,9 @@ class AIChatService(BaseService):
                         text_val = final_text.get("text")
                         if isinstance(text_val, str):
                             answer_text = text_val
+                    suggested = ev.get("suggested_agent_type")
+                    if isinstance(suggested, str) and suggested:
+                        suggested_agent_type = suggested
 
                 payload_out: Dict[str, Any] = {
                     k: v for k, v in ev.items() if k != "type"
@@ -377,6 +394,7 @@ class AIChatService(BaseService):
                 "answer": answer_text,
                 "model": model,
                 "messages": [m.model_dump() for m in messages],
+                "suggested_agent_type": suggested_agent_type,
             }
         )
 
