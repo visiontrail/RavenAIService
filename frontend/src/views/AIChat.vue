@@ -96,6 +96,10 @@ const isLogFileDragOver = ref(false)
 let logFileDragDepth = 0
 
 const showTopMoreMenu = ref(false)
+const showRenameModal = ref(false)
+const renameModalTitle = ref('')
+const renameModalInputRef = ref<HTMLInputElement | null>(null)
+const renameModalInFlight = ref(false)
 
 // Local session id used until the user sends the first message; once a run is
 // created or a history session is selected, the sessionStore drives this.
@@ -176,6 +180,7 @@ const handleKey = (e: KeyboardEvent) => {
   if (e.key === 'Escape') {
     showTopMoreMenu.value = false
     deviceMenuVisible.value = false
+    showRenameModal.value = false
   }
 }
 
@@ -310,6 +315,42 @@ const toggleCurrentPin = async () => {
   } catch (error) {
     console.error('置顶操作失败', error)
     appStore.showNotification({ title: '操作失败', type: 'error' })
+  }
+}
+
+const openRenameModal = () => {
+  showTopMoreMenu.value = false
+  const id = sessionStore.selectedSessionId
+  if (!id) {
+    appStore.showNotification({ title: '请先保存对话后再重命名', type: 'warning' })
+    return
+  }
+  renameModalTitle.value = sessionStore.currentTitle || ''
+  showRenameModal.value = true
+  nextTick(() => {
+    renameModalInputRef.value?.select()
+  })
+}
+
+const commitRenameFromModal = async () => {
+  const id = sessionStore.selectedSessionId
+  if (!id || renameModalInFlight.value) return
+  const title = renameModalTitle.value.trim()
+  if (!title) {
+    appStore.showNotification({ title: '名称不能为空', type: 'warning' })
+    return
+  }
+  renameModalInFlight.value = true
+  try {
+    const ok = await sessionStore.renameSession(id, title)
+    if (ok) {
+      showRenameModal.value = false
+      appStore.showNotification({ title: '已重命名', type: 'success' })
+    }
+  } catch {
+    appStore.showNotification({ title: '重命名失败', type: 'error' })
+  } finally {
+    renameModalInFlight.value = false
   }
 }
 
@@ -1096,7 +1137,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             role="menu"
           >
             <div class="rw-top-menu-group">对话</div>
-            <button class="rw-menu-item" @click="showTopMoreMenu = false">
+            <button class="rw-menu-item" @click="openRenameModal">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16zM14 6l4 4"/></svg>
               重命名对话 <span class="rw-kbd-right">F2</span>
             </button>
@@ -1417,6 +1458,45 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
         </div>
       </div>
       <div class="rw-composer-hint">RavenAI 可能会出错。涉及在线设备的下发操作均需你二次确认。</div>
+    </div>
+
+    <!-- Rename modal -->
+    <div v-if="showRenameModal" class="rw-rename-backdrop" @click.self="showRenameModal = false">
+      <div class="rw-modal rw-rename-modal">
+        <div class="rw-modal-head">
+          <div>
+            <h3 class="rw-modal-title">重命名对话</h3>
+            <p class="rw-modal-sub">为该对话设置一个新的名称</p>
+          </div>
+          <button class="rw-modal-close" @click="showRenameModal = false" aria-label="关闭">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+        <div class="rw-rename-modal-body">
+          <label class="rw-form-field">
+            <span class="rw-form-label">对话名称</span>
+            <input
+              ref="renameModalInputRef"
+              v-model="renameModalTitle"
+              type="text"
+              class="rw-input"
+              placeholder="输入新名称…"
+              maxlength="80"
+              @keydown.enter.prevent="commitRenameFromModal"
+              @keydown.esc.prevent="showRenameModal = false"
+            />
+          </label>
+        </div>
+        <div class="rw-modal-actions">
+          <button
+            type="button"
+            class="rw-btn-primary"
+            :disabled="renameModalInFlight || !renameModalTitle.trim()"
+            @click="commitRenameFromModal"
+          >{{ renameModalInFlight ? '保存中…' : '保存' }}</button>
+          <button type="button" class="rw-btn-ghost" @click="showRenameModal = false">取消</button>
+        </div>
+      </div>
     </div>
 
     <!-- DeviceAgent HITL: tool permission modal -->
@@ -1945,6 +2025,58 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
 }
 .rw-hitl-warn { font-size: 12px; color: var(--rw-muted, #6b7280); margin: 0; }
 .rw-hitl-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* Rename modal */
+.rw-rename-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.4);
+  backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px; z-index: 100;
+}
+.rw-modal {
+  width: 100%; max-width: 380px;
+  background: var(--rw-canvas);
+  border: 1px solid var(--rw-hairline-strong);
+  border-radius: 14px;
+  padding: 22px;
+  box-shadow: 0 24px 64px rgba(0,0,0,.18);
+}
+.rw-modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.rw-modal-title { font-size: 16px; font-weight: 600; color: var(--rw-ink); margin: 0; }
+.rw-modal-sub { font-size: 12px; color: var(--rw-muted); margin: 4px 0 0; }
+.rw-modal-close { width: 28px; height: 28px; border-radius: 6px; display: grid; place-items: center; color: var(--rw-body); }
+.rw-modal-close:hover { background: var(--rw-surface-strong); color: var(--rw-ink); }
+.rw-rename-modal-body { margin-top: 16px; }
+.rw-modal-actions { display: flex; gap: 10px; padding-top: 16px; }
+.rw-form-field { display: flex; flex-direction: column; gap: 6px; }
+.rw-form-label { font-size: 12px; color: var(--rw-body); font-weight: 500; }
+.rw-input {
+  width: 100%; height: 38px;
+  border: 1px solid var(--rw-hairline-strong); border-radius: 8px;
+  padding: 0 12px; font-size: 13.5px; outline: none;
+  background: var(--rw-canvas); color: var(--rw-ink);
+  font-family: inherit;
+}
+.rw-input:focus { border-color: var(--rw-ink); }
+.rw-btn-primary {
+  height: 36px; padding: 0 16px;
+  background: var(--rw-primary); color: var(--rw-on-primary);
+  border-radius: 8px; font-size: 13.5px; font-weight: 500;
+  border: none; cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.rw-btn-primary:hover:not(:disabled) { background: var(--rw-primary-hover); }
+.rw-btn-primary:active:not(:disabled) { background: var(--rw-primary-active); }
+.rw-btn-primary:disabled { opacity: .6; cursor: default; }
+.rw-btn-ghost {
+  height: 36px; padding: 0 14px;
+  background: var(--rw-canvas); color: var(--rw-ink);
+  border: 1px solid var(--rw-hairline-strong);
+  border-radius: 8px; font-size: 13.5px; font-weight: 500;
+  cursor: pointer;
+}
+.rw-btn-ghost:hover { background: var(--rw-surface-strong); }
 
 /* Responsive */
 @media (max-width: 900px) {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
@@ -62,6 +62,10 @@ const hoverSessionId = ref<string | null>(null)
 const openRowMenuId = ref<string | null>(null)
 const lang = ref<'zh' | 'en'>('zh')
 
+const editingSessionId = ref<string | null>(null)
+const editingSessionTitle = ref('')
+const renameInputRef = ref<HTMLInputElement | null>(null)
+
 const showLoginModal = ref(false)
 const authMode = ref<'login' | 'register'>('login')
 const loginForm = reactive({
@@ -100,7 +104,7 @@ const goToAdminConsole = () => {
 
 const navItems = computed(() => ([
   { id: 'logs',    label: '日志列表',   to: '/logs',          icon: 'logs', activeNames: ['Logs', 'LogDetail'] },
-  { id: 'devices', label: '设备机柜',   to: '/devices',       icon: 'device' },
+  { id: 'devices', label: '设备机柜',   to: '/devices',       icon: 'device', activeNames: ['DeviceList', 'DeviceDetail'] },
   { id: 'pkgs',    label: '重构包仓库', to: '/raven-manager', icon: 'box' },
 ]))
 
@@ -146,6 +150,34 @@ const groupedSessions = computed(() => {
   return ordered.filter((g) => g.items.length > 0)
 })
 
+const startRenameSession = (session: ChatSessionSummary) => {
+  openRowMenuId.value = null
+  editingSessionId.value = session.id
+  editingSessionTitle.value = session.title || ''
+  nextTick(() => renameInputRef.value?.select())
+}
+
+const commitRename = async (id: string) => {
+  const title = editingSessionTitle.value.trim()
+  editingSessionId.value = null
+  if (!title) return
+  try {
+    const ok = await sessionStore.renameSession(id, title)
+    if (ok) appStore.showNotification({ title: '已重命名', type: 'success' })
+  } catch {
+    appStore.showNotification({ title: '重命名失败', type: 'error' })
+  }
+}
+
+const cancelRename = () => {
+  editingSessionId.value = null
+}
+
+const handleRenameKeydown = (e: KeyboardEvent, id: string) => {
+  if (e.key === 'Enter') { e.preventDefault(); commitRename(id) }
+  if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
+}
+
 const handleClickOutside = (event: MouseEvent) => {
   const target = event.target as Node
 
@@ -161,6 +193,14 @@ const handleClickOutside = (event: MouseEvent) => {
     const el = target instanceof Element ? target : (target as Node).parentElement
     if (!el?.closest('.rw-row-menu') && !el?.closest('.rw-row-more')) {
       openRowMenuId.value = null
+    }
+  }
+
+  // Commit rename when clicking outside the inline input.
+  if (editingSessionId.value) {
+    const el = target instanceof Element ? target : (target as Node).parentElement
+    if (!el?.closest('.rw-rename-input-wrap')) {
+      commitRename(editingSessionId.value)
     }
   }
 }
@@ -441,49 +481,68 @@ const handleUserLogout = () => {
               :class="{
                 'is-active': sessionStore.selectedSessionId === session.id && isHomeRoute,
                 'is-hover': hoverSessionId === session.id || openRowMenuId === session.id,
+                'is-editing': editingSessionId === session.id,
               }"
-              @click="handleSelectSession(session)"
+              @click="editingSessionId !== session.id && handleSelectSession(session)"
               @mouseenter="hoverSessionId = session.id"
               @mouseleave="hoverSessionId = null"
             >
-              <span class="rw-chat-row-text">{{ session.title || '未命名对话' }}</span>
-              <span
-                v-if="isSessionRunning(session.id)"
-                class="rw-row-thinking"
-                title="正在思考"
-                aria-label="正在思考"
-              >
-                <span></span>
-                <span></span>
-                <span></span>
-              </span>
-              <button
-                class="rw-row-more"
-                :class="{ visible: hoverSessionId === session.id || openRowMenuId === session.id }"
-                @click.stop="openRowMenuId = openRowMenuId === session.id ? null : session.id"
-                aria-label="更多"
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/></svg>
-              </button>
+              <!-- Inline rename input -->
               <div
-                v-if="openRowMenuId === session.id"
-                class="rw-row-menu"
+                v-if="editingSessionId === session.id"
+                class="rw-rename-input-wrap"
                 @click.stop
               >
-                <button class="rw-menu-item" @click="openRowMenuId = null">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16zM14 6l4 4"/></svg>
-                  重命名对话
-                </button>
-                <button class="rw-menu-item" @click="togglePinSession(session)">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M9 8h6l2 6H7zM12 14v8"/></svg>
-                  {{ session.is_pinned ? '取消置顶' : '置顶对话' }}
-                </button>
-                <div class="rw-menu-divider"/>
-                <button class="rw-menu-item is-danger" @click="deleteSession(session.id)">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>
-                  删除对话
-                </button>
+                <input
+                  ref="renameInputRef"
+                  v-model="editingSessionTitle"
+                  class="rw-rename-input"
+                  type="text"
+                  maxlength="80"
+                  @keydown="handleRenameKeydown($event, session.id)"
+                  @blur="commitRename(session.id)"
+                />
               </div>
+              <template v-else>
+                <span class="rw-chat-row-text">{{ session.title || '未命名对话' }}</span>
+                <span
+                  v-if="isSessionRunning(session.id)"
+                  class="rw-row-thinking"
+                  title="正在思考"
+                  aria-label="正在思考"
+                >
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </span>
+                <button
+                  class="rw-row-more"
+                  :class="{ visible: hoverSessionId === session.id || openRowMenuId === session.id }"
+                  @click.stop="openRowMenuId = openRowMenuId === session.id ? null : session.id"
+                  aria-label="更多"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/></svg>
+                </button>
+                <div
+                  v-if="openRowMenuId === session.id"
+                  class="rw-row-menu"
+                  @click.stop
+                >
+                  <button class="rw-menu-item" @click="startRenameSession(session)">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16zM14 6l4 4"/></svg>
+                    重命名对话
+                  </button>
+                  <button class="rw-menu-item" @click="togglePinSession(session)">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M9 8h6l2 6H7zM12 14v8"/></svg>
+                    {{ session.is_pinned ? '取消置顶' : '置顶对话' }}
+                  </button>
+                  <div class="rw-menu-divider"/>
+                  <button class="rw-menu-item is-danger" @click="deleteSession(session.id)">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>
+                    删除对话
+                  </button>
+                </div>
+              </template>
             </div>
           </div>
         </template>
@@ -818,6 +877,26 @@ const handleUserLogout = () => {
 }
 .rw-row-more.visible { visibility: visible; }
 .rw-row-more:hover { background: var(--rw-hairline-strong); }
+
+.rw-chat-row.is-editing {
+  padding: 0 4px;
+  cursor: default;
+}
+.rw-rename-input-wrap {
+  flex: 1; min-width: 0; display: flex; align-items: center;
+}
+.rw-rename-input {
+  width: 100%; height: 26px;
+  background: var(--rw-canvas);
+  border: 1px solid var(--rw-ink);
+  border-radius: 5px;
+  padding: 0 7px;
+  font-size: 13px; font-family: inherit;
+  color: var(--rw-ink); outline: none;
+}
+.rw-rename-input:focus {
+  box-shadow: 0 0 0 2px rgba(23,23,23,.12);
+}
 
 .rw-row-thinking {
   display: inline-flex; align-items: center; justify-content: center; gap: 2px;

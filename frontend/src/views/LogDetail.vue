@@ -1747,9 +1747,21 @@ const resetAIAnalysis = () => {
 }
 
 // 复制分析结果
-const copyAnalysisResult = async () => {
+const copyAnalysisResult = async (event?: ClipboardEvent) => {
   if (!aiAnalysisResult.value) return
-  
+
+  // 如果用户选中了部分内容（原生 Ctrl+C / 右键复制），放行浏览器默认行为，
+  // 仅复制选中的内容，不再用完整结果覆盖剪贴板
+  const selection = window.getSelection()
+  if (selection && !selection.isCollapsed && selection.toString().trim()) {
+    return
+  }
+
+  // 没有选区时才主动复制完整分析结果
+  if (event) {
+    event.preventDefault()
+  }
+
   try {
     const resultText = `
 查询: ${aiAnalysisResult.value.query}

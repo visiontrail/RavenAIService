@@ -1,10 +1,8 @@
 name: raven-ai-service
 
 x-env-files: &env_files
-  - path: .env.example
-    required: true
-  - path: .env
-    required: false
+  - .env.example
+  - .env
 
 x-backend-service: &backend_service
   build:

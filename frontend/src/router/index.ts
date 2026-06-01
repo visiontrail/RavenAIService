@@ -38,6 +38,13 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '设备机柜' },
       },
       {
+        path: 'devices/:id',
+        name: 'DeviceDetail',
+        component: () => import('../views/DeviceDetail.vue'),
+        meta: { title: '设备详情' },
+        props: true,
+      },
+      {
         path: 'raven-manager',
         alias: ['/raven', '/raven/'],
         name: 'RavenManager',
@@ -52,64 +59,43 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '包详情' },
         props: true,
       },
+      {
+        path: 'upload',
+        name: 'Upload',
+        component: () => import('../views/Upload.vue'),
+        meta: { title: '上传日志' },
+      },
+      {
+        path: 'download',
+        name: 'Download',
+        component: () => import('../views/Download.vue'),
+        meta: { title: '下载客户端' },
+      },
+      {
+        path: 'about',
+        name: 'About',
+        component: () => import('../views/NotFound.vue'),
+        meta: { title: '关于 Raven' },
+      },
+      {
+        path: 'changelog',
+        name: 'Changelog',
+        component: () => import('../views/NotFound.vue'),
+        meta: { title: '更新日志' },
+      },
+      {
+        path: 'privacy',
+        name: 'Privacy',
+        component: () => import('../views/NotFound.vue'),
+        meta: { title: '隐私政策' },
+      },
+      {
+        path: 'terms',
+        name: 'Terms',
+        component: () => import('../views/NotFound.vue'),
+        meta: { title: '服务条款' },
+      },
     ],
-  },
-  {
-    path: '/devices/:id',
-    name: 'DeviceDetail',
-    component: () => import('../views/DeviceDetail.vue'),
-    meta: {
-      title: '设备详情',
-    },
-    props: true,
-  },
-  {
-    path: '/upload',
-    name: 'Upload',
-    component: () => import('../views/Upload.vue'),
-    meta: {
-      title: '上传日志',
-    },
-  },
-  {
-    path: '/download',
-    name: 'Download',
-    component: () => import('../views/Download.vue'),
-    meta: {
-      title: '下载客户端',
-    },
-  },
-  {
-    path: '/about',
-    name: 'About',
-    component: () => import('../views/NotFound.vue'),
-    meta: {
-      title: '关于 Raven',
-    },
-  },
-  {
-    path: '/changelog',
-    name: 'Changelog',
-    component: () => import('../views/NotFound.vue'),
-    meta: {
-      title: '更新日志',
-    },
-  },
-  {
-    path: '/privacy',
-    name: 'Privacy',
-    component: () => import('../views/NotFound.vue'),
-    meta: {
-      title: '隐私政策',
-    },
-  },
-  {
-    path: '/terms',
-    name: 'Terms',
-    component: () => import('../views/NotFound.vue'),
-    meta: {
-      title: '服务条款',
-    },
   },
   {
     path: '/admin',
@@ -169,11 +155,15 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/:pathMatch(.*)*',
-    name: 'NotFound',
-    component: () => import('../views/NotFound.vue'),
-    meta: {
-      title: '页面未找到',
-    },
+    component: () => import('../layouts/WorkbenchLayout.vue'),
+    children: [
+      {
+        path: '',
+        name: 'NotFound',
+        component: () => import('../views/NotFound.vue'),
+        meta: { title: '页面未找到' },
+      },
+    ],
   },
 ]
 

@@ -142,6 +142,9 @@ export const userApi = {
   pinSession: (sessionId: string, pinned: boolean): Promise<ApiResponse<ChatSessionSummary[]>> =>
     userClient.patch(`/api/v1/users/chat-sessions/${sessionId}/pin`, { pinned }),
 
+  renameSession: (sessionId: string, title: string): Promise<ApiResponse<ChatSessionSummary[]>> =>
+    userClient.patch(`/api/v1/users/chat-sessions/${sessionId}/rename`, { title }),
+
   saveMessages: (sessionId: string, userContent: string, aiContent: string, titleHint?: string): Promise<ApiResponse<{ session_id: string }>> =>
     userClient.post(`/api/v1/users/chat-sessions/${sessionId}/messages`, {
       user_content: userContent,

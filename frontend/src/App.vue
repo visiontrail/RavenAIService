@@ -2,8 +2,6 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAppStore } from './stores/app'
-import AppNavbar from './components/AppNavbar.vue'
-import AppFooter from './components/AppFooter.vue'
 import AppNotifications from './components/AppNotifications.vue'
 import AppLoading from './components/AppLoading.vue'
 import AIOrb from './components/AIOrb.vue'
@@ -12,7 +10,22 @@ const appStore = useAppStore()
 const route = useRoute()
 
 // Workbench routes share the WorkbenchLayout (sidebar + main pane).
-const workbenchRouteNames = new Set(['Workbench', 'Logs', 'LogDetail', 'DeviceList', 'RavenManager', 'RavenPackageDetail'])
+const workbenchRouteNames = new Set([
+  'Workbench',
+  'Logs',
+  'LogDetail',
+  'DeviceList',
+  'DeviceDetail',
+  'RavenManager',
+  'RavenPackageDetail',
+  'Upload',
+  'Download',
+  'About',
+  'Changelog',
+  'Privacy',
+  'Terms',
+  'NotFound',
+])
 const isWorkbenchRoute = computed(() => {
   const name = (route.name as string) || ''
   if (workbenchRouteNames.has(name)) return true
@@ -24,11 +37,14 @@ const isWorkbenchRoute = computed(() => {
     route.path.startsWith('/log/') ||
     route.path === '/log-list' ||
     route.path === '/devices' ||
+    route.path.startsWith('/devices/') ||
     route.path === '/raven-manager' ||
     route.path === '/raven' ||
     route.path === '/raven/' ||
     route.path.startsWith('/raven/package/') ||
-    route.path.startsWith('/package/')
+    route.path.startsWith('/package/') ||
+    route.path === '/upload' ||
+    route.path === '/download'
   )
 })
 
@@ -39,33 +55,6 @@ const showAIOrb = computed(() => {
   // 工作台与后台管理页面都不显示 Orb
   return !isWorkbenchRoute.value && !isAdminRoute.value
 })
-
-// 判断是否应该显示导航栏
-const shouldShowNavbar = computed(() => {
-  if (typeof window === 'undefined') return true
-
-  const configuredPort = (window as any).__RAVEN_SERVER_PORT__
-  const currentPort = window.location.port
-
-  // 兼容历史独立包服务端口；统一后端部署默认不再设置该值
-  if (configuredPort && currentPort === String(configuredPort)) {
-    return false
-  }
-
-  // 后台管理路径不显示主导航，避免暴露入口
-  if (route.path.startsWith('/admin')) {
-    return false
-  }
-
-  // 工作台壳已包含左侧导航，不再叠加平台顶部栏
-  if (isWorkbenchRoute.value) {
-    return false
-  }
-
-  return true
-})
-
-const shouldShowFooter = computed(() => !isWorkbenchRoute.value && !isAdminRoute.value)
 
 const mainClass = computed(() => {
   if (isWorkbenchRoute.value) return 'w-full'
@@ -165,9 +154,6 @@ onUnmounted(() => {
 
 <template>
   <div id="app" class="min-h-screen bg-gray-50">
-    <!-- 导航栏 - 兼容历史独立 Raven 端口时隐藏 -->
-    <AppNavbar v-if="shouldShowNavbar" />
-    
     <!-- 主要内容区域 -->
     <main
       :class="mainClass"
@@ -175,8 +161,6 @@ onUnmounted(() => {
     >
       <router-view />
     </main>
-
-    <AppFooter v-if="shouldShowFooter" />
     
     <!-- 全局通知 -->
     <AppNotifications />

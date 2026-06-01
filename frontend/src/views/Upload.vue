@@ -1,12 +1,24 @@
 <template>
-  <div class="upload-page">
-    <!-- 页面标题 -->
-    <div class="page-header">
-      <h1 class="text-2xl font-bold text-gray-900 mb-2">上传日志文件</h1>
-      <p class="text-gray-600">支持上传未解析的协议栈日志包进行解析处理</p>
-    </div>
+  <div class="rw-page">
+    <WorkbenchTopbar title="上传日志" :meta="`${recentUploads.length} 条最近记录`">
+      <template #actions>
+        <button type="button" class="rw-btn-secondary" @click="$router.push('/logs')">
+          <el-icon><Document /></el-icon>
+          <span>日志列表</span>
+        </button>
+      </template>
+    </WorkbenchTopbar>
 
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div class="rw-page-scroll">
+      <div class="upload-page">
+        <!-- 页面标题 -->
+        <div class="page-header">
+          <p class="page-kicker">LOG INGEST</p>
+          <h1 class="text-2xl font-bold text-gray-900 mb-2">上传日志文件</h1>
+          <p class="text-gray-600">支持上传未解析的协议栈日志包进行解析处理</p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <!-- 上传区域 -->
       <div class="upload-section">
         <el-card>
@@ -209,6 +221,8 @@
           </div>
         </el-card>
       </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -221,6 +235,7 @@ import { useLogStore } from '../stores/logs'
 import { useAppStore } from '../stores/app'
 import { formatDateTime, getStatusColor, getStatusText } from '../utils'
 import type { UploadFile as CustomUploadFile } from '../types'
+import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'
 import {
   Upload,
   UploadFilled,
@@ -377,12 +392,61 @@ onMounted(() => {
 <style scoped>
 @reference "tailwindcss";
 
+.rw-page {
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--rw-canvas, #ffffff);
+}
+
+.rw-page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 28px 36px;
+}
+
 .upload-page {
   @apply space-y-6;
 }
 
 .page-header {
   @apply mb-8;
+}
+
+.page-kicker {
+  margin: 0 0 0.35rem;
+  color: var(--rw-muted, #999999);
+  font-family: var(--rw-mono, monospace);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.rw-btn-secondary {
+  height: 34px;
+  border-radius: 8px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--rw-hairline-strong, #dcdee0);
+  background: var(--rw-canvas, #ffffff);
+  color: var(--rw-ink, #171717);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.rw-btn-secondary:hover {
+  background: var(--rw-surface-strong, #f0f0f3);
+}
+
+:deep(.el-card) {
+  border-radius: 8px;
+  border-color: var(--rw-hairline, #f0f0f3);
+  box-shadow: none;
 }
 
 .upload-area {
@@ -422,6 +486,10 @@ onMounted(() => {
 }
 
 @media (max-width: 768px) {
+  .rw-page-scroll {
+    padding: 18px 16px 28px;
+  }
+
   .upload-content {
     @apply py-8;
   }

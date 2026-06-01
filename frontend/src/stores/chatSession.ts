@@ -61,6 +61,17 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     return false
   }
 
+  const renameSession = async (id: string, title: string): Promise<boolean> => {
+    const trimmed = (title || '').trim()
+    if (!trimmed) return false
+    const resp = await userApi.renameSession(id, trimmed)
+    if (resp?.success && Array.isArray(resp.data)) {
+      sessions.value = resp.data
+      return true
+    }
+    return false
+  }
+
   const setSelected = (id: string | null) => {
     selectedSessionId.value = id
   }
@@ -106,6 +117,7 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     startNewChat,
     removeSession,
     togglePin,
+    renameSession,
     setSelected,
     upsertSessionTitle,
   }

@@ -1,140 +1,143 @@
 <template>
-  <div class="device-detail-page">
-    <div class="page-header">
-      <div class="flex items-center gap-3 flex-wrap">
-        <el-button text @click="goBack" class="!px-0">
+  <div class="rw-page">
+    <WorkbenchTopbar title="设备详情" :meta="device?.name || deviceId">
+      <template #actions>
+        <button type="button" class="rw-btn-secondary" @click="goBack">
           <el-icon><ArrowLeft /></el-icon>
-          返回设备列表
-        </el-button>
-        <el-tag :type="statusTagType(device?.status)" effect="light">
-          {{ statusText(device?.status) }}
-        </el-tag>
-        <el-tag v-if="device?.host" effect="plain">{{ device.host }}</el-tag>
+          <span>返回列表</span>
+        </button>
+        <button type="button" class="rw-btn-primary" :disabled="loading" @click="fetchDevice">
+          <el-icon><Refresh /></el-icon>
+          <span>{{ loading ? '刷新中…' : '刷新' }}</span>
+        </button>
+      </template>
+    </WorkbenchTopbar>
+
+    <div class="rw-page-scroll">
+      <div class="detail-head">
+        <div class="detail-title-block">
+          <div class="detail-kicker">DEVICE NODE</div>
+          <h1>{{ device?.name || deviceId }}</h1>
+          <p>设备 ID：{{ deviceId }}</p>
+        </div>
+        <div class="detail-badges">
+          <span class="rw-pill" :class="pillVariant(device?.status)">
+            {{ statusText(device?.status) }}
+          </span>
+          <span v-if="device?.host" class="rw-chip">{{ device.host }}</span>
+        </div>
       </div>
-      <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mt-4">
-        <div>
-          <h1 class="text-2xl font-bold text-gray-900">{{ device?.name || deviceId }}</h1>
-          <p class="text-sm text-gray-500 mt-1">设备 ID：{{ deviceId }}</p>
-          <p class="text-xs text-gray-400 mt-1">
+
+      <section class="rw-card heartbeat-card" v-if="device">
+        <div class="heartbeat-main">
+          <span class="heartbeat-label">最近心跳</span>
+          <span class="heartbeat-value">
             最近心跳：{{ device?.last_seen ? formatDateTime(device.last_seen) : '未上报' }}
-            <span v-if="device?.last_seen" class="ml-2 text-gray-400">
+            <span v-if="device?.last_seen" class="heartbeat-relative">
               ({{ formatRelativeTime(device.last_seen) }})
             </span>
-          </p>
+          </span>
         </div>
-        <div class="device-detail-actions flex items-center gap-2">
-          <el-button @click="fetchDevice" :loading="loading" type="primary">
-            <el-icon class="mr-1"><Refresh /></el-icon>
-            刷新
-          </el-button>
-        </div>
-      </div>
-    </div>
+      </section>
 
-    <el-row :gutter="16" v-if="device">
-      <el-col :span="8" :xs="24">
-        <el-card shadow="never" class="info-card">
-          <div class="card-title">基础信息</div>
-          <div class="info-item">
-            <span class="label">主机</span>
-            <span class="value">{{ device.host || '-' }}</span>
-          </div>
-          <div class="info-item">
-            <span class="label">状态</span>
-            <el-tag :type="statusTagType(device.status)" effect="light">
-              {{ statusText(device.status) }}
-            </el-tag>
-          </div>
-          <div class="info-item">
-            <span class="label">可用模型</span>
-            <div class="value models">
-              <el-tag
-                v-for="model in device.models"
-                :key="model"
-                size="small"
-                effect="plain"
-              >
-                {{ model }}
-              </el-tag>
-              <span v-if="!device.models || device.models.length === 0" class="text-gray-400">-</span>
+      <el-row :gutter="16" v-if="device">
+        <el-col :span="8" :xs="24">
+          <el-card shadow="never" class="rw-card info-card">
+            <div class="card-title">基础信息</div>
+            <div class="info-item">
+              <span class="label">主机</span>
+              <span class="value">{{ device.host || '-' }}</span>
             </div>
-          </div>
-        </el-card>
-      </el-col>
-
-      <el-col :span="16" :xs="24">
-        <el-card shadow="never" class="info-card">
-          <div class="card-title flex items-center justify-between">
-            <span>MCP 能力</span>
-            <el-tag effect="plain" type="info">
-              共 {{ mcpServers.length }} 个 MCP 服务
-            </el-tag>
-          </div>
-
-          <div v-if="mcpServers.length === 0" class="empty-capability">
-            暂无上报的 MCP 能力
-          </div>
-
-          <el-collapse v-else accordion>
-            <el-collapse-item v-for="server in mcpServers" :key="server.id" :name="server.id">
-              <template #title>
-                <div class="flex items-center gap-3">
-                  <div class="font-semibold text-gray-900">{{ server.name || server.id }}</div>
-                  <el-tag size="small" effect="plain" v-if="server.provider">{{ server.provider }}</el-tag>
-                  <el-tag size="small" effect="light" v-if="server.type">{{ server.type }}</el-tag>
-                </div>
-              </template>
-
-              <div class="server-meta mb-3">
-                <div class="text-sm text-gray-600" v-if="server.description">{{ server.description }}</div>
-                <div class="text-xs text-gray-500" v-if="server.baseUrl">Base URL: {{ server.baseUrl }}</div>
+            <div class="info-item">
+              <span class="label">状态</span>
+              <span class="rw-pill" :class="pillVariant(device.status)">
+                {{ statusText(device.status) }}
+              </span>
+            </div>
+            <div class="info-item">
+              <span class="label">可用模型</span>
+              <div class="value models">
+                <span v-for="model in device.models" :key="model" class="rw-chip">
+                  {{ model }}
+                </span>
+                <span v-if="!device.models || device.models.length === 0" class="empty-value">-</span>
               </div>
+            </div>
+          </el-card>
+        </el-col>
 
-              <div class="section">
-                <div class="section-title">工具 ({{ server.tools?.length || 0 }})</div>
-                <div v-if="server.tools?.length" class="chips">
-                  <el-tag v-for="tool in server.tools" :key="tool.name" effect="plain" class="chip">
-                    <div class="chip-title">{{ tool.name }}</div>
-                    <div class="chip-desc" v-if="tool.description">{{ tool.description }}</div>
-                  </el-tag>
+        <el-col :span="16" :xs="24">
+          <el-card shadow="never" class="rw-card info-card">
+            <div class="card-title flex items-center justify-between">
+              <span>MCP 能力</span>
+              <span class="rw-chip">共 {{ mcpServers.length }} 个 MCP 服务</span>
+            </div>
+
+            <div v-if="mcpServers.length === 0" class="empty-capability">
+              暂无上报的 MCP 能力
+            </div>
+
+            <el-collapse v-else accordion>
+              <el-collapse-item v-for="server in mcpServers" :key="server.id" :name="server.id">
+                <template #title>
+                  <div class="server-title">
+                    <span>{{ server.name || server.id }}</span>
+                    <span class="rw-chip" v-if="server.provider">{{ server.provider }}</span>
+                    <span class="rw-chip" v-if="server.type">{{ server.type }}</span>
+                  </div>
+                </template>
+
+                <div class="server-meta mb-3">
+                  <div class="text-sm text-gray-600" v-if="server.description">{{ server.description }}</div>
+                  <div class="text-xs text-gray-500" v-if="server.baseUrl">Base URL: {{ server.baseUrl }}</div>
                 </div>
-                <div v-else class="text-gray-400 text-sm">未上报工具</div>
-              </div>
 
-              <div class="section">
-                <div class="section-title">提示词 ({{ server.prompts?.length || 0 }})</div>
-                <div v-if="server.prompts?.length" class="chips">
-                  <el-tag v-for="prompt in server.prompts" :key="prompt.name" effect="plain" class="chip">
-                    <div class="chip-title">{{ prompt.name }}</div>
-                    <div class="chip-desc" v-if="prompt.description">{{ prompt.description }}</div>
-                  </el-tag>
+                <div class="section">
+                  <div class="section-title">工具 ({{ server.tools?.length || 0 }})</div>
+                  <div v-if="server.tools?.length" class="chips">
+                    <el-tag v-for="tool in server.tools" :key="tool.name" effect="plain" class="chip">
+                      <div class="chip-title">{{ tool.name }}</div>
+                      <div class="chip-desc" v-if="tool.description">{{ tool.description }}</div>
+                    </el-tag>
+                  </div>
+                  <div v-else class="text-gray-400 text-sm">未上报工具</div>
                 </div>
-                <div v-else class="text-gray-400 text-sm">未上报提示词</div>
-              </div>
 
-              <div class="section">
-                <div class="section-title">资源 ({{ server.resources?.length || 0 }})</div>
-                <div v-if="server.resources?.length" class="chips">
-                  <el-tag
-                    v-for="resource in server.resources"
-                    :key="resource.uri || resource.name"
-                    effect="plain"
-                    class="chip"
-                  >
-                    <div class="chip-title">{{ resource.name || resource.uri }}</div>
-                    <div class="chip-desc" v-if="resource.description">{{ resource.description }}</div>
-                  </el-tag>
+                <div class="section">
+                  <div class="section-title">提示词 ({{ server.prompts?.length || 0 }})</div>
+                  <div v-if="server.prompts?.length" class="chips">
+                    <el-tag v-for="prompt in server.prompts" :key="prompt.name" effect="plain" class="chip">
+                      <div class="chip-title">{{ prompt.name }}</div>
+                      <div class="chip-desc" v-if="prompt.description">{{ prompt.description }}</div>
+                    </el-tag>
+                  </div>
+                  <div v-else class="text-gray-400 text-sm">未上报提示词</div>
                 </div>
-                <div v-else class="text-gray-400 text-sm">未上报资源</div>
-              </div>
-            </el-collapse-item>
-          </el-collapse>
-        </el-card>
-      </el-col>
-    </el-row>
 
-    <el-empty v-else-if="!loading" description="未找到设备信息" />
-    <div v-if="loading" class="text-center text-gray-500 py-10">加载中...</div>
+                <div class="section">
+                  <div class="section-title">资源 ({{ server.resources?.length || 0 }})</div>
+                  <div v-if="server.resources?.length" class="chips">
+                    <el-tag
+                      v-for="resource in server.resources"
+                      :key="resource.uri || resource.name"
+                      effect="plain"
+                      class="chip"
+                    >
+                      <div class="chip-title">{{ resource.name || resource.uri }}</div>
+                      <div class="chip-desc" v-if="resource.description">{{ resource.description }}</div>
+                    </el-tag>
+                  </div>
+                  <div v-else class="text-gray-400 text-sm">未上报资源</div>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+          </el-card>
+        </el-col>
+      </el-row>
+
+      <el-empty v-else-if="!loading" description="未找到设备信息" />
+      <div v-if="loading" class="loading-state">加载中...</div>
+    </div>
   </div>
 </template>
 
@@ -146,6 +149,7 @@ import { ElMessage } from 'element-plus'
 import { deviceLinkApi } from '@/api/deviceLink'
 import { formatDateTime, formatRelativeTime } from '@/utils'
 import type { DeviceInfo } from '@/types'
+import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -154,7 +158,7 @@ const device = ref<DeviceInfo | null>(null)
 const loading = ref(false)
 
 const statusText = (status?: DeviceInfo['status']) => (status === 'online' ? '在线' : '离线')
-const statusTagType = (status?: DeviceInfo['status']) => (status === 'online' ? 'success' : 'info')
+const pillVariant = (status?: DeviceInfo['status']) => (status === 'online' ? 'is-success' : 'is-neutral')
 
 const mcpServers = computed(() => {
   const mcp = (device.value?.capabilities as any)?.mcp
@@ -185,21 +189,106 @@ onMounted(fetchDevice)
 </script>
 
 <style scoped>
-.device-detail-page > * + * {
-  margin-top: 1.25rem;
+.rw-page {
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--rw-canvas, #ffffff);
 }
 
-.page-header {
-  margin-bottom: 0.5rem;
+.rw-page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 28px 36px;
+}
+
+.rw-page-scroll > * + * {
+  margin-top: 16px;
+}
+
+.detail-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 6px;
+}
+
+.detail-kicker {
+  color: var(--rw-muted, #999999);
+  font-family: var(--rw-mono, monospace);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+
+.detail-title-block h1 {
+  margin: 0;
+  color: var(--rw-ink, #171717);
+  font-size: 26px;
+  line-height: 1.2;
+  font-weight: 650;
+}
+
+.detail-title-block p {
+  margin: 6px 0 0;
+  color: var(--rw-body, #60646c);
+  font-size: 13px;
+  font-family: var(--rw-mono, monospace);
+}
+
+.detail-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.rw-card {
+  border: 1px solid var(--rw-hairline, #f0f0f3);
+  border-radius: 8px;
+  background: var(--rw-canvas, #ffffff);
+  box-shadow: none;
 }
 
 .info-card {
-  border: 1px solid #e5e7eb;
+  min-height: 100%;
+}
+
+.heartbeat-card {
+  padding: 14px 16px;
+}
+
+.heartbeat-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.heartbeat-label {
+  color: var(--rw-muted, #999999);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.heartbeat-value {
+  color: var(--rw-ink, #171717);
+  font-size: 13px;
+  font-family: var(--rw-mono, monospace);
+}
+
+.heartbeat-relative {
+  color: var(--rw-muted, #999999);
 }
 
 .card-title {
   font-weight: 600;
-  color: #111827;
+  color: var(--rw-ink, #171717);
   margin-bottom: 0.75rem;
 }
 
@@ -208,7 +297,8 @@ onMounted(fetchDevice)
   align-items: center;
   justify-content: space-between;
   padding: 0.4rem 0;
-  border-bottom: 1px dashed #f3f4f6;
+  border-bottom: 1px dashed var(--rw-hairline, #f0f0f3);
+  gap: 12px;
 }
 
 .info-item:last-child {
@@ -216,12 +306,12 @@ onMounted(fetchDevice)
 }
 
 .label {
-  color: #6b7280;
+  color: var(--rw-body, #60646c);
   font-size: 0.9rem;
 }
 
 .value {
-  color: #111827;
+  color: var(--rw-ink, #171717);
   font-weight: 500;
   display: flex;
   gap: 0.35rem;
@@ -229,12 +319,37 @@ onMounted(fetchDevice)
   justify-content: flex-end;
 }
 
-.models .el-tag {
-  margin-right: 0.35rem;
+.rw-pill,
+.rw-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.rw-pill.is-success {
+  color: #146c2e;
+  background: #ecfdf3;
+  border: 1px solid #bbf7d0;
+}
+
+.rw-pill.is-neutral,
+.rw-chip {
+  color: var(--rw-body, #60646c);
+  background: var(--rw-canvas-soft, #fafafa);
+  border: 1px solid var(--rw-hairline-strong, #dcdee0);
+}
+
+.empty-value {
+  color: var(--rw-muted, #999999);
 }
 
 .empty-capability {
-  color: #6b7280;
+  color: var(--rw-body, #60646c);
   font-size: 0.95rem;
   padding: 1rem 0;
 }
@@ -245,7 +360,7 @@ onMounted(fetchDevice)
 
 .section-title {
   font-weight: 600;
-  color: #374151;
+  color: var(--rw-ink, #171717);
   margin-bottom: 0.25rem;
 }
 
@@ -271,25 +386,94 @@ onMounted(fetchDevice)
 
 .chip-title {
   font-weight: 600;
-  color: #111827;
+  color: var(--rw-ink, #171717);
   display: block;
   line-height: 1.3;
 }
 
 .chip-desc {
   font-size: 0.85rem;
-  color: #6b7280;
+  color: var(--rw-body, #60646c);
   display: block;
   line-height: 1.5;
 }
 
+.server-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--rw-ink, #171717);
+}
+
+.loading-state {
+  padding: 42px 0;
+  text-align: center;
+  color: var(--rw-muted, #999999);
+  font-size: 13px;
+}
+
+.rw-btn-primary,
+.rw-btn-secondary {
+  height: 34px;
+  border-radius: 8px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.rw-btn-primary {
+  border: 1px solid var(--rw-primary, #171717);
+  background: var(--rw-primary, #171717);
+  color: var(--rw-on-primary, #ffffff);
+}
+
+.rw-btn-primary:hover:not(:disabled) {
+  background: var(--rw-primary-hover, #2e2e2e);
+  color: var(--rw-on-primary, #ffffff);
+}
+
+.rw-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.rw-btn-secondary {
+  border: 1px solid var(--rw-hairline-strong, #dcdee0);
+  background: var(--rw-canvas, #ffffff);
+  color: var(--rw-ink, #171717);
+}
+
+.rw-btn-secondary:hover {
+  background: var(--rw-surface-strong, #f0f0f3);
+}
+
+:deep(.el-card__body) {
+  padding: 18px;
+}
+
+:deep(.el-collapse) {
+  --el-collapse-border-color: var(--rw-hairline, #f0f0f3);
+}
+
 @media (max-width: 768px) {
-  .device-detail-actions {
-    width: 100%;
+  .rw-page-scroll {
+    padding: 18px 16px 28px;
   }
 
-  .device-detail-actions :deep(.el-button) {
-    width: 100%;
+  .detail-head,
+  .heartbeat-main {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .detail-badges {
+    justify-content: flex-start;
   }
 
   .info-item {

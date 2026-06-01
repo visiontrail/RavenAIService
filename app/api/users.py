@@ -414,6 +414,37 @@ async def pin_chat_session(
     )
 
 
+class RenameSessionRequest(BaseModel):
+    """重命名会话请求"""
+
+    title: str
+
+
+@router.patch("/chat-sessions/{session_id}/rename", response_model=ChatSessionListResponse)
+async def rename_chat_session(
+    session_id: str,
+    payload: RenameSessionRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatSessionListResponse:
+    if not payload.title.strip():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="名称不能为空")
+    updated = await chat_history_service.update_session_title(
+        db,
+        user_id=current_user.id,
+        session_id=session_id,
+        title=payload.title.strip(),
+    )
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
+    await db.commit()
+    sessions = await chat_history_service.list_sessions(db, current_user.id)
+    return ChatSessionListResponse(
+        message="已重命名",
+        data=[ChatSessionSummary.model_validate(s, from_attributes=True) for s in sessions],
+    )
+
+
 class SaveMessagesRequest(BaseModel):
     """保存消息请求"""
 
