@@ -27,6 +27,7 @@ from app.agents.log_analysis.agent import LogAnalysisAgent, extract_recoverable_
 from app.agents.log_analysis.workspace import (
     MissingArchiveError,
     MissingMetadataJsonError,
+    UnsupportedUploadFormatError,
     WorkspaceContext,
     WorkspaceExtractTooLarge,
     cleanup,
@@ -191,7 +192,7 @@ class LogAnalysisChatService:
                 yield self._sse_event(
                     {
                         "event": "log_analysis_status",
-                        "message": f"已接收日志包 `{uploaded_filename}`，正在建立分析工作区...",
+                        "message": f"已接收附件 `{uploaded_filename}`，正在建立分析工作区...",
                     }
                 )
                 ctx, context_meta = await self._create_context_from_upload(
@@ -285,9 +286,10 @@ class LogAnalysisChatService:
                     "event": "error",
                     "reason": "missing_metadata",
                     "message": (
-                        "这个日志包里没有找到 metadata.json，我无法自动识别它属于哪个项目。"
+                        "这个附件里没有找到 metadata.json，我无法自动识别它属于哪个项目。"
                         "请在输入框上方的「关联项目」下拉菜单中手动选择对应项目后重新发送，"
-                        "或更换一个包含 metadata.json 的日志包。"
+                        "或改用一个包含 metadata.json 的日志压缩包。"
+                        "（纯文本日志不含 metadata.json，必须手动选择关联项目。）"
                     ),
                 }
             )
@@ -320,8 +322,26 @@ class LogAnalysisChatService:
                     "event": "error",
                     "reason": "archive_too_large",
                     "message": (
-                        "这个日志包解压后体积超出了分析上限。"
+                        "这个附件解压后体积超出了分析上限。"
                         "请精简日志内容或拆分后再上传。"
+                    ),
+                }
+            )
+            return
+        except UnsupportedUploadFormatError as exc:
+            logger.info(
+                "log-analysis chat: unsupported upload format session_id=%s: %s",
+                effective_session_id,
+                exc,
+            )
+            yield self._sse_event(
+                {
+                    "event": "error",
+                    "reason": "unsupported_format",
+                    "message": (
+                        "这个附件既不是受支持的日志压缩包，也不是可识别的纯文本日志。"
+                        "请上传 .zip/.tar.gz/.7z/.rar 等压缩包，"
+                        "或 .log/.txt/.json/.xml/.csv 等纯文本日志后再试。"
                     ),
                 }
             )

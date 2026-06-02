@@ -22,7 +22,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from app.config import settings
-from app.tools.archive_tool import SUPPORTED_ARCHIVE_EXTS  # noqa: F401 – re-exported for callers
+from app.tools.archive_tool import (  # noqa: F401 – re-exported for callers
+    SUPPORTED_ARCHIVE_EXTS,
+    SUPPORTED_TEXT_EXTS,
+    detect_upload_kind,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +47,10 @@ class MissingArchiveError(WorkspaceError):
 
 class MissingMetadataJsonError(WorkspaceError):
     """解压后的 logs/ 树中找不到 metadata.json。"""
+
+
+class UnsupportedUploadFormatError(WorkspaceError):
+    """上传的附件既不是受支持的压缩包，也不是可识别的纯文本日志。"""
 
 
 # ─────────────────────── Data Structures ───────────────────────────
@@ -182,6 +190,26 @@ def _extract_archive(archive_path: Path, dest: Path, max_bytes: int) -> None:
             _extract_zip(archive_path, dest, max_bytes)
 
 
+def _place_text_file(src: Path, dest_dir: Path, max_bytes: int, *, preferred_name: str = "") -> None:
+    """Copy a plain-text log file into ``dest_dir`` under a safe name.
+
+    No decompression happens — the file is analyzed as-is. The size guard mirrors
+    the archive path so a single oversized text file is rejected the same way an
+    oversized archive is.
+    """
+    size = src.stat().st_size
+    if size > max_bytes:
+        raise WorkspaceExtractTooLarge(
+            f"Upload aborted: text file size {size} bytes exceeds limit {max_bytes} bytes"
+        )
+    # Strip any directory component a caller-supplied name might carry; fall back
+    # to the stored archive_path basename.
+    name = Path(preferred_name or src.name).name or src.name
+    out = _safe_output_path(dest_dir, name)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, out)
+
+
 # ─────────────────────── Public API ────────────────────────────────
 
 def prepare(log_record: Any, *, require_metadata: bool = True) -> WorkspaceContext:
@@ -223,10 +251,26 @@ def prepare(log_record: Any, *, require_metadata: bool = True) -> WorkspaceConte
         logs_dir.mkdir(parents=True, exist_ok=True)
         repo_dir.mkdir(parents=True, exist_ok=True)
 
-        # Extract archive into logs/
+        # Pre-judge the upload: a recognized archive is decompressed into logs/,
+        # a plain-text log is copied in verbatim, anything else is rejected up
+        # front (before we ever try to extract a binary blob).
         max_bytes = settings.ai_analysis_max_extract_bytes
+        upload_kind = detect_upload_kind(str(archive_path))
         try:
-            _extract_archive(archive_path, logs_dir, max_bytes)
+            if upload_kind == "archive":
+                _extract_archive(archive_path, logs_dir, max_bytes)
+            elif upload_kind == "text":
+                preferred_name = (
+                    getattr(log_record, "original_filename", None) or archive_path.name
+                )
+                _place_text_file(
+                    archive_path, logs_dir, max_bytes, preferred_name=preferred_name
+                )
+            else:
+                raise UnsupportedUploadFormatError(
+                    f"Upload {archive_path.name!r} is neither a supported archive "
+                    f"nor a recognizable plain-text log"
+                )
         except WorkspaceExtractTooLarge:
             shutil.rmtree(str(logs_dir), ignore_errors=True)
             raise

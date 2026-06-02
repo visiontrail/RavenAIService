@@ -16,13 +16,19 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-def _make_log_record(archive_path: str = "", question: str = "test?", log_type: str = "generic"):
+def _make_log_record(
+    archive_path: str = "",
+    question: str = "test?",
+    log_type: str = "generic",
+    original_filename: str = "",
+):
     r = MagicMock()
     r.id = 42
     r.archive_path = archive_path
     r.issue_description = question
     r.hints = ""
     r.log_type = log_type
+    r.original_filename = original_filename
     return r
 
 
@@ -226,6 +232,108 @@ class TestPrepare:
         dest.mkdir()
         with pytest.raises(WorkspaceExtractTooLarge):
             _extract_rar(tmp_path / "sample.rar", dest, 10)
+
+
+class TestPrepareTextUpload:
+    def test_plain_text_log_copied_in_without_metadata_when_opted_out(self, tmp_path, mock_settings):
+        from app.agents.log_analysis.workspace import prepare
+
+        src = tmp_path / "app.log"
+        src.write_text("2026-06-02 ERROR something broke\n", encoding="utf-8")
+        record = _make_log_record(archive_path=str(src), original_filename="app.log")
+
+        with patch("app.agents.log_analysis.workspace.settings", mock_settings):
+            ctx = prepare(record, require_metadata=False)
+
+        placed = Path(ctx.logs_dir) / "app.log"
+        assert placed.exists()
+        assert "something broke" in placed.read_text(encoding="utf-8")
+
+    def test_plain_text_log_uses_original_filename(self, tmp_path, mock_settings):
+        from app.agents.log_analysis.workspace import prepare
+
+        # Stored path carries a uuid prefix; original_filename should win.
+        src = tmp_path / "abcd1234_service.log"
+        src.write_text("hello\n", encoding="utf-8")
+        record = _make_log_record(archive_path=str(src), original_filename="service.log")
+
+        with patch("app.agents.log_analysis.workspace.settings", mock_settings):
+            ctx = prepare(record, require_metadata=False)
+
+        assert (Path(ctx.logs_dir) / "service.log").exists()
+
+    def test_plain_text_log_requires_metadata_raises(self, tmp_path, mock_settings):
+        from app.agents.log_analysis.workspace import MissingMetadataJsonError, prepare
+
+        src = tmp_path / "app.log"
+        src.write_text("no metadata in a flat text file\n", encoding="utf-8")
+        record = _make_log_record(archive_path=str(src), original_filename="app.log")
+
+        with patch("app.agents.log_analysis.workspace.settings", mock_settings):
+            with pytest.raises(MissingMetadataJsonError):
+                prepare(record, require_metadata=True)
+
+    def test_text_too_large(self, tmp_path, mock_settings):
+        from app.agents.log_analysis.workspace import WorkspaceExtractTooLarge, prepare
+
+        mock_settings.ai_analysis_max_extract_bytes = 10
+        src = tmp_path / "big.log"
+        src.write_text("x" * 1000, encoding="utf-8")
+        record = _make_log_record(archive_path=str(src), original_filename="big.log")
+
+        with patch("app.agents.log_analysis.workspace.settings", mock_settings):
+            with pytest.raises(WorkspaceExtractTooLarge):
+                prepare(record, require_metadata=False)
+
+    def test_binary_blob_rejected(self, tmp_path, mock_settings):
+        from app.agents.log_analysis.workspace import UnsupportedUploadFormatError, prepare
+
+        src = tmp_path / "mystery.bin"
+        src.write_bytes(b"\x00\x01\x02\x03binary\x00payload")
+        record = _make_log_record(archive_path=str(src), original_filename="mystery.bin")
+
+        with patch("app.agents.log_analysis.workspace.settings", mock_settings):
+            with pytest.raises(UnsupportedUploadFormatError):
+                prepare(record, require_metadata=False)
+
+
+class TestDetectUploadKind:
+    def test_detects_plain_text(self, tmp_path):
+        from app.tools.archive_tool import detect_upload_kind
+
+        p = tmp_path / "a.log"
+        p.write_text("plain log line\n", encoding="utf-8")
+        assert detect_upload_kind(str(p)) == "text"
+
+    def test_detects_zip_archive(self, tmp_path):
+        from app.tools.archive_tool import detect_upload_kind
+
+        archive = _create_zip(tmp_path, {"logs/app.log": b"x"})
+        assert detect_upload_kind(str(archive)) == "archive"
+
+    def test_detects_tar_gz_archive(self, tmp_path):
+        from app.tools.archive_tool import detect_upload_kind
+
+        archive = _create_tar_gz(tmp_path, {"app.log": b"x"})
+        assert detect_upload_kind(str(archive)) == "archive"
+
+    def test_binary_is_unknown(self, tmp_path):
+        from app.tools.archive_tool import detect_upload_kind
+
+        p = tmp_path / "x.dat"
+        p.write_bytes(b"\x00\xff\x00\xffbinary")
+        assert detect_upload_kind(str(p)) == "unknown"
+
+    def test_text_named_archive_still_archive(self, tmp_path):
+        # A zip whose name ends in .log must still be treated as an archive,
+        # because looks_like_text rejects the PK magic header.
+        from app.tools.archive_tool import detect_upload_kind, looks_like_text
+
+        archive = _create_zip(tmp_path, {"inner.log": b"data"})
+        renamed = tmp_path / "weird.log"
+        archive.rename(renamed)
+        assert looks_like_text(str(renamed)) is False
+        assert detect_upload_kind(str(renamed)) == "archive"
 
 
 class TestCleanup:

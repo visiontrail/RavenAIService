@@ -15,6 +15,9 @@ from app.tools.fs_tools import safe_listdir
 
 SUPPORTED_ARCHIVE_EXTS = {".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar", ".zip", ".7z", ".rar"}
 
+# Plain-text log formats that can be analyzed directly without decompression.
+SUPPORTED_TEXT_EXTS = {".log", ".txt", ".out", ".err", ".trace", ".json", ".xml", ".csv", ".tsv"}
+
 # (magic_bytes, byte_offset) for each supported extension
 ArchiveMagic = Union[Tuple[bytes, int], List[Tuple[bytes, int]]]
 ARCHIVE_MAGIC: Dict[str, ArchiveMagic] = {
@@ -79,6 +82,57 @@ def guess_archive_type(path: str) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def looks_like_text(path: str, *, sample_size: int = 8192) -> bool:
+    """Heuristic, content-based check for whether ``path`` is a plain-text file.
+
+    A leading sample is treated as text when it is empty, carries no NUL byte,
+    does not start with a known archive/compression magic, and decodes as UTF-8
+    (tolerating a multi-byte sequence truncated at the sample boundary). This is
+    deliberately conservative: binary blobs and compressed archives are rejected
+    so they are never copied in verbatim as if they were logs.
+    """
+    try:
+        with open(path, "rb") as f:
+            sample = f.read(sample_size)
+    except OSError:
+        return False
+    if not sample:
+        return True
+    if b"\x00" in sample:
+        return False
+    # Reject anything whose header matches a known archive/compression magic,
+    # even when it carries a text-ish extension.
+    for ext in ARCHIVE_MAGIC:
+        if check_archive_magic(sample, ext):
+            return False
+    try:
+        sample.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        # A multi-byte UTF-8 sequence may straddle the sample boundary; retry
+        # after dropping the last few bytes before declaring it non-text.
+        try:
+            sample[:-3].decode("utf-8")
+            return True
+        except UnicodeDecodeError:
+            return False
+
+
+def detect_upload_kind(path: str) -> str:
+    """Pre-classify an uploaded file as ``"archive"``, ``"text"`` or ``"unknown"``.
+
+    Archive detection (extension + content inspection) takes precedence so a
+    text-named archive is still decompressed; otherwise a content-based text
+    probe decides. ``"unknown"`` covers binary blobs we can neither extract nor
+    analyze as logs.
+    """
+    if guess_archive_type(path) is not None:
+        return "archive"
+    if looks_like_text(path):
+        return "text"
+    return "unknown"
 
 
 def _ensure_dir(p: str) -> None:

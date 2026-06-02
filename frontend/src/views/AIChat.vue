@@ -56,7 +56,15 @@ const projectExpertAgentOption: AgentOption = {
   description: '选择已登记项目后直接提问，复用项目源码工作区支持追问'
 }
 
-const acceptedLogArchiveTypes = '.zip,.tar,.tgz,.gz,.tar.gz,.tar.bz2,.bz2,.tar.xz,.xz,.7z,.rar'
+// Archive packages (decompressed server-side) plus plain-text logs (analyzed as-is).
+const acceptedLogArchiveExtensions = ['.zip', '.tar', '.tgz', '.gz', '.tar.gz', '.tar.bz2', '.bz2', '.tar.xz', '.xz', '.7z', '.rar']
+const acceptedLogTextExtensions = ['.log', '.txt', '.out', '.err', '.trace', '.json', '.xml', '.csv', '.tsv']
+const acceptedLogArchiveTypes = [...acceptedLogArchiveExtensions, ...acceptedLogTextExtensions].join(',')
+
+function isArchiveLogFile(file: File): boolean {
+  const name = file.name.toLowerCase()
+  return acceptedLogArchiveExtensions.some((ext) => name.endsWith(ext))
+}
 
 const userStore = useUserStore()
 const appStore = useAppStore()
@@ -552,13 +560,17 @@ const logAnalysisNoAttachmentWarning = computed(() =>
   chatHistory.value.length === 0
 )
 
-// Error: ZIP file has no metadata.json and no project manually selected → cannot identify project
-const logAnalysisMetadataError = computed(() =>
-  isLogAnalysisAgentSelected.value &&
-  !!selectedLogFile.value &&
-  zipMetadataCheckResult.value === false &&
-  selectedProjectRepoId.value === null
-)
+// Error: attachment cannot be tied to a project and none was manually selected.
+// Two cases force this: a ZIP we inspected has no metadata.json, or a plain-text
+// log (which can never carry metadata.json) was attached.
+const logAnalysisMetadataError = computed(() => {
+  if (!isLogAnalysisAgentSelected.value) return false
+  const file = selectedLogFile.value
+  if (!file) return false
+  if (selectedProjectRepoId.value !== null) return false
+  if (!isArchiveLogFile(file)) return true
+  return zipMetadataCheckResult.value === false
+})
 
 const sendDisabled = computed(() =>
   !isLoggedIn.value ||
@@ -657,18 +669,26 @@ const renderAiMessage = (content: string) => {
 const mermaidDialogVisible = ref(false)
 const mermaidDialogContainerRef = ref<HTMLElement | null>(null)
 let mermaidZoomSource = ''
+let mermaidRenderScheduled = false
+
+const scheduleMermaidRender = () => {
+  if (isSending.value || loadingMessages.value || mermaidRenderScheduled) return
+  mermaidRenderScheduled = true
+  nextTick(() => {
+    mermaidRenderScheduled = false
+    if (isSending.value || loadingMessages.value) return
+    void processMermaidBlocks(chatContainerRef.value)
+  })
+}
 
 watch(
-  [chatHistory, isSending],
-  () => {
-    if (isSending.value) return
-    nextTick(() => {
-      void processMermaidBlocks(chatContainerRef.value)
-    })
-  },
+  [chatHistory, isSending, loadingMessages, effectiveSessionId],
+  scheduleMermaidRender,
   // immediate: 会话在挂载时可能已加载（store 缓存/恢复），此时 chatHistory
-  // 不会再触发变更事件，需主动渲染一次已存在的 Mermaid 占位块。
-  { deep: true, immediate: true }
+  // 不会再触发变更事件，需主动渲染一次已存在的 Mermaid 占位块。历史加载时
+  // 消息会先写入 store，再从 loading 占位切换到 thread DOM，因此也必须监听
+  // loadingMessages，确保真实消息 DOM 出现后再扫 pending Mermaid 容器。
+  { deep: true, immediate: true, flush: 'post' }
 )
 
 // 事件委托：处理 Mermaid 图表的「复制源码」与「点击放大」交互。
@@ -1623,13 +1643,13 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
       <div v-if="logAnalysisMetadataError" class="rw-composer-alert is-error">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
         <span>
-          日志包中未找到 <code>metadata.json</code>，无法自动识别项目。请在下方「关联项目」下拉菜单中手动选择关联项目，或更换包含 <code>metadata.json</code> 的日志包后重试。
+          无法从该附件自动识别项目（压缩包内缺少 <code>metadata.json</code>，或上传的是纯文本日志）。请在下方「关联项目」下拉菜单中手动选择关联项目，或改用包含 <code>metadata.json</code> 的日志压缩包后重试。
         </span>
       </div>
       <div v-else-if="logAnalysisNoAttachmentWarning" class="rw-composer-alert is-warn">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
         <span>
-          <strong>日志分析</strong> 需要上传日志压缩包作为附件，支持格式：<code>.zip</code> <code>.tar</code> <code>.tgz</code> <code>.gz</code> <code>.tar.gz</code> <code>.tar.bz2</code> <code>.bz2</code> <code>.tar.xz</code> <code>.xz</code> <code>.7z</code> <code>.rar</code>。如需直接提问，可切换至
+          <strong>日志分析</strong> 需要上传日志附件，支持压缩包 <code>.zip</code> <code>.tar.gz</code> <code>.tgz</code> <code>.tar.bz2</code> <code>.tar.xz</code> <code>.7z</code> <code>.rar</code> 等，也支持纯文本日志 <code>.log</code> <code>.txt</code> <code>.json</code> <code>.xml</code> <code>.csv</code> 等（纯文本日志需手动选择关联项目）。如需直接提问，可切换至
           <button type="button" class="rw-alert-link" @click="toggleProjectExpertAgent">项目专家</button>。
         </span>
       </div>
