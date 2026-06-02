@@ -461,6 +461,20 @@
   transition: transform 0.12s ease;
 }
 
+/* 放大后可拖拽平移：抓手光标 + 拖拽时禁止文字选中 */
+.mermaid-zoom-dialog .mermaid-zoom-body.is-pannable {
+  cursor: grab;
+}
+
+.mermaid-zoom-dialog .mermaid-zoom-body.is-panning {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.mermaid-zoom-dialog .mermaid-zoom-body.is-panning svg {
+  transition: none; /* 拖拽过程中关闭过渡，避免延迟感 */
+}
+
 /* 5.4.1 放大弹窗头部：标题 + 工具栏 */
 .mermaid-zoom-header {
   display: flex;

@@ -752,6 +752,48 @@ const onMermaidZoomWheel = (event: WheelEvent) => {
   setMermaidZoom(mermaidZoomScale.value + delta)
 }
 
+// ─── 放大弹窗：拖拽平移 ───────────────────────────────────────────────
+// 放大超过 100% 后，图表会溢出可视区域，通过鼠标拖拽滚动 body 查看细节。
+const mermaidIsPanning = ref(false)
+let panStartX = 0
+let panStartY = 0
+let panStartScrollLeft = 0
+let panStartScrollTop = 0
+
+// 仅当存在可滚动溢出（即放大后超出视口）时才允许拖拽
+const isMermaidPannable = (): boolean => {
+  const host = mermaidDialogContainerRef.value
+  if (!host) return false
+  return host.scrollWidth > host.clientWidth || host.scrollHeight > host.clientHeight
+}
+
+const onMermaidPanStart = (event: MouseEvent) => {
+  if (event.button !== 0) return // 仅响应左键
+  const host = mermaidDialogContainerRef.value
+  if (!host || !isMermaidPannable()) return
+  event.preventDefault()
+  mermaidIsPanning.value = true
+  panStartX = event.clientX
+  panStartY = event.clientY
+  panStartScrollLeft = host.scrollLeft
+  panStartScrollTop = host.scrollTop
+  window.addEventListener('mousemove', onMermaidPanMove)
+  window.addEventListener('mouseup', onMermaidPanEnd)
+}
+
+const onMermaidPanMove = (event: MouseEvent) => {
+  const host = mermaidDialogContainerRef.value
+  if (!host || !mermaidIsPanning.value) return
+  host.scrollLeft = panStartScrollLeft - (event.clientX - panStartX)
+  host.scrollTop = panStartScrollTop - (event.clientY - panStartY)
+}
+
+const onMermaidPanEnd = () => {
+  mermaidIsPanning.value = false
+  window.removeEventListener('mousemove', onMermaidPanMove)
+  window.removeEventListener('mouseup', onMermaidPanEnd)
+}
+
 // ─── 放大弹窗：导出图片（下载 / 复制）────────────────────────────────
 // 将渲染后的 SVG 光栅化为 PNG。2x 缩放保证清晰度，白色底避免透明背景。
 const mermaidSvgToCanvas = async (svgEl: SVGSVGElement): Promise<HTMLCanvasElement> => {
@@ -1894,7 +1936,9 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
       <div
         ref="mermaidDialogContainerRef"
         class="mermaid-zoom-body"
+        :class="{ 'is-pannable': mermaidZoomScale > 1, 'is-panning': mermaidIsPanning }"
         @wheel="onMermaidZoomWheel"
+        @mousedown="onMermaidPanStart"
       ></div>
     </el-dialog>
   </div>
