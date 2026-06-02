@@ -186,6 +186,55 @@ export const adminApi = {
       params: { path },
     }),
 
+  // ==================== 项目级 Skill ====================
+
+  listProjectSkills: (projectCode: string): Promise<ApiResponse<AgentSkill[]>> =>
+    adminClient.get(`/admin/project-repos/${projectCode}/skills`),
+
+  uploadProjectSkill: (
+    projectCode: string,
+    file: File,
+    overwrite = false,
+    onProgress?: (percent: number) => void
+  ): Promise<ApiResponse<AgentSkill>> => {
+    const form = new FormData()
+    form.append('file', file)
+    return adminClient.post(`/admin/project-repos/${projectCode}/skills`, form, {
+      params: { overwrite },
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+      onUploadProgress: (e) => {
+        if (!onProgress || !e.total) return
+        onProgress(Math.round((e.loaded / e.total) * 100))
+      },
+    })
+  },
+
+  updateProjectSkill: (
+    projectCode: string,
+    skillId: string,
+    payload: { enabled: boolean }
+  ): Promise<ApiResponse<AgentSkill>> =>
+    adminClient.patch(`/admin/project-repos/${projectCode}/skills/${skillId}`, payload),
+
+  deleteProjectSkill: (projectCode: string, skillId: string): Promise<void> =>
+    adminClient.delete(`/admin/project-repos/${projectCode}/skills/${skillId}`),
+
+  listProjectSkillFiles: (
+    projectCode: string,
+    skillId: string
+  ): Promise<ApiResponse<SkillFileTree>> =>
+    adminClient.get(`/admin/project-repos/${projectCode}/skills/${skillId}/files`),
+
+  readProjectSkillFile: (
+    projectCode: string,
+    skillId: string,
+    path: string
+  ): Promise<ApiResponse<SkillFileContent>> =>
+    adminClient.get(`/admin/project-repos/${projectCode}/skills/${skillId}/file`, {
+      params: { path },
+    }),
+
   // ==================== 系统/用户指标 (Metrics) ====================
 
   metricsOverview: (

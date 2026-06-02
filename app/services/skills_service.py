@@ -1,18 +1,28 @@
 """
-Agent Skills 管理服务。
+Agent & Project Skills 管理服务。
 
 提供 Claude Agent SDK 的 Skill 包管理能力：
 - 上传 / 解压 zip 格式的 Skill（兼容 Claude 应用程序的官方约定）
 - 维护 per-agent 注册表（启用/禁用、来源、SKILL.md frontmatter）
+- 维护 per-project 注册表（按 project_code 隔离，与 Agent Skill 并行）
 - 在 Agent 运行前将启用的 Skill 物化到 cwd 下的 .claude/skills/<name>/，
   使 SDK 通过 `setting_sources=["project"]` 自动加载
 
-存储布局：
+Agent Skills 存储布局：
     data/agent_skills/
     └── <agent_key>/
-        ├── _registry.json          # [{id, name, description, enabled, ...}, ...]
+        ├── _registry.json
         └── store/
-            └── <skill_name>/       # zip 解压结果，必须包含 SKILL.md
+            └── <skill_name>/
+                ├── SKILL.md
+                └── ...
+
+Project Skills 存储布局：
+    data/project_skills/
+    └── <project_code>/
+        ├── _registry.json
+        └── store/
+            └── <skill_name>/
                 ├── SKILL.md
                 └── ...
 """
@@ -26,7 +36,6 @@ import os
 import re
 import shutil
 import zipfile
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -36,7 +45,6 @@ logger = logging.getLogger(__name__)
 
 # ─────────────────────── Constants ─────────────────────────────────
 
-# 当前支持加载 Skill 的 Agent 注册表，前端下拉据此渲染。
 SUPPORTED_AGENTS: Dict[str, Dict[str, str]] = {
     "log_analysis": {
         "key": "log_analysis",
@@ -58,27 +66,21 @@ SUPPORTED_AGENTS: Dict[str, Dict[str, str]] = {
     },
 }
 
-# Skill 包硬性限制
-MAX_SKILL_ZIP_BYTES = 50 * 1024 * 1024            # 单个 zip ≤ 50 MiB
-MAX_SKILL_EXTRACTED_BYTES = 200 * 1024 * 1024     # 解压总量 ≤ 200 MiB
-MAX_SKILL_FILE_COUNT = 1000                       # 解压条目数上限
+MAX_SKILL_ZIP_BYTES = 50 * 1024 * 1024
+MAX_SKILL_EXTRACTED_BYTES = 200 * 1024 * 1024
+MAX_SKILL_FILE_COUNT = 1000
 
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _ASCII_TERM_RE = re.compile(r"[a-z0-9][a-z0-9_-]{1,}", re.IGNORECASE)
-_CJK_TERM_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
+_CJK_TERM_RE = re.compile(r"[一-鿿]{2,}")
 _REGISTRY_FILENAME = "_registry.json"
 _STORE_DIRNAME = "store"
 
-# 平台/压缩工具产生的无用条目，统一在解压与文件树中过滤。
 _IGNORED_DIR_NAMES = {"__MACOSX", ".git", ".svn", ".hg", ".idea", ".vscode"}
 _IGNORED_FILE_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
 
 
 def _is_ignored_path_parts(parts: Iterable[str]) -> bool:
-    """判断路径任意一段是否落在忽略名单内。
-
-    覆盖：__MACOSX/、._xxx（macOS resource fork）、.DS_Store、Thumbs.db 等。
-    """
     for part in parts:
         if not part:
             continue
@@ -113,10 +115,80 @@ class SkillNotFoundError(SkillError):
     pass
 
 
-# ─────────────────────── Path helpers ──────────────────────────────
+# ─────────────────────── Base path / registry helpers ────────────
+# Parameterized by base_dir so both agent and project skill paths
+# can reuse the same IO logic.
+
+def _base_store_root(base_dir: Path) -> Path:
+    return base_dir / _STORE_DIRNAME
+
+
+def _base_registry_path(base_dir: Path) -> Path:
+    return base_dir / _REGISTRY_FILENAME
+
+
+def _base_ensure_layout(base_dir: Path) -> None:
+    _base_store_root(base_dir).mkdir(parents=True, exist_ok=True)
+    reg = _base_registry_path(base_dir)
+    if not reg.exists():
+        reg.write_text("[]", encoding="utf-8")
+
+
+def _base_load_registry(base_dir: Path) -> List[Dict[str, Any]]:
+    _base_ensure_layout(base_dir)
+    raw = _base_registry_path(base_dir).read_text(encoding="utf-8")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("skills registry corrupt for base_dir=%s, resetting", base_dir)
+        data = []
+    if not isinstance(data, list):
+        data = []
+    return data
+
+
+def _base_save_registry(base_dir: Path, entries: List[Dict[str, Any]]) -> None:
+    _base_ensure_layout(base_dir)
+    tmp = _base_registry_path(base_dir).with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(_base_registry_path(base_dir))
+
+
+def _base_enabled_entries(base_dir: Path) -> List[Dict[str, Any]]:
+    store = _base_store_root(base_dir)
+    entries: List[Dict[str, Any]] = []
+    for entry in _base_load_registry(base_dir):
+        if not entry.get("enabled", True):
+            continue
+        src = store / entry.get("dir_name", entry.get("name", ""))
+        if not (src / "SKILL.md").is_file():
+            logger.warning(
+                "skill dir missing or invalid, skip: base_dir=%s name=%s src=%s",
+                base_dir, entry.get("name"), src,
+            )
+            continue
+        entries.append(entry)
+    return entries
+
+
+def _base_skill_dir_for_entry(base_dir: Path, entry: Dict[str, Any]) -> Path:
+    return _base_store_root(base_dir) / entry.get("dir_name", entry.get("name", ""))
+
+
+def _base_resolve_skill_dir(base_dir: Path, skill_id: str) -> Tuple[Dict[str, Any], Path]:
+    registry = _base_load_registry(base_dir)
+    entry = next((e for e in registry if e.get("id") == skill_id), None)
+    if entry is None:
+        raise SkillNotFoundError(f"Skill 不存在: {skill_id}")
+    skill_dir = (_base_store_root(base_dir) / entry.get("dir_name", entry.get("name", ""))).resolve()
+    if not skill_dir.is_dir() or not (skill_dir / "SKILL.md").is_file():
+        raise SkillNotFoundError(f"Skill 目录已丢失: {skill_id}")
+    return entry, skill_dir
+
+
+# ─────────────────────── Agent path helpers ──────────────────────
 
 def _skills_root() -> Path:
-    """Skills 数据根目录（由 settings.skills_data_dir 控制）。"""
     from app.config import settings
     return Path(settings.skills_data_dir)
 
@@ -128,40 +200,57 @@ def _agent_root(agent_key: str) -> Path:
 
 
 def _store_root(agent_key: str) -> Path:
-    return _agent_root(agent_key) / _STORE_DIRNAME
+    return _base_store_root(_agent_root(agent_key))
 
 
 def _registry_path(agent_key: str) -> Path:
-    return _agent_root(agent_key) / _REGISTRY_FILENAME
+    return _base_registry_path(_agent_root(agent_key))
 
 
 def _ensure_layout(agent_key: str) -> None:
-    _store_root(agent_key).mkdir(parents=True, exist_ok=True)
-    reg = _registry_path(agent_key)
-    if not reg.exists():
-        reg.write_text("[]", encoding="utf-8")
+    _base_ensure_layout(_agent_root(agent_key))
 
-
-# ─────────────────────── Registry IO ───────────────────────────────
 
 def _load_registry(agent_key: str) -> List[Dict[str, Any]]:
-    _ensure_layout(agent_key)
-    raw = _registry_path(agent_key).read_text(encoding="utf-8")
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("skills registry corrupt for agent=%s, resetting", agent_key)
-        data = []
-    if not isinstance(data, list):
-        data = []
-    return data
+    return _base_load_registry(_agent_root(agent_key))
 
 
 def _save_registry(agent_key: str, entries: List[Dict[str, Any]]) -> None:
-    _ensure_layout(agent_key)
-    tmp = _registry_path(agent_key).with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(_registry_path(agent_key))
+    _base_save_registry(_agent_root(agent_key), entries)
+
+
+def _enabled_entries(agent_key: str) -> List[Dict[str, Any]]:
+    return _base_enabled_entries(_agent_root(agent_key))
+
+
+def _skill_dir_for_entry(agent_key: str, entry: Dict[str, Any]) -> Path:
+    return _base_skill_dir_for_entry(_agent_root(agent_key), entry)
+
+
+# ─────────────────────── Project path helpers ────────────────────
+
+def _project_skills_root() -> Path:
+    from app.config import settings
+    return Path(settings.project_skills_data_dir)
+
+
+def _validate_project_code(project_code: str) -> str:
+    if not project_code or not project_code.strip():
+        raise SkillValidationError("project_code 不能为空")
+    return project_code.strip().lower()
+
+
+def _project_root(project_code: str) -> Path:
+    code = _validate_project_code(project_code)
+    return _project_skills_root() / code
+
+
+def _project_store_root(project_code: str) -> Path:
+    return _base_store_root(_project_root(project_code))
+
+
+def _project_registry_path(project_code: str) -> Path:
+    return _base_registry_path(_project_root(project_code))
 
 
 # ─────────────────────── SKILL.md parsing ──────────────────────────
@@ -170,8 +259,6 @@ _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 
 def _parse_skill_frontmatter(skill_md_path: Path) -> Dict[str, str]:
-    """解析 SKILL.md 顶部 YAML frontmatter。仅取 name/description；
-    其余字段保留为字符串供未来扩展。"""
     text = skill_md_path.read_text(encoding="utf-8", errors="replace")
     m = _FRONTMATTER_RE.match(text)
     if not m:
@@ -198,10 +285,6 @@ def _parse_skill_frontmatter(skill_md_path: Path) -> Dict[str, str]:
 # ─────────────────────── Zip 解包与校验 ────────────────────────────
 
 def _safe_extract_zip(zip_bytes: bytes, dest: Path) -> List[Path]:
-    """安全解压 zip 到 dest，返回所有写入的文件路径。
-
-    防御：zip-slip / 条目数 / 解压总量。
-    """
     written: List[Path] = []
     extracted = 0
     with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
@@ -212,14 +295,11 @@ def _safe_extract_zip(zip_bytes: bytes, dest: Path) -> List[Path]:
             )
         dest_resolved = dest.resolve()
         for info in infos:
-            # 跳过目录条目自身
             if info.is_dir():
                 continue
-            # 规范化路径并校验 zip-slip
             member = Path(info.filename)
             if member.is_absolute() or any(part == ".." for part in member.parts):
                 raise SkillValidationError(f"zip 包含非法路径：{info.filename}")
-            # 跳过平台噪声（__MACOSX/、._foo、.DS_Store 等）
             if _is_ignored_path_parts(member.parts):
                 continue
             target = (dest / member).resolve()
@@ -238,16 +318,9 @@ def _safe_extract_zip(zip_bytes: bytes, dest: Path) -> List[Path]:
 
 
 def _find_skill_root(extracted_dir: Path) -> Path:
-    """寻找 SKILL.md 所在目录。
-
-    兼容两种官方 zip 结构：
-      (a) zip 顶层就是单个 skill 目录：<name>/SKILL.md
-      (b) zip 顶层直接放 SKILL.md
-    """
     direct = extracted_dir / "SKILL.md"
     if direct.is_file():
         return extracted_dir
-    # 寻找唯一的 <something>/SKILL.md
     children = [p for p in extracted_dir.iterdir() if p.is_dir()]
     candidates = [d for d in children if (d / "SKILL.md").is_file()]
     if len(candidates) == 1:
@@ -259,31 +332,7 @@ def _find_skill_root(extracted_dir: Path) -> Path:
     )
 
 
-# ─────────────────────── Public API ────────────────────────────────
-
-def list_agents() -> List[Dict[str, str]]:
-    """返回支持加载 Skill 的 Agent 列表（前端下拉用）。"""
-    return list(SUPPORTED_AGENTS.values())
-
-
-def list_skills(agent_key: str) -> List[Dict[str, Any]]:
-    """列出 agent 已安装的 Skill。返回的 dict 已剔除内部路径字段。"""
-    _ = _agent_root(agent_key)  # 校验 agent_key
-    entries = _load_registry(agent_key)
-    # 兜底：对照磁盘，过滤掉目录已丢失的条目
-    store = _store_root(agent_key)
-    alive: List[Dict[str, Any]] = []
-    for e in entries:
-        skill_dir = store / e.get("dir_name", "")
-        if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
-            alive.append(_public_entry(e))
-        else:
-            logger.warning("skill missing on disk, dropping: agent=%s id=%s", agent_key, e.get("id"))
-    if len(alive) != len(entries):
-        # 同步注册表
-        _save_registry(agent_key, [_internal_entry(e) for e in alive])
-    return alive
-
+# ─────────────────────── Shared entry helpers ─────────────────────
 
 def _public_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     return {
@@ -299,7 +348,6 @@ def _public_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _internal_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
-    """保留 dir_name 等内部字段，用于落盘。"""
     return {
         "id": entry["id"],
         "name": entry["name"],
@@ -313,30 +361,9 @@ def _internal_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _enabled_entries(agent_key: str) -> List[Dict[str, Any]]:
-    """Return enabled registry entries whose on-disk skill directory exists."""
-    store = _store_root(agent_key)
-    entries: List[Dict[str, Any]] = []
-    for entry in _load_registry(agent_key):
-        if not entry.get("enabled", True):
-            continue
-        src = store / entry.get("dir_name", entry.get("name", ""))
-        if not (src / "SKILL.md").is_file():
-            logger.warning(
-                "skill dir missing or invalid, skip: agent=%s name=%s src=%s",
-                agent_key, entry.get("name"), src,
-            )
-            continue
-        entries.append(entry)
-    return entries
-
-
-def _skill_dir_for_entry(agent_key: str, entry: Dict[str, Any]) -> Path:
-    return _store_root(agent_key) / entry.get("dir_name", entry.get("name", ""))
-
+# ─────────────────────── Relevance scoring ────────────────────────
 
 def _extract_terms(text: str) -> Set[str]:
-    """Extract lightweight relevance terms from English/code and Chinese text."""
     lowered = (text or "").lower()
     terms: Set[str] = set()
     for term in _ASCII_TERM_RE.findall(lowered):
@@ -348,7 +375,6 @@ def _extract_terms(text: str) -> Set[str]:
                     terms.add(part)
     for term in _CJK_TERM_RE.findall(lowered):
         terms.add(term)
-        # Add 2-char shingles so short domain words such as 基带 / 天线 can match.
         if len(term) > 2:
             for idx in range(0, len(term) - 1):
                 terms.add(term[idx:idx + 2])
@@ -360,7 +386,6 @@ def _read_skill_body(skill_dir: Path, max_chars: int = 12000) -> str:
         text = (skill_dir / "SKILL.md").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
-    # Drop frontmatter; name/description are scored separately with higher weight.
     text = _FRONTMATTER_RE.sub("", text, count=1)
     return text[:max_chars]
 
@@ -371,19 +396,11 @@ def _score_skill_for_query(
     skill_dir: Path,
     query_terms: Set[str],
 ) -> int:
-    """Simple deterministic skill relevance score.
-
-    The Claude Skill runtime can choose among loaded skills, but loading every
-    enabled skill makes unrelated skills visible to the model. This scorer keeps
-    runtime scope narrow using metadata and the top of SKILL.md.
-    """
     if not query_terms:
         return 0
-
     name_terms = _extract_terms(str(entry.get("name") or ""))
     description_terms = _extract_terms(str(entry.get("description") or ""))
     body_terms = _extract_terms(_read_skill_body(skill_dir))
-
     score = 0
     for term in query_terms:
         if term in name_terms:
@@ -395,58 +412,26 @@ def _score_skill_for_query(
     return score
 
 
-def select_relevant_skill_names(
-    agent_key: str,
-    *,
-    query_text: str,
-    max_skills: int = 3,
-) -> List[str]:
-    """Select enabled skills relevant to the current request.
+# ─────────────────────── Agent Public API ─────────────────────────
 
-    If there is no confident match, returns all enabled skills to preserve the
-    previous behavior. Callers that want unconditional loading should continue
-    using ``materialize_enabled_skills``.
-    """
-    entries = _enabled_entries(agent_key)
-    if not entries:
-        return []
+def list_agents() -> List[Dict[str, str]]:
+    return list(SUPPORTED_AGENTS.values())
 
-    query_terms = _extract_terms(query_text)
-    if not query_terms:
-        return [str(e["name"]) for e in entries]
 
-    scored: List[Tuple[int, Dict[str, Any]]] = []
-    for entry in entries:
-        score = _score_skill_for_query(
-            entry=entry,
-            skill_dir=_skill_dir_for_entry(agent_key, entry),
-            query_terms=query_terms,
-        )
-        scored.append((score, entry))
-
-    scored.sort(key=lambda item: (-item[0], str(item[1].get("name") or "")))
-    best = scored[0][0]
-    if best <= 0:
-        logger.info(
-            "skill relevance: no match for agent=%s query_terms=%s; loading all enabled skills",
-            agent_key,
-            sorted(query_terms)[:20],
-        )
-        return [str(e["name"]) for e in entries]
-
-    threshold = max(2, int(best * 0.65))
-    selected = [
-        str(entry["name"])
-        for score, entry in scored
-        if score >= threshold
-    ][:max_skills]
-    logger.info(
-        "skill relevance selected for agent=%s: %s (best_score=%s)",
-        agent_key,
-        ", ".join(selected) if selected else "-",
-        best,
-    )
-    return selected
+def list_skills(agent_key: str) -> List[Dict[str, Any]]:
+    _ = _agent_root(agent_key)
+    entries = _load_registry(agent_key)
+    store = _store_root(agent_key)
+    alive: List[Dict[str, Any]] = []
+    for e in entries:
+        skill_dir = store / e.get("dir_name", "")
+        if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
+            alive.append(_public_entry(e))
+        else:
+            logger.warning("skill missing on disk, dropping: agent=%s id=%s", agent_key, e.get("id"))
+    if len(alive) != len(entries):
+        _save_registry(agent_key, [_internal_entry(e) for e in alive])
+    return alive
 
 
 def install_skill(
@@ -456,14 +441,6 @@ def install_skill(
     source_filename: str,
     overwrite: bool = False,
 ) -> Dict[str, Any]:
-    """从 zip 字节流安装一个 Skill。
-
-    - 上传体积上限：MAX_SKILL_ZIP_BYTES
-    - zip 解包后必须含 SKILL.md（顶层或唯一子目录），frontmatter 必须含合法 name
-    - 同名 Skill 默认拒绝，传 overwrite=True 时替换
-
-    返回新增/更新后的 public entry。
-    """
     if not zip_bytes:
         raise SkillValidationError("上传内容为空")
     if len(zip_bytes) > MAX_SKILL_ZIP_BYTES:
@@ -474,7 +451,6 @@ def install_skill(
     _ensure_layout(agent_key)
     store = _store_root(agent_key)
 
-    # 解压到临时目录再原子化移动
     import tempfile
     with tempfile.TemporaryDirectory(prefix="skill_", dir=str(store)) as tmpdir:
         tmp_path = Path(tmpdir)
@@ -490,12 +466,10 @@ def install_skill(
         if existing and not overwrite:
             raise SkillConflictError(f"已存在同名 Skill: {name}")
 
-        # 落盘：替换目标目录
         if target_dir.exists():
             shutil.rmtree(target_dir)
         shutil.move(str(skill_root), str(target_dir))
 
-    # 计算大小
     size_bytes = sum(
         f.stat().st_size for f in target_dir.rglob("*") if f.is_file()
     )
@@ -514,7 +488,7 @@ def install_skill(
         new_entry = existing
     else:
         new_entry = {
-            "id": name,  # name 唯一约束 → 直接作为 id
+            "id": name,
             "name": name,
             "description": description,
             "enabled": True,
@@ -547,13 +521,22 @@ def delete_skill(agent_key: str, skill_id: str) -> None:
     logger.info("skill deleted: agent=%s id=%s", agent_key, skill_id)
 
 
-# ─────────────────────── 文件浏览 / 预览 ──────────────────────────
+def set_skill_enabled(agent_key: str, skill_id: str, enabled: bool) -> Dict[str, Any]:
+    registry = _load_registry(agent_key)
+    entry = next((e for e in registry if e.get("id") == skill_id), None)
+    if entry is None:
+        raise SkillNotFoundError(f"Skill 不存在: {skill_id}")
+    entry["enabled"] = bool(enabled)
+    entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _save_registry(agent_key, [_internal_entry(e) for e in registry])
+    return _public_entry(entry)
 
-# 文本预览限制：避免把超大文件塞回响应
-MAX_PREVIEW_FILE_BYTES = 1 * 1024 * 1024   # 单文件 ≤ 1 MiB
-MAX_TREE_ENTRIES = 2000                    # 树节点上限
 
-# 视为可文本预览的扩展名（其余按二进制处理，仅返回元数据）
+# ─────────────────────── Agent file browsing ──────────────────────
+
+MAX_PREVIEW_FILE_BYTES = 1 * 1024 * 1024
+MAX_TREE_ENTRIES = 2000
+
 _TEXT_LIKE_SUFFIXES = {
     ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
     ".py", ".js", ".ts", ".tsx", ".jsx", ".vue", ".html", ".htm", ".css",
@@ -565,20 +548,7 @@ _TEXT_LIKE_SUFFIXES = {
 }
 
 
-def _resolve_skill_dir(agent_key: str, skill_id: str) -> Tuple[Dict[str, Any], Path]:
-    """根据 skill_id 定位磁盘目录，返回 (registry entry, 目录绝对路径)。"""
-    registry = _load_registry(agent_key)
-    entry = next((e for e in registry if e.get("id") == skill_id), None)
-    if entry is None:
-        raise SkillNotFoundError(f"Skill 不存在: {skill_id}")
-    skill_dir = (_store_root(agent_key) / entry.get("dir_name", entry.get("name", ""))).resolve()
-    if not skill_dir.is_dir() or not (skill_dir / "SKILL.md").is_file():
-        raise SkillNotFoundError(f"Skill 目录已丢失: {skill_id}")
-    return entry, skill_dir
-
-
 def _safe_join(base: Path, rel_path: str) -> Path:
-    """把用户传入的相对路径限制在 base 子树内，防 path-traversal。"""
     if not rel_path or rel_path in (".", "./"):
         return base
     candidate = (base / rel_path).resolve()
@@ -588,16 +558,7 @@ def _safe_join(base: Path, rel_path: str) -> Path:
     return candidate
 
 
-def list_skill_files(agent_key: str, skill_id: str) -> Dict[str, Any]:
-    """返回 skill 目录的文件树，前端用于左侧导航。
-
-    结构：{ "name": skill_name, "tree": <node> }
-    node = { "name": str, "path": str(rel), "type": "dir"|"file", "size"?: int,
-             "children"?: [node, ...] }
-    """
-    _ = _agent_root(agent_key)
-    entry, skill_dir = _resolve_skill_dir(agent_key, skill_id)
-
+def _build_file_tree(skill_dir: Path, entry_name: str) -> Dict[str, Any]:
     count = 0
 
     def build(node_dir: Path) -> Dict[str, Any]:
@@ -633,27 +594,18 @@ def list_skill_files(agent_key: str, skill_id: str) -> Dict[str, Any]:
                     }
                 )
         return {
-            "name": node_dir.name if node_dir != skill_dir else entry["name"],
+            "name": node_dir.name if node_dir != skill_dir else entry_name,
             "path": "",
             "type": "dir",
             "children": children,
         }
 
-    tree = build(skill_dir)
-    return {"name": entry["name"], "tree": tree}
+    return build(skill_dir)
 
 
-def read_skill_file(agent_key: str, skill_id: str, rel_path: str) -> Dict[str, Any]:
-    """读取 skill 目录下指定文件的内容（仅文本类型返回正文）。
-
-    返回:
-      { path, size, mime, encoding: "utf-8"|"binary", content?: str, truncated: bool }
-    """
+def _read_file_content(skill_dir: Path, rel_path: str) -> Dict[str, Any]:
     if not rel_path:
         raise SkillValidationError("path 不能为空")
-    _ = _agent_root(agent_key)
-    _, skill_dir = _resolve_skill_dir(agent_key, skill_id)
-
     target = _safe_join(skill_dir, rel_path)
     if not target.is_file():
         raise SkillNotFoundError(f"文件不存在: {rel_path}")
@@ -663,7 +615,6 @@ def read_skill_file(agent_key: str, skill_id: str, rel_path: str) -> Dict[str, A
     is_textlike = suffix in _TEXT_LIKE_SUFFIXES or target.name.lower() in {"skill.md", "readme", "license"}
 
     if not is_textlike:
-        # 用前 4 KiB 做一次启发式判断，没有 NUL 字节就当文本读
         with open(target, "rb") as fh:
             sniff = fh.read(4096)
         is_textlike = b"\x00" not in sniff
@@ -694,42 +645,248 @@ def read_skill_file(agent_key: str, skill_id: str, rel_path: str) -> Dict[str, A
     }
 
 
-def set_skill_enabled(agent_key: str, skill_id: str, enabled: bool) -> Dict[str, Any]:
-    registry = _load_registry(agent_key)
+def list_skill_files(agent_key: str, skill_id: str) -> Dict[str, Any]:
+    _ = _agent_root(agent_key)
+    entry, skill_dir = _base_resolve_skill_dir(_agent_root(agent_key), skill_id)
+    tree = _build_file_tree(skill_dir, entry["name"])
+    return {"name": entry["name"], "tree": tree}
+
+
+def read_skill_file(agent_key: str, skill_id: str, rel_path: str) -> Dict[str, Any]:
+    _ = _agent_root(agent_key)
+    _, skill_dir = _base_resolve_skill_dir(_agent_root(agent_key), skill_id)
+    return _read_file_content(skill_dir, rel_path)
+
+
+# ─────────────────────── Project Skill Public API ─────────────────
+
+def list_project_skills(project_code: str) -> List[Dict[str, Any]]:
+    base_dir = _project_root(project_code)
+    entries = _base_load_registry(base_dir)
+    store = _base_store_root(base_dir)
+    alive: List[Dict[str, Any]] = []
+    for e in entries:
+        skill_dir = store / e.get("dir_name", "")
+        if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
+            alive.append(_public_entry(e))
+        else:
+            logger.warning("project skill missing on disk, dropping: project=%s id=%s", project_code, e.get("id"))
+    if len(alive) != len(entries):
+        _base_save_registry(base_dir, [_internal_entry(e) for e in alive])
+    return alive
+
+
+def install_project_skill(
+    project_code: str,
+    *,
+    zip_bytes: bytes,
+    source_filename: str,
+    overwrite: bool = False,
+) -> Dict[str, Any]:
+    if not zip_bytes:
+        raise SkillValidationError("上传内容为空")
+    if len(zip_bytes) > MAX_SKILL_ZIP_BYTES:
+        raise SkillValidationError(
+            f"zip 大小 {len(zip_bytes)} 字节超过上限 {MAX_SKILL_ZIP_BYTES}"
+        )
+
+    base_dir = _project_root(project_code)
+    _base_ensure_layout(base_dir)
+    store = _base_store_root(base_dir)
+
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="skill_", dir=str(store)) as tmpdir:
+        tmp_path = Path(tmpdir)
+        _safe_extract_zip(zip_bytes, tmp_path)
+        skill_root = _find_skill_root(tmp_path)
+        fm = _parse_skill_frontmatter(skill_root / "SKILL.md")
+        name = fm["name"]
+        description = fm.get("description", "")
+
+        target_dir = store / name
+        registry = _base_load_registry(base_dir)
+        existing = next((e for e in registry if e.get("name") == name), None)
+        if existing and not overwrite:
+            raise SkillConflictError(f"已存在同名 Skill: {name}")
+
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        shutil.move(str(skill_root), str(target_dir))
+
+    size_bytes = sum(
+        f.stat().st_size for f in target_dir.rglob("*") if f.is_file()
+    )
+    now = datetime.now(timezone.utc).isoformat()
+
+    if existing:
+        existing.update(
+            {
+                "description": description,
+                "source_filename": source_filename,
+                "size_bytes": size_bytes,
+                "updated_at": now,
+                "dir_name": name,
+            }
+        )
+        new_entry = existing
+    else:
+        new_entry = {
+            "id": name,
+            "name": name,
+            "description": description,
+            "enabled": True,
+            "source_filename": source_filename,
+            "size_bytes": size_bytes,
+            "installed_at": now,
+            "updated_at": now,
+            "dir_name": name,
+        }
+        registry.append(new_entry)
+
+    _base_save_registry(base_dir, [_internal_entry(e) for e in registry])
+    logger.info(
+        "project skill installed: project=%s name=%s size=%d overwrite=%s",
+        project_code, name, size_bytes, bool(existing),
+    )
+    return _public_entry(new_entry)
+
+
+def set_project_skill_enabled(project_code: str, skill_id: str, enabled: bool) -> Dict[str, Any]:
+    base_dir = _project_root(project_code)
+    registry = _base_load_registry(base_dir)
     entry = next((e for e in registry if e.get("id") == skill_id), None)
     if entry is None:
         raise SkillNotFoundError(f"Skill 不存在: {skill_id}")
     entry["enabled"] = bool(enabled)
     entry["updated_at"] = datetime.now(timezone.utc).isoformat()
-    _save_registry(agent_key, [_internal_entry(e) for e in registry])
+    _base_save_registry(base_dir, [_internal_entry(e) for e in registry])
     return _public_entry(entry)
 
 
-# ─────────────────────── 物化到 Agent cwd ──────────────────────────
+def delete_project_skill(project_code: str, skill_id: str) -> None:
+    base_dir = _project_root(project_code)
+    registry = _base_load_registry(base_dir)
+    idx = next((i for i, e in enumerate(registry) if e.get("id") == skill_id), -1)
+    if idx < 0:
+        raise SkillNotFoundError(f"Skill 不存在: {skill_id}")
+    entry = registry.pop(idx)
+    target = _base_store_root(base_dir) / entry.get("dir_name", entry.get("name", ""))
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)
+    _base_save_registry(base_dir, [_internal_entry(e) for e in registry])
+    logger.info("project skill deleted: project=%s id=%s", project_code, skill_id)
+
+
+def list_project_skill_files(project_code: str, skill_id: str) -> Dict[str, Any]:
+    base_dir = _project_root(project_code)
+    entry, skill_dir = _base_resolve_skill_dir(base_dir, skill_id)
+    tree = _build_file_tree(skill_dir, entry["name"])
+    return {"name": entry["name"], "tree": tree}
+
+
+def read_project_skill_file(project_code: str, skill_id: str, rel_path: str) -> Dict[str, Any]:
+    base_dir = _project_root(project_code)
+    _, skill_dir = _base_resolve_skill_dir(base_dir, skill_id)
+    return _read_file_content(skill_dir, rel_path)
+
+
+# ─────────────────────── Project enabled entries ─────────────────
+
+def _project_enabled_entries(project_code: str) -> List[Dict[str, Any]]:
+    return _base_enabled_entries(_project_root(project_code))
+
+
+# ─────────────────────── Selection & Materialization ──────────────
+
+def select_relevant_skill_names(
+    agent_key: str,
+    *,
+    query_text: str,
+    max_skills: int = 5,
+    project_code: Optional[str] = None,
+) -> List[Tuple[str, str]]:
+    """Select the most relevant skills from the combined agent + project pool.
+
+    Returns list of (source, name) tuples where source is ``"agent"`` or
+    ``"project"``.  When *project_code* is ``None``, only agent skills are
+    considered (backward-compatible).
+    """
+    # Build candidate pool: (source, entry, skill_dir)
+    candidates: List[Tuple[str, Dict[str, Any], Path]] = []
+    for entry in _enabled_entries(agent_key):
+        candidates.append(("agent", entry, _skill_dir_for_entry(agent_key, entry)))
+    if project_code:
+        for entry in _project_enabled_entries(project_code):
+            candidates.append(("project", entry, _base_skill_dir_for_entry(_project_root(project_code), entry)))
+
+    if not candidates:
+        return []
+
+    def _dedup_by_name(
+        items: List[Tuple[str, Dict[str, Any]]],
+    ) -> List[Tuple[str, str]]:
+        seen: Dict[str, str] = {}
+        for source, entry in items:
+            name = str(entry["name"])
+            if name not in seen or source == "project":
+                seen[name] = source
+        return [(src, n) for n, src in seen.items()]
+
+    query_terms = _extract_terms(query_text)
+    if not query_terms:
+        return _dedup_by_name([(src, e) for src, e, _ in candidates])
+
+    scored: List[Tuple[int, str, Dict[str, Any]]] = []
+    for source, entry, skill_dir in candidates:
+        score = _score_skill_for_query(
+            entry=entry,
+            skill_dir=skill_dir,
+            query_terms=query_terms,
+        )
+        scored.append((score, source, entry))
+
+    scored.sort(key=lambda item: (-item[0], str(item[2].get("name") or "")))
+    best = scored[0][0]
+    if best <= 0:
+        logger.info(
+            "skill relevance: no match for agent=%s query_terms=%s; loading all enabled skills",
+            agent_key,
+            sorted(query_terms)[:20],
+        )
+        return _dedup_by_name([(src, e) for _, src, e in scored])
+
+    threshold = max(2, int(best * 0.65))
+    above: List[Tuple[str, Dict[str, Any]]] = [
+        (source, entry)
+        for score, source, entry in scored
+        if score >= threshold
+    ]
+    selected = _dedup_by_name(above)[:max_skills]
+    logger.info(
+        "skill relevance selected for agent=%s: %s (best_score=%s)",
+        agent_key,
+        ", ".join(f"{s}:{n}" for s, n in selected) if selected else "-",
+        best,
+    )
+    return selected
+
 
 def materialize_enabled_skills(
     agent_key: str,
     target_dir: str | Path,
     *,
     skill_names: Optional[Iterable[str]] = None,
+    project_code: Optional[str] = None,
 ) -> List[str]:
-    """在 target_dir 下创建 .claude/skills/<name>，指向已安装且启用的 Skill。
-
-    优先使用 symlink；symlink 失败（不支持/权限）时降级为复制。返回已物化的 Skill 名称列表。
-
-    SDK 配合 `setting_sources=["project"]` 时，会扫描 cwd 下的 .claude/skills/<name>/SKILL.md。
-    """
     target = Path(target_dir)
     skills_dir = target / ".claude" / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
     selected_names = set(skill_names) if skill_names is not None else None
 
     materialized: List[str] = []
-    for entry in _enabled_entries(agent_key):
-        if selected_names is not None and entry.get("name") not in selected_names:
-            continue
-        src = _skill_dir_for_entry(agent_key, entry)
-        dst = skills_dir / entry["name"]
+
+    def _link_skill(name: str, src: Path) -> None:
+        dst = skills_dir / name
         if dst.exists() or dst.is_symlink():
             try:
                 if dst.is_symlink() or dst.is_file():
@@ -738,16 +895,32 @@ def materialize_enabled_skills(
                     shutil.rmtree(dst)
             except OSError as exc:
                 logger.warning("clean dst failed: %s (%s)", dst, exc)
-                continue
+                return
         try:
             os.symlink(src.resolve(), dst, target_is_directory=True)
         except (OSError, NotImplementedError) as exc:
             logger.info(
                 "symlink unavailable (%s), falling back to copy for skill=%s",
-                exc, entry["name"],
+                exc, name,
             )
             shutil.copytree(src, dst)
-        materialized.append(entry["name"])
+        if name not in materialized:
+            materialized.append(name)
+
+    # Agent skills first
+    for entry in _enabled_entries(agent_key):
+        name = entry["name"]
+        if selected_names is not None and name not in selected_names:
+            continue
+        _link_skill(name, _skill_dir_for_entry(agent_key, entry))
+
+    # Project skills second — overwrite on name conflict
+    if project_code:
+        for entry in _project_enabled_entries(project_code):
+            name = entry["name"]
+            if selected_names is not None and name not in selected_names:
+                continue
+            _link_skill(name, _base_skill_dir_for_entry(_project_root(project_code), entry))
 
     return materialized
 
@@ -757,14 +930,18 @@ def materialize_relevant_enabled_skills(
     target_dir: str | Path,
     *,
     query_text: str,
-    max_skills: int = 3,
+    max_skills: int = 5,
+    project_code: Optional[str] = None,
 ) -> List[str]:
-    """Select request-relevant enabled skills, then materialize only those."""
     selected = select_relevant_skill_names(
         agent_key,
         query_text=query_text,
         max_skills=max_skills,
+        project_code=project_code,
     )
     if not selected:
         return []
-    return materialize_enabled_skills(agent_key, target_dir, skill_names=selected)
+    names = [name for _, name in selected]
+    return materialize_enabled_skills(
+        agent_key, target_dir, skill_names=names, project_code=project_code,
+    )

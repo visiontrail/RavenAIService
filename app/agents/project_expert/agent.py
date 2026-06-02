@@ -199,6 +199,11 @@ class ProjectExpertAgent:
 
         # 物化本次请求相关的 Skill 到 cwd/.claude/skills/<name>/，配合
         # setting_sources=["project"] 让 SDK 按官方约定发现 Skill。
+        repo_info = task_data.get("repo_info") if isinstance(task_data, dict) else None
+        project_code: Optional[str] = None
+        if isinstance(repo_info, dict):
+            project_code = repo_info.get("project_code") or None
+
         materialized_skills: List[str] = []
         try:
             from app.services import skills_service
@@ -206,6 +211,7 @@ class ProjectExpertAgent:
                 AGENT_KEY,
                 ctx.temp_dir,
                 query_text=_build_skill_relevance_query(ctx, task_data),
+                project_code=project_code,
             )
             if materialized_skills:
                 logger.info(

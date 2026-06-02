@@ -146,6 +146,15 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/admin/project-repos/:projectCode/skills',
+    name: 'AdminProjectSkills',
+    component: () => import('../views/AdminProjectSkills.vue'),
+    meta: {
+      title: '项目 Skill 管理',
+    },
+    props: true,
+  },
+  {
     path: '/admin/model-settings',
     name: 'AdminModelSettings',
     component: () => import('../views/AdminModelSettings.vue'),

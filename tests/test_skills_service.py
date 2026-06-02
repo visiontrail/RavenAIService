@@ -30,15 +30,23 @@ _SKILL_MD = (
     "Use this skill to grep for panic patterns.\n"
 ).encode("utf-8")
 
+_PROJECT_SKILL_MD = (
+    "---\n"
+    "name: proj-helper\n"
+    "description: Project-level helper for satellite telemetry\n"
+    "---\n"
+    "# Body\n"
+    "Use this for satellite telemetry analysis.\n"
+).encode("utf-8")
+
 
 @pytest.fixture()
 def isolated_skills_dir(tmp_path, monkeypatch):
     """Point skills_service at a fresh tmp dir for each test."""
     from app.config import settings
-    from app.services import skills_service
 
     monkeypatch.setattr(settings, "skills_data_dir", str(tmp_path / "agent_skills"))
-    # Service reads via _skills_root(); no further patching needed.
+    monkeypatch.setattr(settings, "project_skills_data_dir", str(tmp_path / "project_skills"))
     return tmp_path
 
 
@@ -204,7 +212,7 @@ def test_select_relevant_skills_prefers_request_specific_match(isolated_skills_d
         "log_analysis",
         query_text="从SMU通过RS422发送文件到基带失败，请帮忙分析原因",
     )
-    assert selected == ["smu-baseband-interfaces"]
+    assert selected == [("agent", "smu-baseband-interfaces")]
 
     cwd = tmp_path / "agent_cwd_relevant"
     cwd.mkdir()
@@ -232,3 +240,318 @@ def test_install_zip_too_large(isolated_skills_dir, monkeypatch):
         skills_service.install_skill(
             "log_analysis", zip_bytes=big, source_filename="big.zip"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 8.1 — Project skill storage: install, list, enable/disable, delete
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestProjectSkillStorage:
+
+    def test_list_empty(self, isolated_skills_dir):
+        from app.services import skills_service
+        assert skills_service.list_project_skills("MYPROJ") == []
+
+    def test_install_and_list(self, isolated_skills_dir):
+        from app.services import skills_service
+        zip_bytes = _build_zip({"SKILL.md": _PROJECT_SKILL_MD})
+        entry = skills_service.install_project_skill(
+            "MyProj", zip_bytes=zip_bytes, source_filename="proj.zip"
+        )
+        assert entry["name"] == "proj-helper"
+        assert entry["enabled"] is True
+        assert entry["source_filename"] == "proj.zip"
+
+        listed = skills_service.list_project_skills("myproj")
+        assert len(listed) == 1
+        assert listed[0]["id"] == "proj-helper"
+
+    def test_project_code_normalized_to_lowercase(self, isolated_skills_dir):
+        from app.services import skills_service
+        zip_bytes = _build_zip({"SKILL.md": _PROJECT_SKILL_MD})
+        skills_service.install_project_skill(
+            "MixedCase", zip_bytes=zip_bytes, source_filename="a.zip"
+        )
+        listed = skills_service.list_project_skills("MIXEDCASE")
+        assert len(listed) == 1
+
+    def test_empty_project_code_rejected(self, isolated_skills_dir):
+        from app.services import skills_service
+        with pytest.raises(skills_service.SkillValidationError):
+            skills_service.list_project_skills("")
+        with pytest.raises(skills_service.SkillValidationError):
+            skills_service.list_project_skills("   ")
+
+    def test_install_conflict_and_overwrite(self, isolated_skills_dir):
+        from app.services import skills_service
+        zip_bytes = _build_zip({"SKILL.md": _PROJECT_SKILL_MD})
+        skills_service.install_project_skill(
+            "proj1", zip_bytes=zip_bytes, source_filename="a.zip"
+        )
+        with pytest.raises(skills_service.SkillConflictError):
+            skills_service.install_project_skill(
+                "proj1", zip_bytes=zip_bytes, source_filename="b.zip"
+            )
+        entry = skills_service.install_project_skill(
+            "proj1", zip_bytes=zip_bytes, source_filename="b.zip", overwrite=True
+        )
+        assert entry["source_filename"] == "b.zip"
+
+    def test_enable_disable(self, isolated_skills_dir):
+        from app.services import skills_service
+        zip_bytes = _build_zip({"SKILL.md": _PROJECT_SKILL_MD})
+        skills_service.install_project_skill(
+            "proj1", zip_bytes=zip_bytes, source_filename="a.zip"
+        )
+        updated = skills_service.set_project_skill_enabled("proj1", "proj-helper", False)
+        assert updated["enabled"] is False
+
+        updated = skills_service.set_project_skill_enabled("proj1", "proj-helper", True)
+        assert updated["enabled"] is True
+
+    def test_enable_not_found(self, isolated_skills_dir):
+        from app.services import skills_service
+        _build_zip({"SKILL.md": _PROJECT_SKILL_MD})
+        with pytest.raises(skills_service.SkillNotFoundError):
+            skills_service.set_project_skill_enabled("proj1", "nonexistent", True)
+
+    def test_delete(self, isolated_skills_dir):
+        from app.services import skills_service
+        zip_bytes = _build_zip({"SKILL.md": _PROJECT_SKILL_MD})
+        skills_service.install_project_skill(
+            "proj1", zip_bytes=zip_bytes, source_filename="a.zip"
+        )
+        skills_service.delete_project_skill("proj1", "proj-helper")
+        assert skills_service.list_project_skills("proj1") == []
+
+    def test_delete_not_found(self, isolated_skills_dir):
+        from app.services import skills_service
+        with pytest.raises(skills_service.SkillNotFoundError):
+            skills_service.delete_project_skill("proj1", "nonexistent")
+
+    def test_disk_validation_on_list(self, isolated_skills_dir):
+        """If the skill directory is removed from disk, list drops it."""
+        from app.services import skills_service
+        zip_bytes = _build_zip({"SKILL.md": _PROJECT_SKILL_MD})
+        skills_service.install_project_skill(
+            "proj1", zip_bytes=zip_bytes, source_filename="a.zip"
+        )
+        import shutil
+        store = skills_service._project_store_root("proj1")
+        shutil.rmtree(store / "proj-helper")
+
+        listed = skills_service.list_project_skills("proj1")
+        assert listed == []
+
+    def test_file_browsing(self, isolated_skills_dir):
+        from app.services import skills_service
+        zip_bytes = _build_zip({
+            "SKILL.md": _PROJECT_SKILL_MD,
+            "scripts/run.sh": b"#!/bin/sh\necho hello\n",
+        })
+        skills_service.install_project_skill(
+            "proj1", zip_bytes=zip_bytes, source_filename="a.zip"
+        )
+        files = skills_service.list_project_skill_files("proj1", "proj-helper")
+        assert files["name"] == "proj-helper"
+        assert files["tree"]["type"] == "dir"
+
+        content = skills_service.read_project_skill_file(
+            "proj1", "proj-helper", "scripts/run.sh"
+        )
+        assert content["encoding"] == "utf-8"
+        assert "echo hello" in content["content"]
+
+    def test_file_browsing_not_found(self, isolated_skills_dir):
+        from app.services import skills_service
+        with pytest.raises(skills_service.SkillNotFoundError):
+            skills_service.list_project_skill_files("proj1", "nonexistent")
+
+    def test_project_isolation(self, isolated_skills_dir):
+        """Skills installed under different project_codes are isolated."""
+        from app.services import skills_service
+        zip_bytes = _build_zip({"SKILL.md": _PROJECT_SKILL_MD})
+        skills_service.install_project_skill(
+            "projA", zip_bytes=zip_bytes, source_filename="a.zip"
+        )
+        assert len(skills_service.list_project_skills("projA")) == 1
+        assert len(skills_service.list_project_skills("projB")) == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 8.2 — Unified materialization: merged pool, name conflict, backward compat
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestUnifiedMaterialization:
+
+    def test_backward_compat_project_code_none(self, isolated_skills_dir, tmp_path):
+        """With project_code=None, behavior is identical to pre-change."""
+        from app.services import skills_service
+        zip_bytes = _build_zip({"SKILL.md": _SKILL_MD})
+        skills_service.install_skill(
+            "log_analysis", zip_bytes=zip_bytes, source_filename="a.zip"
+        )
+        cwd = tmp_path / "cwd_compat"
+        cwd.mkdir()
+        materialized = skills_service.materialize_enabled_skills(
+            "log_analysis", str(cwd), project_code=None
+        )
+        assert materialized == ["log-grep-helper"]
+        assert (cwd / ".claude" / "skills" / "log-grep-helper" / "SKILL.md").is_file()
+
+    def test_select_backward_compat_project_code_none(self, isolated_skills_dir):
+        from app.services import skills_service
+        zip_bytes = _build_zip({"SKILL.md": _SKILL_MD})
+        skills_service.install_skill(
+            "log_analysis", zip_bytes=zip_bytes, source_filename="a.zip"
+        )
+        selected = skills_service.select_relevant_skill_names(
+            "log_analysis", query_text="grep panic logs", project_code=None
+        )
+        assert all(src == "agent" for src, _ in selected)
+
+    def test_merged_pool_includes_project_skills(self, isolated_skills_dir, tmp_path):
+        from app.services import skills_service
+        agent_zip = _build_zip({"SKILL.md": _SKILL_MD})
+        skills_service.install_skill(
+            "log_analysis", zip_bytes=agent_zip, source_filename="agent.zip"
+        )
+        proj_zip = _build_zip({"SKILL.md": _PROJECT_SKILL_MD})
+        skills_service.install_project_skill(
+            "sat1", zip_bytes=proj_zip, source_filename="proj.zip"
+        )
+
+        selected = skills_service.select_relevant_skill_names(
+            "log_analysis",
+            query_text="satellite telemetry panic logs",
+            project_code="sat1",
+        )
+        names = [n for _, n in selected]
+        assert "log-grep-helper" in names
+        assert "proj-helper" in names
+
+    def test_materialize_agent_and_project(self, isolated_skills_dir, tmp_path):
+        from app.services import skills_service
+        agent_zip = _build_zip({"SKILL.md": _SKILL_MD})
+        skills_service.install_skill(
+            "log_analysis", zip_bytes=agent_zip, source_filename="agent.zip"
+        )
+        proj_zip = _build_zip({"SKILL.md": _PROJECT_SKILL_MD})
+        skills_service.install_project_skill(
+            "sat1", zip_bytes=proj_zip, source_filename="proj.zip"
+        )
+
+        cwd = tmp_path / "cwd_merged"
+        cwd.mkdir()
+        materialized = skills_service.materialize_enabled_skills(
+            "log_analysis", str(cwd), project_code="sat1"
+        )
+        assert "log-grep-helper" in materialized
+        assert "proj-helper" in materialized
+        assert (cwd / ".claude" / "skills" / "log-grep-helper" / "SKILL.md").is_file()
+        assert (cwd / ".claude" / "skills" / "proj-helper" / "SKILL.md").is_file()
+
+    def test_name_conflict_project_wins(self, isolated_skills_dir, tmp_path):
+        """When agent and project have a skill with the same name, project overwrites."""
+        from app.services import skills_service
+        agent_md = (
+            "---\n"
+            "name: shared-skill\n"
+            "description: agent version\n"
+            "---\n"
+            "Agent body.\n"
+        ).encode("utf-8")
+        proj_md = (
+            "---\n"
+            "name: shared-skill\n"
+            "description: project version\n"
+            "---\n"
+            "Project body.\n"
+        ).encode("utf-8")
+
+        skills_service.install_skill(
+            "log_analysis",
+            zip_bytes=_build_zip({"SKILL.md": agent_md}),
+            source_filename="agent.zip",
+        )
+        skills_service.install_project_skill(
+            "sat1",
+            zip_bytes=_build_zip({"SKILL.md": proj_md}),
+            source_filename="proj.zip",
+        )
+
+        cwd = tmp_path / "cwd_conflict"
+        cwd.mkdir()
+        materialized = skills_service.materialize_enabled_skills(
+            "log_analysis", str(cwd), project_code="sat1"
+        )
+        assert "shared-skill" in materialized
+
+        skill_md = (cwd / ".claude" / "skills" / "shared-skill" / "SKILL.md").read_text()
+        assert "Project body." in skill_md
+
+    def test_select_name_conflict_project_preferred(self, isolated_skills_dir):
+        """In selection, project skill wins dedup over agent on name conflict."""
+        from app.services import skills_service
+        shared_md = (
+            "---\n"
+            "name: shared-skill\n"
+            "description: satellite telemetry helper\n"
+            "---\n"
+            "body\n"
+        ).encode("utf-8")
+
+        skills_service.install_skill(
+            "log_analysis",
+            zip_bytes=_build_zip({"SKILL.md": shared_md}),
+            source_filename="agent.zip",
+        )
+        skills_service.install_project_skill(
+            "sat1",
+            zip_bytes=_build_zip({"SKILL.md": shared_md}),
+            source_filename="proj.zip",
+        )
+
+        selected = skills_service.select_relevant_skill_names(
+            "log_analysis",
+            query_text="satellite telemetry",
+            project_code="sat1",
+        )
+        assert ("project", "shared-skill") in selected
+        names = [n for _, n in selected]
+        assert names.count("shared-skill") == 1
+
+    def test_disabled_project_skill_excluded(self, isolated_skills_dir, tmp_path):
+        from app.services import skills_service
+        proj_zip = _build_zip({"SKILL.md": _PROJECT_SKILL_MD})
+        skills_service.install_project_skill(
+            "sat1", zip_bytes=proj_zip, source_filename="a.zip"
+        )
+        skills_service.set_project_skill_enabled("sat1", "proj-helper", False)
+
+        cwd = tmp_path / "cwd_disabled"
+        cwd.mkdir()
+        materialized = skills_service.materialize_enabled_skills(
+            "log_analysis", str(cwd), project_code="sat1"
+        )
+        assert "proj-helper" not in materialized
+
+    def test_materialize_relevant_with_project(self, isolated_skills_dir, tmp_path):
+        from app.services import skills_service
+        proj_zip = _build_zip({"SKILL.md": _PROJECT_SKILL_MD})
+        skills_service.install_project_skill(
+            "sat1", zip_bytes=proj_zip, source_filename="a.zip"
+        )
+
+        cwd = tmp_path / "cwd_relevant"
+        cwd.mkdir()
+        materialized = skills_service.materialize_relevant_enabled_skills(
+            "log_analysis",
+            cwd,
+            query_text="satellite telemetry analysis",
+            project_code="sat1",
+        )
+        assert "proj-helper" in materialized
+        assert (cwd / ".claude" / "skills" / "proj-helper" / "SKILL.md").is_file()

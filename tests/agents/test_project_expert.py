@@ -134,6 +134,24 @@ async def _fake_query_reuse_existing_repo(*_args, **_kwargs) -> AsyncIterator[An
     yield FakeResultMessage(result=_result_json("复用 repo/.git 后定位到 repo/app/main.py:10"))
 
 
+async def _fake_query_unescaped_answer_quotes(*_args, **_kwargs) -> AsyncIterator[Any]:
+    yield FakeResultMessage(result=(
+        "基于对灵犀10操作维护项目源码的调查，以下是关于重构的回答：\n"
+        "```json\n"
+        "{\n"
+        '  "status": "ok",\n'
+        '  "question_type": "qa",\n'
+        '  "answer": "在灵犀10（LX10）操作维护这个项目中，**"重构"有明确的专有含义：它指的是「在轨软件重构」**，即通过地面指令远程替换/重新加载星载基带处理器上运行的不同软件版本。根据 `repo/README.md:71-78`，它包括基带软件、核心网版本、DVB馈电版本、Ka相控阵软件和客户定制启动脚本的重构。",\n'
+        '  "summary": "重构在该项目中主要指在轨软件重构。",\n'
+        '  "severity": "info",\n'
+        '  "root_cause_hypotheses": [],\n'
+        '  "recommended_actions": [],\n'
+        '  "related_keywords": ["重构", "在轨软件重构"]\n'
+        "}\n"
+        "```"
+    ))
+
+
 def _patch_agent_common(fake_query):
     fake_sdk = SimpleNamespace(query=fake_query)
     return patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk})
@@ -245,6 +263,26 @@ async def test_agent_followup_reuses_existing_repo_without_clone(tmp_path):
     assert "git clone" not in trace_text
     assert "git -C repo status" in trace_text
     assert result["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_agent_recovers_grounded_answer_with_unescaped_inner_quotes(tmp_path):
+    from app.agents.project_expert.agent import ProjectExpertAgent
+
+    ctx = _make_ctx(tmp_path)
+
+    with _patch_agent_common(_fake_query_unescaped_answer_quotes), \
+        patch("app.agents.anthropic_client.build_options", return_value=MagicMock()), \
+        patch("app.services.skills_service.materialize_relevant_enabled_skills", return_value=[]), \
+        patch("app.agents.log_analysis.mcp_tools.get_mcp_server", return_value=MagicMock()):
+        result = await ProjectExpertAgent().run(ctx)
+
+    assert result["status"] == "ok"
+    assert result["question_type"] == "qa"
+    assert '**"重构"有明确的专有含义' in result["answer"]
+    assert "repo/README.md:71-78" in result["answer"]
+    assert "星载基带处理器" in result["answer"]
+    assert result["answer"] != "在灵犀10（LX10）操作维护这个项目中，**"
 
 
 @pytest.mark.asyncio

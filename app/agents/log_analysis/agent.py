@@ -127,6 +127,107 @@ def _parse_partial_array(text: str, start: int, decoder: json.JSONDecoder) -> tu
     return items, i
 
 
+_RESULT_FIELD_NAMES = (
+    "status",
+    "error_kind",
+    "question_type",
+    "answer",
+    "summary",
+    "severity",
+    "root_cause_hypotheses",
+    "recommended_actions",
+    "related_keywords",
+)
+_RESULT_FIELD_DELIMITER_RE = re.compile(
+    r'(?<!\\)"\s*,\s*"(?P<field>' + "|".join(_RESULT_FIELD_NAMES) + r')"\s*:'
+)
+
+
+def _is_complete_json_value_boundary(text: str, index: int) -> bool:
+    """Return whether ``index`` sits after a complete top-level JSON value."""
+    length = len(text)
+    while index < length and text[index].isspace():
+        index += 1
+    return index >= length or text[index] in ",}" or text.startswith("```", index)
+
+
+def _decode_lenient_json_string(raw: str) -> str:
+    """Decode JSON string content while tolerating unescaped quotes.
+
+    Grounded answers often quote source terms (for example ``"重构"``). If a
+    provider forgets to escape those quotes inside the final JSON string, the
+    standard decoder stops at the first one. This keeps normal JSON escapes but
+    treats bare quotes as literal content.
+    """
+    chars: List[str] = []
+    i = 0
+    length = len(raw)
+    while i < length:
+        ch = raw[i]
+        if ch != "\\":
+            chars.append(ch)
+            i += 1
+            continue
+
+        if i + 1 >= length:
+            chars.append("\\")
+            i += 1
+            continue
+
+        nxt = raw[i + 1]
+        if nxt in {'"', "\\", "/"}:
+            chars.append(nxt)
+            i += 2
+        elif nxt == "b":
+            chars.append("\b")
+            i += 2
+        elif nxt == "f":
+            chars.append("\f")
+            i += 2
+        elif nxt == "n":
+            chars.append("\n")
+            i += 2
+        elif nxt == "r":
+            chars.append("\r")
+            i += 2
+        elif nxt == "t":
+            chars.append("\t")
+            i += 2
+        elif nxt == "u" and i + 5 < length:
+            code = raw[i + 2 : i + 6]
+            try:
+                chars.append(chr(int(code, 16)))
+                i += 6
+            except ValueError:
+                chars.extend(["\\", nxt])
+                i += 2
+        else:
+            chars.extend(["\\", nxt])
+            i += 2
+    return "".join(chars)
+
+
+def _parse_string_value_prefix(
+    text: str,
+    start: int,
+    decoder: json.JSONDecoder,
+) -> tuple[Optional[str], int]:
+    """Parse a top-level JSON string value with a lenient fallback."""
+    try:
+        value, end = decoder.raw_decode(text, start)
+        if isinstance(value, str) and _is_complete_json_value_boundary(text, end):
+            return value, end
+    except json.JSONDecodeError:
+        pass
+
+    # If a quoted answer contains an unescaped quote, find the closing quote by
+    # looking for the next known top-level result field (", "summary":, etc.).
+    for match in _RESULT_FIELD_DELIMITER_RE.finditer(text, start + 1):
+        raw = text[start + 1 : match.start()]
+        return _decode_lenient_json_string(raw), match.start() + 1
+    return None, start
+
+
 def _parse_json_object_prefix(text: str) -> Optional[Dict[str, Any]]:
     """Parse a JSON object, keeping complete top-level members if truncated.
 
@@ -178,17 +279,24 @@ def _parse_json_object_prefix(text: str) -> Optional[Dict[str, Any]]:
             i += 1
         if i >= length:
             break
-        try:
-            value, end = decoder.raw_decode(body, i)
+        if body[i] == '"':
+            value, end = _parse_string_value_prefix(body, i, decoder)
+            if value is None:
+                break
             result[key] = value
             i = end
-        except json.JSONDecodeError:
-            if body[i] == "[":
-                items, end = _parse_partial_array(body, i, decoder)
-                if items:
-                    result[key] = items
-                    i = end
-            break
+        else:
+            try:
+                value, end = decoder.raw_decode(body, i)
+                result[key] = value
+                i = end
+            except json.JSONDecodeError:
+                if body[i] == "[":
+                    items, end = _parse_partial_array(body, i, decoder)
+                    if items:
+                        result[key] = items
+                        i = end
+                break
         while i < length and body[i].isspace():
             i += 1
         if i < length and body[i] == ",":
@@ -918,6 +1026,10 @@ class LogAnalysisAgent:
 
         # 物化本次请求相关的 Skill 到 cwd/.claude/skills/<name>/，配合
         # setting_sources=["project"] 让 Claude Agent SDK 按官方约定发现 Skill。
+        project_code: Optional[str] = None
+        if isinstance(repo_info, dict):
+            project_code = repo_info.get("project_code") or None
+
         materialized_skills: List[str] = []
         try:
             from app.services import skills_service
@@ -925,6 +1037,7 @@ class LogAnalysisAgent:
                 AGENT_KEY,
                 ctx.temp_dir,
                 query_text=_build_skill_relevance_query(ctx, task_data),
+                project_code=project_code,
             )
             if materialized_skills:
                 logger.info(

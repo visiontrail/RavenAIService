@@ -570,3 +570,142 @@ async def delete_agent_skill(
         skills_service.delete_skill(agent_key, skill_id)
     except skills_service.SkillNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# Project-level Skill endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/project-repos/{project_code}/skills",
+    response_model=SkillListResponse,
+)
+async def list_project_skills(
+    project_code: str,
+    _username: str = Depends(require_admin),
+) -> SkillListResponse:
+    items = skills_service.list_project_skills(project_code)
+    return SkillListResponse(data=[SkillData(**item) for item in items])
+
+
+@router.post(
+    "/project-repos/{project_code}/skills",
+    response_model=SkillResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_project_skill(
+    project_code: str,
+    file: UploadFile = File(..., description="Skill zip 包"),
+    overwrite: bool = Query(default=False),
+    _username: str = Depends(require_admin),
+) -> SkillResponse:
+    filename = (file.filename or "").strip()
+    if not filename.lower().endswith(".zip"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="只支持上传 .zip 格式的 Skill 包",
+        )
+
+    payload = await file.read()
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传内容为空")
+
+    try:
+        entry = skills_service.install_project_skill(
+            project_code,
+            zip_bytes=payload,
+            source_filename=filename,
+            overwrite=overwrite,
+        )
+    except skills_service.SkillConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except skills_service.SkillValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except skills_service.SkillError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return SkillResponse(data=SkillData(**entry), message="上传成功")
+
+
+@router.patch(
+    "/project-repos/{project_code}/skills/{skill_id}",
+    response_model=SkillResponse,
+)
+async def update_project_skill(
+    project_code: str,
+    skill_id: str,
+    payload: UpdateSkillRequest,
+    _username: str = Depends(require_admin),
+) -> SkillResponse:
+    try:
+        entry = skills_service.set_project_skill_enabled(
+            project_code, skill_id, enabled=payload.enabled
+        )
+    except skills_service.SkillNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return SkillResponse(data=SkillData(**entry), message="更新成功")
+
+
+@router.delete(
+    "/project-repos/{project_code}/skills/{skill_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_project_skill(
+    project_code: str,
+    skill_id: str,
+    _username: str = Depends(require_admin),
+) -> None:
+    try:
+        skills_service.delete_project_skill(project_code, skill_id)
+    except skills_service.SkillNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get(
+    "/project-repos/{project_code}/skills/{skill_id}/files",
+    response_model=SkillFilesResponse,
+)
+async def list_project_skill_files(
+    project_code: str,
+    skill_id: str,
+    _username: str = Depends(require_admin),
+) -> SkillFilesResponse:
+    try:
+        data = skills_service.list_project_skill_files(project_code, skill_id)
+    except skills_service.SkillNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except skills_service.SkillValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return SkillFilesResponse(data=data)
+
+
+@router.get(
+    "/project-repos/{project_code}/skills/{skill_id}/file",
+    response_model=SkillFileContentResponse,
+)
+async def get_project_skill_file(
+    project_code: str,
+    skill_id: str,
+    path: str = Query(..., description="Skill 目录下的相对路径"),
+    _username: str = Depends(require_admin),
+) -> SkillFileContentResponse:
+    try:
+        data = skills_service.read_project_skill_file(project_code, skill_id, path)
+    except skills_service.SkillNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except skills_service.SkillValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    return SkillFileContentResponse(data=SkillFileContent(**data))

@@ -97,6 +97,9 @@ class Settings(BaseSettings):
     # Agent Skills 数据目录（Claude Agent SDK Skill 包按 agent 隔离存储）
     skills_data_dir: str = "data/agent_skills"
 
+    # Project Skills 数据目录（按 project_code 隔离存储，与 Agent Skills 平行）
+    project_skills_data_dir: str = "data/project_skills"
+
     # 运行期可由 Admin 调整的轻量级模型设置持久化文件
     runtime_settings_path: str = "data/runtime_settings.json"
 

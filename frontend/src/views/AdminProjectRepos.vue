@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   CheckCircle2,
   CircleAlert,
+  FolderTree,
   LogOut,
   Menu,
   Pencil,
@@ -507,6 +508,13 @@ onMounted(() => bootstrap())
                   <td class="py-3 pr-4 whitespace-nowrap text-xs text-slate-400">{{ formatTimestamp(repo.updated_at) }}</td>
                   <td class="py-3 pr-5">
                     <div class="flex justify-end gap-2">
+                      <button
+                        class="admin-action-btn"
+                        title="项目 Skill"
+                        @click="router.push(`/admin/project-repos/${repo.project_code}/skills`)"
+                      >
+                        <FolderTree :size="15" />
+                      </button>
                       <button
                         class="admin-action-btn"
                         :disabled="testingId === repo.id"

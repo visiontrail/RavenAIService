@@ -49,6 +49,7 @@ export const resolveAdminNavKey = (path: string) => {
   if (path.startsWith('/admin/users')) return 'users'
   if (path.startsWith('/admin/releases')) return 'releases'
   if (path.startsWith('/admin/project-repos')) return 'project-repos'
+  if (path.startsWith('/admin/project-skills')) return 'project-repos'
   if (path.startsWith('/admin/agent-skills')) return 'agent-skills'
   if (path.startsWith('/admin/model-settings')) return 'model-settings'
   if (path.startsWith('/admin/metrics')) return 'metrics'
