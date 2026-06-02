@@ -11,6 +11,13 @@
 
 import MarkdownIt from 'markdown-it'
 import hljs from 'highlight.js'
+import { loadMermaid } from './mermaidLoader'
+
+/**
+ * 模块级自增计数器，用于生成唯一的 Mermaid 容器 ID。
+ * 页面生命周期内单调递增，保证 mermaid.render() 所需的 DOM id 唯一。
+ */
+let mermaidIdCounter = 0
 
 const escapeHtml = (value: string): string =>
   value
@@ -141,6 +148,21 @@ function createMarkdownRenderer(): MarkdownIt {
     typographer: true, // 启用一些语言中立的替换 + 引号美化
     breaks: false,     // 转换段落里的 '\n' 到 <br>
     highlight: function (str: string, lang: string): string {
+      // Mermaid 代码块：输出占位容器，稍后由 processMermaidBlocks() 异步渲染为 SVG。
+      if (lang === 'mermaid') {
+        const id = `mermaid-${++mermaidIdCounter}`
+        const escapedSource = escapeHtml(str)
+        // data-mermaid-source 保存原始源码（HTML 实体编码，读取 dataset 时自动解码），
+        // 供异步渲染、错误降级与复制源码功能使用。
+        return (
+          `<div class="mermaid-container" data-mermaid-id="${id}" ` +
+          `data-mermaid-source="${escapedSource}" data-mermaid-state="pending">` +
+          `<div class="mermaid-loading">图表渲染中…</div>` +
+          `<pre class="hljs mermaid-source language-mermaid"><code>${escapedSource}</code></pre>` +
+          `</div>`
+        )
+      }
+
       // 代码高亮处理
       if (lang && hljs.getLanguage(lang)) {
         try {
@@ -240,6 +262,72 @@ export function renderMarkdown(
 
   // 包装在容器中
   return `<div class="${wrapperClass}">${html}</div>`
+}
+
+/**
+ * 处理容器内所有 Mermaid 占位元素，将其异步渲染为 SVG 图表。
+ *
+ * 行为：
+ * - 查找所有处于 `pending` 状态的 `.mermaid-container`；
+ * - 懒加载 Mermaid 实例后，对每个容器调用 `mermaid.render()`；
+ * - 渲染成功：替换为 SVG，并附加“复制源码”按钮；
+ * - 渲染失败：显示带高亮的原始源码 + 错误提示（优雅降级）；
+ * - 库加载失败：所有占位元素降级为普通源码块。
+ *
+ * 该函数幂等：仅处理 `data-mermaid-state="pending"` 的容器，可安全重复调用。
+ *
+ * @param containerEl - 包含 Mermaid 占位元素的 DOM 容器（如消息列表根节点）
+ */
+export async function processMermaidBlocks(containerEl: HTMLElement | null): Promise<void> {
+  if (!containerEl) return
+
+  const containers = Array.from(
+    containerEl.querySelectorAll<HTMLElement>('.mermaid-container[data-mermaid-state="pending"]')
+  )
+  if (containers.length === 0) return
+
+  // 标记为处理中，避免并发重复渲染同一容器
+  containers.forEach((el) => {
+    el.dataset.mermaidState = 'rendering'
+  })
+
+  let mermaid
+  try {
+    mermaid = await loadMermaid()
+  } catch (err) {
+    // 库加载失败：降级为普通源码块（占位容器已内置 <pre> 源码，保留即可）
+    console.warn('Mermaid 库加载失败，降级为源码展示:', err)
+    containers.forEach((el) => {
+      el.dataset.mermaidState = 'error'
+      el.classList.add('is-error')
+      const loading = el.querySelector('.mermaid-loading')
+      if (loading) loading.remove()
+    })
+    return
+  }
+
+  await Promise.all(
+    containers.map(async (el) => {
+      const source = el.dataset.mermaidSource || ''
+      const renderId = `${el.dataset.mermaidId || 'mermaid'}-svg`
+      try {
+        const { svg } = await mermaid.render(renderId, source)
+        el.innerHTML =
+          `<div class="mermaid-svg">${svg}</div>` +
+          `<button class="mermaid-copy-btn" type="button" aria-label="复制源码">复制源码</button>`
+        el.dataset.mermaidState = 'done'
+        el.classList.add('is-rendered')
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        el.innerHTML =
+          `<div class="mermaid-error">⚠ 图表渲染失败：${escapeHtml(message)}</div>` +
+          `<pre class="hljs mermaid-source language-mermaid"><code>${escapeHtml(source)}</code></pre>` +
+          `<button class="mermaid-copy-btn" type="button" aria-label="复制源码">复制源码</button>`
+        el.dataset.mermaidState = 'error'
+        el.classList.add('is-error')
+      }
+    })
+  )
 }
 
 /**

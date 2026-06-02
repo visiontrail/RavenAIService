@@ -60,6 +60,10 @@ export type ConversationState = {
   subscription: AbortController | null
   /** Loaded once per session-id so loadSession + selectSessionToken don't both refetch. */
   loaded: boolean
+  /** Last agent kind used in this conversation, derived from message records. */
+  lastAgentKind: AgentKind | null
+  /** Last project repo id selected for this conversation (frontend-only, not persisted to backend). */
+  lastProjectRepoId: number | null
 }
 
 export type StartDeviceRunPayload = {
@@ -172,6 +176,8 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         currentAnswerId: null,
         subscription: null,
         loaded: false,
+        lastAgentKind: null,
+        lastProjectRepoId: null,
       }
       bySession[sessionId] = state
     }
@@ -612,7 +618,8 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         try {
           const resp = await userApi.fetchMessages(sessionId)
           if (resp?.success && Array.isArray(resp.data)) {
-            state.messages = (resp.data as ChatMessageRecord[]).map((item) => ({
+            const records = resp.data as ChatMessageRecord[]
+            state.messages = records.map((item) => ({
               id: item.id || generateUUID(),
               role: item.role as ChatRole,
               content: item.content || '',
@@ -622,6 +629,10 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
                 : undefined,
               traceRunning: item.run_status === 'running',
             }))
+            const lastWithAgent = [...records].reverse().find((m) => m.run_agent_kind)
+            if (lastWithAgent?.run_agent_kind) {
+              state.lastAgentKind = lastWithAgent.run_agent_kind as AgentKind
+            }
           }
         } catch (err) {
           console.warn('加载会话消息失败', err)

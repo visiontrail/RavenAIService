@@ -343,4 +343,121 @@
   }
 }
 
+/* ==================== Mermaid 图表 ==================== */
+/* 5.1 图表容器：背景/圆角/阴影与 .hljs 代码块一致 */
+.mermaid-container {
+  position: relative;
+  display: block;
+  margin: 1rem 0;
+  padding: 1rem;
+  background: #0d1117;
+  border-radius: 0.5rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  overflow-x: auto; /* 5.5 移动端横向滚动 */
+}
+
+/* 渲染完成的图表：居中、限制最大宽度、可点击放大 */
+.mermaid-container.is-rendered {
+  text-align: center;
+  cursor: zoom-in;
+}
+
+.mermaid-container .mermaid-svg svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* 渲染前隐藏源码预览（避免源码闪现），仅显示 loading */
+.mermaid-container[data-mermaid-state='pending'] .mermaid-source,
+.mermaid-container[data-mermaid-state='rendering'] .mermaid-source {
+  display: none;
+}
+
+/* 5.2 loading 指示器 */
+.mermaid-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 3rem;
+  color: #8b949e;
+  font-size: 0.85rem;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+.mermaid-loading::before {
+  content: '';
+  width: 0.9rem;
+  height: 0.9rem;
+  border: 2px solid #30363d;
+  border-top-color: #58a6ff;
+  border-radius: 50%;
+  animation: mermaid-spin 0.8s linear infinite;
+}
+
+@keyframes mermaid-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 5.2 错误提示 */
+.mermaid-error {
+  margin-bottom: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.1);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  border-radius: 0.375rem;
+  font-size: 0.8rem;
+  text-align: left;
+}
+
+/* 错误降级时展示的源码块去除外层重复背景 */
+.mermaid-container.is-error .mermaid-source {
+  margin: 0;
+  text-align: left;
+}
+
+/* 5.3 复制源码按钮：默认半透明，hover 显现 */
+.mermaid-copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+  color: #c9d1d9;
+  background: rgba(48, 54, 61, 0.7);
+  border: 1px solid #30363d;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.mermaid-container:hover .mermaid-copy-btn {
+  opacity: 0.85;
+}
+
+.mermaid-copy-btn:hover {
+  opacity: 1;
+  background: rgba(56, 139, 253, 0.4);
+}
+
+/* 5.4 放大弹窗中的图表：居中、自适应 */
+.mermaid-zoom-dialog .mermaid-zoom-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40vh;
+  max-height: 78vh;
+  overflow: auto;
+}
+
+.mermaid-zoom-dialog .mermaid-zoom-body svg {
+  max-width: 100%;
+  max-height: 76vh;
+  height: auto;
+}
+
 /* 移除暗色模式的自动切换，让分析摘要始终使用浅色系样式 */

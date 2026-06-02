@@ -13,7 +13,9 @@ import type {
   PackageAgentTraceEvent,
   RavenPackage,
 } from '@/types'
-import { renderMarkdown } from '@/utils/markdownRenderer'
+import { renderMarkdown, processMermaidBlocks } from '@/utils/markdownRenderer'
+import { loadMermaid } from '@/utils/mermaidLoader'
+import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/stores/user'
 import { useAppStore } from '@/stores/app'
 import { useChatSessionStore } from '@/stores/chatSession'
@@ -226,6 +228,10 @@ watch(isLoggedIn, (loggedIn) => {
   }
 })
 
+watch(selectedProjectRepoId, () => {
+  saveAgentSelectionToState()
+})
+
 const fetchDevices = async () => {
   isLoadingDevices.value = true
   try {
@@ -238,8 +244,40 @@ const fetchDevices = async () => {
   }
 }
 
+const agentKindToOption: Record<string, AgentOption> = {
+  log_analysis: logAnalysisAgentOption,
+  package: packageAgentOption,
+  project_expert: projectExpertAgentOption,
+}
+
+const saveAgentSelectionToState = (sessionId?: string | null) => {
+  const sid = sessionId ?? effectiveSessionId.value
+  if (!sid) return
+  const state = runsStore.ensureState(sid)
+  const kind = targetAgent.value?.agentType === 'log-analysis' ? 'log_analysis'
+    : targetAgent.value?.agentType === 'project-expert' ? 'project_expert'
+    : targetAgent.value?.agentType === 'package-manager' ? 'package'
+    : null
+  state.lastAgentKind = kind as import('@/stores/conversationRuns').AgentKind | null
+  state.lastProjectRepoId = selectedProjectRepoId.value
+}
+
+const restoreAgentSelectionFromState = (state: ReturnType<typeof runsStore.ensureState>) => {
+  const agentKind = state.runAgentKind || state.lastAgentKind
+  if (agentKind && agentKindToOption[agentKind]) {
+    targetAgent.value = agentKindToOption[agentKind]
+    if (agentKind === 'log_analysis' || agentKind === 'project_expert') {
+      ensureProjectRepoOptions()
+    }
+  } else {
+    targetAgent.value = null
+  }
+  selectedProjectRepoId.value = state.lastProjectRepoId ?? null
+}
+
 const loadMessages = async (id: string) => {
   if (loadedSessionId.value && loadedSessionId.value !== id) {
+    saveAgentSelectionToState(loadedSessionId.value)
     runsStore.abortSubscription(loadedSessionId.value)
   }
   loadedSessionId.value = id
@@ -250,6 +288,8 @@ const loadMessages = async (id: string) => {
       isLoggedIn: isLoggedIn.value,
       force: true,
     })
+    const state = runsStore.ensureState(id)
+    restoreAgentSelectionFromState(state)
   } catch (error) {
     console.error('加载会话消息失败', error)
     appStore.showNotification({ title: '加载消息失败', type: 'error' })
@@ -257,11 +297,17 @@ const loadMessages = async (id: string) => {
 }
 
 const resetPanel = () => {
+  saveAgentSelectionToState()
   const id = loadedSessionId.value || effectiveSessionId.value
   if (id) runsStore.abortSubscription(id)
   loadedSessionId.value = null
   localSessionId.value = null
   inputMessage.value = ''
+  targetAgent.value = null
+  targetDeviceId.value = null
+  targetDeviceName.value = null
+  selectedProjectRepoId.value = null
+  selectedLogFile.value = null
   deviceMenuVisible.value = false
   nextTick(() => textareaRef.value?.focus())
 }
@@ -529,6 +575,7 @@ const setTargetAgent = (option: AgentOption) => {
   if (option.agentType === 'log-analysis' || option.agentType === 'project-expert') {
     ensureProjectRepoOptions()
   }
+  saveAgentSelectionToState()
 }
 
 // ── GeneralAgent 路由建议（suggested_agent_type）的展示与一键切换 ──
@@ -585,6 +632,67 @@ const chooseSuggestedAgent = () => {
 
 const renderAiMessage = (content: string) =>
   renderMarkdown(content || '', { wrapperClass: 'markdown-content text-ink' })
+
+// ─── Mermaid 图表渲染 ───────────────────────────────────────────────
+// 消息内容通过 v-html 插入后，占位的 .mermaid-container 需异步渲染为 SVG。
+// 仅在流式输出结束（!isSending）后处理，避免未闭合的代码块反复渲染与闪烁。
+const mermaidDialogVisible = ref(false)
+const mermaidDialogContainerRef = ref<HTMLElement | null>(null)
+let mermaidZoomSource = ''
+
+watch(
+  [chatHistory, isSending],
+  () => {
+    if (isSending.value) return
+    nextTick(() => {
+      void processMermaidBlocks(chatContainerRef.value)
+    })
+  },
+  { deep: true }
+)
+
+// 事件委托：处理 Mermaid 图表的「复制源码」与「点击放大」交互。
+const onThreadClick = (event: MouseEvent) => {
+  const target = event.target as HTMLElement | null
+  if (!target) return
+
+  const copyBtn = target.closest('.mermaid-copy-btn')
+  if (copyBtn) {
+    event.stopPropagation()
+    const container = copyBtn.closest('.mermaid-container') as HTMLElement | null
+    const source = container?.dataset.mermaidSource || ''
+    if (!source) return
+    navigator.clipboard.writeText(source).then(
+      () => ElMessage.success('已复制 Mermaid 源码'),
+      () => ElMessage.error('复制失败，请手动选择源码')
+    )
+    return
+  }
+
+  const rendered = target.closest('.mermaid-container.is-rendered') as HTMLElement | null
+  if (rendered) {
+    openMermaidZoom(rendered)
+  }
+}
+
+const openMermaidZoom = (container: HTMLElement) => {
+  mermaidZoomSource = container.dataset.mermaidSource || ''
+  if (!mermaidZoomSource) return
+  mermaidDialogVisible.value = true
+  nextTick(async () => {
+    const host = mermaidDialogContainerRef.value
+    if (!host) return
+    host.innerHTML = '<div class="mermaid-loading">图表渲染中…</div>'
+    try {
+      const mermaid = await loadMermaid()
+      const { svg } = await mermaid.render(`mermaid-zoom-${Date.now()}`, mermaidZoomSource)
+      host.innerHTML = svg
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      host.innerHTML = `<div class="mermaid-error">⚠ 图表渲染失败：${message}</div>`
+    }
+  })
+}
 
 const packageTypeText = (type?: string) => {
   const map: Record<string, string> = {
@@ -664,6 +772,7 @@ const clearTargetDevice = () => { targetDeviceId.value = null; targetDeviceName.
 const clearTargetAgent = () => {
   targetAgent.value = null
   selectedProjectRepoId.value = null
+  saveAgentSelectionToState()
 }
 const clearSelectedLogFile = () => { selectedLogFile.value = null }
 
@@ -1222,7 +1331,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
     </header>
 
     <!-- Scroll body -->
-    <div ref="chatContainerRef" class="rw-scroll">
+    <div ref="chatContainerRef" class="rw-scroll" @click="onThreadClick">
       <!-- Welcome -->
       <div v-if="isWelcomeMode" class="rw-welcome">
         <div class="rw-welcome-badge">
@@ -1609,6 +1718,18 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
         </div>
       </div>
     </div>
+
+    <!-- Mermaid 图表放大查看 -->
+    <el-dialog
+      v-model="mermaidDialogVisible"
+      title="图表查看"
+      width="80%"
+      top="6vh"
+      append-to-body
+      class="mermaid-zoom-dialog"
+    >
+      <div ref="mermaidDialogContainerRef" class="mermaid-zoom-body"></div>
+    </el-dialog>
   </div>
 </template>
 
