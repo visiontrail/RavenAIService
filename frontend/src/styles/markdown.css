@@ -344,15 +344,16 @@
 }
 
 /* ==================== Mermaid 图表 ==================== */
-/* 5.1 图表容器：背景/圆角/阴影与 .hljs 代码块一致 */
+/* 5.1 图表容器：浅色背景，与整体浅色聊天界面协调，保证图表清晰可读 */
 .mermaid-container {
   position: relative;
   display: block;
   margin: 1rem 0;
   padding: 1rem;
-  background: #0d1117;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   border-radius: 0.5rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   overflow-x: auto; /* 5.5 移动端横向滚动 */
 }
 
@@ -444,20 +445,89 @@
   background: rgba(56, 139, 253, 0.4);
 }
 
-/* 5.4 放大弹窗中的图表：居中、自适应 */
+/* 5.4 放大弹窗中的图表：可缩放、可滚动 */
 .mermaid-zoom-dialog .mermaid-zoom-body {
-  display: flex;
-  align-items: center;
-  justify-content: center;
   min-height: 40vh;
   max-height: 78vh;
   overflow: auto;
+  text-align: center;
+  background: #ffffff;
+  border-radius: 0.5rem;
 }
 
 .mermaid-zoom-dialog .mermaid-zoom-body svg {
   max-width: 100%;
-  max-height: 76vh;
   height: auto;
+  transition: transform 0.12s ease;
+}
+
+/* 5.4.1 放大弹窗头部：标题 + 工具栏 */
+.mermaid-zoom-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.mermaid-zoom-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.mermaid-zoom-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.mermaid-zoom-toolbar .mz-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.6rem;
+  font-size: 0.8rem;
+  line-height: 1;
+  color: #374151;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.mermaid-zoom-toolbar .mz-btn:hover {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+}
+
+.mermaid-zoom-toolbar .mz-btn-primary {
+  color: #ffffff;
+  background: #3b82f6;
+  border-color: #3b82f6;
+}
+
+.mermaid-zoom-toolbar .mz-btn-primary:hover {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+.mermaid-zoom-toolbar .mz-scale {
+  min-width: 3rem;
+  text-align: center;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  color: #6b7280;
+}
+
+.mermaid-zoom-toolbar .mz-divider {
+  width: 1px;
+  height: 1.2rem;
+  margin: 0 0.3rem;
+  background: #e5e7eb;
 }
 
 /* 移除暗色模式的自动切换，让分析摘要始终使用浅色系样式 */

@@ -698,6 +698,7 @@ const onThreadClick = (event: MouseEvent) => {
 const openMermaidZoom = (container: HTMLElement) => {
   mermaidZoomSource = container.dataset.mermaidSource || ''
   if (!mermaidZoomSource) return
+  mermaidZoomScale.value = 1
   mermaidDialogVisible.value = true
   nextTick(async () => {
     const host = mermaidDialogContainerRef.value
@@ -707,11 +708,140 @@ const openMermaidZoom = (container: HTMLElement) => {
       const mermaid = await loadMermaid()
       const { svg } = await mermaid.render(`mermaid-zoom-${Date.now()}`, mermaidZoomSource)
       host.innerHTML = svg
+      applyMermaidZoom()
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       host.innerHTML = `<div class="mermaid-error">⚠ 图表渲染失败：${message}</div>`
     }
   })
+}
+
+// ─── 放大弹窗：缩放控制 ───────────────────────────────────────────────
+const mermaidZoomScale = ref(1)
+const MERMAID_ZOOM_MIN = 0.25
+const MERMAID_ZOOM_MAX = 5
+const MERMAID_ZOOM_STEP = 0.2
+
+const getZoomSvgElement = (): SVGSVGElement | null =>
+  mermaidDialogContainerRef.value?.querySelector('svg') ?? null
+
+const applyMermaidZoom = () => {
+  const svg = getZoomSvgElement()
+  if (!svg) return
+  svg.style.transformOrigin = 'top center'
+  svg.style.transform = `scale(${mermaidZoomScale.value})`
+}
+
+const setMermaidZoom = (value: number) => {
+  mermaidZoomScale.value = Math.min(
+    MERMAID_ZOOM_MAX,
+    Math.max(MERMAID_ZOOM_MIN, Math.round(value * 100) / 100)
+  )
+  applyMermaidZoom()
+}
+
+const zoomInMermaid = () => setMermaidZoom(mermaidZoomScale.value + MERMAID_ZOOM_STEP)
+const zoomOutMermaid = () => setMermaidZoom(mermaidZoomScale.value - MERMAID_ZOOM_STEP)
+const resetMermaidZoom = () => setMermaidZoom(1)
+
+// Ctrl/⌘ + 滚轮：以当前位置为中心平滑缩放
+const onMermaidZoomWheel = (event: WheelEvent) => {
+  if (!event.ctrlKey && !event.metaKey) return
+  event.preventDefault()
+  const delta = event.deltaY > 0 ? -MERMAID_ZOOM_STEP : MERMAID_ZOOM_STEP
+  setMermaidZoom(mermaidZoomScale.value + delta)
+}
+
+// ─── 放大弹窗：导出图片（下载 / 复制）────────────────────────────────
+// 将渲染后的 SVG 光栅化为 PNG。2x 缩放保证清晰度，白色底避免透明背景。
+const mermaidSvgToCanvas = async (svgEl: SVGSVGElement): Promise<HTMLCanvasElement> => {
+  const clone = svgEl.cloneNode(true) as SVGSVGElement
+  clone.style.transform = '' // 去除缩放，导出原始尺寸
+
+  const viewBox = svgEl.viewBox?.baseVal
+  const rect = svgEl.getBoundingClientRect()
+  const width =
+    (viewBox && viewBox.width) ||
+    parseFloat(svgEl.getAttribute('width') || '') ||
+    rect.width ||
+    800
+  const height =
+    (viewBox && viewBox.height) ||
+    parseFloat(svgEl.getAttribute('height') || '') ||
+    rect.height ||
+    600
+
+  clone.setAttribute('width', String(width))
+  clone.setAttribute('height', String(height))
+  if (!clone.getAttribute('xmlns')) {
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+  }
+
+  const xml = new XMLSerializer().serializeToString(clone)
+  const src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml)
+
+  const img = new Image()
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve()
+    img.onerror = () => reject(new Error('SVG 加载失败'))
+    img.src = src
+  })
+
+  const dpr = 2
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(width * dpr))
+  canvas.height = Math.max(1, Math.round(height * dpr))
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('无法创建画布上下文')
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  ctx.scale(dpr, dpr)
+  ctx.drawImage(img, 0, 0, width, height)
+  return canvas
+}
+
+const canvasToBlob = (canvas: HTMLCanvasElement): Promise<Blob | null> =>
+  new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
+
+const downloadMermaidImage = async () => {
+  const svg = getZoomSvgElement()
+  if (!svg) return
+  try {
+    const canvas = await mermaidSvgToCanvas(svg)
+    const blob = await canvasToBlob(canvas)
+    if (!blob) throw new Error('导出失败')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `mermaid-${Date.now()}.png`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    ElMessage.success('已下载图片')
+  } catch (err) {
+    console.warn('Mermaid 图片下载失败:', err)
+    ElMessage.error('图片下载失败')
+  }
+}
+
+const copyMermaidImage = async () => {
+  const svg = getZoomSvgElement()
+  if (!svg) return
+  if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+    ElMessage.warning('当前浏览器不支持复制图片，请使用下载')
+    return
+  }
+  try {
+    const canvas = await mermaidSvgToCanvas(svg)
+    const blob = await canvasToBlob(canvas)
+    if (!blob) throw new Error('导出失败')
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+    ElMessage.success('已复制图片到剪贴板')
+  } catch (err) {
+    console.warn('Mermaid 图片复制失败:', err)
+    ElMessage.error('图片复制失败')
+  }
 }
 
 const packageTypeText = (type?: string) => {
@@ -1742,13 +1872,30 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
     <!-- Mermaid 图表放大查看 -->
     <el-dialog
       v-model="mermaidDialogVisible"
-      title="图表查看"
       width="80%"
       top="6vh"
       append-to-body
       class="mermaid-zoom-dialog"
     >
-      <div ref="mermaidDialogContainerRef" class="mermaid-zoom-body"></div>
+      <template #header>
+        <div class="mermaid-zoom-header">
+          <span class="mermaid-zoom-title">图表查看</span>
+          <div class="mermaid-zoom-toolbar">
+            <button class="mz-btn" type="button" title="缩小" @click="zoomOutMermaid">−</button>
+            <span class="mz-scale">{{ Math.round(mermaidZoomScale * 100) }}%</span>
+            <button class="mz-btn" type="button" title="放大" @click="zoomInMermaid">＋</button>
+            <button class="mz-btn" type="button" title="重置缩放" @click="resetMermaidZoom">重置</button>
+            <span class="mz-divider"></span>
+            <button class="mz-btn" type="button" title="复制图片" @click="copyMermaidImage">复制图片</button>
+            <button class="mz-btn mz-btn-primary" type="button" title="下载图片" @click="downloadMermaidImage">下载图片</button>
+          </div>
+        </div>
+      </template>
+      <div
+        ref="mermaidDialogContainerRef"
+        class="mermaid-zoom-body"
+        @wheel="onMermaidZoomWheel"
+      ></div>
     </el-dialog>
   </div>
 </template>

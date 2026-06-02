@@ -7,8 +7,11 @@
  *
  * 初始化配置：
  * - securityLevel: 'strict'  —— 禁止执行脚本/HTML 标签，防止 XSS
- * - theme: 'dark'            —— 与现有 github-dark 代码块主题协调
- * - themeVariables           —— 微调配色匹配 .hljs（#0d1117 背景）
+ * - theme: 'default'         —— 浅色主题，深色文字 + 浅色方框，保证可读性
+ *                              （旧版 dark 主题会出现“黑底黑字黑框”难以辨识）
+ * - flowchart.htmlLabels:false—— 标签渲染为 SVG <text> 而非 foreignObject，
+ *                              既保证浅色背景对比度，也让导出 PNG 不会污染 canvas
+ * - themeVariables           —— 浅色配色，与整体浅色聊天界面协调
  */
 
 import type { Mermaid } from 'mermaid'
@@ -29,25 +32,26 @@ export function loadMermaid(): Promise<Mermaid> {
         mermaid.initialize({
           startOnLoad: false,
           securityLevel: 'strict',
-          theme: 'dark',
+          theme: 'default',
+          flowchart: { htmlLabels: false, useMaxWidth: true },
           fontFamily:
             'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
           themeVariables: {
-            // 与 github-dark (.hljs) 代码块风格保持一致
-            background: '#0d1117',
-            primaryColor: '#161b22',
-            primaryBorderColor: '#30363d',
-            primaryTextColor: '#c9d1d9',
-            secondaryColor: '#21262d',
-            tertiaryColor: '#161b22',
-            lineColor: '#8b949e',
-            textColor: '#c9d1d9',
-            mainBkg: '#161b22',
-            nodeBorder: '#30363d',
-            clusterBkg: '#0d1117',
-            clusterBorder: '#30363d',
-            titleColor: '#c9d1d9',
-            edgeLabelBackground: '#0d1117',
+            // 浅色配色：深色文字 + 浅色方框，确保在白色容器上清晰可读
+            background: '#ffffff',
+            primaryColor: '#eff6ff',
+            primaryBorderColor: '#3b82f6',
+            primaryTextColor: '#1f2937',
+            secondaryColor: '#f1f5f9',
+            tertiaryColor: '#f8fafc',
+            lineColor: '#64748b',
+            textColor: '#1f2937',
+            mainBkg: '#eff6ff',
+            nodeBorder: '#3b82f6',
+            clusterBkg: '#f8fafc',
+            clusterBorder: '#cbd5e1',
+            titleColor: '#1f2937',
+            edgeLabelBackground: '#ffffff',
           },
         })
 
