@@ -152,6 +152,10 @@ async def _fake_query_unescaped_answer_quotes(*_args, **_kwargs) -> AsyncIterato
     ))
 
 
+async def _fake_query_plain_skill_answer(*_args, **_kwargs) -> AsyncIterator[Any]:
+    yield FakeResultMessage(result="TURQUOISE-MONGOOSE-9")
+
+
 def _patch_agent_common(fake_query):
     fake_sdk = SimpleNamespace(query=fake_query)
     return patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk})
@@ -218,9 +222,15 @@ async def test_agent_uses_expected_tools_materializes_project_skills_and_masks_t
 
     ctx = _make_ctx(tmp_path)
     trace_events: list[dict] = []
+    captured_prompt: dict[str, str] = {}
     build_options = MagicMock(return_value=MagicMock())
 
-    with _patch_agent_common(_fake_query_with_clone), \
+    async def fake_query_with_prompt_capture(*args, **kwargs) -> AsyncIterator[Any]:
+        captured_prompt["prompt"] = kwargs.get("prompt") or (args[0] if args else "")
+        async for message in _fake_query_with_clone(*args, **kwargs):
+            yield message
+
+    with _patch_agent_common(fake_query_with_prompt_capture), \
         patch("app.agents.anthropic_client.build_options", build_options), \
         patch(
             "app.services.skills_service.materialize_relevant_enabled_skills",
@@ -240,6 +250,10 @@ async def test_agent_uses_expected_tools_materializes_project_skills_and_masks_t
     assert kwargs["allowed_tools"] == ALLOWED_TOOLS
     assert kwargs["cwd"] == ctx.temp_dir
     assert kwargs["setting_sources"] == ["project"]
+    assert "本轮命中的 Skill（必须先加载）" in kwargs["system_prompt"]
+    assert "本轮命中的 Skill（必须先加载）" in captured_prompt["prompt"]
+    assert '"skill": "repo-reader"' in captured_prompt["prompt"]
+    assert "最终输出仍必须遵守第 5 步的围栏 JSON schema" in captured_prompt["prompt"]
 
     trace_text = json.dumps(result["trace_events"], ensure_ascii=False)
     assert "secret-token" not in trace_text
@@ -283,6 +297,29 @@ async def test_agent_recovers_grounded_answer_with_unescaped_inner_quotes(tmp_pa
     assert "repo/README.md:71-78" in result["answer"]
     assert "星载基带处理器" in result["answer"]
     assert result["answer"] != "在灵犀10（LX10）操作维护这个项目中，**"
+
+
+@pytest.mark.asyncio
+async def test_agent_wraps_plain_text_skill_answer(tmp_path):
+    from app.agents.project_expert.agent import ProjectExpertAgent
+
+    ctx = _make_ctx(tmp_path)
+
+    with _patch_agent_common(_fake_query_plain_skill_answer), \
+        patch("app.agents.anthropic_client.build_options", return_value=MagicMock()), \
+        patch(
+            "app.services.skills_service.materialize_relevant_enabled_skills",
+            return_value=["skill-verifier"],
+        ), \
+        patch("app.agents.log_analysis.mcp_tools.get_mcp_server", return_value=MagicMock()):
+        result = await ProjectExpertAgent().run(ctx)
+
+    assert result["status"] == "ok"
+    assert result["question_type"] == "qa"
+    assert result["answer"] == "TURQUOISE-MONGOOSE-9"
+    assert result["summary"] == "TURQUOISE-MONGOOSE-9"
+    assert result["parse_warning"] == "plain_text_skill_answer_wrapped"
+    assert result["loaded_skills"] == ["skill-verifier"]
 
 
 @pytest.mark.asyncio

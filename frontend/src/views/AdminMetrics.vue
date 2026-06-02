@@ -660,6 +660,7 @@ onMounted(() => {
                   <th>时间</th>
                   <th>类型</th>
                   <th>Source</th>
+                  <th>触发用户</th>
                   <th>Model</th>
                   <th>状态</th>
                   <th class="text-right">Token</th>
@@ -670,6 +671,7 @@ onMounted(() => {
                   <td class="text-xs text-slate-500">{{ formatTimestamp(ev.occurred_at) }}</td>
                   <td class="text-xs">{{ ev.event_type }}</td>
                   <td class="text-xs">{{ ev.source }}</td>
+                  <td class="text-xs">{{ ev.display_name || ev.username || ev.user_id || '--' }}</td>
                   <td class="text-xs">{{ ev.model || '--' }}</td>
                   <td><span class="metrics-status" :class="`is-${ev.status || 'unknown'}`">{{ ev.status || '--' }}</span></td>
                   <td class="text-right">{{ formatNumber(ev.total_tokens) }}</td>

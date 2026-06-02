@@ -14,10 +14,28 @@ import hljs from 'highlight.js'
 import { loadMermaid } from './mermaidLoader'
 
 /**
- * 模块级自增计数器，用于生成唯一的 Mermaid 容器 ID。
- * 页面生命周期内单调递增，保证 mermaid.render() 所需的 DOM id 唯一。
+ * 模块级自增计数器，用于 mermaid.render() 的临时 DOM id。
+ * 与容器 id 解耦，保证即使两个图表源码相同（容器 id 一致）也不会发生
+ * 渲染时 id 冲突。
  */
-let mermaidIdCounter = 0
+let mermaidRenderSeq = 0
+
+/**
+ * 根据内容生成稳定的短哈希（djb2）。
+ *
+ * Mermaid 容器 id 必须由源码内容**确定性**派生，而非自增计数器：
+ * `renderMarkdown` 会在组件每次重渲染时被 v-html 调用，若 id 每次不同，
+ * 输出的 HTML 字符串就会变化，触发 Vue 重新 patch innerHTML，抹掉
+ * `processMermaidBlocks()` 异步插入的 SVG（表现为图表一直“渲染中…”）。
+ * 相同内容产出相同 id ⇒ 相同 HTML ⇒ Vue 跳过 patch ⇒ SVG 得以保留。
+ */
+function hashString(value: string): string {
+  let hash = 5381
+  for (let i = 0; i < value.length; i++) {
+    hash = ((hash << 5) + hash + value.charCodeAt(i)) | 0
+  }
+  return (hash >>> 0).toString(36)
+}
 
 const escapeHtml = (value: string): string =>
   value
@@ -150,7 +168,8 @@ function createMarkdownRenderer(): MarkdownIt {
     highlight: function (str: string, lang: string): string {
       // Mermaid 代码块：输出占位容器，稍后由 processMermaidBlocks() 异步渲染为 SVG。
       if (lang === 'mermaid') {
-        const id = `mermaid-${++mermaidIdCounter}`
+        // 容器 id 由源码哈希派生，保证同一内容多次渲染产出一致的 HTML。
+        const id = `mermaid-${hashString(str)}`
         const escapedSource = escapeHtml(str)
         // data-mermaid-source 保存原始源码（HTML 实体编码，读取 dataset 时自动解码），
         // 供异步渲染、错误降级与复制源码功能使用。
@@ -309,7 +328,7 @@ export async function processMermaidBlocks(containerEl: HTMLElement | null): Pro
   await Promise.all(
     containers.map(async (el) => {
       const source = el.dataset.mermaidSource || ''
-      const renderId = `${el.dataset.mermaidId || 'mermaid'}-svg`
+      const renderId = `mermaid-render-${++mermaidRenderSeq}`
       try {
         const { svg } = await mermaid.render(renderId, source)
         el.innerHTML =

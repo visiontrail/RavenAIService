@@ -226,6 +226,35 @@ def test_select_relevant_skills_prefers_request_specific_match(isolated_skills_d
     assert not (cwd / ".claude" / "skills" / "ka-phased-array-antenna").exists()
 
 
+def test_folded_yaml_description_is_indexed_for_relevance(isolated_skills_dir):
+    from app.services import skills_service
+
+    verifier_md = (
+        "---\n"
+        "name: skill-verifier\n"
+        "description: >\n"
+        "  Use this skill when the user asks to verify skill loading,\n"
+        "  asks \"橙子是什么颜色\", or says \"skill password\".\n"
+        "---\n"
+        "# Body\n"
+        "No trigger words are repeated here.\n"
+    ).encode("utf-8")
+
+    entry = skills_service.install_project_skill(
+        "sat1",
+        zip_bytes=_build_zip({"SKILL.md": verifier_md}),
+        source_filename="verifier.zip",
+    )
+    assert "橙子是什么颜色" in entry["description"]
+
+    selected = skills_service.select_relevant_skill_names(
+        "project_expert",
+        query_text="请告诉我橙子是什么颜色，然后 1+1 等于多少？",
+        project_code="sat1",
+    )
+    assert selected == [("project", "skill-verifier")]
+
+
 def test_unknown_agent_rejected(isolated_skills_dir):
     from app.services import skills_service
     with pytest.raises(skills_service.UnknownAgentError):

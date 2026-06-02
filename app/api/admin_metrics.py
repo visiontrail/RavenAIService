@@ -275,6 +275,7 @@ async def list_raw_events(
     page: int = Query(1, ge=1),
     per_page: int = Query(_DEFAULT_PER_PAGE_EVENTS, ge=1),
     _admin: str = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
 ) -> RawMetricEventsResponse:
     """Paginated raw (sanitized) event listing for audit/troubleshooting."""
     from_time, to_time = resolve_time_range(from_, to)
@@ -288,6 +289,16 @@ async def list_raw_events(
         page=page,
         per_page=per_page,
     )
+
+    # Enrich each event with its triggering user (username/display_name) so the
+    # audit feed shows who triggered the event, not just an opaque user_id.
+    event_user_ids = list({e["user_id"] for e in agg["events"] if e.get("user_id")})
+    users = await _fetch_users(db, event_user_ids)
+    for event in agg["events"]:
+        user = users.get(event.get("user_id"))
+        event["username"] = user.username if user else None
+        event["display_name"] = user.display_name if user else None
+
     data = RawMetricEventsData(
         from_time=from_time,
         to_time=to_time,

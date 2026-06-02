@@ -305,6 +305,9 @@ class RawMetricEvent(BaseModel):
     event_type: str
     source: str
     user_id: Optional[str] = None
+    # 触发用户（由 API 层按 user_id 关联 users 表补全，便于审计）。
+    username: Optional[str] = None
+    display_name: Optional[str] = None
     owner_scope: Optional[str] = None
     session_id: Optional[str] = None
     run_id: Optional[str] = None

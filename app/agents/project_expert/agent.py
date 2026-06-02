@@ -137,6 +137,10 @@ class ProjectExpertAgent:
         """
         from app.agents.anthropic_client import PROVIDER_PROFILES, build_options
         from app.agents.project_expert.prompts import get_prompts, render_user_prompt
+        from app.agents.skill_prompting import (
+            build_plain_text_skill_answer_fields,
+            build_skill_activation_prompt,
+        )
         from app.config import settings
 
         try:
@@ -215,12 +219,20 @@ class ProjectExpertAgent:
             )
             if materialized_skills:
                 logger.info(
-                    "ProjectExpertAgent: loaded %d skill(s): %s",
+                    "ProjectExpertAgent: materialized %d skill(s): %s",
                     len(materialized_skills),
                     ", ".join(materialized_skills),
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning("ProjectExpertAgent: failed to materialize skills: %s", exc)
+
+        if materialized_skills:
+            skill_activation_prompt = build_skill_activation_prompt(
+                materialized_skills,
+                final_output_contract="第 5 步的围栏 JSON schema",
+            )
+            system_prompt += skill_activation_prompt
+            user_prompt += skill_activation_prompt
 
         setting_sources = ["project"] if materialized_skills else None
 
@@ -350,6 +362,21 @@ class ProjectExpertAgent:
         }
 
         if parsed is None:
+            wrapped_skill_answer = build_plain_text_skill_answer_fields(
+                final_text,
+                materialized_skills,
+            )
+            if wrapped_skill_answer:
+                logger.warning(
+                    "ProjectExpertAgent: no fenced JSON in skill result; wrapped plain text answer"
+                )
+                return {
+                    "engine": "claude-agent-sdk",
+                    "model": effective_model,
+                    "schema_version": 3,
+                    **wrapped_skill_answer,
+                    **common_extra,
+                }
             logger.warning("ProjectExpertAgent: no fenced JSON in result, schema_mismatch")
             return _empty_result(
                 effective_model, status="schema_mismatch", error_kind=None, **common_extra

@@ -519,6 +519,8 @@ export interface MetricsRawEvent {
   event_type: string
   source: string
   user_id: string | null
+  username: string | null
+  display_name: string | null
   owner_scope: string | null
   session_id: string | null
   run_id: string | null

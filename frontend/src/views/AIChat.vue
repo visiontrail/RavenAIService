@@ -630,8 +630,26 @@ const chooseSuggestedAgent = () => {
   }
 }
 
-const renderAiMessage = (content: string) =>
-  renderMarkdown(content || '', { wrapperClass: 'markdown-content text-ink' })
+// 渲染结果按内容缓存，确保相同内容在组件多次重渲染时返回**完全相同**的 HTML
+// 字符串。否则 markdownRenderer 内部的自增计数器会让每次渲染生成不同的
+// mermaid 容器 id，导致 v-html 字符串变化、Vue 重新 patch innerHTML，
+// 从而抹掉 processMermaidBlocks() 异步插入的 SVG（表现为图表一直“渲染中…”）。
+const aiMessageHtmlCache = new Map<string, string>()
+const AI_MESSAGE_CACHE_LIMIT = 200
+
+const renderAiMessage = (content: string) => {
+  const key = content || ''
+  const cached = aiMessageHtmlCache.get(key)
+  if (cached !== undefined) return cached
+  const html = renderMarkdown(key, { wrapperClass: 'markdown-content text-ink' })
+  // 简单 FIFO 上限，避免流式过程中逐 token 的中间内容无限堆积。
+  if (aiMessageHtmlCache.size >= AI_MESSAGE_CACHE_LIMIT) {
+    const oldest = aiMessageHtmlCache.keys().next().value
+    if (oldest !== undefined) aiMessageHtmlCache.delete(oldest)
+  }
+  aiMessageHtmlCache.set(key, html)
+  return html
+}
 
 // ─── Mermaid 图表渲染 ───────────────────────────────────────────────
 // 消息内容通过 v-html 插入后，占位的 .mermaid-container 需异步渲染为 SVG。
@@ -648,7 +666,9 @@ watch(
       void processMermaidBlocks(chatContainerRef.value)
     })
   },
-  { deep: true }
+  // immediate: 会话在挂载时可能已加载（store 缓存/恢复），此时 chatHistory
+  // 不会再触发变更事件，需主动渲染一次已存在的 Mermaid 占位块。
+  { deep: true, immediate: true }
 )
 
 // 事件委托：处理 Mermaid 图表的「复制源码」与「点击放大」交互。

@@ -218,7 +218,10 @@ class TestEmitterEventSequence:
         }
 
     def test_loaded_skills_are_emitted_and_returned(self, workspace_ctx):
+        captured_prompt: Dict[str, str] = {}
+
         async def fake_query(*args, **kwargs):
+            captured_prompt["prompt"] = kwargs.get("prompt") or (args[0] if args else "")
             yield FakeResultMessage(result=_make_good_result_json())
 
         captured: List[Dict[str, Any]] = []
@@ -238,6 +241,9 @@ class TestEmitterEventSequence:
         ]
         assert len(skill_events) == 1
         assert skill_events[0]["loaded_skills"] == ["smu-baseband-interfaces"]
+        assert "本轮命中的 Skill（必须先加载）" in captured_prompt["prompt"]
+        assert '"skill": "smu-baseband-interfaces"' in captured_prompt["prompt"]
+        assert "最终输出仍必须遵守第 6 步的围栏 JSON schema" in captured_prompt["prompt"]
 
     def test_seq_strictly_monotonic(self, workspace_ctx):
         async def fake_query(*args, **kwargs):

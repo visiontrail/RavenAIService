@@ -1,7 +1,7 @@
 <template>
   <div v-if="hasContent" class="agent-trace">
-    <div v-if="loadedSkills.length" class="agent-trace__skills" title="本次 Agent 运行已加载的 Skill">
-      <span class="agent-trace__skills-label">Skills</span>
+    <div v-if="loadedSkills.length" class="agent-trace__skills" title="本次 Agent 已通过 Skill 工具读取的 Skill">
+      <span class="agent-trace__skills-label">Loaded Skills</span>
       <span
         v-for="skill in loadedSkills"
         :key="skill"
@@ -104,12 +104,11 @@ const summaryExpanded = ref(false)
 const loadedSkills = computed(() => {
   const names = new Set<string>()
   for (const event of props.events || []) {
-    const skills = event.type === 'run_start' || event.type === 'system_notice'
-      ? event.loaded_skills
-      : undefined
-    if (!Array.isArray(skills)) continue
-    for (const skill of skills) {
-      if (typeof skill === 'string' && skill.trim()) names.add(skill.trim())
+    if (event.type !== 'step_start' || event.tool_name !== 'Skill') continue
+    const input = event.tool_input || {}
+    const raw = input.skill ?? input.name ?? input.value
+    if (typeof raw === 'string' && raw.trim()) {
+      names.add(raw.trim())
     }
   }
   return Array.from(names)

@@ -264,15 +264,25 @@ def _parse_skill_frontmatter(skill_md_path: Path) -> Dict[str, str]:
     if not m:
         raise SkillValidationError("SKILL.md 缺少 frontmatter（--- 包裹的 YAML 头）")
     block = m.group(1)
+    try:
+        import yaml
+
+        parsed = yaml.safe_load(block) or {}
+    except Exception as exc:  # noqa: BLE001
+        raise SkillValidationError(f"SKILL.md frontmatter YAML 解析失败: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise SkillValidationError("SKILL.md frontmatter 必须是键值对象")
+
     result: Dict[str, str] = {}
-    for line in block.splitlines():
-        if ":" not in line:
+    for key, value in parsed.items():
+        if not key:
             continue
-        key, _, value = line.partition(":")
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key:
-            result[key] = value
+        if value is None:
+            result[str(key).strip()] = ""
+        elif isinstance(value, str):
+            result[str(key).strip()] = value.strip()
+        else:
+            result[str(key).strip()] = str(value).strip()
     if not result.get("name"):
         raise SkillValidationError("SKILL.md frontmatter 必须包含 name")
     if not _SKILL_NAME_RE.match(result["name"]):

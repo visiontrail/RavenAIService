@@ -1235,12 +1235,18 @@ async def list_metric_events(
     page: int = 1,
     per_page: int = 50,
 ) -> Dict[str, Any]:
-    """Paginated raw (sanitized) event listing for admin audit."""
+    """Paginated raw (sanitized) event listing for admin audit.
+
+    Log-upload activity events are intentionally excluded: a log upload is not an
+    AI/agent invocation, so it is neither counted toward invocation totals nor
+    surfaced in this raw-event audit feed.
+    """
     page = max(1, page)
     per_page = max(1, per_page)
     filters: List[ColumnElement] = [
         MetricEvent.occurred_at >= from_time,
         MetricEvent.occurred_at < to_time,
+        MetricEvent.source != "log_upload",
     ]
     if event_type:
         filters.append(MetricEvent.event_type == event_type)

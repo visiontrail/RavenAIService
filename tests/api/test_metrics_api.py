@@ -320,6 +320,58 @@ def test_raw_events_filtering(client: TestClient) -> None:
     assert data["events"][0]["source"] == "device_agent"
 
 
+def _log_upload_event(*, user_id: Optional[str]) -> MetricEvent:
+    """A log-upload business event (not an AI/agent invocation)."""
+    return MetricEvent(
+        id=str(uuid.uuid4()),
+        idempotency_key=f"log_activity:upload:{uuid.uuid4()}",
+        occurred_at=datetime.utcnow() - timedelta(hours=1),
+        event_type="log_activity",
+        source="log_upload",
+        user_id=user_id,
+        status="pending",
+    )
+
+
+def test_raw_events_excludes_log_upload(client: TestClient) -> None:
+    """Log uploads are not invocations → excluded from the raw-event audit feed."""
+    user = _make_user("uploader")
+    _seed([user])
+    _seed(
+        [
+            _ai_event(user_id=user.id, source="general_agent", input_tokens=10),
+            _log_upload_event(user_id=user.id),
+            _log_upload_event(user_id=user.id),
+        ]
+    )
+
+    resp = client.get("/admin/metrics/events")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    # Only the AI invocation survives; both log_upload rows are filtered out.
+    assert data["total"] == 1
+    assert all(ev["source"] != "log_upload" for ev in data["events"])
+
+    # Even an explicit source filter cannot surface log_upload rows.
+    resp = client.get("/admin/metrics/events", params={"source": "log_upload"})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["total"] == 0
+
+
+def test_raw_events_include_triggering_user(client: TestClient) -> None:
+    """Each raw event is enriched with the triggering user's name."""
+    user = _make_user("triggerer")
+    _seed([user])
+    _seed([_ai_event(user_id=user.id, source="general_agent", input_tokens=10)])
+
+    resp = client.get("/admin/metrics/events")
+    assert resp.status_code == 200
+    event = resp.json()["data"]["events"][0]
+    assert event["user_id"] == user.id
+    assert event["username"] == "triggerer"
+    assert event["display_name"] == "Triggerer"
+
+
 def test_raw_events_invalid_datetime_is_400(client: TestClient) -> None:
     resp = client.get("/admin/metrics/events", params={"from": "not-a-date"})
     assert resp.status_code == 400
