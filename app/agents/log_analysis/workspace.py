@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from app.config import settings
+from app.i18n import DEFAULT as I18N_DEFAULT
 from app.tools.archive_tool import (  # noqa: F401 – re-exported for callers
     SUPPORTED_ARCHIVE_EXTS,
     SUPPORTED_TEXT_EXTS,
@@ -63,6 +64,10 @@ class WorkspaceContext:
     repo_dir: str           # temp_dir/repo/
     task_json_path: str     # temp_dir/task.json
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Active locale for this run (drives prompt selection + the response-language
+    # directive). Resolved from the request/owner at enqueue time; defaults to
+    # the system default so legacy callers keep working.
+    locale: str = I18N_DEFAULT
 
 
 # ─────────────────────── Helpers ───────────────────────────────────
@@ -288,7 +293,7 @@ def prepare(log_record: Any, *, require_metadata: bool = True) -> WorkspaceConte
             "log_id": getattr(log_record, "id", None),
             "question": getattr(log_record, "issue_description", None) or getattr(log_record, "question", None) or "",
             "hints": getattr(log_record, "hints", None) or "",
-            "log_type": getattr(log_record, "log_type", None),
+            "project_id": getattr(log_record, "project_id", None),
         }
         task_json_path = temp_dir / "task.json"
         task_json_path.write_text(json.dumps(task_data, ensure_ascii=False, indent=2), encoding="utf-8")

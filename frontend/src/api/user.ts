@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { API_BASE_URL } from './index'
+import { API_BASE_URL, localeHeaderInterceptor } from './index'
 import type {
   ApiResponse,
   UserAuthPayload,
@@ -108,7 +108,7 @@ userClient.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
-  return config
+  return localeHeaderInterceptor(config)
 })
 
 userClient.interceptors.response.use(
@@ -129,6 +129,9 @@ export const userApi = {
     userClient.post('/api/v1/users/auth/register', payload),
 
   me: (): Promise<ApiResponse<UserProfile>> => userClient.get('/api/v1/users/auth/me'),
+
+  updateProfile: (payload: { language?: string }): Promise<ApiResponse<UserProfile>> =>
+    userClient.patch('/api/v1/users/auth/me', payload),
 
   listSessions: (): Promise<ApiResponse<ChatSessionSummary[]>> =>
     userClient.get('/api/v1/users/chat-sessions'),

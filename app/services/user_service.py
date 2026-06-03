@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.i18n import normalize as normalize_locale
 from app.models.user import User
 from app.security.admin_auth import AdminUser
 from app.security.user_auth import hash_password, verify_password
@@ -150,6 +151,7 @@ class UserService(BaseService):
         email: Optional[str] = None,
         is_active: Optional[bool] = None,
         role: Optional[str] = None,
+        language: Optional[str] = None,
     ) -> Optional[User]:
         user = await self.get_by_id(db, user_id)
         if not user:
@@ -162,6 +164,9 @@ class UserService(BaseService):
             user.is_active = is_active
         if role is not None:
             user.role = _normalize_role(role)
+        if language is not None:
+            # Coerce unsupported codes to a supported one; never store as-is.
+            user.language = normalize_locale(language)
         await db.flush()
         await db.refresh(user)
         return user

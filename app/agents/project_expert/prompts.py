@@ -7,9 +7,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import yaml
+
+from app.i18n.prompts import select_localized_body
 
 _PROMPTS_CACHE: Dict[str, Any] = {}
 
@@ -35,16 +37,23 @@ def _load_config() -> Dict[str, Any]:
     return _PROMPTS_CACHE
 
 
-def get_prompts() -> Tuple[str, str]:
-    """Return the generic (system_prompt, user_prompt_template)."""
+def get_prompts(locale: Optional[str] = None) -> Tuple[str, str]:
+    """Return the generic (system_prompt, user_prompt_template) for ``locale``.
+
+    ``locale`` selects the per-language body, falling back to the default
+    language (``zh``) when a variant is missing; a legacy flat-string body is
+    returned unchanged.
+    """
     config = _load_config()
     agent_config: Dict[str, Any] = config.get("claude_agent_project_expert", {})
     variant = agent_config.get("generic") or {}
 
-    system_prompt = variant.get("system_prompt", "")
-    user_prompt_template = variant.get("user_prompt_template", "")
+    system_prompt = select_localized_body(variant.get("system_prompt"), locale)
+    user_prompt_template = select_localized_body(
+        variant.get("user_prompt_template"), locale
+    )
 
-    return system_prompt.strip(), user_prompt_template.strip()
+    return system_prompt, user_prompt_template
 
 
 def render_user_prompt(

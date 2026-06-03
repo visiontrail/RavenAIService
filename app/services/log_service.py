@@ -20,9 +20,10 @@ from sqlalchemy import select, and_, or_
 from app.config import settings
 from app.models.log import (
     LogRecord, LogFileInfo, LogUploadRequest, LogListRequest, BatchDeleteRequest,
-    BatchDownloadRequest, LogStatus, LogType, LogLevel, LogMetadata,
+    BatchDownloadRequest, LogStatus, LogLevel, LogMetadata,
     BatchOperationResult, SortField, SortOrder, LogListData, PaginationInfo
 )
+from app.models.project_repo import ProjectRepo
 from app.models.database import get_db
 from app.services.base import BaseCRUDService
 from app.exceptions import (
@@ -104,14 +105,15 @@ class LogService(BaseCRUDService[LogRecord]):
             if request.metadata:
                 metadata_json = request.metadata.model_dump_json()
             
-            # 根据日志类型确定初始状态和进度
+            # 根据项目确定初始状态和进度
             # OAM天线日志上传后直接标记为已完成，其他类型保持待处理状态
-            initial_status = LogStatus.COMPLETED if request.log_type == LogType.OAM_ANTENNA else LogStatus.PENDING
-            initial_progress = 100.0 if request.log_type == LogType.OAM_ANTENNA else 0.0
-            processed_at = datetime.utcnow() if request.log_type == LogType.OAM_ANTENNA else None
-            
-            logger.info(f"LogService - 日志类型: {request.log_type.value}, 初始状态: {initial_status.value}, 初始进度: {initial_progress}")
-            
+            is_oam = (request.project_code or "").lower() == "oam_antenna"
+            initial_status = LogStatus.COMPLETED if is_oam else LogStatus.PENDING
+            initial_progress = 100.0 if is_oam else 0.0
+            processed_at = datetime.utcnow() if is_oam else None
+
+            logger.info(f"LogService - 项目: code={request.project_code} id={request.project_id}, 初始状态: {initial_status.value}, 初始进度: {initial_progress}")
+
             # 创建数据库记录
             logger.info(f"LogService - 开始创建数据库记录: ID={file_id}")
             create_data = {
@@ -121,7 +123,7 @@ class LogService(BaseCRUDService[LogRecord]):
                 "file_size": file_size,
                 "file_path": str(file_path),
                 "archive_path": str(file_path),
-                "log_type": request.log_type,
+                "project_id": request.project_id,
                 "status": initial_status,
                 "progress": initial_progress,
                 "checksum": checksum,
@@ -137,9 +139,10 @@ class LogService(BaseCRUDService[LogRecord]):
             
             log_record = await self.create(db=db, **create_data)
             logger.info(f"LogService - 数据库记录创建成功: ID={file_id}")
-            
+
             # 转换为Pydantic模型
-            result = await self._db_to_pydantic(log_record, request.metadata)
+            project = await self._get_project(db, log_record.project_id)
+            result = await self._db_to_pydantic(log_record, request.metadata, project)
             
             # 立即提交事务，确保数据在触发Celery任务前已完全写入数据库
             # 这样可以避免Celery worker无法找到记录的竞态条件
@@ -152,7 +155,7 @@ class LogService(BaseCRUDService[LogRecord]):
                 from app.services import metrics_service
                 from app.utils import metrics as prom
 
-                log_type_value = getattr(request.log_type, "value", str(request.log_type))
+                project_label = request.project_code or "unclassified"
                 status_value = getattr(initial_status, "value", str(initial_status))
                 await metrics_service.record_business_event(
                     event_type="log_activity",
@@ -160,10 +163,10 @@ class LogService(BaseCRUDService[LogRecord]):
                     idempotency_key=f"log_activity:upload:{file_id}",
                     status=status_value,
                     log_id=file_id,
-                    metadata={"log_type": log_type_value},
+                    metadata={"project_code": project_label},
                 )
                 prom.record_log_upload(
-                    log_type=log_type_value,
+                    log_type=project_label,
                     status=status_value,
                     uploaded_bytes=file_size,
                 )
@@ -172,7 +175,7 @@ class LogService(BaseCRUDService[LogRecord]):
             
             # 检查是否为协议栈日志，如果是则自动触发处理
             # OAM天线日志已经标记为完成，无需额外处理
-            if request.log_type != LogType.OAM_ANTENNA:
+            if not is_oam:
                 logger.info(f"LogService - 检查是否需要触发协议栈处理: {original_filename}")
                 await self._check_and_trigger_protocol_stack_processing(log_record)
             else:
@@ -215,9 +218,13 @@ class LogService(BaseCRUDService[LogRecord]):
             # 添加过滤条件（默认只查询未删除的记录）
             conditions = [LogRecord.is_deleted == False]
             
-            if request.log_type:
-                conditions.append(LogRecord.log_type == request.log_type)
-            
+            # project_id 过滤：0 或负值表示"未分类"（project_id IS NULL）
+            if request.project_id is not None:
+                if request.project_id <= 0:
+                    conditions.append(LogRecord.project_id.is_(None))
+                else:
+                    conditions.append(LogRecord.project_id == request.project_id)
+
             if request.log_level:
                 conditions.append(LogRecord.log_level == request.log_level)
             
@@ -269,6 +276,11 @@ class LogService(BaseCRUDService[LogRecord]):
             result = await db.execute(query)
             log_records = result.scalars().all()
             
+            # 批量获取关联项目，避免逐行查询
+            project_map = await self._get_project_map(
+                db, [r.project_id for r in log_records]
+            )
+
             # 转换为Pydantic模型
             log_infos = []
             for record in log_records:
@@ -297,7 +309,9 @@ class LogService(BaseCRUDService[LogRecord]):
                 else:
                     metadata = LogMetadata()
 
-                log_info = await self._db_to_pydantic(record, metadata)
+                log_info = await self._db_to_pydantic(
+                    record, metadata, project_map.get(record.project_id)
+                )
                 log_infos.append(log_info)
             
             # 计算分页信息
@@ -367,7 +381,7 @@ class LogService(BaseCRUDService[LogRecord]):
                             log_id, ef_exc,
                         )
 
-        return await self._db_to_pydantic(log_record, metadata)
+        return await self._db_to_pydantic(log_record, metadata, db=db)
 
     async def save_ai_analysis_result(
         self,
@@ -406,7 +420,7 @@ class LogService(BaseCRUDService[LogRecord]):
         await db.refresh(log_record)
 
         metadata = LogMetadata(**metadata_dict) if metadata_dict else LogMetadata()
-        return await self._db_to_pydantic(log_record, metadata)
+        return await self._db_to_pydantic(log_record, metadata, db=db)
 
     async def save_manual_analysis(
         self,
@@ -449,7 +463,7 @@ class LogService(BaseCRUDService[LogRecord]):
         await db.refresh(log_record)
 
         metadata = LogMetadata(**metadata_dict) if metadata_dict else LogMetadata()
-        return await self._db_to_pydantic(log_record, metadata)
+        return await self._db_to_pydantic(log_record, metadata, db=db)
 
     async def update_issue_description(
         self,
@@ -480,7 +494,7 @@ class LogService(BaseCRUDService[LogRecord]):
         await db.commit()
         await db.refresh(log_record)
 
-        return await self._db_to_pydantic(log_record, metadata)
+        return await self._db_to_pydantic(log_record, metadata, db=db)
 
     async def update_ai_analysis_task(
         self,
@@ -543,7 +557,7 @@ class LogService(BaseCRUDService[LogRecord]):
         await db.refresh(log_record)
 
         metadata = LogMetadata(**metadata_dict) if metadata_dict else LogMetadata()
-        return await self._db_to_pydantic(log_record, metadata)
+        return await self._db_to_pydantic(log_record, metadata, db=db)
 
     async def delete_log(self, db: AsyncSession, log_id: str, hard_delete: bool = False) -> bool:
         """
@@ -653,7 +667,7 @@ class LogService(BaseCRUDService[LogRecord]):
             except:
                 pass
         
-        return await self._db_to_pydantic(log_record, metadata)
+        return await self._db_to_pydantic(log_record, metadata, db=db)
 
     async def get_download_path(self, db: AsyncSession, log_id: str) -> str:
         """
@@ -711,7 +725,7 @@ class LogService(BaseCRUDService[LogRecord]):
             except (json.JSONDecodeError, TypeError):
                 metadata = LogMetadata()
         
-        return await self._db_to_pydantic(record, metadata)
+        return await self._db_to_pydantic(record, metadata, db=db)
 
     async def batch_delete(
         self, 
@@ -1100,10 +1114,19 @@ class LogService(BaseCRUDService[LogRecord]):
             int: 成功重新触发的任务数量
         """
         try:
+            # OAM 项目无需解压处理；通过 project_repo 关联排除 oam_antenna
+            oam_subquery = (
+                select(ProjectRepo.id)
+                .where(ProjectRepo.project_code == "oam_antenna")
+                .scalar_subquery()
+            )
             query = select(LogRecord).where(
                 LogRecord.status == LogStatus.FAILED,
                 LogRecord.is_deleted == False,
-                LogRecord.log_type != LogType.OAM_ANTENNA  # OAM类型无需解压处理
+                or_(
+                    LogRecord.project_id.is_(None),
+                    LogRecord.project_id != oam_subquery,
+                ),
             ).order_by(LogRecord.updated_at.desc())
             
             if limit and limit > 0:
@@ -1173,8 +1196,34 @@ class LogService(BaseCRUDService[LogRecord]):
         except Exception as e:
             raise StorageError(f"保存文件失败: {str(e)}")
 
-    async def _db_to_pydantic(self, record: LogRecord, metadata: Optional[LogMetadata] = None) -> LogFileInfo:
+    async def _get_project(self, db: AsyncSession, project_id: Optional[int]) -> Optional[ProjectRepo]:
+        """根据 project_id 获取项目，None / 不存在时返回 None。"""
+        if not project_id:
+            return None
+        result = await db.execute(select(ProjectRepo).where(ProjectRepo.id == project_id))
+        return result.scalar_one_or_none()
+
+    async def _get_project_map(
+        self, db: AsyncSession, project_ids: List[Optional[int]]
+    ) -> Dict[int, ProjectRepo]:
+        """批量获取项目，返回 {project_id: ProjectRepo}。"""
+        ids = {pid for pid in project_ids if pid}
+        if not ids:
+            return {}
+        result = await db.execute(select(ProjectRepo).where(ProjectRepo.id.in_(ids)))
+        return {repo.id: repo for repo in result.scalars().all()}
+
+    async def _db_to_pydantic(
+        self,
+        record: LogRecord,
+        metadata: Optional[LogMetadata] = None,
+        project: Optional[ProjectRepo] = None,
+        db: Optional[AsyncSession] = None,
+    ) -> LogFileInfo:
         """将数据库记录转换为Pydantic模型"""
+        # 未显式传入 project 时，按 project_id 即时查询（单条场景）
+        if project is None and db is not None and record.project_id:
+            project = await self._get_project(db, record.project_id)
         ai_analysis_result = None
         ai_analysis_task: Dict[str, Any] = {}
         manual_analysis_content: Optional[str] = None
@@ -1236,7 +1285,9 @@ class LogService(BaseCRUDService[LogRecord]):
             original_filename=record.original_filename,
             file_size=record.file_size,
             file_path=record.file_path,
-            log_type=record.log_type,
+            project_id=record.project_id,
+            project_code=project.project_code if project else None,
+            project_name=project.project_name if project else None,
             status=record.status,
             progress=record.progress,
             created_at=record.created_at,
@@ -1270,7 +1321,7 @@ class LogService(BaseCRUDService[LogRecord]):
             "mime_type": log_record.mime_type,
             "checksum": log_record.checksum,
             "status": log_record.status.value,
-            "log_type": log_record.log_type.value,
+            "project_id": log_record.project_id,
             "log_level": log_record.log_level.value if log_record.log_level else None,
             "progress": log_record.progress,
             "created_at": log_record.created_at.isoformat(),
@@ -1337,8 +1388,8 @@ class LogService(BaseCRUDService[LogRecord]):
             log_record: 日志记录
         """
         try:
-            # 检查文件名是否包含"stack"关键字，或者日志类型为FULL（全量日志）
-            if "stack" in log_record.original_filename.lower() or log_record.log_type == LogType.FULL:
+            # 检查文件名是否包含"stack"关键字（全量日志的文件名同样包含 stack）
+            if "stack" in log_record.original_filename.lower():
                 logger.info(f"LogService - 检测到协议栈日志，准备启动处理任务: {log_record.original_filename}")
                 # 动态导入避免循环导入
                 from app.tasks.log_processing import process_protocol_stack_log

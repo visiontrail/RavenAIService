@@ -13,7 +13,7 @@ def _make_workspace(tmp_path: Path) -> WorkspaceContext:
     repo_dir.mkdir()
     task_json_path = tmp_path / "task.json"
     task_json_path.write_text(
-        json.dumps({"log_id": 1, "question": "old question", "log_type": "generic"}),
+        json.dumps({"log_id": 1, "question": "old question", "project_id": None}),
         encoding="utf-8",
     )
     return WorkspaceContext(
@@ -31,12 +31,12 @@ def test_bind_query_to_workspace_overwrites_task_question(tmp_path):
     ai_analysis._bind_query_to_workspace(
         ctx,
         query="测试日志提取的metadata.json内容,从中解析出对应代码库地址，克隆后告诉我代码库最新的两次修改是什么",
-        log_type="oam",
+        project_id=7,
     )
 
     task_data = json.loads(Path(ctx.task_json_path).read_text(encoding="utf-8"))
     assert task_data["question"].startswith("测试日志提取的metadata.json内容")
-    assert task_data["log_type"] == "oam"
+    assert task_data["project_id"] == 7
     assert ctx.metadata["question"] == task_data["question"]
 
 
@@ -91,7 +91,6 @@ def test_project_code_candidates_include_log_types_before_service_name():
 
 def test_inject_repo_info_matches_log_types_project_code(tmp_path, monkeypatch):
     ctx = _make_workspace(tmp_path)
-    ctx.metadata["log_type"] = "oam_antenna"
     metadata_path = Path(ctx.logs_dir) / "metadata.json"
     metadata_path.write_text(
         json.dumps(

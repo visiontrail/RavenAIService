@@ -145,6 +145,7 @@ class AIChatService(BaseService):
         *,
         user_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        locale: Optional[str] = None,
     ) -> Optional[str]:
         """Public wrapper used by other services / API endpoints."""
         return await _generate_title_external(
@@ -152,6 +153,7 @@ class AIChatService(BaseService):
             ai_content,
             user_id=user_id,
             session_id=session_id,
+            locale=locale,
         )
 
     async def _try_generate_and_update_session_title(
@@ -181,6 +183,7 @@ class AIChatService(BaseService):
                     answer_text,
                     user_id=str(user.id) if getattr(user, "id", None) is not None else None,
                     session_id=session_id,
+                    locale=getattr(user, "language", None),
                 ),
                 timeout=8,
             )
@@ -240,6 +243,7 @@ class AIChatService(BaseService):
         payload: ChatRequest,
         db: Optional[AsyncSession] = None,
         user: Optional[User] = None,
+        locale: Optional[str] = None,
     ) -> ChatResponse:
         logger.info("AIChatService.chat: session=%s remember=%s device=%s agent_type=%s",
                     payload.session_id, payload.remember, payload.target_device_id,
@@ -259,6 +263,7 @@ class AIChatService(BaseService):
                 history=history,
                 system_prompt_override=payload.system_prompt,
                 broker_registry=self.permission_broker_registry,
+                locale=locale,
             )
             events, answer_text, model = await DeviceAgent().run(ctx)
         else:
@@ -267,6 +272,7 @@ class AIChatService(BaseService):
                 user_message=payload.message,
                 history=history,
                 system_prompt_override=payload.system_prompt,
+                locale=locale,
             )
             events, answer_text, model = await GeneralAgent().run(ctx_general)
             suggested_agent_type = self._suggested_agent_from_events(events)

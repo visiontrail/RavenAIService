@@ -407,6 +407,7 @@ class ChatRunService:
         history: List[Dict[str, str]],
         system_prompt_override: Optional[str] = None,
         remember: bool = True,
+        locale: Optional[str] = None,
     ) -> ChatRunJob:
         """Create a new DeviceAgent run and start its background task.
 
@@ -529,6 +530,7 @@ class ChatRunService:
             "run_id": run_id,
             "owner_scope": owner_scope,
             "remember": remember,
+            "locale": locale,
         }
         job.task = asyncio.create_task(self._run_device_job(job, ctx_kwargs))
         # Surface a synthetic ``run_start`` SSE frame so subscribers can pick up
@@ -788,6 +790,7 @@ class ChatRunService:
         history: List[Dict[str, str]],
         system_prompt_override: Optional[str] = None,
         remember: bool = True,
+        locale: Optional[str] = None,
     ) -> ChatRunJob:
         """Create a new GeneralAgent run and start its background task."""
         from app.services.chat_history_service import chat_history_service
@@ -861,6 +864,7 @@ class ChatRunService:
             "run_id": run_id,
             "owner_scope": owner_scope,
             "remember": remember,
+            "locale": locale,
         }
         job.task = asyncio.create_task(self._run_general_job(job, ctx_kwargs))
         job.append_event(

@@ -227,11 +227,13 @@ async def generate_session_title(
     *,
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
+    locale: Optional[str] = None,
 ) -> Optional[str]:
     """Generate a session title from a completed user/assistant exchange.
 
-    Returns ``None`` on failure (callers typically retain the existing
-    default title in that case).
+    ``locale`` selects the per-language title prompt so the generated title is
+    produced in the active language. Returns ``None`` on failure (callers
+    typically retain the existing default title in that case).
     """
     from app.services.prompts_config_service import get_chat_title_prompt_template
 
@@ -241,7 +243,7 @@ async def generate_session_title(
         return None
 
     try:
-        template = get_chat_title_prompt_template()
+        template = get_chat_title_prompt_template(locale)
         prompt = template.format(
             user_content=user_clean[:1200],
             ai_content=ai_clean[:1200],

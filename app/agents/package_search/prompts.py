@@ -7,6 +7,10 @@ the canonical ``PACKAGE_TYPES`` keys, and the structured-answer contract
 
 from __future__ import annotations
 
+from typing import Optional
+
+from app.i18n.prompts import select_localized_body
+
 # Mirrors ``RavenPackageService.PACKAGE_TYPES`` value set without importing
 # the service module at prompt-import time (the prompt is rendered in many
 # contexts including tests where the service module may not be available).
@@ -81,3 +85,20 @@ SYSTEM_PROMPT = """\
 
 在 fenced JSON 之前，用一段自然语言简短说明你的推理与候选包。
 """ % ", ".join(PACKAGE_TYPES)
+
+
+# Per-language system prompts. ``en`` is intentionally absent for now; the
+# loader falls back to ``zh`` until an English body is authored (see the
+# multi-language-support change, prompt task 3.2). Keep ``SYSTEM_PROMPT`` as the
+# default-language alias for any caller that still imports the constant.
+_SYSTEM_PROMPTS = {
+    "zh": SYSTEM_PROMPT,
+}
+
+
+def get_system_prompt(locale: Optional[str] = None) -> str:
+    """Return the package-search system prompt for ``locale``.
+
+    Selects the per-language body with a default-language (``zh``) fallback.
+    """
+    return select_localized_body(_SYSTEM_PROMPTS, locale)

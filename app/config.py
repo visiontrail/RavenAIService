@@ -88,6 +88,14 @@ class Settings(BaseSettings):
     anthropic_small_fast_request_timeout_seconds: int = 30
     ai_analysis_max_extract_bytes: int = 2 * 1024 * 1024 * 1024  # 2 GiB
 
+    # Bug Fix Coding Agent（分析判定需要代码修复时自动派发的写入型 Agent）
+    bug_fix_auto_dispatch: bool = False             # 自动派发总开关，默认关闭，灰度可控
+    bug_fix_agent_model: Optional[str] = None       # None 时复用 anthropic_model / provider 默认
+    bug_fix_agent_request_timeout_seconds: int = 3600
+    bug_fix_agent_max_turns: int = 60               # 写入型任务需要更多回合（克隆/编辑/提交/推送/建 MR）
+    bug_fix_git_provider: Optional[str] = None      # None 时由 repo_url host 推断（gitlab|github）
+    bug_fix_git_api_base: Optional[str] = None       # None 时由 repo_url host 推断
+
     # DeviceAgent 专属（Claude Agent SDK 设备联动对话）
     device_agent_permission_timeout_seconds: int = 120
     device_agent_result_excerpt_bytes: int = 16 * 1024

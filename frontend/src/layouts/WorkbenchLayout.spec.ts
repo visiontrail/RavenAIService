@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 
 import WorkbenchLayout from '@/layouts/WorkbenchLayout.vue'
+import { i18n } from '@/i18n'
 import { useChatSessionStore } from '@/stores/chatSession'
 import { useConversationRunsStore } from '@/stores/conversationRuns'
 import { useUserStore } from '@/stores/user'
@@ -57,6 +58,7 @@ const createHarness = async () => {
     const app = createSSRApp({ render: () => h(WorkbenchLayout) })
     app.use(pinia)
     app.use(router)
+    app.use(i18n)
     return renderToString(app)
   }
 

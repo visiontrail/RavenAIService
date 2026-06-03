@@ -13,13 +13,17 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Search,
   Trash2,
+  UserMinus,
+  UserPlus,
+  Users,
   X,
 } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
-import type { ProjectRepo, ProjectRepoPayload, TestConnectionResult } from '@/types'
+import type { ProjectMember, ProjectRepo, ProjectRepoPayload, TestConnectionResult, UserProfile } from '@/types'
 
 const appStore = useAppStore()
 const route = useRoute()
@@ -38,6 +42,15 @@ const testingId = ref<number | null>(null)
 const includeDisabled = ref(true)
 const repos = ref<ProjectRepo[]>([])
 const testResults = reactive<Record<number, TestConnectionResult | undefined>>({})
+const memberDialogVisible = ref(false)
+const selectedRepoForMembers = ref<ProjectRepo | null>(null)
+const loadingMembers = ref(false)
+const loadingUsers = ref(false)
+const addingMemberId = ref<string | null>(null)
+const removingMemberId = ref<string | null>(null)
+const memberSearch = ref('')
+const projectMembers = ref<ProjectMember[]>([])
+const userCandidates = ref<UserProfile[]>([])
 
 const authForm = reactive({
   username: '',
@@ -60,6 +73,19 @@ const navVisible = computed(() => appStore.adminSidebarVisible)
 const activeNavKey = computed(() => resolveAdminNavKey(route.path))
 const enabledCount = computed(() => repos.value.filter((repo) => repo.enabled).length)
 const disabledCount = computed(() => repos.value.length - enabledCount.value)
+const memberUserIds = computed(() => new Set(projectMembers.value.map((member) => member.id)))
+const normalizedMemberSearch = computed(() => memberSearch.value.trim().toLowerCase())
+const filteredUserCandidates = computed(() => {
+  const query = normalizedMemberSearch.value
+  if (!query) return []
+  return userCandidates.value
+    .filter((user) => {
+      if (memberUserIds.value.has(user.id)) return false
+      const fields = [user.username, user.email || '', user.display_name || '']
+      return fields.some((field) => field.toLowerCase().includes(query))
+    })
+    .slice(0, 12)
+})
 
 const parseErrorMessage = (err: any): string => {
   if (err?.response?.data?.detail) return err.response.data.detail
@@ -88,6 +114,10 @@ const clearAuth = () => {
   adminToken.clear()
   isAuthenticated.value = false
   repos.value = []
+  memberDialogVisible.value = false
+  selectedRepoForMembers.value = null
+  projectMembers.value = []
+  userCandidates.value = []
   authForm.password = ''
 }
 
@@ -142,6 +172,97 @@ const fetchRepos = async () => {
     appStore.showNotification({ title: '加载失败', message: parseErrorMessage(err), type: 'error' })
   } finally {
     loadingRepos.value = false
+  }
+}
+
+const updateRepoMemberCount = (repoId: number, memberCount: number) => {
+  repos.value = repos.value.map((repo) =>
+    repo.id === repoId ? { ...repo, member_count: memberCount } : repo
+  )
+  if (selectedRepoForMembers.value?.id === repoId) {
+    selectedRepoForMembers.value = {
+      ...selectedRepoForMembers.value,
+      member_count: memberCount,
+    }
+  }
+}
+
+const fetchProjectMembers = async (repoId: number) => {
+  loadingMembers.value = true
+  try {
+    const resp = await adminApi.listProjectRepoMembers(repoId)
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || '获取项目成员失败')
+    projectMembers.value = resp.data
+    updateRepoMemberCount(repoId, resp.data.length)
+  } catch (err: any) {
+    appStore.showNotification({ title: '成员加载失败', message: parseErrorMessage(err), type: 'error' })
+  } finally {
+    loadingMembers.value = false
+  }
+}
+
+const fetchUserCandidates = async () => {
+  loadingUsers.value = true
+  try {
+    const resp = await adminApi.listUsers()
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || '获取用户列表失败')
+    userCandidates.value = resp.data
+  } catch (err: any) {
+    userCandidates.value = []
+    appStore.showNotification({ title: '用户加载失败', message: parseErrorMessage(err), type: 'error' })
+  } finally {
+    loadingUsers.value = false
+  }
+}
+
+const openMemberDialog = async (repo: ProjectRepo) => {
+  selectedRepoForMembers.value = repo
+  projectMembers.value = []
+  memberSearch.value = ''
+  memberDialogVisible.value = true
+  await Promise.all([fetchProjectMembers(repo.id), fetchUserCandidates()])
+}
+
+const closeMemberDialog = () => {
+  if (addingMemberId.value || removingMemberId.value) return
+  memberDialogVisible.value = false
+  selectedRepoForMembers.value = null
+  projectMembers.value = []
+  memberSearch.value = ''
+}
+
+const addProjectMember = async (user: UserProfile) => {
+  const repo = selectedRepoForMembers.value
+  if (!repo) return
+  addingMemberId.value = user.id
+  try {
+    const resp = await adminApi.addProjectRepoMember(repo.id, user.id)
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || '添加成员失败')
+    projectMembers.value = resp.data
+    updateRepoMemberCount(repo.id, resp.data.length)
+    memberSearch.value = ''
+    appStore.showNotification({ title: '已添加成员', message: user.username, type: 'success' })
+  } catch (err: any) {
+    appStore.showNotification({ title: '添加失败', message: parseErrorMessage(err), type: 'error' })
+  } finally {
+    addingMemberId.value = null
+  }
+}
+
+const removeProjectMember = async (member: ProjectMember) => {
+  const repo = selectedRepoForMembers.value
+  if (!repo) return
+  if (!window.confirm(`确认从 ${repo.project_code} 移除成员 ${member.username}？`)) return
+  removingMemberId.value = member.id
+  try {
+    await adminApi.removeProjectRepoMember(repo.id, member.id)
+    projectMembers.value = projectMembers.value.filter((item) => item.id !== member.id)
+    updateRepoMemberCount(repo.id, projectMembers.value.length)
+    appStore.showNotification({ title: '已移除成员', message: member.username, type: 'success' })
+  } catch (err: any) {
+    appStore.showNotification({ title: '移除失败', message: parseErrorMessage(err), type: 'error' })
+  } finally {
+    removingMemberId.value = null
   }
 }
 
@@ -418,7 +539,7 @@ onMounted(() => bootstrap())
         </div>
 
         <div class="bg-slate-50 border border-slate-200 rounded-2xl p-4">
-          <div class="grid gap-3 md:grid-cols-3">
+          <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div>
               <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Code</p>
               <p class="mt-1 text-sm text-slate-600">保存时自动 trim + lower-case，用于 metadata.json 匹配。</p>
@@ -426,6 +547,10 @@ onMounted(() => bootstrap())
             <div>
               <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Token</p>
               <p class="mt-1 text-sm text-slate-600">每个仓库可覆盖全局 Token；响应只显示是否已设置。</p>
+            </div>
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Members</p>
+              <p class="mt-1 text-sm text-slate-600">项目成员可查看该项目的 Bug 修复任务与 MR 详情。</p>
             </div>
             <div>
               <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Connectivity</p>
@@ -452,6 +577,7 @@ onMounted(() => bootstrap())
                   <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">仓库 URL</th>
                   <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">默认分支</th>
                   <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">Token</th>
+                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">成员</th>
                   <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">状态</th>
                   <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">更新时间</th>
                   <th class="py-2.5 pr-5 text-right font-semibold text-slate-600">操作</th>
@@ -498,6 +624,12 @@ onMounted(() => bootstrap())
                     </span>
                   </td>
                   <td class="py-3 pr-4">
+                    <span class="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-1 text-xs font-semibold text-indigo-700">
+                      <Users :size="13" />
+                      {{ repo.member_count ?? 0 }} 人
+                    </span>
+                  </td>
+                  <td class="py-3 pr-4">
                     <span
                       class="inline-flex rounded-full px-2 py-1 text-xs font-semibold"
                       :class="repo.enabled ? 'bg-cyan-50 text-cyan-700' : 'bg-slate-100 text-slate-500'"
@@ -514,6 +646,9 @@ onMounted(() => bootstrap())
                         @click="router.push(`/admin/project-repos/${repo.project_code}/skills`)"
                       >
                         <FolderTree :size="15" />
+                      </button>
+                      <button class="admin-action-btn" title="成员管理" @click="openMemberDialog(repo)">
+                        <Users :size="15" />
                       </button>
                       <button
                         class="admin-action-btn"
@@ -648,6 +783,143 @@ onMounted(() => bootstrap())
             <Save :size="16" />
             {{ savingRepo ? '保存中…' : '保存' }}
           </button>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="memberDialogVisible && selectedRepoForMembers"
+      class="admin-modal-backdrop"
+      @click="closeMemberDialog"
+    >
+      <div class="admin-modal-card member-modal" @click.stop>
+        <div class="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <h3 class="text-base font-semibold text-slate-900">项目成员管理</h3>
+            <p class="mt-1 text-sm text-slate-500">
+              {{ selectedRepoForMembers.project_name }}
+              <code class="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
+                {{ selectedRepoForMembers.project_code }}
+              </code>
+            </p>
+          </div>
+          <button class="admin-close-btn" title="关闭" @click="closeMemberDialog">
+            <X :size="17" />
+          </button>
+        </div>
+
+        <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.95fr)]">
+          <section class="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div class="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h4 class="text-sm font-semibold text-slate-900">当前成员</h4>
+                <p class="text-xs text-slate-500">{{ projectMembers.length }} 个用户可见该项目的 Bug 修复</p>
+              </div>
+              <button
+                class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                :disabled="loadingMembers"
+                @click="fetchProjectMembers(selectedRepoForMembers.id)"
+              >
+                <RefreshCw :size="13" />
+                {{ loadingMembers ? '同步中' : '刷新' }}
+              </button>
+            </div>
+
+            <div v-if="loadingMembers" class="rounded-lg border border-dashed border-slate-300 bg-white px-4 py-8 text-center text-sm text-slate-400">
+              正在加载成员…
+            </div>
+            <div v-else-if="!projectMembers.length" class="rounded-lg border border-dashed border-slate-300 bg-white px-4 py-8 text-center">
+              <p class="text-sm font-medium text-slate-700">暂无成员</p>
+              <p class="mt-1 text-xs text-slate-400">从右侧搜索注册用户并加入。</p>
+            </div>
+            <div v-else class="member-list-scroll space-y-2">
+              <div
+                v-for="member in projectMembers"
+                :key="member.id"
+                class="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2"
+              >
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2">
+                    <p class="truncate text-sm font-semibold text-slate-900">{{ member.display_name || member.username }}</p>
+                    <code class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500">
+                      {{ member.username }}
+                    </code>
+                  </div>
+                  <p class="mt-0.5 truncate text-xs text-slate-500">{{ member.email || '未设置邮箱' }}</p>
+                </div>
+                <button
+                  class="admin-action-btn danger shrink-0"
+                  :disabled="removingMemberId === member.id"
+                  title="移除成员"
+                  @click="removeProjectMember(member)"
+                >
+                  <UserMinus :size="15" />
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section class="rounded-xl border border-slate-200 bg-white p-4">
+            <div class="mb-3">
+              <h4 class="text-sm font-semibold text-slate-900">添加注册用户</h4>
+              <p class="text-xs text-slate-500">按用户名、邮箱或展示名检索；已加入的用户不会重复出现。</p>
+            </div>
+
+            <label class="block">
+              <span class="sr-only">搜索用户</span>
+              <div class="relative">
+                <Search class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" :size="16" />
+                <input
+                  v-model="memberSearch"
+                  type="search"
+                  class="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
+                  placeholder="搜索用户名 / 邮箱 / 展示名"
+                />
+              </div>
+            </label>
+
+            <div class="mt-3">
+              <div v-if="loadingUsers" class="rounded-lg border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-slate-400">
+                正在加载注册用户…
+              </div>
+              <div v-else-if="!normalizedMemberSearch" class="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                输入关键词开始检索用户
+              </div>
+              <div v-else-if="!filteredUserCandidates.length" class="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                没有匹配的未加入用户
+              </div>
+              <div v-else class="member-list-scroll space-y-2">
+                <div
+                  v-for="user in filteredUserCandidates"
+                  :key="user.id"
+                  class="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2"
+                >
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                      <p class="truncate text-sm font-semibold text-slate-900">{{ user.display_name || user.username }}</p>
+                      <span
+                        v-if="!user.is_active"
+                        class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500"
+                      >
+                        已禁用
+                      </span>
+                    </div>
+                    <p class="mt-0.5 truncate text-xs text-slate-500">
+                      {{ user.username }} · {{ user.email || '未设置邮箱' }}
+                    </p>
+                  </div>
+                  <button
+                    class="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-cyan-200 px-2.5 py-1.5 text-xs font-semibold text-cyan-700 hover:bg-cyan-50 disabled:opacity-50"
+                    :disabled="addingMemberId === user.id"
+                    @click="addProjectMember(user)"
+                  >
+                    <UserPlus :size="14" />
+                    {{ addingMemberId === user.id ? '加入中' : '加入' }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </div>
@@ -834,6 +1106,18 @@ onMounted(() => bootstrap())
   background: #ffffff;
   box-shadow: 0 20px 45px rgba(15, 23, 42, 0.25);
   padding: 1.25rem;
+}
+
+.member-modal {
+  width: min(980px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.member-list-scroll {
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 0.15rem;
 }
 
 .admin-close-btn {

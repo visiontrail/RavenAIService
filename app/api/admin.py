@@ -13,7 +13,12 @@ from pydantic import BaseModel, Field
 
 from app.models.database import get_db
 from app.security.admin_auth import ADMIN_TOKEN_HEADER, ADMIN_TOKEN_PREFIX, auth_manager
-from app.services import project_repo_service, skills_service
+from app.services import (
+    project_repo_member_service,
+    project_repo_service,
+    skills_service,
+)
+from app.services.user_service import user_service
 from app.services.prompts_config_service import (
     load_prompts_config,
     update_prompt_entries,
@@ -189,6 +194,7 @@ class ProjectRepoData(BaseModel):
     git_token_set: bool
     description: Optional[str] = None
     enabled: bool
+    member_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -208,7 +214,8 @@ class ProjectRepoResponse(BaseModel):
 class CreateProjectRepoRequest(BaseModel):
     project_code: str = Field(..., min_length=1, max_length=128)
     project_name: str = Field(..., min_length=1, max_length=256)
-    repo_url: str = Field(..., min_length=1)
+    # 允许空字符串：仅用于日志分类、无关联 Git 仓库的项目
+    repo_url: str = Field(default="")
     default_branch: str = Field(default="main", max_length=128)
     git_token: Optional[str] = None
     description: Optional[str] = None
@@ -230,7 +237,7 @@ class TestConnectionResponse(BaseModel):
     message: str = "ok"
 
 
-def _repo_to_data(repo) -> ProjectRepoData:
+def _repo_to_data(repo, member_count: int = 0) -> ProjectRepoData:
     return ProjectRepoData(
         id=repo.id,
         project_code=repo.project_code,
@@ -240,6 +247,7 @@ def _repo_to_data(repo) -> ProjectRepoData:
         git_token_set=bool(repo.git_token),
         description=repo.description,
         enabled=repo.enabled,
+        member_count=member_count,
         created_at=repo.created_at,
         updated_at=repo.updated_at,
     )
@@ -256,7 +264,12 @@ async def list_project_repos(
     repos = await project_repo_service.list_repos(
         db, include_disabled=include_disabled, offset=offset, limit=limit
     )
-    return ProjectRepoListResponse(data=[_repo_to_data(r) for r in repos])
+    counts = await project_repo_member_service.count_members_bulk(
+        db, [r.id for r in repos]
+    )
+    return ProjectRepoListResponse(
+        data=[_repo_to_data(r, counts.get(r.id, 0)) for r in repos]
+    )
 
 
 @router.post("/project-repos", response_model=ProjectRepoResponse, status_code=status.HTTP_201_CREATED)
@@ -293,7 +306,8 @@ async def get_project_repo(
     repo = await project_repo_service.get_by_id(db, repo_id)
     if not repo:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="记录不存在")
-    return ProjectRepoResponse(data=_repo_to_data(repo))
+    member_count = await project_repo_member_service.count_members(db, repo.id)
+    return ProjectRepoResponse(data=_repo_to_data(repo, member_count))
 
 
 @router.put("/project-repos/{repo_id}", response_model=ProjectRepoResponse)
@@ -328,12 +342,41 @@ async def update_project_repo(
 @router.delete("/project-repos/{repo_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project_repo(
     repo_id: int,
+    force: bool = Query(default=False, description="为 true 时即便存在关联日志也强制删除"),
     _username: str = Depends(require_admin),
     db=Depends(get_db),
 ) -> None:
+    from sqlalchemy import func, select, update as sa_update
+    from app.models.log import LogRecord
+
     repo = await project_repo_service.get_by_id(db, repo_id)
     if not repo:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="记录不存在")
+
+    # 统计引用该项目的日志数量
+    affected = (
+        await db.execute(
+            select(func.count(LogRecord.id)).where(LogRecord.project_id == repo_id)
+        )
+    ).scalar() or 0
+
+    if affected and not force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "affected_logs": int(affected),
+                "message": "该项目有关联的日志记录。使用 force=true 进行删除。",
+            },
+        )
+
+    # 强制删除：先将关联日志的 project_id 置空（兼容未启用 FK 级联的方言）
+    if affected:
+        await db.execute(
+            sa_update(LogRecord)
+            .where(LogRecord.project_id == repo_id)
+            .values(project_id=None)
+        )
+
     await project_repo_service.delete(db, repo)
 
 
@@ -349,6 +392,91 @@ async def test_project_repo_connection(
         data=result,
         message=result["message"],
     )
+
+
+# ─────────────────── Project Repo Members ─────────────────────────
+
+class ProjectMemberData(BaseModel):
+    id: str
+    username: str
+    display_name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class ProjectMemberListResponse(BaseModel):
+    success: bool = True
+    data: List[ProjectMemberData]
+    message: str = "ok"
+
+
+class AddProjectMemberRequest(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=36)
+
+
+def _user_to_member(user) -> ProjectMemberData:
+    return ProjectMemberData(
+        id=user.id,
+        username=user.username,
+        display_name=user.display_name,
+        email=user.email,
+    )
+
+
+@router.get(
+    "/project-repos/{repo_id}/members",
+    response_model=ProjectMemberListResponse,
+)
+async def list_project_members(
+    repo_id: int,
+    _username: str = Depends(require_admin),
+    db=Depends(get_db),
+) -> ProjectMemberListResponse:
+    repo = await project_repo_service.get_by_id(db, repo_id)
+    if not repo:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="记录不存在")
+    members = await project_repo_member_service.list_members(db, repo_id)
+    return ProjectMemberListResponse(data=[_user_to_member(u) for u in members])
+
+
+@router.post(
+    "/project-repos/{repo_id}/members",
+    response_model=ProjectMemberListResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_project_member(
+    repo_id: int,
+    payload: AddProjectMemberRequest,
+    _username: str = Depends(require_admin),
+    db=Depends(get_db),
+) -> ProjectMemberListResponse:
+    repo = await project_repo_service.get_by_id(db, repo_id)
+    if not repo:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="记录不存在")
+    user = await user_service.get_by_id(db, payload.user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    # 幂等加入
+    await project_repo_member_service.add_member(db, repo_id, payload.user_id)
+    members = await project_repo_member_service.list_members(db, repo_id)
+    return ProjectMemberListResponse(
+        data=[_user_to_member(u) for u in members], message="添加成功"
+    )
+
+
+@router.delete(
+    "/project-repos/{repo_id}/members/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def remove_project_member(
+    repo_id: int,
+    user_id: str,
+    _username: str = Depends(require_admin),
+    db=Depends(get_db),
+) -> None:
+    repo = await project_repo_service.get_by_id(db, repo_id)
+    if not repo:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="记录不存在")
+    await project_repo_member_service.remove_member(db, repo_id, user_id)
 
 
 # ─────────────────── Agent Skills Management ──────────────────────

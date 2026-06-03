@@ -8,11 +8,13 @@ import asyncio
 import json
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.i18n.deps import LOCALE_HEADER, resolve_locale
+from app.i18n.messages import t
 from app.models.database import get_db
 from app.models.user import (
     ChatAgentRun,
@@ -39,16 +41,29 @@ admin_bearer = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(user_bearer),
     db: AsyncSession = Depends(get_db),
 ):
     """Require a valid user token."""
+    # No authenticated user yet, so resolve the locale for auth errors from the
+    # request headers only (explicit app header, then Accept-Language).
+    locale = resolve_locale(
+        header_locale=request.headers.get(LOCALE_HEADER),
+        accept_language=request.headers.get("Accept-Language"),
+    )
     if not credentials:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未登录")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=t("auth.not_logged_in", locale),
+        )
     user_id, username = user_auth_manager.validate_token(credentials.credentials)
     user = await user_service.get_by_id(db, user_id)
     if not user or not user.is_active or user.username != username:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户无效或已禁用")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=t("auth.user_invalid", locale),
+        )
     return user
 
 
@@ -67,6 +82,22 @@ async def get_optional_user(
     if not user or not user.is_active or user.username != username:
         return None
     return user
+
+
+async def get_request_locale(
+    request: Request,
+    current_user=Depends(get_optional_user),
+) -> str:
+    """Resolve the active locale for the current request.
+
+    Priority: explicit locale header → authenticated user's stored language →
+    default. Always returns a supported code.
+    """
+    return resolve_locale(
+        header_locale=request.headers.get(LOCALE_HEADER),
+        accept_language=request.headers.get("Accept-Language"),
+        user=current_user,
+    )
 
 
 def require_admin(credentials: HTTPAuthorizationCredentials = Depends(admin_bearer)) -> str:
@@ -136,7 +167,11 @@ class UserRegisterRequest(BaseModel):
 
 
 @router.post("/auth/login", response_model=UserAuthResponse)
-async def user_login(payload: UserLoginRequest, db: AsyncSession = Depends(get_db)) -> UserAuthResponse:
+async def user_login(
+    payload: UserLoginRequest,
+    locale: str = Depends(get_request_locale),
+    db: AsyncSession = Depends(get_db),
+) -> UserAuthResponse:
     # Ensure admin users from admin_auth.yaml are provisioned with the admin role
     # so they can access the backend management entry after their first login.
     try:
@@ -146,7 +181,7 @@ async def user_login(payload: UserLoginRequest, db: AsyncSession = Depends(get_d
     user = await user_service.authenticate(db, username=payload.username, password=payload.password)
     token, expires_at = user_auth_manager.issue_token(user.id, user.username)
     return UserAuthResponse(
-        message="登录成功",
+        message=t("auth.login_success", locale),
         data=UserAuthPayload(
             token=token,
             expires_at=expires_at,
@@ -156,7 +191,11 @@ async def user_login(payload: UserLoginRequest, db: AsyncSession = Depends(get_d
 
 
 @router.post("/auth/register", response_model=UserAuthResponse, status_code=201)
-async def user_register(payload: UserRegisterRequest, db: AsyncSession = Depends(get_db)) -> UserAuthResponse:
+async def user_register(
+    payload: UserRegisterRequest,
+    locale: str = Depends(get_request_locale),
+    db: AsyncSession = Depends(get_db),
+) -> UserAuthResponse:
     user = await user_service.create_user(
         db,
         username=payload.username,
@@ -167,7 +206,7 @@ async def user_register(payload: UserRegisterRequest, db: AsyncSession = Depends
     )
     token, expires_at = user_auth_manager.issue_token(user.id, user.username)
     return UserAuthResponse(
-        message="注册成功",
+        message=t("auth.register_success", locale),
         data=UserAuthPayload(
             token=token,
             expires_at=expires_at,
@@ -181,6 +220,44 @@ async def get_profile(current_user=Depends(get_current_user)) -> UserDetailRespo
     return UserDetailResponse(
         message="ok",
         data=UserProfile.model_validate(current_user, from_attributes=True),
+    )
+
+
+class UpdateProfileRequest(BaseModel):
+    """当前用户自助更新个人资料请求"""
+
+    display_name: Optional[str] = Field(None, max_length=128)
+    email: Optional[str] = Field(None, max_length=255)
+    language: Optional[str] = Field(None, max_length=8)
+
+
+@router.patch("/auth/me", response_model=UserDetailResponse)
+async def update_profile(
+    payload: UpdateProfileRequest,
+    current_user=Depends(get_current_user),
+    locale: str = Depends(get_request_locale),
+    db: AsyncSession = Depends(get_db),
+) -> UserDetailResponse:
+    """Allow the authenticated user to update their own profile preferences.
+
+    Unsupported ``language`` codes are coerced to a supported code by the
+    service layer rather than rejected, so the UI never gets stuck.
+    """
+    user = await user_service.update_user(
+        db,
+        current_user.id,
+        display_name=payload.display_name,
+        email=payload.email,
+        language=payload.language,
+    )
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=t("user.not_found", locale)
+        )
+    await db.commit()
+    return UserDetailResponse(
+        message=t("user.profile_updated", locale),
+        data=UserProfile.model_validate(user, from_attributes=True),
     )
 
 
@@ -220,6 +297,7 @@ async def list_users(
 async def create_user(
     payload: CreateUserRequest,
     _admin: str = Depends(require_admin),
+    locale: str = Depends(get_request_locale),
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
     user = await user_service.create_user(
@@ -231,7 +309,7 @@ async def create_user(
         role=payload.role or "user",
     )
     return UserDetailResponse(
-        message="用户创建成功",
+        message=t("user.created", locale),
         data=UserProfile.model_validate(user, from_attributes=True),
     )
 
@@ -241,6 +319,7 @@ async def update_user(
     user_id: str,
     payload: UpdateUserRequest,
     _admin: str = Depends(require_admin),
+    locale: str = Depends(get_request_locale),
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
     user = await user_service.update_user(
@@ -252,11 +331,13 @@ async def update_user(
         role=payload.role,
     )
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=t("user.not_found", locale)
+        )
     if payload.password:
         user = await user_service.set_password(db, user_id, payload.password)
     return UserDetailResponse(
-        message="用户已更新",
+        message=t("user.updated", locale),
         data=UserProfile.model_validate(user, from_attributes=True),
     )
 
@@ -265,13 +346,16 @@ async def update_user(
 async def disable_user(
     user_id: str,
     _admin: str = Depends(require_admin),
+    locale: str = Depends(get_request_locale),
     db: AsyncSession = Depends(get_db),
 ) -> UserDetailResponse:
     user = await user_service.update_user(db, user_id, is_active=False)
     if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=t("user.not_found", locale)
+        )
     return UserDetailResponse(
-        message="用户已禁用",
+        message=t("user.disabled", locale),
         data=UserProfile.model_validate(user, from_attributes=True),
     )
 
@@ -374,14 +458,17 @@ async def get_chat_messages(
 async def delete_chat_session(
     session_id: str,
     current_user=Depends(get_current_user),
+    locale: str = Depends(get_request_locale),
     db: AsyncSession = Depends(get_db),
 ) -> ChatSessionListResponse:
     deleted = await chat_history_service.delete_session(db, user_id=current_user.id, session_id=session_id)
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=t("session.not_found", locale)
+        )
     sessions = await chat_history_service.list_sessions(db, current_user.id)
     return ChatSessionListResponse(
-        message="会话已删除",
+        message=t("session.deleted", locale),
         data=[ChatSessionSummary.model_validate(s, from_attributes=True) for s in sessions],
     )
 
@@ -397,6 +484,7 @@ async def pin_chat_session(
     session_id: str,
     payload: PinSessionRequest,
     current_user=Depends(get_current_user),
+    locale: str = Depends(get_request_locale),
     db: AsyncSession = Depends(get_db),
 ) -> ChatSessionListResponse:
     updated = await chat_history_service.set_session_pinned(
@@ -406,10 +494,12 @@ async def pin_chat_session(
         pinned=payload.pinned,
     )
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=t("session.not_found", locale)
+        )
     sessions = await chat_history_service.list_sessions(db, current_user.id)
     return ChatSessionListResponse(
-        message="已置顶" if payload.pinned else "已取消置顶",
+        message=t("session.pinned" if payload.pinned else "session.unpinned", locale),
         data=[ChatSessionSummary.model_validate(s, from_attributes=True) for s in sessions],
     )
 
@@ -425,10 +515,14 @@ async def rename_chat_session(
     session_id: str,
     payload: RenameSessionRequest,
     current_user=Depends(get_current_user),
+    locale: str = Depends(get_request_locale),
     db: AsyncSession = Depends(get_db),
 ) -> ChatSessionListResponse:
     if not payload.title.strip():
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="名称不能为空")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=t("session.title_empty", locale),
+        )
     updated = await chat_history_service.update_session_title(
         db,
         user_id=current_user.id,
@@ -436,11 +530,13 @@ async def rename_chat_session(
         title=payload.title.strip(),
     )
     if not updated:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=t("session.not_found", locale)
+        )
     await db.commit()
     sessions = await chat_history_service.list_sessions(db, current_user.id)
     return ChatSessionListResponse(
-        message="已重命名",
+        message=t("session.renamed", locale),
         data=[ChatSessionSummary.model_validate(s, from_attributes=True) for s in sessions],
     )
 
@@ -465,6 +561,7 @@ async def save_messages(
     session_id: str,
     payload: SaveMessagesRequest,
     current_user=Depends(get_current_user),
+    locale: str = Depends(get_request_locale),
     db: AsyncSession = Depends(get_db),
 ) -> SaveMessagesResponse:
     """保存用户消息和AI回复到指定会话"""
@@ -484,6 +581,7 @@ async def save_messages(
                     payload.ai_content,
                     user_id=str(current_user.id),
                     session_id=session_id,
+                    locale=locale,
                 ),
                 timeout=8,
             )
@@ -500,6 +598,6 @@ async def save_messages(
             pass
     await db.commit()
     return SaveMessagesResponse(
-        message="消息已保存",
+        message=t("chat.message_saved", locale),
         session_id=session.id,
     )

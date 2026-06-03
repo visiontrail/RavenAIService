@@ -19,7 +19,9 @@ export interface LogRecord {
   original_filename?: string
   file_size: number
   file_path?: string
-  log_type?: 'stack' | 'oam_antenna' | 'full'
+  project_id?: number | null
+  project_code?: string | null
+  project_name?: string | null
   status: 'pending' | 'processing' | 'completed' | 'failed'
   progress?: number
   task_id?: string
@@ -279,8 +281,16 @@ export interface ProjectRepo {
   git_token_set: boolean
   description?: string | null
   enabled: boolean
+  member_count?: number
   created_at: string
   updated_at: string
+}
+
+export interface ProjectMember {
+  id: string
+  username: string
+  display_name?: string | null
+  email?: string | null
 }
 
 export interface ProjectRepoPayload {
@@ -291,6 +301,104 @@ export interface ProjectRepoPayload {
   git_token?: string | null
   description?: string | null
   enabled?: boolean
+}
+
+// Bug 修复任务
+export type BugFixTaskStatus =
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'partial'
+  | 'failed'
+  | 'cancelled'
+  | string
+
+export type BugFixMergeRequestStatus =
+  | 'created'
+  | 'open'
+  | 'push_failed'
+  | 'mr_failed'
+  | string
+
+export interface BugFixProposedFix {
+  title?: string
+  description?: string
+  rationale?: string
+  suspected_files?: string[]
+  suspected_symbols?: string[]
+  [key: string]: unknown
+}
+
+export interface BugFixChangedFile {
+  path?: string
+  file_path?: string
+  filename?: string
+  name?: string
+  additions?: number
+  deletions?: number
+  insertions?: number
+  added?: number
+  removed?: number
+  [key: string]: unknown
+}
+
+export interface BugFixDiffStat {
+  files?: number
+  file_count?: number
+  additions?: number
+  deletions?: number
+  insertions?: number
+  removed?: number
+  [key: string]: unknown
+}
+
+export interface BugFixMergeRequest {
+  id: string
+  title: string
+  status: BugFixMergeRequestStatus
+  branch_name: string
+  base_branch: string
+  mr_url?: string | null
+  mr_iid?: string | null
+  commit_sha?: string | null
+  changed_files?: BugFixChangedFile[] | Record<string, unknown> | null
+  diff_stat?: BugFixDiffStat | null
+}
+
+export interface BugFixTaskSummary {
+  id: string
+  title: string
+  project_code?: string | null
+  project_name?: string | null
+  status: BugFixTaskStatus
+  merge_request_count: number
+  source_log_id?: string | null
+  created_at?: string | null
+  finished_at?: string | null
+}
+
+export interface BugFixTaskDetail extends BugFixTaskSummary {
+  summary?: string | null
+  source_analysis_task_id?: string | null
+  error?: string | null
+  started_at?: string | null
+  proposed_fixes: BugFixProposedFix[]
+  merge_requests: BugFixMergeRequest[]
+}
+
+export interface BugFixTaskListResponse {
+  success: boolean
+  data: BugFixTaskSummary[]
+  total: number
+  page: number
+  page_size: number
+  message?: string
+}
+
+export interface BugFixTaskDetailResponse {
+  success: boolean
+  data?: BugFixTaskDetail
+  message?: string
 }
 
 // Agent Skills
@@ -343,6 +451,7 @@ export interface UserProfile {
   email?: string | null
   is_active: boolean
   role?: UserRole | string
+  language?: string | null
   last_login_at?: string | null
   created_at: string
   updated_at: string
@@ -442,7 +551,7 @@ export interface MetricsChatActivitySummary {
 export interface MetricsLogActivitySummary {
   upload_count: number
   uploaded_bytes: number
-  counts_by_log_type: Record<string, number>
+  counts_by_project: Record<string, number>
   counts_by_status: Record<string, number>
   ai_analysis_counts: Record<string, number>
 }

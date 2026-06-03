@@ -8,16 +8,14 @@
           <span>404</span>
         </div>
         <p class="not-found-kicker">ROUTE NOT AVAILABLE</p>
-        <h1>这个页面暂时无法抵达</h1>
-        <p class="not-found-copy">
-          链接可能已经变更，或当前环境尚未开放该入口。你可以返回上一页，或回到 RavenAI 工作台继续处理日志、设备和重构包任务。
-        </p>
+        <h1>{{ t('notFound.title') }}</h1>
+        <p class="not-found-copy">{{ t('notFound.copy') }}</p>
         <div class="not-found-actions">
           <button type="button" class="rw-btn-secondary" @click="$router.back()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
               <path d="m15 18-6-6 6-6" />
             </svg>
-            <span>返回上页</span>
+            <span>{{ t('notFound.back') }}</span>
           </button>
           <button type="button" class="rw-btn-primary" @click="goHome">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -25,7 +23,7 @@
               <path d="M5 10.5V20h14v-9.5" />
               <path d="M9 20v-6h6v6" />
             </svg>
-            <span>回到工作台</span>
+            <span>{{ t('notFound.home') }}</span>
           </button>
         </div>
       </section>
@@ -35,13 +33,15 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'
 
+const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 
-const pageTitle = computed(() => (route.meta?.title as string) || '页面未找到')
+const pageTitle = computed(() => (route.meta?.title as string) || t('notFound.pageTitle'))
 
 const goHome = () => {
   router.push('/workbench')

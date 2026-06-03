@@ -9,7 +9,7 @@ celery_app = Celery(
     "log_staging_service",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["app.tasks.log_processing", "app.tasks.cleanup_tasks", "app.tasks.ai_analysis"]
+    include=["app.tasks.log_processing", "app.tasks.cleanup_tasks", "app.tasks.ai_analysis", "app.tasks.bug_fix"]
 )
 
 # 配置Celery
@@ -40,6 +40,7 @@ celery_app.conf.update(
 celery_app.conf.task_routes = {
     'app.tasks.log_processing.*': {'queue': 'log_processing'},
     'app.tasks.ai_analysis.*': {'queue': 'ai_analysis'},
+    'app.tasks.bug_fix.*': {'queue': 'bug_fix'},
     'app.tasks.cleanup_tasks.*': {'queue': 'maintenance'},
 }
 

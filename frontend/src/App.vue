@@ -1,13 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { ElConfigProvider } from 'element-plus'
 import { useRoute } from 'vue-router'
 import { useAppStore } from './stores/app'
+import { getElementLocale } from './i18n'
 import AppNotifications from './components/AppNotifications.vue'
 import AppLoading from './components/AppLoading.vue'
 import AIOrb from './components/AIOrb.vue'
 
 const appStore = useAppStore()
 const route = useRoute()
+
+// Element Plus 语言包随激活 locale 响应式切换。
+const elementLocale = computed(() => getElementLocale(appStore.locale))
 
 // Workbench routes share the WorkbenchLayout (sidebar + main pane).
 const workbenchRouteNames = new Set([
@@ -153,24 +158,26 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div id="app" class="min-h-screen bg-gray-50">
-    <!-- 主要内容区域 -->
-    <main
-      :class="mainClass"
-      :style="chatMainStyle"
-    >
-      <router-view />
-    </main>
-    
-    <!-- 全局通知 -->
-    <AppNotifications />
-    
-    <!-- 全局加载状态 -->
-    <AppLoading v-if="appStore.loading" />
-    
-    <!-- AI Assistant Orb -->
-    <AIOrb :visible="showAIOrb" />
-  </div>
+  <el-config-provider :locale="elementLocale">
+    <div id="app" class="min-h-screen bg-gray-50">
+      <!-- 主要内容区域 -->
+      <main
+        :class="mainClass"
+        :style="chatMainStyle"
+      >
+        <router-view />
+      </main>
+
+      <!-- 全局通知 -->
+      <AppNotifications />
+
+      <!-- 全局加载状态 -->
+      <AppLoading v-if="appStore.loading" />
+
+      <!-- AI Assistant Orb -->
+      <AIOrb :visible="showAIOrb" />
+    </div>
+  </el-config-provider>
 </template>
 
 <style>

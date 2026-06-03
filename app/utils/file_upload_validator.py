@@ -13,6 +13,8 @@ from app.exceptions import (
     FileSizeExceededError,
     ValidationError,
 )
+from app.i18n import DEFAULT
+from app.i18n.messages import t
 from app.tools.archive_tool import SUPPORTED_ARCHIVE_EXTS, check_archive_magic
 
 
@@ -35,102 +37,133 @@ class T04FileUploadValidator:
     def __init__(self):
         self.max_file_size = T04_MAX_FILE_SIZE
     
-    async def validate_upload_files(self, files: List[UploadFile]) -> Tuple[bool, str]:
+    async def validate_upload_files(
+        self, files: List[UploadFile], locale: str = DEFAULT
+    ) -> Tuple[bool, str]:
         """验证多个上传文件
-        
+
         Args:
             files: 上传的文件列表
-            
+            locale: 用于生成用户可见错误信息的语言代码
+
         Returns:
             Tuple[bool, str]: (是否全部有效, 错误信息)
         """
         if not files:
-            return False, "没有选择文件"
-        
+            return False, t("upload.no_file_selected", locale)
+
         # 验证每个文件
         for i, file in enumerate(files):
-            is_valid, error_msg = await self.validate_single_file(file)
+            is_valid, error_msg = await self.validate_single_file(file, locale)
             if not is_valid:
-                return False, f"文件 {i+1} ({file.filename}): {error_msg}"
-        
+                return False, t(
+                    "upload.file_invalid",
+                    locale,
+                    index=i + 1,
+                    filename=file.filename,
+                    error=error_msg,
+                )
+
         return True, ""
-    
-    async def validate_single_file(self, file: UploadFile) -> Tuple[bool, str]:
+
+    async def validate_single_file(
+        self, file: UploadFile, locale: str = DEFAULT
+    ) -> Tuple[bool, str]:
         """验证单个上传文件
-        
+
         Args:
             file: 上传的文件
-            
+            locale: 用于生成用户可见错误信息的语言代码
+
         Returns:
             Tuple[bool, str]: (是否有效, 错误信息)
         """
         try:
             # 1. 验证文件名
-            self._validate_filename(file.filename)
-            
+            self._validate_filename(file.filename, locale)
+
             # 2. 验证文件格式
-            self._validate_file_format(file.filename)
-            
+            self._validate_file_format(file.filename, locale)
+
             # 3. 验证文件大小
-            await self._validate_file_size(file)
-            
+            await self._validate_file_size(file, locale)
+
             # 4. 验证文件完整性（magic number检查）
-            await self._validate_file_integrity(file)
-            
+            await self._validate_file_integrity(file, locale)
+
             return True, ""
-            
+
         except Exception as e:
             return False, str(e)
-    
-    def _validate_filename(self, filename: str):
+
+    def _validate_filename(self, filename: str, locale: str = DEFAULT):
         """验证文件名安全性。"""
         if not filename:
-            raise ValidationError("文件名不能为空")
+            raise ValidationError(t("upload.filename_empty", locale))
 
         if len(filename) > 255:
-            raise ValidationError("文件名长度不能超过255个字符")
+            raise ValidationError(t("upload.filename_too_long", locale))
 
         if '..' in filename or '/' in filename or '\\' in filename:
-            raise ValidationError("文件名不能包含路径分隔符")
+            raise ValidationError(t("upload.filename_path_separator", locale))
 
         if filename.startswith('.'):
-            raise ValidationError("不支持隐藏文件")
+            raise ValidationError(t("upload.filename_hidden", locale))
 
         if not SAFE_FILENAME_PATTERN.match(filename):
             supported = ', '.join(sorted(SUPPORTED_ARCHIVE_EXTS))
             raise ValidationError(
-                f"文件名包含不安全的字符或格式不正确，支持的格式：{supported}"
+                t("upload.filename_unsafe", locale, supported=supported)
             )
 
-    def _validate_file_format(self, filename: str):
+    def _validate_file_format(self, filename: str, locale: str = DEFAULT):
         """验证文件格式是否在支持列表内。"""
         fn = filename.lower()
         suffixes = "".join(Path(fn).suffixes)
         if suffixes not in SUPPORTED_ARCHIVE_EXTS:
-            raise UnsupportedFileTypeError(
-                suffixes or (filename.split('.')[-1] if '.' in filename else 'unknown'),
-                sorted(SUPPORTED_ARCHIVE_EXTS),
+            file_type = suffixes or (
+                filename.split('.')[-1] if '.' in filename else 'unknown'
             )
-    
-    async def _validate_file_size(self, file: UploadFile):
+            supported = sorted(SUPPORTED_ARCHIVE_EXTS)
+            raise UnsupportedFileTypeError(
+                file_type,
+                supported,
+                message=t(
+                    "upload.unsupported_type",
+                    locale,
+                    file_type=file_type,
+                    supported=', '.join(supported),
+                ),
+            )
+
+    async def _validate_file_size(self, file: UploadFile, locale: str = DEFAULT):
         """验证文件大小（1GB限制）"""
         # 重置文件指针
         await file.seek(0)
-        
+
         # 读取文件内容计算大小
         content = await file.read()
         file_size = len(content)
-        
+
         # 重置文件指针
         await file.seek(0)
-        
+
         if file_size > self.max_file_size:
-            raise FileSizeExceededError(file_size, self.max_file_size)
-        
+            raise FileSizeExceededError(
+                file_size,
+                self.max_file_size,
+                message=t(
+                    "upload.size_exceeded",
+                    locale,
+                    size=f"{file_size / 1024 / 1024:.1f}",
+                    max=f"{self.max_file_size / 1024 / 1024:.1f}",
+                ),
+            )
+
         if file_size == 0:
-            raise ValidationError("文件不能为空")
-    
-    async def _validate_file_integrity(self, file: UploadFile):
+            raise ValidationError(t("upload.file_empty", locale))
+
+    async def _validate_file_integrity(self, file: UploadFile, locale: str = DEFAULT):
         """按文件扩展名校验 magic number。"""
         await file.seek(0)
         # 读取足够覆盖所有格式的 magic（tar 的 ustar 在偏移 257，加上 5 字节）
@@ -138,34 +171,37 @@ class T04FileUploadValidator:
         await file.seek(0)
 
         if len(header) < 2:
-            raise ValidationError("文件损坏：文件太小")
+            raise ValidationError(t("upload.file_too_small", locale))
 
         fn = file.filename or ""
         ext = "".join(Path(fn.lower()).suffixes)
         if not check_archive_magic(header, ext):
-            raise ValidationError(f"文件损坏：magic number 与扩展名 {ext!r} 不匹配")
+            raise ValidationError(
+                t("upload.magic_mismatch", locale, ext=repr(ext))
+            )
     
-    def determine_log_type_from_filename(self, filename: str) -> str:
-        """根据文件名判断日志类型
-        
+    def determine_project_code_from_filename(self, filename: str) -> Optional[str]:
+        """根据文件名推断项目代号
+
         Args:
             filename: 文件名
-            
+
         Returns:
-            str: 日志类型 ('stack', 'oam_antenna', 或 'full')
+            Optional[str]: 项目代号 ('stack' / 'oam_antenna' / 'full')，无法识别时为 None
         """
-        filename_lower = filename.lower()
-        
+        filename_lower = (filename or "").lower()
+
         # 检查是否为全量日志：同时包含stack和(oam或om)
         has_stack = 'stack' in filename_lower
         has_oam = 'oam' in filename_lower or 'om' in filename_lower
-        
+
         if has_stack and has_oam:
             return 'full'
         elif has_stack:
             return 'stack'
-        else:
+        elif has_oam:
             return 'oam_antenna'
+        return None
     
     def sanitize_filename(self, filename: str) -> str:
         """安全化文件名，保留原始扩展名。"""
@@ -197,7 +233,9 @@ class T04FileUploadValidator:
 
         return base_name + ext
     
-    async def calculate_file_checksum(self, file: UploadFile, algorithm: str = 'sha256') -> str:
+    async def calculate_file_checksum(
+        self, file: UploadFile, algorithm: str = 'sha256', locale: str = DEFAULT
+    ) -> str:
         """计算文件校验和
         
         Args:
@@ -218,7 +256,7 @@ class T04FileUploadValidator:
         elif algorithm.lower() == 'sha256':
             hasher = hashlib.sha256()
         else:
-            raise ValidationError(f"不支持的哈希算法: {algorithm}")
+            raise ValidationError(t("upload.unsupported_hash", locale, algorithm=algorithm))
         
         # 分块读取文件计算哈希
         chunk_size = 8192

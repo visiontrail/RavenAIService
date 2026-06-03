@@ -206,7 +206,7 @@ class LogActivitySummary(BaseModel):
 
     upload_count: int = 0
     uploaded_bytes: int = 0
-    counts_by_log_type: Dict[str, int] = Field(default_factory=dict)
+    counts_by_project: Dict[str, int] = Field(default_factory=dict)
     counts_by_status: Dict[str, int] = Field(default_factory=dict)
     ai_analysis_counts: Dict[str, int] = Field(default_factory=dict)
 

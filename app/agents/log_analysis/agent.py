@@ -371,6 +371,9 @@ def extract_recoverable_result_fields(text: str) -> Dict[str, Any]:
     }
     if isinstance(parsed.get("error_kind"), str) and parsed.get("error_kind"):
         recovered["error_kind"] = parsed["error_kind"]
+    requires_code_fix, proposed_fixes = _normalize_code_fix_signal(parsed)
+    recovered["requires_code_fix"] = requires_code_fix
+    recovered["proposed_fixes"] = proposed_fixes
     return recovered
 
 
@@ -381,6 +384,58 @@ def _normalize_question_type(value: Any) -> str:
     if isinstance(value, str) and value.strip().lower() in _VALID_QUESTION_TYPES:
         return value.strip().lower()
     return "other"
+
+
+def _normalize_proposed_fixes(value: Any) -> List[Dict[str, Any]]:
+    """Validate and normalize the ``proposed_fixes`` array from model output.
+
+    Keeps only well-formed entries (each needs non-empty ``title``,
+    ``description`` and ``rationale`` strings). Optional ``suspected_files`` /
+    ``suspected_symbols`` are coerced to lists of strings when present. Anything
+    malformed is dropped rather than raising, so a partially-broken array still
+    yields the usable entries.
+    """
+    if not isinstance(value, list):
+        return []
+    fixes: List[Dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("title")
+        description = item.get("description")
+        rationale = item.get("rationale")
+        if not (isinstance(title, str) and title.strip()):
+            continue
+        if not (isinstance(description, str) and description.strip()):
+            continue
+        if not (isinstance(rationale, str) and rationale.strip()):
+            continue
+        fix: Dict[str, Any] = {
+            "title": title.strip(),
+            "description": description.strip(),
+            "rationale": rationale.strip(),
+        }
+        for key in ("suspected_files", "suspected_symbols"):
+            raw = item.get(key)
+            if isinstance(raw, list):
+                cleaned = [str(x).strip() for x in raw if str(x).strip()]
+                if cleaned:
+                    fix[key] = cleaned
+        fixes.append(fix)
+    return fixes
+
+
+def _normalize_code_fix_signal(parsed: Dict[str, Any]) -> tuple[bool, List[Dict[str, Any]]]:
+    """Derive the (requires_code_fix, proposed_fixes) pair with safe defaults.
+
+    Legacy responses omit both fields; they default to ``False`` / ``[]`` so no
+    bug fix task is dispatched. ``requires_code_fix`` is only honored as ``True``
+    when there is at least one well-formed proposed fix, so a stray boolean
+    cannot trigger dispatch with nothing to act on.
+    """
+    proposed_fixes = _normalize_proposed_fixes(parsed.get("proposed_fixes"))
+    requires_code_fix = bool(parsed.get("requires_code_fix")) and bool(proposed_fixes)
+    return requires_code_fix, proposed_fixes
 
 
 def _strip_confidence_fields(value: Any) -> Any:
@@ -896,6 +951,8 @@ def _cancelled_result(
         "root_cause_hypotheses": [],
         "recommended_actions": [],
         "related_keywords": [],
+        "requires_code_fix": False,
+        "proposed_fixes": [],
         "tool_trace": tool_trace,
         "trace_events": trace_events,
         "trace_summary": trace_summary,
@@ -939,8 +996,7 @@ class LogAnalysisAgent:
                 "claude-agent-sdk is required. Install with: pip install claude-agent-sdk>=0.1"
             ) from exc
 
-        log_type = ctx.metadata.get("log_type")
-        system_prompt, user_prompt_template = get_prompts(log_type)
+        system_prompt, user_prompt_template = get_prompts(locale=ctx.locale)
         system_prompt += (
             "\n\n## 当前运行工作区\n"
             f"本次运行的当前工作目录是 `{ctx.temp_dir}`。"
@@ -990,7 +1046,7 @@ class LogAnalysisAgent:
             task_id=ctx.task_id,
             workspace_dir=ctx.temp_dir,
             question=ctx.metadata.get("question") or task_data.get("question", ""),
-            log_type=ctx.metadata.get("log_type") or task_data.get("log_type"),
+            project_code=(task_data.get("repo_info") or {}).get("project_code") if isinstance(task_data.get("repo_info"), dict) else None,
             hints=task_data.get("hints", ""),
         )
 
@@ -1059,6 +1115,13 @@ class LogAnalysisAgent:
             user_prompt += skill_activation_prompt
 
         setting_sources = ["project"] if materialized_skills else None
+
+        # Response-language directive last: an explicit final instruction is the
+        # most reliable lever on output language, decoupling the answer language
+        # from the (possibly mixed-language) log/source input.
+        from app.i18n.prompts import response_language_directive
+
+        system_prompt += "\n\n" + response_language_directive(ctx.locale)
 
         options = build_options(
             system_prompt=system_prompt,
@@ -1187,6 +1250,11 @@ class LogAnalysisAgent:
             "duration_seconds": round(duration, 2),
             "token_usage": state.token_usage,
             "loaded_skills": list(materialized_skills),
+            # Safe defaults for the bug-fix dispatch signal; overridden below
+            # for the success/recovered paths. Error/mismatch paths keep these
+            # defaults so no bug fix task is ever dispatched off a bad result.
+            "requires_code_fix": False,
+            "proposed_fixes": [],
         }
 
         if parsed is None:
@@ -1250,6 +1318,8 @@ class LogAnalysisAgent:
                     "related_keywords": recovered.get("related_keywords", []),
                     "parse_warning": "incomplete_json_recovered",
                     **common_extra,
+                    "requires_code_fix": recovered.get("requires_code_fix", False),
+                    "proposed_fixes": recovered.get("proposed_fixes", []),
                 }
 
             logger.warning("LogAnalysisAgent: result JSON missing required fields, schema_mismatch")
@@ -1283,6 +1353,8 @@ class LogAnalysisAgent:
         if not answer and summary:
             answer = summary
 
+        requires_code_fix, proposed_fixes = _normalize_code_fix_signal(parsed)
+
         return {
             "engine": "claude-agent-sdk",
             "model": effective_model,
@@ -1299,6 +1371,8 @@ class LogAnalysisAgent:
             "recommended_actions": parsed.get("recommended_actions", []),
             "related_keywords": parsed.get("related_keywords", []),
             **common_extra,
+            "requires_code_fix": requires_code_fix,
+            "proposed_fixes": proposed_fixes,
         }
 
     def run_sync(
@@ -1334,6 +1408,8 @@ class LogAnalysisAgent:
                 "root_cause_hypotheses": [],
                 "recommended_actions": [],
                 "related_keywords": [],
+                "requires_code_fix": False,
+                "proposed_fixes": [],
                 "tool_trace": [],
                 "trace_events": [],
                 "trace_summary": {

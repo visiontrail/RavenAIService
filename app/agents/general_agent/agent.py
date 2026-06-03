@@ -163,6 +163,9 @@ class GeneralAgentContext:
     system_prompt_override: Optional[str] = None
     run_id: Optional[str] = None
     owner_scope: Optional[str] = None
+    # 本轮活动语言，仅用于追加回复语言指令（general agent 暂无每语言提示词正文，
+    # 沿用单一 ``SYSTEM_PROMPT`` 常量）。缺省时回退系统默认语言。
+    locale: Optional[str] = None
 
 
 def _format_history_block(history: List[Dict[str, str]], max_turns: int) -> str:
@@ -251,6 +254,12 @@ class GeneralAgent:
         }
 
         system_prompt = _compose_system_prompt(SYSTEM_PROMPT, ctx.system_prompt_override)
+        # 末尾追加直白的回复语言指令，使回复语言随活动语言切换。
+        from app.i18n.prompts import response_language_directive
+
+        system_prompt = _compose_system_prompt(
+            system_prompt, response_language_directive(ctx.locale)
+        )
 
         max_history_turns = int(getattr(settings, "anthropic_max_history_turns", 10))
         history_block = _format_history_block(ctx.history, max_history_turns)

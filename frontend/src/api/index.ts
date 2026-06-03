@@ -1,6 +1,7 @@
 import axios from 'axios'
 import type { ApiResponse, LogRecord } from '@/types'
 import type { LogListData, DownloadInfo } from '@/types'
+import { getActiveLocale, LOCALE_HEADER } from '@/i18n/runtime'
 
 const normalizeBase = (value?: string | null) => (value ? value.replace(/\/+$/, '') : '')
 const defaultBase = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8085'
@@ -17,6 +18,13 @@ const computedBaseURL =
 
 export const API_BASE_URL = computedBaseURL
 
+// 共享请求拦截器：在每个请求上携带当前激活语言（X-App-Locale），
+// 供后端解析 locale。各 axios 实例都应注册此拦截器。
+export const localeHeaderInterceptor = <T extends { headers: any }>(config: T): T => {
+  config.headers?.set?.(LOCALE_HEADER, getActiveLocale())
+  return config
+}
+
 // 创建axios实例
 const api = axios.create({
   baseURL: computedBaseURL,
@@ -28,10 +36,7 @@ const api = axios.create({
 
 // 请求拦截器
 api.interceptors.request.use(
-  (config) => {
-    // 可以在这里添加认证token等
-    return config
-  },
+  localeHeaderInterceptor,
   (error) => {
     return Promise.reject(error)
   }
@@ -54,7 +59,7 @@ export const logApi = {
   getLogList: (params: {
     page?: number
     per_page?: number
-    log_type?: string
+    project_id?: number
     status?: string
     start_time?: string
     end_time?: string

@@ -54,8 +54,8 @@
               </div>
             </div>
             <div class="title-tags">
-              <span :class="['rw-pill', logTypePill(logStore.currentLog.log_type)]">
-                {{ getLogTypeLabel(logStore.currentLog.log_type) }}
+              <span :class="['rw-pill', projectPill(logStore.currentLog)]">
+                {{ getProjectLabel(logStore.currentLog) }}
               </span>
               <span :class="['rw-pill', statusPill(logStore.currentLog.status)]">
                 <span v-if="logStore.currentLog.status === 'processing'" class="rw-pill-dot"></span>
@@ -102,7 +102,7 @@
 
             <div
               class="info-item col-span-all"
-              v-if="(logStore.currentLog.log_type === 'stack' || logStore.currentLog.log_type === 'full') && logStore.currentLog.status === 'processing'"
+              v-if="(logStore.currentLog.project_code === 'stack' || logStore.currentLog.project_code === 'full') && logStore.currentLog.status === 'processing'"
             >
               <label>处理进度</label>
               <el-progress
@@ -455,6 +455,7 @@ import {
 } from '../utils'
 import { logApi, projectRepoApi } from '../api'
 import type { ProjectRepoOption } from '../api'
+import type { LogRecord } from '../types'
 import { API_BASE_URL } from '../api'
 import AIAnalysisResult from '../components/AIAnalysisResult.vue'
 import AgentTraceStream from '../components/AgentTraceStream.vue'
@@ -784,32 +785,14 @@ const renderedManualAnalysis = computed(() => {
   return renderMarkdown(content, { wrapperClass: 'markdown-content', cleanXml: true })
 })
 
-// 日志类型对应的 pill 样式
-const logTypePill = (logType?: string) => {
-  switch (logType) {
-    case 'stack':
-      return 'rw-pill-success'
-    case 'oam_antenna':
-      return 'rw-pill-info'
-    case 'full':
-      return 'rw-pill-warning'
-    default:
-      return 'rw-pill-neutral'
-  }
+// 项目对应的 pill 样式
+const projectPill = (log?: LogRecord | null) => {
+  return log?.project_id ? 'rw-pill-success' : 'rw-pill-neutral'
 }
 
-// 获取日志类型标签文本
-const getLogTypeLabel = (logType?: string) => {
-  switch (logType) {
-    case 'stack':
-      return '协议栈日志'
-    case 'oam_antenna':
-      return 'OAM天线日志'
-    case 'full':
-      return '全量日志'
-    default:
-      return '未知类型'
-  }
+// 获取项目标签文本
+const getProjectLabel = (log?: LogRecord | null) => {
+  return log?.project_name || '未分类'
 }
 
 // 状态对应的 pill 样式
@@ -1277,7 +1260,7 @@ const handleExportPDF = async () => {
       ['文件名', log.filename || ''],
       ['原始文件名', log.original_filename || ''],
       ['文件大小', formatFileSize(log.file_size)],
-      ['日志类型', getLogTypeLabel(log.log_type)],
+      ['所属项目', getProjectLabel(log)],
       ['处理状态', getStatusLabel(log.status)],
       ['创建时间', formatDateTime(log.created_at)],
       ['下载次数', String(log.download_count ?? 0)],

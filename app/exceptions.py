@@ -62,9 +62,9 @@ class FileUploadError(LogServiceException):
 
 class FileSizeExceededError(LogServiceException):
     """文件大小超限异常"""
-    def __init__(self, file_size: int, max_size: int):
+    def __init__(self, file_size: int, max_size: int, message: str = None):
         super().__init__(
-            message=f"文件大小超出限制: {file_size / 1024 / 1024:.1f}MB > {max_size / 1024 / 1024:.1f}MB",
+            message=message or f"文件大小超出限制: {file_size / 1024 / 1024:.1f}MB > {max_size / 1024 / 1024:.1f}MB",
             error_code="FILE_SIZE_EXCEEDED",
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
         )
@@ -72,9 +72,9 @@ class FileSizeExceededError(LogServiceException):
 
 class UnsupportedFileTypeError(LogServiceException):
     """不支持的文件类型异常"""
-    def __init__(self, file_type: str, supported_types: list):
+    def __init__(self, file_type: str, supported_types: list, message: str = None):
         super().__init__(
-            message=f"不支持的文件类型: {file_type}，支持的类型: {', '.join(supported_types)}",
+            message=message or f"不支持的文件类型: {file_type}，支持的类型: {', '.join(supported_types)}",
             error_code="UNSUPPORTED_FILE_TYPE",
             status_code=status.HTTP_400_BAD_REQUEST
         )

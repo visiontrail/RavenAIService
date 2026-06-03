@@ -61,6 +61,13 @@ class User(Base, TimestampMixin):
         nullable=False,
         comment="用户角色（user/admin）",
     )
+    language: Mapped[str] = mapped_column(
+        String(8),
+        default="zh",
+        server_default="zh",
+        nullable=False,
+        comment="界面与AI语言偏好（zh/en）",
+    )
     last_login_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime,
         nullable=True,
@@ -294,6 +301,7 @@ class UserProfile(BaseModel):
     email: Optional[str] = None
     is_active: bool = True
     role: str = "user"
+    language: str = "zh"
     last_login_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime

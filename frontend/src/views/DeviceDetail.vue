@@ -1,14 +1,14 @@
 <template>
   <div class="rw-page">
-    <WorkbenchTopbar title="设备详情" :meta="device?.name || deviceId">
+    <WorkbenchTopbar :title="t('device.detailTitle')" :meta="device?.name || deviceId">
       <template #actions>
         <button type="button" class="rw-btn-secondary" @click="goBack">
           <el-icon><ArrowLeft /></el-icon>
-          <span>返回列表</span>
+          <span>{{ t('device.backToList') }}</span>
         </button>
         <button type="button" class="rw-btn-primary" :disabled="loading" @click="fetchDevice">
           <el-icon><Refresh /></el-icon>
-          <span>{{ loading ? '刷新中…' : '刷新' }}</span>
+          <span>{{ loading ? t('device.refreshing') : t('common.refresh') }}</span>
         </button>
       </template>
     </WorkbenchTopbar>
@@ -18,7 +18,7 @@
         <div class="detail-title-block">
           <div class="detail-kicker">DEVICE NODE</div>
           <h1>{{ device?.name || deviceId }}</h1>
-          <p>设备 ID：{{ deviceId }}</p>
+          <p>{{ t('device.deviceId', { id: deviceId }) }}</p>
         </div>
         <div class="detail-badges">
           <span class="rw-pill" :class="pillVariant(device?.status)">
@@ -30,9 +30,9 @@
 
       <section class="rw-card heartbeat-card" v-if="device">
         <div class="heartbeat-main">
-          <span class="heartbeat-label">最近心跳</span>
+          <span class="heartbeat-label">{{ t('device.colLastSeen') }}</span>
           <span class="heartbeat-value">
-            最近心跳：{{ device?.last_seen ? formatDateTime(device.last_seen) : '未上报' }}
+            {{ t('device.colLastSeen') }}：{{ device?.last_seen ? formatDateTime(device.last_seen) : t('device.notReported') }}
             <span v-if="device?.last_seen" class="heartbeat-relative">
               ({{ formatRelativeTime(device.last_seen) }})
             </span>
@@ -43,19 +43,19 @@
       <el-row :gutter="16" v-if="device">
         <el-col :span="8" :xs="24">
           <el-card shadow="never" class="rw-card info-card">
-            <div class="card-title">基础信息</div>
+            <div class="card-title">{{ t('device.basicInfo') }}</div>
             <div class="info-item">
-              <span class="label">主机</span>
+              <span class="label">{{ t('device.colHost') }}</span>
               <span class="value">{{ device.host || '-' }}</span>
             </div>
             <div class="info-item">
-              <span class="label">状态</span>
+              <span class="label">{{ t('device.colStatus') }}</span>
               <span class="rw-pill" :class="pillVariant(device.status)">
                 {{ statusText(device.status) }}
               </span>
             </div>
             <div class="info-item">
-              <span class="label">可用模型</span>
+              <span class="label">{{ t('device.colModels') }}</span>
               <div class="value models">
                 <span v-for="model in device.models" :key="model" class="rw-chip">
                   {{ model }}
@@ -69,12 +69,12 @@
         <el-col :span="16" :xs="24">
           <el-card shadow="never" class="rw-card info-card">
             <div class="card-title flex items-center justify-between">
-              <span>MCP 能力</span>
-              <span class="rw-chip">共 {{ mcpServers.length }} 个 MCP 服务</span>
+              <span>{{ t('device.mcpCapability') }}</span>
+              <span class="rw-chip">{{ t('device.mcpCount', { count: mcpServers.length }) }}</span>
             </div>
 
             <div v-if="mcpServers.length === 0" class="empty-capability">
-              暂无上报的 MCP 能力
+              {{ t('device.noMcp') }}
             </div>
 
             <el-collapse v-else accordion>
@@ -93,29 +93,29 @@
                 </div>
 
                 <div class="section">
-                  <div class="section-title">工具 ({{ server.tools?.length || 0 }})</div>
+                  <div class="section-title">{{ t('device.toolsSection', { count: server.tools?.length || 0 }) }}</div>
                   <div v-if="server.tools?.length" class="chips">
                     <el-tag v-for="tool in server.tools" :key="tool.name" effect="plain" class="chip">
                       <div class="chip-title">{{ tool.name }}</div>
                       <div class="chip-desc" v-if="tool.description">{{ tool.description }}</div>
                     </el-tag>
                   </div>
-                  <div v-else class="text-gray-400 text-sm">未上报工具</div>
+                  <div v-else class="text-gray-400 text-sm">{{ t('device.noTools') }}</div>
                 </div>
 
                 <div class="section">
-                  <div class="section-title">提示词 ({{ server.prompts?.length || 0 }})</div>
+                  <div class="section-title">{{ t('device.promptsSection', { count: server.prompts?.length || 0 }) }}</div>
                   <div v-if="server.prompts?.length" class="chips">
                     <el-tag v-for="prompt in server.prompts" :key="prompt.name" effect="plain" class="chip">
                       <div class="chip-title">{{ prompt.name }}</div>
                       <div class="chip-desc" v-if="prompt.description">{{ prompt.description }}</div>
                     </el-tag>
                   </div>
-                  <div v-else class="text-gray-400 text-sm">未上报提示词</div>
+                  <div v-else class="text-gray-400 text-sm">{{ t('device.noPrompts') }}</div>
                 </div>
 
                 <div class="section">
-                  <div class="section-title">资源 ({{ server.resources?.length || 0 }})</div>
+                  <div class="section-title">{{ t('device.resourcesSection', { count: server.resources?.length || 0 }) }}</div>
                   <div v-if="server.resources?.length" class="chips">
                     <el-tag
                       v-for="resource in server.resources"
@@ -127,7 +127,7 @@
                       <div class="chip-desc" v-if="resource.description">{{ resource.description }}</div>
                     </el-tag>
                   </div>
-                  <div v-else class="text-gray-400 text-sm">未上报资源</div>
+                  <div v-else class="text-gray-400 text-sm">{{ t('device.noResources') }}</div>
                 </div>
               </el-collapse-item>
             </el-collapse>
@@ -135,14 +135,15 @@
         </el-col>
       </el-row>
 
-      <el-empty v-else-if="!loading" description="未找到设备信息" />
-      <div v-if="loading" class="loading-state">加载中...</div>
+      <el-empty v-else-if="!loading" :description="t('device.notFound')" />
+      <div v-if="loading" class="loading-state">{{ t('device.loadingText') }}</div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -151,13 +152,15 @@ import { formatDateTime, formatRelativeTime } from '@/utils'
 import type { DeviceInfo } from '@/types'
 import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'
 
+const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const deviceId = computed(() => (route.params.id as string) || '')
 const device = ref<DeviceInfo | null>(null)
 const loading = ref(false)
 
-const statusText = (status?: DeviceInfo['status']) => (status === 'online' ? '在线' : '离线')
+const statusText = (status?: DeviceInfo['status']) =>
+  status === 'online' ? t('device.status.online') : t('device.status.offline')
 const pillVariant = (status?: DeviceInfo['status']) => (status === 'online' ? 'is-success' : 'is-neutral')
 
 const mcpServers = computed(() => {
@@ -175,11 +178,11 @@ const fetchDevice = async () => {
     const res = await deviceLinkApi.getDevice(deviceId.value)
     device.value = res
     if (!res) {
-      ElMessage.warning('未找到设备信息')
+      ElMessage.warning(t('device.notFound'))
     }
   } catch (error: any) {
     console.error('Failed to load device detail:', error)
-    ElMessage.error(error?.message || '加载设备详情失败')
+    ElMessage.error(error?.message || t('device.loadDetailFail'))
   } finally {
     loading.value = false
   }

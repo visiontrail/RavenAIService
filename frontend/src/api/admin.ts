@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { API_BASE_URL } from './index'
+import { API_BASE_URL, localeHeaderInterceptor } from './index'
 import type {
   AdminAuthData,
   AgentSkill,
@@ -10,6 +10,7 @@ import type {
   MetricsUserDetail,
   MetricsUserListData,
   PromptsConfigData,
+  ProjectMember,
   ProjectRepo,
   ProjectRepoPayload,
   SkillFileContent,
@@ -59,7 +60,7 @@ adminClient.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
-  return config
+  return localeHeaderInterceptor(config)
 })
 
 adminClient.interceptors.response.use(
@@ -135,6 +136,18 @@ export const adminApi = {
 
   testProjectRepoConnection: (repoId: number): Promise<ApiResponse<TestConnectionResult>> =>
     adminClient.post(`/admin/project-repos/${repoId}/test-connection`),
+
+  listProjectRepoMembers: (repoId: number): Promise<ApiResponse<ProjectMember[]>> =>
+    adminClient.get(`/admin/project-repos/${repoId}/members`),
+
+  addProjectRepoMember: (
+    repoId: number,
+    userId: string
+  ): Promise<ApiResponse<ProjectMember[]>> =>
+    adminClient.post(`/admin/project-repos/${repoId}/members`, { user_id: userId }),
+
+  removeProjectRepoMember: (repoId: number, userId: string): Promise<void> =>
+    adminClient.delete(`/admin/project-repos/${repoId}/members/${userId}`),
 
   listSkillAgents: (): Promise<ApiResponse<AgentSkillAgentInfo[]>> =>
     adminClient.get('/admin/agents'),

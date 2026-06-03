@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+
+const { t } = useI18n()
 import {
   getRavenPackageDetail,
   ravenBaseUrl,
@@ -78,7 +81,8 @@ const isPatchPackage = (value?: RavenPackage | null) => {
   return flag === true || flag === 'true'
 }
 
-const humanizePatch = (value?: RavenPackage | null) => (isPatchPackage(value) ? '补丁包' : '正式包')
+const humanizePatch = (value?: RavenPackage | null) =>
+  isPatchPackage(value) ? t('raven.patch') : t('raven.release')
 
 const packageTypeText = (type?: string) => {
   const map: Record<string, string> = {
@@ -86,10 +90,10 @@ const packageTypeText = (type?: string) => {
     'lingxi-07a': 'LingXi-07A',
     'ka-tx': 'KaTx',
     'ka-rx': 'KaRx',
-    config: '配置包',
+    config: t('raven.packageType.config'),
     'lingxi-06-thrid': 'LingXi-06-TRD',
   }
-  return map[type || ''] || type || '未知类型'
+  return map[type || ''] || type || t('raven.unknownType')
 }
 
 const packageTypePillClass = (type?: string) => {
@@ -105,7 +109,7 @@ const packageTypePillClass = (type?: string) => {
 }
 
 const renderedDescription = computed(() =>
-  renderMarkdown(pkg.value?.metadata?.description || '暂无描述', { cleanXml: true })
+  renderMarkdown(pkg.value?.metadata?.description || t('raven.noDesc'), { cleanXml: true })
 )
 
 const tags = computed(() => normalizeTags(pkg.value?.metadata?.tags))
@@ -113,7 +117,7 @@ const components = computed(() => normalizeComponents(pkg.value?.metadata?.compo
 
 const fetchDetail = async () => {
   if (!packageId.value) {
-    errorMessage.value = '未找到包 ID'
+    errorMessage.value = t('raven.pkgIdNotFound')
     return
   }
   loading.value = true
@@ -124,11 +128,11 @@ const fetchDetail = async () => {
     if (data?.success && data.data) {
       pkg.value = data.data
     } else {
-      throw new Error(data?.message || '获取包详情失败')
+      throw new Error(data?.message || t('raven.fetchDetailFail'))
     }
   } catch (error: any) {
     console.error(error)
-    errorMessage.value = error.message || '加载包详情失败'
+    errorMessage.value = error.message || t('raven.loadDetailFail')
     ElMessage.error(errorMessage.value)
   } finally {
     loading.value = false
@@ -147,23 +151,23 @@ const copyShareLink = async (link: string) => {
   if (!link) return
   const ok = await copyToClipboard(link)
   if (ok) {
-    ElMessage.success('链接已复制')
+    ElMessage.success(t('raven.copyLinkSuccess'))
   } else {
-    ElMessage.warning('复制失败，请手动复制')
+    ElMessage.warning(t('raven.copyLinkFail'))
   }
 }
 
 const copyRebuildPrompt = async () => {
   if (!pkg.value || !downloadLink.value) {
-    ElMessage.warning('暂无可用的下载链接')
+    ElMessage.warning(t('raven.noDownloadLink'))
     return
   }
   const prompt = `请你帮忙下载${downloadLink.value}并上传到设备ftp，然后请向基带处理机发送重构包下载请求后，启动卫星升级流程`
   const ok = await copyToClipboard(prompt)
   if (ok) {
-    ElMessage.success('提示词已复制')
+    ElMessage.success(t('raven.copyPromptSuccess'))
   } else {
-    ElMessage.warning('复制失败，请手动复制')
+    ElMessage.warning(t('raven.copyLinkFail'))
   }
 }
 
@@ -172,7 +176,7 @@ const downloadPackage = (value: RavenPackage) => {
   const filename =
     value.name && value.name.includes('.') ? value.name : value.name ? `${value.name}.tgz` : 'package.tgz'
   downloadFileByUrl(url, filename)
-  ElMessage.success('下载开始')
+  ElMessage.success(t('raven.downloadStart'))
 }
 
 onMounted(fetchDetail)
@@ -187,12 +191,12 @@ watch(
   <div class="rw-page package-detail-page">
     <header class="rw-topbar">
       <div class="rw-topbar-left">
-        <button class="back-btn" @click="goBack" title="返回">
+        <button class="back-btn" @click="goBack" :title="t('common.back')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M15 18l-6-6 6-6" />
           </svg>
         </button>
-        <span class="rw-crumb">重构包详情</span>
+        <span class="rw-crumb">{{ t('raven.detailTitle') }}</span>
         <span v-if="pkg" class="rw-crumb-meta">· {{ pkg.name }}</span>
       </div>
       <div class="rw-topbar-right">
@@ -201,13 +205,13 @@ watch(
             <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
           </svg>
-          <span>复制详情链接</span>
+          <span>{{ t('raven.copyDetailLink') }}</span>
         </button>
         <button v-if="pkg" class="rw-btn-secondary" @click="copyShareLink(downloadLink)">
-          <span>复制下载链接</span>
+          <span>{{ t('raven.copyDownloadLink') }}</span>
         </button>
         <button v-if="pkg" class="rw-btn-secondary" @click="copyRebuildPrompt">
-          <span>复制重构提示词</span>
+          <span>{{ t('raven.copyRebuildPrompt') }}</span>
         </button>
         <button v-if="pkg" class="rw-btn-primary" @click="downloadPackage(pkg)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -215,7 +219,7 @@ watch(
             <polyline points="7 10 12 15 17 10" />
             <line x1="12" y1="15" x2="12" y2="3" />
           </svg>
-          <span>下载</span>
+          <span>{{ t('common.download') }}</span>
         </button>
       </div>
     </header>
@@ -243,7 +247,7 @@ watch(
               <span class="rw-pill" :class="packageTypePillClass(pkg.packageType)">
                 {{ packageTypeText(pkg.packageType) }}
               </span>
-              <span class="rw-pill rw-pill-neutral rw-pill-mono">v{{ pkg.version || '未知' }}</span>
+              <span class="rw-pill rw-pill-neutral rw-pill-mono">v{{ pkg.version || t('raven.unknown') }}</span>
               <span class="rw-pill" :class="isPatchPackage(pkg) ? 'rw-pill-warning' : 'rw-pill-success'">
                 {{ humanizePatch(pkg) }}
               </span>
@@ -254,23 +258,23 @@ watch(
         <!-- 基本信息 -->
         <section class="rw-card">
           <div class="card-head">
-            <h2 class="card-title">基本信息</h2>
+            <h2 class="card-title">{{ t('raven.basicInfo') }}</h2>
           </div>
           <div class="info-grid">
             <div class="info-item">
-              <label>包名</label>
+              <label>{{ t('raven.labelName') }}</label>
               <div class="info-value strong">{{ pkg.name }}</div>
             </div>
             <div class="info-item">
-              <label>版本</label>
-              <div class="info-value mono">v{{ pkg.version || '未知' }}</div>
+              <label>{{ t('raven.labelVersion') }}</label>
+              <div class="info-value mono">v{{ pkg.version || t('raven.unknown') }}</div>
             </div>
             <div class="info-item">
-              <label>文件大小</label>
+              <label>{{ t('raven.labelSize') }}</label>
               <div class="info-value strong">{{ formatFileSize(pkg.size) }}</div>
             </div>
             <div class="info-item">
-              <label>包类型</label>
+              <label>{{ t('raven.labelPackageType') }}</label>
               <div>
                 <span class="rw-pill" :class="packageTypePillClass(pkg.packageType)">
                   {{ packageTypeText(pkg.packageType) }}
@@ -278,7 +282,7 @@ watch(
               </div>
             </div>
             <div class="info-item">
-              <label>包形式</label>
+              <label>{{ t('raven.labelPatchType') }}</label>
               <div>
                 <span class="rw-pill" :class="isPatchPackage(pkg) ? 'rw-pill-warning' : 'rw-pill-success'">
                   {{ humanizePatch(pkg) }}
@@ -286,19 +290,19 @@ watch(
               </div>
             </div>
             <div class="info-item">
-              <label>创建时间</label>
+              <label>{{ t('raven.labelCreatedAt') }}</label>
               <div class="info-value mono">{{ formatDateTime(pkg.createdAt) }}</div>
             </div>
             <div class="info-item col-span-all">
-              <label>包 ID</label>
+              <label>{{ t('raven.labelId') }}</label>
               <div class="code-box">{{ pkg.id }}</div>
             </div>
             <div class="info-item col-span-all">
-              <label>存储路径</label>
+              <label>{{ t('raven.labelPath') }}</label>
               <div class="code-box">{{ pkg.path || '-' }}</div>
             </div>
             <div class="info-item col-span-all" v-if="pkg.metadata?.sha256">
-              <label>文件校验和 (SHA-256)</label>
+              <label>{{ t('raven.labelSha256') }}</label>
               <div class="code-box">{{ pkg.metadata.sha256 }}</div>
             </div>
           </div>
@@ -307,7 +311,7 @@ watch(
         <!-- 描述 -->
         <section class="rw-card">
           <div class="card-head">
-            <h2 class="card-title">描述</h2>
+            <h2 class="card-title">{{ t('raven.descSection') }}</h2>
           </div>
           <div class="rw-markdown" v-html="renderedDescription" />
         </section>
@@ -315,22 +319,22 @@ watch(
         <!-- 标签 -->
         <section class="rw-card">
           <div class="card-head">
-            <h2 class="card-title">标签</h2>
-            <span v-if="tags.length" class="card-subtitle">共 {{ tags.length }} 个</span>
+            <h2 class="card-title">{{ t('raven.tagsSection') }}</h2>
+            <span v-if="tags.length" class="card-subtitle">{{ t('raven.totalCount', { count: tags.length }) }}</span>
           </div>
           <div class="pill-group">
             <span v-for="tag in tags" :key="tag" class="rw-pill rw-pill-neutral">
               {{ tag }}
             </span>
-            <span v-if="!tags.length" class="empty-inline">暂无标签</span>
+            <span v-if="!tags.length" class="empty-inline">{{ t('raven.noTags') }}</span>
           </div>
         </section>
 
         <!-- 组件 -->
         <section class="rw-card">
           <div class="card-head">
-            <h2 class="card-title">组件</h2>
-            <span v-if="components.length" class="card-subtitle">共 {{ components.length }} 个</span>
+            <h2 class="card-title">{{ t('raven.componentsSection') }}</h2>
+            <span v-if="components.length" class="card-subtitle">{{ t('raven.totalCount', { count: components.length }) }}</span>
           </div>
           <div class="pill-group">
             <span
@@ -340,28 +344,28 @@ watch(
             >
               {{ comp.name }}<span v-if="comp.version" class="rw-pill-sub"> · {{ comp.version }}</span>
             </span>
-            <span v-if="!components.length" class="empty-inline">暂无组件</span>
+            <span v-if="!components.length" class="empty-inline">{{ t('raven.noComponents') }}</span>
           </div>
         </section>
 
         <!-- 操作 -->
         <section class="rw-card">
           <div class="card-head">
-            <h2 class="card-title">操作</h2>
+            <h2 class="card-title">{{ t('common.actions') }}</h2>
           </div>
           <div class="actions-grid">
-            <button class="rw-btn-primary" @click="downloadPackage(pkg)">下载重构包</button>
-            <button class="rw-btn-secondary" @click="copyShareLink(shareLink)">复制详情链接</button>
-            <button class="rw-btn-secondary" @click="copyShareLink(downloadLink)">复制下载链接</button>
-            <button class="rw-btn-secondary" @click="copyRebuildPrompt">复制重构提示词</button>
+            <button class="rw-btn-primary" @click="downloadPackage(pkg)">{{ t('raven.downloadPkg') }}</button>
+            <button class="rw-btn-secondary" @click="copyShareLink(shareLink)">{{ t('raven.copyDetailLink') }}</button>
+            <button class="rw-btn-secondary" @click="copyShareLink(downloadLink)">{{ t('raven.copyDownloadLink') }}</button>
+            <button class="rw-btn-secondary" @click="copyRebuildPrompt">{{ t('raven.copyRebuildPrompt') }}</button>
           </div>
         </section>
       </template>
 
       <div v-else-if="!loading" class="not-found">
-        <el-result icon="warning" title="包不存在" sub-title="请检查包 ID 是否正确，或包可能已被删除">
+        <el-result icon="warning" :title="t('raven.pkgNotFound')" :sub-title="t('raven.pkgNotFoundHint')">
           <template #extra>
-            <button class="rw-btn-primary" @click="$router.push({ name: 'RavenManager' })">返回列表</button>
+            <button class="rw-btn-primary" @click="$router.push({ name: 'RavenManager' })">{{ t('raven.backToList') }}</button>
           </template>
         </el-result>
       </div>

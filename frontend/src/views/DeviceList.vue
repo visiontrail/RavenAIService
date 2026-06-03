@@ -1,6 +1,6 @@
 <template>
   <div class="rw-page">
-    <WorkbenchTopbar title="设备机柜" :meta="`在线 ${onlineCount} / ${devices.length}`">
+    <WorkbenchTopbar :title="t('device.listTitle')" :meta="t('device.listMeta', { online: onlineCount, total: devices.length })">
       <template #actions>
         <span class="rw-meta">{{ lastUpdatedLabel }}</span>
         <button
@@ -8,13 +8,13 @@
           class="rw-toggle"
           :class="{ 'is-active': autoRefreshEnabled }"
           :aria-pressed="autoRefreshEnabled"
-          title="每 15 秒自动刷新一次"
+          :title="t('device.autoRefreshHint')"
           @click="autoRefreshEnabled = !autoRefreshEnabled"
         >
           <span class="rw-toggle-track">
             <span class="rw-toggle-dot" />
           </span>
-          <span class="rw-toggle-label">自动刷新</span>
+          <span class="rw-toggle-label">{{ t('device.autoRefresh') }}</span>
         </button>
         <button
           type="button"
@@ -28,16 +28,16 @@
             <path d="M21 12a9 9 0 0 1-15.5 6.4L3 16" />
             <path d="M3 21v-5h5" />
           </svg>
-          <span>{{ loading ? '刷新中…' : '刷新' }}</span>
+          <span>{{ loading ? t('device.refreshing') : t('common.refresh') }}</span>
         </button>
       </template>
     </WorkbenchTopbar>
 
     <div class="rw-page-scroll">
       <div class="rw-stat-row">
-        <span class="rw-pill rw-pill-success">在线 {{ onlineCount }}</span>
-        <span class="rw-pill rw-pill-neutral">总计 {{ devices.length }}</span>
-        <span class="rw-meta rw-stat-meta">自动刷新间隔：{{ refreshIntervalMs / 1000 }}s</span>
+        <span class="rw-pill rw-pill-success">{{ t('device.onlineCount', { count: onlineCount }) }}</span>
+        <span class="rw-pill rw-pill-neutral">{{ t('device.totalCount', { count: devices.length }) }}</span>
+        <span class="rw-meta rw-stat-meta">{{ t('device.refreshInterval', { interval: refreshIntervalMs / 1000 }) }}</span>
       </div>
 
       <section class="rw-card desktop-only">
@@ -48,9 +48,9 @@
             :border="false"
             :stripe="false"
             class="rw-table"
-            :empty-text="loading ? '加载中...' : '暂无设备连接'"
+            :empty-text="loading ? t('device.loadingText') : t('device.empty')"
           >
-            <el-table-column prop="name" label="设备" min-width="220">
+            <el-table-column prop="name" :label="t('device.colDevice')" min-width="220">
               <template #default="{ row }">
                 <router-link :to="`/devices/${row.id}`" class="name-link">
                   <span class="name-link-title">{{ row.name || row.id }}</span>
@@ -59,13 +59,13 @@
               </template>
             </el-table-column>
 
-            <el-table-column prop="host" label="主机" min-width="180">
+            <el-table-column prop="host" :label="t('device.colHost')" min-width="180">
               <template #default="{ row }">
                 <span class="cell-host">{{ row.host || '-' }}</span>
               </template>
             </el-table-column>
 
-            <el-table-column prop="status" label="状态" width="120">
+            <el-table-column prop="status" :label="t('device.colStatus')" width="120">
               <template #default="{ row }">
                 <span class="rw-pill" :class="pillVariant(row.status)">
                   {{ statusText(row.status) }}
@@ -73,11 +73,11 @@
               </template>
             </el-table-column>
 
-            <el-table-column prop="last_seen" label="最近心跳" min-width="200">
+            <el-table-column prop="last_seen" :label="t('device.colLastSeen')" min-width="200">
               <template #default="{ row }">
                 <div class="cell-stacked">
                   <span class="cell-primary">
-                    {{ row.last_seen ? formatDateTime(row.last_seen) : '未上报' }}
+                    {{ row.last_seen ? formatDateTime(row.last_seen) : t('device.notReported') }}
                   </span>
                   <span v-if="row.last_seen" class="cell-sub">
                     {{ formatRelativeTime(row.last_seen) }}
@@ -86,7 +86,7 @@
               </template>
             </el-table-column>
 
-            <el-table-column prop="models" label="可用模型" min-width="240">
+            <el-table-column prop="models" :label="t('device.colModels')" min-width="240">
               <template #default="{ row }">
                 <div class="rw-chip-row">
                   <span
@@ -103,7 +103,7 @@
               </template>
             </el-table-column>
 
-            <el-table-column label="操作" width="220" fixed="right">
+            <el-table-column :label="t('common.actions')" width="220" fixed="right">
               <template #default="{ row }">
                 <div class="row-actions">
                   <button
@@ -122,10 +122,10 @@
                   </button>
                   <el-popconfirm
                     width="220"
-                    confirm-button-text="删除"
-                    cancel-button-text="取消"
+                    :confirm-button-text="t('common.delete')"
+                    :cancel-button-text="t('common.cancel')"
                     confirm-button-type="danger"
-                    title="确定删除该设备记录？"
+                    :title="t('device.deleteConfirm')"
                     @confirm="handleDelete(row)"
                   >
                     <template #reference>
@@ -134,7 +134,7 @@
                         class="rw-btn-danger"
                         :disabled="deletingId === row.id"
                       >
-                        {{ deletingId === row.id ? '删除中…' : '删除' }}
+                        {{ deletingId === row.id ? t('device.deleting') : t('common.delete') }}
                       </button>
                     </template>
                   </el-popconfirm>
@@ -161,23 +161,23 @@
             </div>
             <div class="mobile-device-id">ID: {{ row.id }}</div>
             <div class="mobile-device-meta">
-              <span class="mobile-meta-label">主机</span>
+              <span class="mobile-meta-label">{{ t('device.colHost') }}</span>
               <span>{{ row.host || '-' }}</span>
             </div>
             <div class="mobile-device-meta">
-              <span class="mobile-meta-label">最近心跳</span>
+              <span class="mobile-meta-label">{{ t('device.colLastSeen') }}</span>
               <span>
-                {{ row.last_seen ? `${formatRelativeTime(row.last_seen)} · ${formatDateTime(row.last_seen)}` : '未上报' }}
+                {{ row.last_seen ? `${formatRelativeTime(row.last_seen)} · ${formatDateTime(row.last_seen)}` : t('device.notReported') }}
               </span>
             </div>
             <div class="mobile-device-meta">
-              <span class="mobile-meta-label">可用模型</span>
-              <span>{{ row.models?.length || 0 }} 个</span>
+              <span class="mobile-meta-label">{{ t('device.colModels') }}</span>
+              <span>{{ t('device.modelCount', { count: row.models?.length || 0 }) }}</span>
             </div>
-            <div class="mobile-device-link">查看详情 →</div>
+            <div class="mobile-device-link">{{ t('device.viewDetail') }}</div>
           </router-link>
         </div>
-        <el-empty v-else :description="loading ? '加载中...' : '暂无设备连接'" />
+        <el-empty v-else :description="loading ? t('device.loadingText') : t('device.empty')" />
       </section>
     </div>
   </div>
@@ -185,11 +185,14 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'
 import { deviceLinkApi } from '@/api/deviceLink'
 import { formatDateTime, formatRelativeTime } from '@/utils'
 import type { DeviceInfo } from '@/types'
+
+const { t } = useI18n()
 
 const devices = ref<DeviceInfo[]>([])
 const loading = ref(false)
@@ -203,12 +206,13 @@ let timer: number | null = null
 const onlineCount = computed(() => devices.value.filter((d) => d.status === 'online').length)
 
 const lastUpdatedLabel = computed(() => {
-  if (!lastUpdated.value) return '等待刷新'
+  if (!lastUpdated.value) return t('device.waitingRefresh')
   const isoString = lastUpdated.value.toISOString()
   return `${formatRelativeTime(isoString)} · ${formatDateTime(isoString)}`
 })
 
-const statusText = (status: DeviceInfo['status']) => (status === 'online' ? '在线' : '离线')
+const statusText = (status: DeviceInfo['status']) =>
+  status === 'online' ? t('device.status.online') : t('device.status.offline')
 const statusTagType = (status: DeviceInfo['status']) => (status === 'online' ? 'success' : 'info')
 const pillVariant = (status: DeviceInfo['status']) =>
   statusTagType(status) === 'success' ? 'rw-pill-success' : 'rw-pill-neutral'
@@ -238,7 +242,7 @@ const fetchDevices = async (silent = false) => {
   } catch (error: any) {
     console.error('Failed to load devices:', error)
     if (!silent) {
-      ElMessage.error(error?.message || '加载设备列表失败')
+      ElMessage.error(error?.message || t('device.loadListFail'))
     }
   } finally {
     if (!silent) loading.value = false
@@ -251,10 +255,10 @@ const handlePing = async (device: DeviceInfo) => {
     const updated = await deviceLinkApi.pingDevice(device.id)
     upsertDevice(updated)
     lastUpdated.value = new Date()
-    ElMessage.success(`已向 ${device.name || device.id} 发送 ping`)
+    ElMessage.success(t('device.pingSuccess', { name: device.name || device.id }))
   } catch (error: any) {
     console.error('Ping device failed:', error)
-    const detail = error?.response?.data?.detail || error?.message || 'Ping 失败'
+    const detail = error?.response?.data?.detail || error?.message || t('device.pingFail')
     ElMessage.error(detail)
   } finally {
     pingingId.value = null
@@ -267,10 +271,10 @@ const handleDelete = async (device: DeviceInfo) => {
     await deviceLinkApi.deleteDevice(device.id)
     removeDevice(device.id)
     lastUpdated.value = new Date()
-    ElMessage.success(`已删除 ${device.name || device.id}`)
+    ElMessage.success(t('device.deleteSuccess', { name: device.name || device.id }))
   } catch (error: any) {
     console.error('Delete device failed:', error)
-    const detail = error?.response?.data?.detail || error?.message || '删除失败'
+    const detail = error?.response?.data?.detail || error?.message || t('device.deleteFail')
     ElMessage.error(detail)
   } finally {
     deletingId.value = null

@@ -229,11 +229,10 @@ def process_protocol_stack_log(self, log_id: str) -> dict:
         log_record.processing_started_at = datetime.utcnow()
         log_record.progress = 0.0
         
-        # 保持原有的日志类型（可能是STACK、FULL等）
-        # 不再强制设置为STACK类型
-        
+        # 保持原有的项目归属，不在处理时修改
+
         db_session.commit()
-        logger.info(f"LogProcessingTask - 任务状态已更新为处理中: 任务ID={task_id}, 日志类型={log_record.log_type}")
+        logger.info(f"LogProcessingTask - 任务状态已更新为处理中: 任务ID={task_id}, 项目ID={log_record.project_id}")
         
         # 检查文件是否存在
         if not os.path.exists(log_record.file_path):

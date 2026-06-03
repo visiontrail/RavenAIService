@@ -16,7 +16,7 @@ export const useLogStore = defineStore('logs', () => {
   })
   const filters = ref({
     status: '',
-    log_type: '',
+    project_id: '' as number | '',
     search: '',
     start_time: '',
     end_time: '',
@@ -31,7 +31,9 @@ export const useLogStore = defineStore('logs', () => {
       const query = {
         page: params.page ?? pagination.value.page,
         per_page: params.per_page ?? pagination.value.per_page,
-        log_type: (params.log_type ?? filters.value.log_type) || undefined,
+        project_id: ((params.project_id ?? filters.value.project_id) === '' || (params.project_id ?? filters.value.project_id) === undefined)
+          ? undefined
+          : Number(params.project_id ?? filters.value.project_id),
         status: (params.status ?? filters.value.status) || undefined,
         start_time: (params.start_time ?? filters.value.start_time) || undefined,
         end_time: (params.end_time ?? filters.value.end_time) || undefined,

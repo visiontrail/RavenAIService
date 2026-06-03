@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
@@ -11,6 +12,7 @@ import brandIcon from '@/assets/icon.png'
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 const appStore = useAppStore()
 const userStore = useUserStore()
 const sessionStore = useChatSessionStore()
@@ -60,7 +62,15 @@ const showUserMenu = ref(false)
 const showSearchBox = ref(false)
 const hoverSessionId = ref<string | null>(null)
 const openRowMenuId = ref<string | null>(null)
-const lang = ref<'zh' | 'en'>('zh')
+
+// 当前语言来自 app store（启动期由 localStorage/浏览器/profile 解析）。
+const activeLocale = computed(() => appStore.locale)
+const setLanguage = (next: 'zh' | 'en') => {
+  if (appStore.locale === next) return
+  // setLocale 负责更新 store + localStorage + vue-i18n/Element Plus，
+  // 已登录时同步 PATCH profile。
+  appStore.setLocale(next)
+}
 
 const editingSessionId = ref<string | null>(null)
 const editingSessionTitle = ref('')
@@ -100,6 +110,11 @@ const openAuthModal = (mode: 'login' | 'register' = 'login') => {
 const goToAdminConsole = () => {
   showUserMenu.value = false
   router.push('/admin')
+}
+
+const goToBugFixes = () => {
+  showUserMenu.value = false
+  router.push('/bug-fixes')
 }
 
 const navItems = computed(() => ([
@@ -214,6 +229,8 @@ const handleKey = (e: KeyboardEvent) => {
 
 const bootstrapUser = async () => {
   await userStore.bootstrap()
+  // 启动期语言解析：已登录时优先采用 profile 偏好
+  appStore.initLocale()
   if (isLoggedIn.value) {
     try { await sessionStore.load() } catch { /* notification handled below */ }
   }
@@ -330,6 +347,8 @@ const handleUserLogin = async () => {
     if (!resp?.success || !resp.data) throw new Error(resp?.message || '登录失败')
     userStore.setToken(resp.data.token)
     userStore.setProfile(resp.data.user)
+    // 登录后 profile 语言偏好优先于本地 localStorage
+    appStore.initLocale()
     appStore.showNotification({ title: '登录成功', type: 'success' })
     closeAuthModal()
     await sessionStore.load()
@@ -368,6 +387,8 @@ const handleUserRegister = async () => {
     if (!resp?.success || !resp.data) throw new Error(resp?.message || '注册失败')
     userStore.setToken(resp.data.token)
     userStore.setProfile(resp.data.user)
+    // 新用户：把当前匿名期选择的语言写入新 profile
+    appStore.setLocale(appStore.locale)
     appStore.showNotification({ title: '注册成功', type: 'success' })
     closeAuthModal()
     await sessionStore.load()
@@ -395,7 +416,7 @@ const handleUserLogout = () => {
 </script>
 
 <template>
-  <div class="raven-workbench" :class="{ 'lang-en': lang === 'en' }">
+  <div class="raven-workbench" :class="{ 'lang-en': activeLocale === 'en' }">
     <!-- Sidebar -->
     <aside class="rw-sidebar">
       <!-- Brand -->
@@ -580,13 +601,22 @@ const handleUserLogout = () => {
               后台管理
               <span class="rw-kbd-right">/admin</span>
             </button>
-            <div v-if="isAdmin" class="rw-menu-divider"/>
+            <button
+              v-if="isLoggedIn"
+              class="rw-user-menu-item"
+              @click="goToBugFixes"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
+              Bug 修复
+              <span class="rw-kbd-right">/bug-fixes</span>
+            </button>
+            <div v-if="isLoggedIn || isAdmin" class="rw-menu-divider"/>
             <div class="rw-menu-section">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
-              <span>语言</span>
-              <span class="rw-lang-pill">
-                <span class="rw-lang-opt" :class="{ active: lang === 'zh' }" @click="lang = 'zh'">中</span>
-                <span class="rw-lang-opt" :class="{ active: lang === 'en' }" @click="lang = 'en'">EN</span>
+              <span>{{ t('language.label') }}</span>
+              <span class="rw-lang-pill" role="group" :aria-label="t('language.switchTo')">
+                <span class="rw-lang-opt" :class="{ active: activeLocale === 'zh' }" @click="setLanguage('zh')">中</span>
+                <span class="rw-lang-opt" :class="{ active: activeLocale === 'en' }" @click="setLanguage('en')">EN</span>
               </span>
             </div>
             <button class="rw-user-menu-item" @click="showUserMenu = false">

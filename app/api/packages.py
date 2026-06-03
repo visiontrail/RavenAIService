@@ -27,7 +27,8 @@ from fastapi import (
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
-from app.api.users import get_optional_user
+from app.api.users import get_optional_user, get_request_locale
+from app.i18n.messages import t
 from app.services.raven_package_service import raven_package_service
 
 logger = logging.getLogger(__name__)
@@ -133,15 +134,23 @@ def _metadata_fields(
     return fields
 
 
-def _parse_package_info(packageInfo: Optional[str]) -> Optional[dict[str, Any]]:
+def _parse_package_info(
+    packageInfo: Optional[str], locale: str = "zh"
+) -> Optional[dict[str, Any]]:
     if not packageInfo:
         return None
     try:
         parsed = json.loads(packageInfo)
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"无效的 packageInfo JSON: {exc}") from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=t("package.invalid_package_info_json", locale, error=exc),
+        ) from exc
     if not isinstance(parsed, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="packageInfo 必须是 JSON object")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=t("package.package_info_not_object", locale),
+        )
     return parsed
 
 
@@ -199,24 +208,38 @@ async def package_stats() -> dict[str, Any]:
 
 
 @router.post("/packages/scan")
-async def scan_packages() -> dict[str, Any]:
+async def scan_packages(
+    locale: str = Depends(get_request_locale),
+) -> dict[str, Any]:
     added = raven_package_service.scan_uploads_directory()
-    return _ok({"added": added}, message="扫描完成")
+    return _ok({"added": added}, message=t("package.scan_complete", locale))
 
 
 @router.get("/packages/{package_id}")
-async def get_package(package_id: str) -> dict[str, Any]:
+async def get_package(
+    package_id: str,
+    locale: str = Depends(get_request_locale),
+) -> dict[str, Any]:
     package = raven_package_service.get_package(package_id)
     if not package:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="包不存在")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=t("package.not_found", locale),
+        )
     return _ok(package)
 
 
 @router.delete("/packages/{package_id}")
-async def delete_package(package_id: str) -> dict[str, Any]:
+async def delete_package(
+    package_id: str,
+    locale: str = Depends(get_request_locale),
+) -> dict[str, Any]:
     if not raven_package_service.delete_package(package_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="包不存在或删除失败")
-    return _ok(message="包删除成功")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=t("package.not_found_or_delete_failed", locale),
+        )
+    return _ok(message=t("package.delete_success", locale))
 
 
 @router.post("/upload")
@@ -229,6 +252,7 @@ async def upload_package(
     isPatch: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
     components: Optional[str] = Form(None),
+    locale: str = Depends(get_request_locale),
 ) -> dict[str, Any]:
     file_path, size, sha256 = await raven_package_service.store_upload(file)
     try:
@@ -237,24 +261,30 @@ async def upload_package(
             size=size,
             sha256=sha256,
             metadata_fields=_metadata_fields(version, packageType, description, isPatch, tags, components),
-            package_info=_parse_package_info(packageInfo),
+            package_info=_parse_package_info(packageInfo, locale),
         )
         saved = raven_package_service.add_or_update_package(package)
         await _record_package_activity(
             action="upload", package_type=saved.get("packageType")
         )
-        return _ok(message="包上传成功", package=saved)
+        return _ok(message=t("package.upload_success", locale), package=saved)
     except Exception:
         raven_package_service.cleanup_file(file_path)
         raise
 
 
 @router.post("/upload/batch")
-async def upload_package_batch(request: Request) -> dict[str, Any]:
+async def upload_package_batch(
+    request: Request,
+    locale: str = Depends(get_request_locale),
+) -> dict[str, Any]:
     form = await request.form()
     files = list(form.getlist("file")) or list(form.getlist("files"))
     if not files:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="没有上传文件")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=t("package.no_files_uploaded", locale),
+        )
 
     fields = _metadata_fields(
         version=form.get("version"),
@@ -281,7 +311,7 @@ async def upload_package_batch(request: Request) -> dict[str, Any]:
             errors.append({"filename": getattr(upload, "filename", ""), "error": str(exc)})
 
     return _ok(
-        message=f"成功上传 {len(results)} 个包",
+        message=t("package.batch_upload_success", locale, count=len(results)),
         packages=results,
         errors=errors or None,
     )
@@ -303,14 +333,23 @@ async def download_stats() -> dict[str, Any]:
 
 
 @router.post("/download/batch")
-async def download_batch(request: Request) -> FileResponse:
+async def download_batch(
+    request: Request,
+    locale: str = Depends(get_request_locale),
+) -> FileResponse:
     body = await request.json()
     package_ids = body.get("packageIds")
     if not isinstance(package_ids, list) or not package_ids:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Package IDs are required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=t("package.ids_required", locale),
+        )
     packages = [pkg for pkg_id in package_ids if (pkg := raven_package_service.get_package(str(pkg_id)))]
     if not packages:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No valid packages found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=t("package.no_valid_packages", locale),
+        )
     zip_path = raven_package_service.build_zip(packages)
     filename = f"packages-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
     await _record_package_activity(
@@ -325,18 +364,25 @@ async def download_batch(request: Request) -> FileResponse:
 
 
 @router.get("/download/type/{package_type}")
-async def download_by_type(package_type: str, version: Optional[str] = None) -> FileResponse:
+async def download_by_type(
+    package_type: str,
+    version: Optional[str] = None,
+    locale: str = Depends(get_request_locale),
+) -> FileResponse:
     packages = [
         pkg for pkg in raven_package_service.get_all_packages()
         if pkg.get("packageType") == package_type and (not version or pkg.get("version") == version)
     ]
     if not packages:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No packages found for the specified criteria")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=t("package.none_for_criteria", locale),
+        )
     await _record_package_activity(
         action="download_type", package_type=package_type, count=len(packages)
     )
     if len(packages) == 1:
-        return _package_file_response(packages[0])
+        return _package_file_response(packages[0], locale)
     zip_path = raven_package_service.build_zip(packages, prefix=f"{package_type}-packages")
     filename = f"{package_type}-packages-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
     return FileResponse(
@@ -348,21 +394,30 @@ async def download_by_type(package_type: str, version: Optional[str] = None) -> 
 
 
 @router.get("/download/{package_id}")
-async def download_package(package_id: str) -> FileResponse:
+async def download_package(
+    package_id: str,
+    locale: str = Depends(get_request_locale),
+) -> FileResponse:
     package = raven_package_service.get_package(package_id)
     if not package:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Package not found")
-    response = _package_file_response(package)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=t("package.not_found", locale),
+        )
+    response = _package_file_response(package, locale)
     await _record_package_activity(
         action="download", package_type=package.get("packageType")
     )
     return response
 
 
-def _package_file_response(package: dict[str, Any]) -> FileResponse:
+def _package_file_response(package: dict[str, Any], locale: str = "zh") -> FileResponse:
     file_path = raven_package_service.package_file(package)
     if not file_path.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Package file not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=t("package.file_not_found", locale),
+        )
     return FileResponse(
         str(file_path),
         filename=str(package.get("name") or Path(file_path).name),
@@ -370,7 +425,7 @@ def _package_file_response(package: dict[str, Any]) -> FileResponse:
     )
 
 
-def _validate_search_query(raw: Any) -> str:
+def _validate_search_query(raw: Any, locale: str = "zh") -> str:
     """Coerce + validate the agent-search ``query`` field.
 
     Raises HTTPException 400 when:
@@ -381,18 +436,18 @@ def _validate_search_query(raw: Any) -> str:
     if not isinstance(raw, str):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="query is required and must be a string",
+            detail=t("package.query_required", locale),
         )
     text = raw.strip()
     if not text:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="query must not be empty",
+            detail=t("package.query_empty", locale),
         )
     if len(text) > PACKAGE_SEARCH_QUERY_MAX_LEN:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"query exceeds {PACKAGE_SEARCH_QUERY_MAX_LEN}-character limit",
+            detail=t("package.query_too_long", locale, max=PACKAGE_SEARCH_QUERY_MAX_LEN),
         )
     return text
 
@@ -411,26 +466,33 @@ async def agent_search_packages(request: Request, current_user=Depends(get_optio
       payload as the non-stream response.
     """
     from app.agents.package_search.agent import PackageSearchAgent
+    from app.i18n.deps import LOCALE_HEADER, resolve_locale
+
+    locale = resolve_locale(
+        header_locale=request.headers.get(LOCALE_HEADER),
+        accept_language=request.headers.get("Accept-Language"),
+        user=current_user,
+    )
 
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="request body must be a JSON object",
+            detail=t("package.body_not_object", locale),
         )
-    query = _validate_search_query(body.get("query"))
+    query = _validate_search_query(body.get("query"), locale)
     session_id = body.get("session_id")
     if session_id is not None and not isinstance(session_id, str):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="session_id must be a string",
+            detail=t("package.session_id_not_string", locale),
         )
     use_stream = bool(body.get("stream") or False)
 
     agent = PackageSearchAgent()
 
     if not use_stream:
-        result = await agent.run(query, session_id=session_id)
+        result = await agent.run(query, session_id=session_id, locale=locale)
         await _record_package_search_metrics(result, current_user)
         return {
             "answer": result["answer"],
@@ -445,7 +507,7 @@ async def agent_search_packages(request: Request, current_user=Depends(get_optio
     async def _sse():
         final_event: Optional[dict] = None
         try:
-            async for event in agent.stream(query, session_id=session_id):
+            async for event in agent.stream(query, session_id=session_id, locale=locale):
                 if isinstance(event, dict) and event.get("type") == "final":
                     final_event = event
                 yield f"event: {event.get('type', 'message')}\n"

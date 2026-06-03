@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from app.i18n.prompts import select_localized_body
+
 _PROMPTS_CACHE: Dict[str, Any] = {}
 
 
@@ -65,23 +67,21 @@ def _scene_config(scene_hint: Optional[str]) -> Dict[str, Any]:
     return agent_config.get(_DEFAULT_SCENE) or {}
 
 
-def get_prompts(scene_hint: Optional[str] = None) -> Tuple[str, str]:
+def get_prompts(
+    scene_hint: Optional[str] = None,
+    locale: Optional[str] = None,
+) -> Tuple[str, str]:
     """返回 ``(system_prompt, user_prompt_template)``。
 
-    缺失/为空时返回空字符串；DeviceAgent.run 会在拼接 prompt 时把空模板退化为
-    "直接附加历史 + 当前消息"。
+    ``locale`` 选择每种语言的提示词正文，缺失某语言时回退到默认语言（``zh``）；
+    旧的扁平字符串正文原样返回。缺失/为空时返回空字符串；DeviceAgent.run
+    会在拼接 prompt 时把空模板退化为"直接附加历史 + 当前消息"。
     """
     variant = _scene_config(scene_hint)
-    system_prompt = variant.get("system_prompt") or ""
-    user_prompt_template = variant.get("user_prompt_template") or ""
-    if isinstance(system_prompt, str):
-        system_prompt = system_prompt.strip()
-    else:
-        system_prompt = ""
-    if isinstance(user_prompt_template, str):
-        user_prompt_template = user_prompt_template.strip()
-    else:
-        user_prompt_template = ""
+    system_prompt = select_localized_body(variant.get("system_prompt"), locale)
+    user_prompt_template = select_localized_body(
+        variant.get("user_prompt_template"), locale
+    )
     return system_prompt, user_prompt_template
 
 

@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { API_BASE_URL } from '@/api'
+import { API_BASE_URL, localeHeaderInterceptor } from '@/api'
 
 export type ChatPermissionDecision = 'allow' | 'deny'
 
@@ -92,6 +92,8 @@ const chatApi = axios.create({
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 })
+
+chatApi.interceptors.request.use(localeHeaderInterceptor)
 
 /**
  * Submit the user's HITL decision for a DeviceAgent tool-permission request.

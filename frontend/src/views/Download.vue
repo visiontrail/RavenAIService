@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { releasesPublicApi } from '@/api/releases'
 import PlatformBrandIcon from '@/components/icons/PlatformBrandIcon.vue'
 import type { ReleaseItem } from '@/types'
 import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'
+
+const { t, locale } = useI18n()
 
 const loading = ref(true)
 const releases = ref<ReleaseItem[]>([])
@@ -18,7 +21,6 @@ const PLATFORM_CONFIG = {
     badge: 'bg-orange-100 text-orange-700',
     btn: 'bg-orange-500 hover:bg-orange-600',
     btnLight: 'border-orange-200 text-orange-600 hover:bg-orange-50',
-    description: '适用于主流 Linux 发行版（Ubuntu、Debian、CentOS、Arch 等）',
     fileHint: '.tar.gz / .deb / .rpm',
   },
   macos: {
@@ -29,7 +31,6 @@ const PLATFORM_CONFIG = {
     badge: 'bg-blue-100 text-blue-700',
     btn: 'bg-blue-500 hover:bg-blue-600',
     btnLight: 'border-blue-200 text-blue-600 hover:bg-blue-50',
-    description: '适用于 macOS 10.14 (Mojave) 及更高版本，支持 Intel 与 Apple Silicon',
     fileHint: '.dmg / .pkg',
   },
   windows: {
@@ -40,7 +41,6 @@ const PLATFORM_CONFIG = {
     badge: 'bg-sky-100 text-sky-700',
     btn: 'bg-sky-500 hover:bg-sky-600',
     btnLight: 'border-sky-200 text-sky-600 hover:bg-sky-50',
-    description: '适用于 Windows 10 及更高版本，64 位系统',
     fileHint: '.exe / .msi',
   },
 } as const
@@ -66,7 +66,8 @@ const formatBytes = (bytes: number): string => {
 
 const formatDate = (value: string): string => {
   try {
-    return new Date(value).toLocaleDateString('zh-CN', {
+    const dateLocale = locale.value === 'zh' ? 'zh-CN' : 'en-US'
+    return new Date(value).toLocaleDateString(dateLocale, {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
@@ -93,7 +94,7 @@ const fetchReleases = async () => {
       releases.value = resp.data || []
     }
   } catch (err: any) {
-    error.value = '加载失败，请稍后重试'
+    error.value = t('download.loadError')
   } finally {
     loading.value = false
   }
@@ -112,7 +113,7 @@ onMounted(() => fetchReleases())
 
 <template>
   <div class="rw-page">
-    <WorkbenchTopbar title="下载客户端" :meta="hasAnyRelease ? `${releases.length} 个发布物` : 'Release Center'">
+    <WorkbenchTopbar :title="t('download.pageTitle')" :meta="hasAnyRelease ? t('download.releases', { count: releases.length }) : 'Release Center'">
       <template #actions>
         <button type="button" class="rw-btn-secondary" :disabled="loading" @click="fetchReleases">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -121,7 +122,7 @@ onMounted(() => fetchReleases())
             <path d="M21 12a9 9 0 0 1-15.5 6.4L3 16" />
             <path d="M3 21v-5h5" />
           </svg>
-          <span>{{ loading ? '同步中…' : '刷新' }}</span>
+          <span>{{ loading ? t('download.syncing') : t('common.refresh') }}</span>
         </button>
       </template>
     </WorkbenchTopbar>
@@ -133,20 +134,20 @@ onMounted(() => fetchReleases())
           <div class="container mx-auto px-4 py-16 text-center">
             <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-50 border border-blue-100 text-blue-600 text-xs font-semibold mb-6">
               <span class="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></span>
-              正式发布版
+              {{ t('download.officialRelease') }}
             </div>
             <h1 class="text-4xl sm:text-5xl font-bold text-slate-900 mb-4 leading-tight">
-              下载 Raven
-              <span class="bg-gradient-to-r from-blue-600 to-cyan-500 bg-clip-text text-transparent">客户端</span>
+              {{ t('download.heroTitle') }}
+              <span class="bg-gradient-to-r from-blue-600 to-cyan-500 bg-clip-text text-transparent">{{ t('download.heroTitleHighlight') }}</span>
             </h1>
             <p class="text-lg text-slate-500 max-w-lg mx-auto mb-8">
-              智能测试平台桌面客户端，支持 Linux、macOS 和 Windows，随时随地进行日志分析与设备协同。
+              {{ t('download.heroText') }}
             </p>
             <div v-if="loading" class="flex items-center justify-center gap-2 text-slate-400 text-sm">
               <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
                 <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2.5" stroke-dasharray="15 45" />
               </svg>
-              正在获取最新版本…
+              {{ t('download.fetchingLatest') }}
             </div>
           </div>
         </section>
@@ -155,7 +156,7 @@ onMounted(() => fetchReleases())
         <section class="container mx-auto px-4 pb-16 max-w-5xl">
           <div v-if="error" class="text-center py-16 text-slate-400">
             <p class="text-base">{{ error }}</p>
-            <button class="mt-4 text-sm text-blue-600 hover:underline" @click="fetchReleases">重试</button>
+            <button class="mt-4 text-sm text-blue-600 hover:underline" @click="fetchReleases">{{ t('download.retry') }}</button>
           </div>
 
           <div v-else-if="!loading && !hasAnyRelease" class="text-center py-20">
@@ -164,8 +165,8 @@ onMounted(() => fetchReleases())
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
               </svg>
             </div>
-            <h3 class="text-lg font-semibold text-slate-700 mb-1">暂无发布版本</h3>
-            <p class="text-sm text-slate-400">请关注官方渠道获取最新版本信息</p>
+            <h3 class="text-lg font-semibold text-slate-700 mb-1">{{ t('download.noReleases') }}</h3>
+            <p class="text-sm text-slate-400">{{ t('download.noReleasesHint') }}</p>
           </div>
 
           <div v-else class="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -197,12 +198,12 @@ onMounted(() => fetchReleases())
 
               <!-- Description -->
               <p class="text-xs text-slate-500 leading-relaxed mb-5">
-                {{ PLATFORM_CONFIG[platform].description }}
+                {{ t(`download.platforms.${platform}.description`) }}
               </p>
 
               <!-- No release state -->
               <div v-if="!detailGroups[platform].length" class="mt-auto text-center py-4">
-                <p class="text-sm text-slate-400">暂未发布</p>
+                <p class="text-sm text-slate-400">{{ t('download.notPublished') }}</p>
               </div>
 
               <!-- Latest release -->
@@ -221,7 +222,7 @@ onMounted(() => fetchReleases())
                     :class="PLATFORM_CONFIG[platform].btn"
                     @click="handleDownload(detailGroups[platform][0])"
                   >
-                    立即下载
+                    {{ t('download.downloadNow') }}
                   </button>
                   <button
                     v-if="detailGroups[platform].length > 1"
@@ -229,7 +230,7 @@ onMounted(() => fetchReleases())
                     :class="PLATFORM_CONFIG[platform].btnLight"
                     @click="toggleHistory(platform)"
                   >
-                    {{ selectedPlatform === platform ? '收起' : `查看历史版本 (${detailGroups[platform].length - 1})` }}
+                    {{ selectedPlatform === platform ? t('download.collapse') : t('download.viewHistory', { count: detailGroups[platform].length - 1 }) }}
                   </button>
                 </div>
 
@@ -252,7 +253,7 @@ onMounted(() => fetchReleases())
                       :class="PLATFORM_CONFIG[platform].btnLight"
                       @click="handleDownload(item)"
                     >
-                      下载
+                      {{ t('common.download') }}
                     </button>
                   </div>
                 </div>
@@ -269,8 +270,8 @@ onMounted(() => fetchReleases())
                 </svg>
               </div>
               <div>
-                <p class="text-sm font-semibold text-slate-800">安全可信</p>
-                <p class="text-xs text-slate-500 mt-0.5">所有安装包由内部构建系统统一发布</p>
+                <p class="text-sm font-semibold text-slate-800">{{ t('download.info.secure.title') }}</p>
+                <p class="text-xs text-slate-500 mt-0.5">{{ t('download.info.secure.desc') }}</p>
               </div>
             </div>
             <div class="info-strip-item flex items-start gap-3 p-4 rounded-xl bg-white border border-slate-100 shadow-sm">
@@ -280,8 +281,8 @@ onMounted(() => fetchReleases())
                 </svg>
               </div>
               <div>
-                <p class="text-sm font-semibold text-slate-800">持续更新</p>
-                <p class="text-xs text-slate-500 mt-0.5">功能迭代与 Bug 修复定期跟进</p>
+                <p class="text-sm font-semibold text-slate-800">{{ t('download.info.updates.title') }}</p>
+                <p class="text-xs text-slate-500 mt-0.5">{{ t('download.info.updates.desc') }}</p>
               </div>
             </div>
             <div class="info-strip-item flex items-start gap-3 p-4 rounded-xl bg-white border border-slate-100 shadow-sm">
@@ -291,8 +292,8 @@ onMounted(() => fetchReleases())
                 </svg>
               </div>
               <div>
-                <p class="text-sm font-semibold text-slate-800">技术支持</p>
-                <p class="text-xs text-slate-500 mt-0.5">遇到问题可联系内部技术团队</p>
+                <p class="text-sm font-semibold text-slate-800">{{ t('download.info.support.title') }}</p>
+                <p class="text-xs text-slate-500 mt-0.5">{{ t('download.info.support.desc') }}</p>
               </div>
             </div>
           </div>

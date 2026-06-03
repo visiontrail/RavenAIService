@@ -150,7 +150,7 @@ class ProjectExpertAgent:
                 "claude-agent-sdk is required. Install with: pip install claude-agent-sdk>=0.1"
             ) from exc
 
-        system_prompt, user_prompt_template = get_prompts()
+        system_prompt, user_prompt_template = get_prompts(locale=ctx.locale)
         system_prompt += (
             "\n\n## 当前运行工作区\n"
             f"本次运行的当前工作目录是 `{ctx.temp_dir}`。"
@@ -235,6 +235,12 @@ class ProjectExpertAgent:
             user_prompt += skill_activation_prompt
 
         setting_sources = ["project"] if materialized_skills else None
+
+        # Append the blunt response-language directive last so the answer
+        # language is decoupled from the (possibly Chinese) source code/input.
+        from app.i18n.prompts import response_language_directive
+
+        system_prompt += "\n\n" + response_language_directive(ctx.locale)
 
         options = build_options(
             system_prompt=system_prompt,

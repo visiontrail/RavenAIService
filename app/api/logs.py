@@ -20,13 +20,17 @@ from fastapi.security import HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import get_db
+from app.api.users import get_request_locale
+from app.i18n.messages import t
 
 from app.models.log import (
     LogUploadRequest, LogUploadResponse, LogListRequest, LogListResponse,
     LogDetailResponse, LogDeleteResponse, BatchDeleteRequest, BatchDeleteResponse,
-    BatchDownloadRequest, BatchDownloadResponse, LogType, LogLevel, LogStatus,
+    BatchDownloadRequest, BatchDownloadResponse, LogLevel, LogStatus,
     LogMetadata, SortField, SortOrder, ManualAnalysisRequest, IssueDescriptionUpdateRequest
 )
+from app.models.project_repo import ProjectRepo
+from app.services import project_repo_service
 from app.services.log_service import log_service
 from app.utils.validation import request_validator
 from app.utils.file_upload_validator import t04_file_validator
@@ -38,29 +42,42 @@ router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
 
-def _infer_log_type_from_filename(filename: str) -> LogType:
+def _infer_project_code_from_filename(filename: str) -> Optional[str]:
     """
-    根据文件名初步判断日志类型：
-    - 同时包含 stack 与 (oam 或 om) -> FULL
-    - 仅包含 stack -> STACK
-    - 其他情况（包含 oam/om 或都不包含）-> OAM_ANTENNA
+    根据文件名推断项目代号：
+    - 同时包含 stack 与 (oam 或 om) -> "full"
+    - 仅包含 stack -> "stack"
+    - 仅包含 oam/om -> "oam_antenna"
+    - 都不包含 -> None（无法识别）
     """
     name = (filename or "").lower()
     has_stack = "stack" in name
     has_oam = ("oam" in name) or ("om" in name)
     if has_stack and has_oam:
-        return LogType.FULL
+        return "full"
     if has_stack:
-        return LogType.STACK
-    return LogType.OAM_ANTENNA
+        return "stack"
+    if has_oam:
+        return "oam_antenna"
+    return None
 
 
-def _infer_log_type_from_components(components) -> Optional[LogType]:
+async def infer_project_from_filename(filename: str, db: AsyncSession) -> Optional[ProjectRepo]:
     """
-    根据 metadata.json 中的 log_components 的 component_name 进一步细化日志类型：
-    - 若包含任一 STACK 相关组件（如："STACK_", "CUCP", "STACK_CUUP", "STACK_DU"），认为包含协议栈
-    - 若包含任一 OAM 相关组件（名称包含 "OAM"，如："CUUP_OAM", "DU_OAM", "DVB_OAM", "MAIN_OAM"），认为包含 OAM
-    - 两者皆有 -> FULL；仅栈 -> STACK；仅 OAM -> OAM_ANTENNA；都无 -> None（不改变）
+    应用文件名模式匹配并解析到已启用的 project_repo 条目。
+    无匹配或匹配的 project_code 无已启用条目时返回 None。
+    """
+    code = _infer_project_code_from_filename(filename)
+    if not code:
+        return None
+    return await project_repo_service.get_by_project_code(db, code)
+
+
+def _infer_project_code_from_components(components) -> Optional[str]:
+    """
+    根据 metadata.json 中 log_components 的 component_name 推断项目代号：
+    - 含 STACK 相关组件 + OAM 相关组件 -> "full"
+    - 仅栈 -> "stack"；仅 OAM -> "oam_antenna"；都无 -> None
     """
     try:
         if not isinstance(components, list):
@@ -78,14 +95,41 @@ def _infer_log_type_from_components(components) -> Optional[LogType]:
             if "OAM" in name:
                 has_oam_component = True
         if has_stack_component and has_oam_component:
-            return LogType.FULL
+            return "full"
         if has_stack_component:
-            return LogType.STACK
+            return "stack"
         if has_oam_component:
-            return LogType.OAM_ANTENNA
+            return "oam_antenna"
         return None
     except Exception:
         return None
+
+
+async def resolve_project(
+    db: AsyncSession,
+    *,
+    project_id: Optional[int] = None,
+    project_code: Optional[str] = None,
+    filename: Optional[str] = None,
+    locale: str = "zh",
+) -> Optional[ProjectRepo]:
+    """
+    统一的项目解析：显式 project_id → 显式 project_code → 文件名推断 → None。
+    显式 project_id/project_code 无效时抛出 HTTP 400。
+    """
+    if project_id is not None:
+        repo = await project_repo_service.get_by_id(db, project_id)
+        if not repo or not repo.enabled:
+            raise HTTPException(status_code=400, detail=t("log.project_not_found_id", locale, project_id=project_id))
+        return repo
+    if project_code:
+        repo = await project_repo_service.get_by_project_code(db, project_code)
+        if not repo:
+            raise HTTPException(status_code=400, detail=t("log.project_not_found_code", locale, project_code=project_code))
+        return repo
+    if filename:
+        return await infer_project_from_filename(filename, db)
+    return None
 
 
 async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
@@ -202,15 +246,17 @@ async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
         except Exception:
             pass
 
-        # 先尝试基于 log_components 细化日志类型
-        refined_log_type: Optional[LogType] = None
+        # 先尝试基于 log_components 细化项目归属
+        refined_project: Optional[ProjectRepo] = None
         try:
             components = None
             if isinstance(metadata_dict, dict):
                 components = metadata_dict.get("log_components")
-            refined_log_type = _infer_log_type_from_components(components)
+            refined_code = _infer_project_code_from_components(components)
+            if refined_code:
+                refined_project = await project_repo_service.get_by_project_code(db, refined_code)
         except Exception:
-            refined_log_type = None
+            refined_project = None
 
         # 组装需要更新的数据
         update_data = {
@@ -221,9 +267,9 @@ async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
         if issue_desc and is_empty(getattr(record, "issue_description", None)):
             update_data["issue_description"] = issue_desc
 
-        # 如能根据组件细化日志类型，则一并更新
-        if refined_log_type is not None and getattr(record, "log_type", None) != refined_log_type:
-            update_data["log_type"] = refined_log_type
+        # 如能根据组件细化项目，则一并更新 project_id
+        if refined_project is not None and getattr(record, "project_id", None) != refined_project.id:
+            update_data["project_id"] = refined_project.id
 
         # 执行更新并提交
         await log_service.update(db, log_info.id, **update_data)
@@ -235,26 +281,28 @@ async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
 @router.post("/upload-simple", response_model=LogUploadResponse, status_code=201)
 async def upload_log_simple(
     file: UploadFile = File(..., description="要上传的日志文件"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """
     简化的日志文件上传接口
     """
-    # 使用文件名推断初始日志类型
-    inferred_type = _infer_log_type_from_filename(file.filename)
+    # 使用文件名推断关联项目（无法识别时为未分类）
+    inferred = await infer_project_from_filename(file.filename, db)
     metadata = LogMetadata()
     upload_request = LogUploadRequest(
-        log_type=inferred_type,
+        project_code=inferred.project_code if inferred else None,
+        project_id=inferred.id if inferred else None,
         log_level=LogLevel.INFO,
         metadata=metadata,
         expires_in_days=None
     )
-    
+
     # 执行上传
     log_info = await log_service.upload_log(db, file, upload_request)
-    
+
     logger.info(f"Log uploaded successfully (simple): {log_info.id}")
-    
+
     # 二次检查并回填 metadata.json
     try:
         await _try_extract_and_update_metadata(db, log_info)
@@ -262,9 +310,9 @@ async def upload_log_simple(
         log_info = await log_service.get_log_detail(db, log_info.id)
     except Exception as e:
         logger.warning(f"Post-upload metadata backfill failed: {e}")
-    
+
     return LogUploadResponse(
-        message="日志上传成功",
+        message=t("log.upload_success", locale),
         data=log_info
     )
 
@@ -272,7 +320,8 @@ async def upload_log_simple(
 @router.post("/upload", response_model=LogUploadResponse, status_code=201)
 async def upload_log(
     file: UploadFile = File(..., description="要上传的日志文件"),
-    log_type: LogType = Form(LogType.STACK, description="日志类型"),
+    project_code: Optional[str] = Form(None, description="关联项目代号（与 project_id 二选一）"),
+    project_id: Optional[int] = Form(None, description="关联项目ID（与 project_code 二选一）"),
     log_level: LogLevel = Form(LogLevel.INFO, description="日志级别"),
     source: Optional[str] = Form(None, description="日志来源"),
     environment: Optional[str] = Form(None, description="环境信息"),
@@ -280,13 +329,15 @@ async def upload_log(
     version: Optional[str] = Form(None, description="版本号"),
     expires_in_days: Optional[int] = Form(None, ge=1, le=365, description="过期天数"),
     issue_description: Optional[str] = Form(None, description="问题描述"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """
     上传日志文件
-    
+
     - **file**: 要上传的日志文件
-    - **log_type**: 日志类型 (stack, oam_antenna, full)
+    - **project_code**: 关联项目代号（可选；与 project_id 二选一）
+    - **project_id**: 关联项目ID（可选；与 project_code 二选一）
     - **log_level**: 日志级别 (debug, info, warn, error, fatal)
     - **source**: 日志来源系统
     - **environment**: 运行环境 (dev, test, prod等)
@@ -294,8 +345,10 @@ async def upload_log(
     - **version**: 版本号
     - **expires_in_days**: 文件过期天数 (1-365天)
     - **issue_description**: 问题描述，用于描述日志所对应的问题
+
+    项目解析顺序：显式 project_id → 显式 project_code → 文件名推断 → 未分类(NULL)
     """
-    
+
     # 构建元数据
     metadata = LogMetadata(
         source=source,
@@ -303,24 +356,31 @@ async def upload_log(
         service_name=service_name,
         version=version
     )
-    
-    # 基于文件名推断，优先于表单入参
-    inferred_type = _infer_log_type_from_filename(file.filename)
 
-    # 构建上传请求（覆盖为推断结果）
+    # 解析关联项目（显式优先，否则按文件名推断）
+    project = await resolve_project(
+        db,
+        project_id=project_id,
+        project_code=project_code,
+        filename=file.filename,
+        locale=locale,
+    )
+
+    # 构建上传请求
     upload_request = LogUploadRequest(
-        log_type=inferred_type,
+        project_code=project.project_code if project else None,
+        project_id=project.id if project else None,
         log_level=log_level,
         metadata=metadata,
         expires_in_days=expires_in_days,
         issue_description=issue_description
     )
-    
+
     # 执行上传
     log_info = await log_service.upload_log(db, file, upload_request)
-    
+
     logger.info(f"Log uploaded successfully: {log_info.id}")
-    
+
     # 二次检查并回填 metadata.json
     try:
         await _try_extract_and_update_metadata(db, log_info)
@@ -328,16 +388,18 @@ async def upload_log(
         log_info = await log_service.get_log_detail(db, log_info.id)
     except Exception as e:
         logger.warning(f"Post-upload metadata backfill failed: {e}")
-    
+
     return LogUploadResponse(
-        message="日志上传成功",
+        message=t("log.upload_success", locale),
         data=log_info
     )
 
 
 @router.post("/upload-t04", status_code=201)
 async def upload_t04_logs(
-    files: List[UploadFile] = File(..., description="要上传的日志归档文件列表")
+    request: Request,
+    files: List[UploadFile] = File(..., description="要上传的日志归档文件列表"),
+    project_code: Optional[str] = Form(None, description="可选：无法从文件名推断时使用的默认项目代号"),
 ):
     """
     T04任务：上传日志归档文件
@@ -375,17 +437,24 @@ async def upload_t04_logs(
     except Exception as e:
         logger.warning(f"T04上传 - 清理临时文件失败: {e}")
     
+    # 解析请求语言（header → Accept-Language → 默认 zh），用于用户可见的错误信息
+    from app.i18n.deps import LOCALE_HEADER, resolve_locale
+    locale = resolve_locale(
+        header_locale=request.headers.get(LOCALE_HEADER),
+        accept_language=request.headers.get("Accept-Language"),
+    )
+
     # 验证文件列表
     logger.info("T04上传 - 开始文件验证")
     try:
-        is_valid, error_msg = await t04_file_validator.validate_upload_files(files)
+        is_valid, error_msg = await t04_file_validator.validate_upload_files(files, locale)
         if not is_valid:
             logger.error(f"T04上传 - 文件验证失败: {error_msg}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "success": False,
-                    "message": "文件验证失败",
+                    "message": t("log.file_validation_failed", locale),
                     "error": error_msg
                 }
             )
@@ -396,7 +465,7 @@ async def upload_t04_logs(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail={
                 "success": False,
-                "message": "文件大小超限",
+                "message": t("log.file_size_exceeded", locale),
                 "error": str(e)
             }
         )
@@ -406,7 +475,7 @@ async def upload_t04_logs(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "success": False,
-                "message": "文件格式错误",
+                "message": t("log.file_format_error", locale),
                 "error": str(e)
             }
         )
@@ -417,7 +486,7 @@ async def upload_t04_logs(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
                     "success": False,
-                    "message": "文件损坏",
+                    "message": t("log.file_corrupted", locale),
                     "error": str(e)
                 }
             )
@@ -427,7 +496,7 @@ async def upload_t04_logs(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "success": False,
-                    "message": "文件验证失败",
+                    "message": t("log.file_validation_failed", locale),
                     "error": str(e)
                 }
             )
@@ -455,7 +524,7 @@ async def upload_t04_logs(
                 status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
                 detail={
                     "success": False,
-                    "message": "存储空间不足",
+                    "message": t("log.storage_insufficient", locale),
                     "error": f"可用空间: {free_space // (1024*1024)}MB, 需要空间: {total_file_size // (1024*1024)}MB"
                 }
             )
@@ -483,9 +552,13 @@ async def upload_t04_logs(
                     file_id = str(uuid.uuid4())
                     logger.info(f"T04上传 - 生成文件ID: {file_id}")
                     
-                    # 判断日志类型
-                    log_type = t04_file_validator.determine_log_type_from_filename(file.filename)
-                    logger.info(f"T04上传 - 检测到日志类型: {log_type}")
+                    # 解析关联项目：按文件名推断，无法识别时回退到默认 project_code
+                    inferred_project = await infer_project_from_filename(file.filename, db)
+                    if inferred_project is None and project_code:
+                        inferred_project = await project_repo_service.get_by_project_code(db, project_code)
+                    resolved_project_id = inferred_project.id if inferred_project else None
+                    resolved_project_code = inferred_project.project_code if inferred_project else None
+                    logger.info(f"T04上传 - 解析项目: code={resolved_project_code} id={resolved_project_id}")
                     
                     # 生成安全的文件名
                     safe_filename = t04_file_validator.generate_unique_filename(file.filename, file_id)
@@ -522,7 +595,7 @@ async def upload_t04_logs(
                         "file_size": file_size,
                         "file_path": str(file_path),
                         "archive_path": str(file_path),
-                        "log_type": LogType.STACK if log_type == "stack" else (LogType.FULL if log_type == "full" else LogType.OAM_ANTENNA),
+                        "project_id": resolved_project_id,
                         "status": LogStatus.PENDING,
                         "progress": 0.0,
                         "checksum": checksum,
@@ -542,7 +615,7 @@ async def upload_t04_logs(
                         "filename": safe_filename,
                         "original_filename": file.filename,
                         "file_size": file_size,
-                        "log_type": log_type,
+                        "project_code": resolved_project_code,
                         "status": "pending"
                     })
                     
@@ -580,17 +653,21 @@ async def upload_t04_logs(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={
                     "success": False,
-                    "message": "服务器错误",
+                    "message": t("log.server_error", locale),
                     "error": "数据库操作失败"
                 }
             )
-    
+
     # 构建响应
     logger.info(f"T04上传 - 上传完成: 成功={len(upload_results)}, 失败={len(failed_files)}")
     if upload_results:
+        if failed_files:
+            _msg = t("log.t04_upload_partial", locale, uploaded=len(upload_results), failed=len(failed_files))
+        else:
+            _msg = t("log.t04_upload_success", locale, count=len(upload_results))
         response_data = {
             "success": True,
-            "message": f"成功上传 {len(upload_results)} 个文件" + (f"，{len(failed_files)} 个文件失败" if failed_files else ""),
+            "message": _msg,
             "data": {
                 "uploaded_files": upload_results,
                 "failed_files": failed_files if failed_files else None,
@@ -598,23 +675,19 @@ async def upload_t04_logs(
                 "total_failed": len(failed_files)
             }
         }
-        
+
         if failed_files:
-            # 部分成功
             logger.warning(f"T04上传 - 部分成功: {len(upload_results)}/{len(files)} 个文件上传成功")
-            return response_data
         else:
-            # 全部成功
             logger.info(f"T04上传 - 全部成功: {len(upload_results)} 个文件上传成功")
-            return response_data
+        return response_data
     else:
-        # 全部失败
         logger.error(f"T04上传 - 全部失败: {len(failed_files)} 个文件上传失败")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
                 "success": False,
-                "message": "所有文件上传失败",
+                "message": t("log.t04_upload_all_failed", locale),
                 "data": {
                     "failed_files": failed_files
                 }
@@ -626,7 +699,7 @@ async def upload_t04_logs(
 async def get_logs(
     page: int = Query(1, ge=1, description="页码"),
     per_page: int = Query(20, ge=1, le=100, description="每页大小"),
-    log_type: LogType = Query(None, description="日志类型过滤"),
+    project_id: Optional[int] = Query(None, description="项目过滤；0 或 none 表示未分类日志"),
     log_level: LogLevel = Query(None, description="日志级别过滤"),
     status: LogStatus = Query(None, description="状态过滤"),
     start_time: str = Query(None, description="开始时间 (ISO格式)"),
@@ -635,7 +708,8 @@ async def get_logs(
     sort_by: SortField = Query(SortField.CREATED_AT, description="排序字段"),
     sort_order: SortOrder = Query(SortOrder.DESC, description="排序顺序"),
     tags: List[str] = Query(None, description="标签过滤"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """
     获取日志列表
@@ -643,7 +717,7 @@ async def get_logs(
     支持多种过滤条件：
     - **page**: 页码 (从1开始)
     - **per_page**: 每页大小 (1-100)
-    - **log_type**: 按日志类型过滤
+    - **project_id**: 按项目过滤（0 或 none 表示未分类）
     - **log_level**: 按日志级别过滤
     - **status**: 按状态过滤
     - **start_time**: 开始时间过滤 (ISO格式: 2024-01-01T00:00:00Z)
@@ -665,7 +739,7 @@ async def get_logs(
     list_request = LogListRequest(
         page=page,
         per_page=per_page,
-        log_type=log_type,
+        project_id=project_id,
         log_level=log_level,
         status=status,
         start_time=datetime.fromisoformat(start_time.replace('Z', '+00:00')) if start_time else None,
@@ -680,7 +754,7 @@ async def get_logs(
     log_data = await log_service.get_log_list(db, list_request)
     
     return LogListResponse(
-        message="获取日志列表成功",
+        message=t("log.list_success", locale),
         data=log_data
     )
 
@@ -688,11 +762,12 @@ async def get_logs(
 @router.get("/{log_id}", response_model=LogDetailResponse)
 async def get_log_detail(
     log_id: str = Path(..., description="日志文件ID"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """
     获取日志详情
-    
+
     根据log_id获取日志详细信息，包含所有基本信息和处理状态。
     支持SEO友好的URL（/log/{log_id}）
     
@@ -704,7 +779,7 @@ async def get_log_detail(
     - original_filename: 原始文件名
     - file_size: 文件大小（字节）
     - file_size_human: 人类可读的文件大小
-    - log_type: 日志类型
+    - project_id / project_code / project_name: 关联项目信息
     - status: 处理状态
     - progress: 处理进度（0-100）
     - created_at: 创建时间
@@ -733,10 +808,10 @@ async def get_log_detail(
         logger.info(f"Log detail retrieved successfully: {log_id}")
         
         return LogDetailResponse(
-            message="获取日志详情成功",
+            message=t("log.detail_success", locale),
             data=log_info
         )
-        
+
     except ValidationError as e:
         logger.warning(f"Invalid log ID format: {log_id}")
         raise e
@@ -746,7 +821,7 @@ async def get_log_detail(
     except Exception as e:
         logger.error(f"Error retrieving log detail for {log_id}: {str(e)}")
         raise LogServiceException(
-            message="获取日志详情失败",
+            message=t("log.detail_failed", locale),
             error_code="LOG_DETAIL_ERROR",
             detail=str(e)
         )
@@ -755,7 +830,8 @@ async def get_log_detail(
 @router.delete("/{log_id}", response_model=LogDeleteResponse)
 async def delete_log(
     log_id: str = Path(..., description="日志文件ID"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """
     删除日志文件（软删除）
@@ -772,7 +848,7 @@ async def delete_log(
     logger.info(f"Log deleted successfully: {log_id}")
     
     return LogDeleteResponse(
-        message="日志删除成功"
+        message=t("log.delete_success", locale)
     )
 
 
@@ -780,7 +856,8 @@ async def delete_log(
 async def download_log(
     log_id: str = Path(..., description="日志文件ID"),
     request: Request = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """
     下载日志文件
@@ -818,7 +895,7 @@ async def download_log(
         
         # 检查日志状态是否允许下载（临时允许pending状态用于测试）
         if log_info.status not in [LogStatus.COMPLETED, LogStatus.PROCESSING, LogStatus.PENDING]:
-            raise AuthorizationError("文件尚未处理完成，无法下载")
+            raise AuthorizationError(t("log.not_ready_for_download", locale))
         
         # 检查日志是否被软删除
         if hasattr(log_info, 'is_deleted') and log_info.is_deleted:
@@ -926,7 +1003,7 @@ async def download_log(
     except Exception as e:
         logger.error(f"Error downloading log {log_id}: {str(e)}")
         raise LogServiceException(
-            message="文件下载失败",
+            message=t("log.download_failed", locale),
             error_code="DOWNLOAD_ERROR",
             detail=str(e)
         )
@@ -935,7 +1012,8 @@ async def download_log(
 @router.post("/{log_id}/download-count")
 async def increment_download_count(
     log_id: str = Path(..., description="日志文件ID"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """
     增加下载次数
@@ -957,13 +1035,13 @@ async def increment_download_count(
         
         return {
             "success": True,
-            "message": "下载次数已更新",
+            "message": t("log.download_count_updated", locale),
             "data": {
                 "log_id": log_id,
                 "download_count": log_info.download_count
             }
         }
-        
+
     except ValidationError as e:
         logger.warning(f"Invalid log ID format for download count: {log_id}")
         raise e
@@ -973,7 +1051,7 @@ async def increment_download_count(
     except Exception as e:
         logger.error(f"Error updating download count {log_id}: {str(e)}")
         raise LogServiceException(
-            message="下载次数更新失败",
+            message=t("log.download_count_failed", locale),
             error_code="DOWNLOAD_COUNT_ERROR",
             detail=str(e)
         )
@@ -982,7 +1060,8 @@ async def increment_download_count(
 @router.post("/batch/delete", response_model=BatchDeleteResponse)
 async def batch_delete_logs(
     request: BatchDeleteRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """
     批量删除日志文件 - 改进版本
@@ -1022,7 +1101,7 @@ async def batch_delete_logs(
         
         return BatchDeleteResponse(
             success=True,
-            message=f"批量删除完成: 成功删除 {result.deleted_count} 个，失败 {result.failed_count} 个",
+            message=t("log.batch_delete_complete", locale, deleted=result.deleted_count, failed=result.failed_count),
             data=result
         )
         
@@ -1037,7 +1116,8 @@ async def batch_delete_logs(
 @router.post("/batch/download", response_model=BatchDownloadResponse)
 async def batch_download_logs(
     request: BatchDownloadRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """
     批量下载日志文件 - 改进版本
@@ -1053,7 +1133,7 @@ async def batch_download_logs(
     try:
         # 验证日志ID列表
         if len(request.log_ids) > 50:
-            raise ValidationError("批量下载的文件数量不能超过50个")
+            raise ValidationError(t("log.batch_download_limit", locale))
         
         request_validator.validate_log_ids(request.log_ids)
         
@@ -1080,7 +1160,7 @@ async def batch_download_logs(
         
         return BatchDownloadResponse(
             success=True,
-            message="批量下载准备完成",
+            message=t("log.batch_download_ready", locale),
             data=download_info
         )
         
@@ -1098,7 +1178,8 @@ async def batch_download_logs(
 @router.post("/batch/download-stream")
 async def batch_download_logs_stream(
     request: BatchDownloadRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """
     流式批量下载日志文件
@@ -1114,7 +1195,7 @@ async def batch_download_logs_stream(
     try:
         # 验证日志ID列表 - 流式下载限制更严格
         if len(request.log_ids) > 20:
-            raise ValidationError("流式批量下载的文件数量不能超过20个")
+            raise ValidationError(t("log.stream_download_limit", locale))
         
         request_validator.validate_log_ids(request.log_ids)
         
@@ -1198,13 +1279,15 @@ async def download_batch_file(
 
 @router.post("/{log_id}/analyze")
 async def analyze_log(
+    request: Request,
     log_id: str = Path(..., description="日志文件ID"),
     query: str = Form(..., description="分析查询内容"),
     project_repo_id: Optional[int] = Form(
         None,
         description="可选：指定项目仓库注册表 ID。若提供，则跳过 metadata.json 解析，直接使用该项目的仓库信息。",
     ),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """
     AI分析日志文件
@@ -1230,7 +1313,7 @@ async def analyze_log(
                 status_code=400,
                 detail={
                     "error_kind": "missing_archive",
-                    "message": "日志归档文件（archive_path）未设置，无法执行 AI 分析。请先上传归档文件。",
+                    "message": t("log.archive_path_missing", locale),
                 },
             )
 
@@ -1245,7 +1328,7 @@ async def analyze_log(
                     status_code=400,
                     detail={
                         "error_kind": "invalid_project_repo",
-                        "message": "所选项目仓库不存在或已禁用",
+                        "message": t("log.invalid_project_repo", locale),
                     },
                 )
 
@@ -1258,7 +1341,9 @@ async def analyze_log(
         try:
             from app.tasks.ai_analysis import run_ai_analysis_task
 
-            task_result = run_ai_analysis_task.delay(log_id, query, project_repo_id)
+            task_result = run_ai_analysis_task.delay(
+                log_id, query, project_repo_id, locale
+            )
 
             # 记录任务信息，便于前端轮询
             await log_service.update_ai_analysis_task(
@@ -1273,7 +1358,7 @@ async def analyze_log(
 
             return {
                 "success": True,
-                "message": "AI分析任务已提交，后台将继续运行",
+                "message": t("log.ai_analysis_queued", locale),
                 "data": {
                     "task_id": task_result.id,
                     "status": "queued",
@@ -1284,18 +1369,18 @@ async def analyze_log(
         except ImportError as e:
             logger.error(f"AI analysis failed: log_agent module not available: {e}")
             raise LogServiceException(
-                message="AI分析模块不可用",
+                message=t("log.ai_module_unavailable", locale),
                 error_code="AI_MODULE_ERROR",
                 detail=str(e)
             )
         except Exception as e:
             logger.error(f"AI analysis failed: {e}")
             raise LogServiceException(
-                message="AI分析执行失败",
+                message=t("log.ai_analysis_failed", locale),
                 error_code="AI_ANALYSIS_ERROR",
                 detail=str(e)
             )
-            
+
     except ValidationError as e:
         logger.warning(f"Invalid log ID format for AI analysis: {log_id}")
         raise e
@@ -1307,7 +1392,7 @@ async def analyze_log(
     except Exception as e:
         logger.error(f"Error during AI analysis {log_id}: {str(e)}")
         raise LogServiceException(
-            message="AI分析失败",
+            message=t("log.ai_analysis_error", locale),
             error_code="AI_ANALYSIS_ERROR",
             detail=str(e)
         )
@@ -1316,7 +1401,8 @@ async def analyze_log(
 @router.get("/{log_id}/analysis/status")
 async def get_ai_analysis_status(
     log_id: str = Path(..., description="日志文件ID"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """
     查询AI分析任务状态（含已完成结果）
@@ -1337,17 +1423,9 @@ async def get_ai_analysis_status(
             except Exception:
                 pass
 
-        _ERROR_KIND_MESSAGES = {
-            "missing_archive": "日志归档文件缺失，请联系管理员上传归档",
-            "missing_metadata_json": "归档中缺少 metadata.json，无法识别项目信息",
-            "missing_project_identity": "metadata.json 中缺少项目代号字段，请补全上报数据",
-            "project_repo_not_registered": "项目仓库未在系统注册，请管理员在「项目仓库管理」页面添加",
-            "timeout": "AI 分析超时，请联系管理员检查配置或增大超时限制",
-        }
-
         return {
             "success": True,
-            "message": "AI分析状态获取成功",
+            "message": t("log.ai_status_success", locale),
             "data": {
                 "log_id": log_id,
                 "task_id": getattr(log_info, "ai_analysis_task_id", None),
@@ -1356,7 +1434,7 @@ async def get_ai_analysis_status(
                 "query": getattr(log_info, "ai_analysis_query", None),
                 "error": getattr(log_info, "ai_analysis_error", None),
                 "error_kind": error_kind,
-                "error_kind_message": _ERROR_KIND_MESSAGES.get(error_kind) if error_kind else None,
+                "error_kind_message": t(f"log.error_kind.{error_kind}", locale) if error_kind else None,
                 "started_at": getattr(log_info, "ai_analysis_started_at", None),
                 "finished_at": getattr(log_info, "ai_analysis_finished_at", None),
                 "result": result_raw,
@@ -1365,7 +1443,7 @@ async def get_ai_analysis_status(
     except Exception as e:
         logger.error(f"Failed to fetch AI analysis status for {log_id}: {e}")
         raise LogServiceException(
-            message="查询AI分析状态失败",
+            message=t("log.ai_status_failed", locale),
             error_code="AI_ANALYSIS_STATUS_ERROR",
             detail=str(e)
         )
@@ -1381,6 +1459,7 @@ async def stream_ai_analysis_trace(
     log_id: str = Path(..., description="日志文件ID"),
     from_seq: int = Query(0, ge=0, description="只返回 seq 严格大于该值的事件，用于断线重连增量取回"),
     db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """SSE stream of ``AgentTraceEvent`` rows for a log's AI analysis task.
 
@@ -1408,7 +1487,7 @@ async def stream_ai_analysis_trace(
     if not task_id and initial_status not in {"completed", "failed"}:
         raise HTTPException(
             status_code=404,
-            detail={"error_kind": "no_task", "message": "该日志暂未发起 AI 分析任务"},
+            detail={"error_kind": "no_task", "message": t("log.no_ai_task", locale)},
         )
 
     def _sse(payload: dict) -> str:
@@ -1549,7 +1628,8 @@ async def stream_ai_analysis_trace(
 async def update_issue_description(
     log_id: str = Path(..., description="日志文件ID"),
     payload: IssueDescriptionUpdateRequest = Body(...),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """
     更新日志问题描述
@@ -1559,7 +1639,7 @@ async def update_issue_description(
         result = await log_service.update_issue_description(db, log_id, payload.issue_description)
         return {
             "success": True,
-            "message": "问题描述已更新",
+            "message": t("log.issue_description_updated", locale),
             "data": {
                 "log_id": log_id,
                 "issue_description": result.issue_description,
@@ -1575,7 +1655,7 @@ async def update_issue_description(
     except Exception as e:
         logger.error(f"Failed to update issue description for {log_id}: {e}")
         raise LogServiceException(
-            message="问题描述更新失败",
+            message=t("log.issue_description_failed", locale),
             error_code="ISSUE_DESCRIPTION_UPDATE_ERROR",
             detail=str(e)
         )
@@ -1585,7 +1665,8 @@ async def update_issue_description(
 async def save_manual_analysis(
     log_id: str = Path(..., description="日志文件ID"),
     payload: ManualAnalysisRequest = Body(...),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    locale: str = Depends(get_request_locale),
 ):
     """
     保存人工分析结果
@@ -1595,7 +1676,7 @@ async def save_manual_analysis(
         result = await log_service.save_manual_analysis(db, log_id, payload.content)
         return {
             "success": True,
-            "message": "人工分析已保存",
+            "message": t("log.manual_analysis_saved", locale),
             "data": {
                 "log_id": log_id,
                 "manual_analysis": result.manual_analysis,
@@ -1611,7 +1692,7 @@ async def save_manual_analysis(
     except Exception as e:
         logger.error(f"Failed to save manual analysis for {log_id}: {e}")
         raise LogServiceException(
-            message="保存人工分析失败",
+            message=t("log.manual_analysis_failed", locale),
             error_code="MANUAL_ANALYSIS_SAVE_ERROR",
             detail=str(e)
         )

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from app.services.log_service import log_service
 from app.utils.temp_directory_cleaner import temp_directory_cleaner
-from app.models.log import LogRecord, LogStatus, LogType
+from app.models.log import LogRecord, LogStatus
 from app.config import settings
 
 
@@ -27,7 +27,6 @@ class TestFileDeletion:
             original_filename="test_log.tgz",
             file_size=1024,
             file_path=str(test_log_file),
-            log_type=LogType.STACK,
             status=LogStatus.COMPLETED
         )
         test_db.add(log_record)
@@ -60,7 +59,6 @@ class TestFileDeletion:
             original_filename="test_log.tgz",
             file_size=1024,
             file_path=str(test_log_file),
-            log_type=LogType.STACK,
             status=LogStatus.COMPLETED
         )
         test_db.add(log_record)
@@ -97,7 +95,6 @@ class TestFileDeletion:
             original_filename="test_log.tgz",
             file_size=1024,
             file_path=str(test_log_file),
-            log_type=LogType.STACK,
             status=LogStatus.COMPLETED,
             task_id=task_id
         )

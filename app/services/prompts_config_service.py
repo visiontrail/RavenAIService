@@ -152,8 +152,11 @@ def _path_set(root: Dict[str, Any], path: List[str], value: str) -> None:
         if not isinstance(cursor, dict) or key not in cursor:
             raise KeyError(".".join(path))
         cursor = cursor[key]
-    if not isinstance(cursor, dict) or path[-1] not in cursor:
+    if not isinstance(cursor, dict):
         raise KeyError(".".join(path))
+    # The final key may be a not-yet-present language variant (e.g. authoring an
+    # ``en`` body alongside an existing ``zh`` one), so the parent dict only has
+    # to exist — the leaf key is allowed to be new.
     cursor[path[-1]] = value
 
 
@@ -173,27 +176,43 @@ def _extract_prompt_entries(parsed: Any) -> List[Dict[str, Any]]:
 
             agent_meta = PROMPT_AGENT_META.get((function_key, agent_key), {})
             for prompt_key, field_meta in PROMPT_FIELD_META.items():
-                content = agent_config.get(prompt_key)
-                if not isinstance(content, str):
-                    continue
+                raw = agent_config.get(prompt_key)
+                # A body is either a legacy flat string or a per-language map
+                # ({locale: body}). Normalize to a list of (locale, content)
+                # pairs so each language is an independently editable entry; a
+                # flat string keeps ``locale = None`` for backward compatibility.
+                variants: List[Tuple[Optional[str], str]] = []
+                if isinstance(raw, str):
+                    variants.append((None, raw))
+                elif isinstance(raw, dict):
+                    for loc_code, loc_content in raw.items():
+                        if isinstance(loc_code, str) and isinstance(loc_content, str):
+                            variants.append((loc_code, loc_content))
 
-                prompt_path = [function_key, agent_key, prompt_key]
-                entries.append(
-                    {
-                        "id": ".".join(prompt_path),
-                        "function_key": function_key,
-                        "function_name": function_meta.get("name") or function_key,
-                        "function_description": function_meta.get("description"),
-                        "agent_key": agent_key,
-                        "agent_name": agent_meta.get("name") or agent_key,
-                        "agent_description": agent_meta.get("description"),
-                        "prompt_key": prompt_key,
-                        "prompt_label": field_meta["label"],
-                        "prompt_type": field_meta["type"],
-                        "path": prompt_path,
-                        "content": content,
-                    }
-                )
+                for locale_code, content in variants:
+                    prompt_path = [function_key, agent_key, prompt_key]
+                    if locale_code is not None:
+                        prompt_path = prompt_path + [locale_code]
+                    label = field_meta["label"]
+                    if locale_code is not None:
+                        label = f"{label} ({locale_code})"
+                    entries.append(
+                        {
+                            "id": ".".join(prompt_path),
+                            "function_key": function_key,
+                            "function_name": function_meta.get("name") or function_key,
+                            "function_description": function_meta.get("description"),
+                            "agent_key": agent_key,
+                            "agent_name": agent_meta.get("name") or agent_key,
+                            "agent_description": agent_meta.get("description"),
+                            "prompt_key": prompt_key,
+                            "locale": locale_code,
+                            "prompt_label": label,
+                            "prompt_type": field_meta["type"],
+                            "path": prompt_path,
+                            "content": content,
+                        }
+                    )
 
     return entries
 
@@ -370,17 +389,23 @@ def update_prompt_entries(
     return _response_data(path, new_content, parsed)
 
 
-def get_device_agent_prompts(scene_hint: Optional[str] = None) -> Dict[str, Any]:
+def get_device_agent_prompts(
+    scene_hint: Optional[str] = None,
+    locale: Optional[str] = None,
+) -> Dict[str, Any]:
     """Expose DeviceAgent prompts + risk rules through the same service layer
     so callers (DeviceAgent, admin UI, tests) all read the cache-aware path.
 
     Returns a dict with keys ``system_prompt`` / ``user_prompt_template``
-    / ``risk_rules`` / ``scene``. Empty strings / empty list when the yaml
+    / ``risk_rules`` / ``scene``. ``locale`` selects the per-language body with
+    a default-language fallback. Empty strings / empty list when the yaml
     section is missing or malformed.
     """
     from app.agents.device_agent import prompts as device_agent_prompts
 
-    system_prompt, user_prompt_template = device_agent_prompts.get_prompts(scene_hint)
+    system_prompt, user_prompt_template = device_agent_prompts.get_prompts(
+        scene_hint, locale
+    )
     risk_rules = device_agent_prompts.get_risk_rules(scene_hint)
     return {
         "scene": scene_hint or "default",
@@ -390,8 +415,16 @@ def get_device_agent_prompts(scene_hint: Optional[str] = None) -> Dict[str, Any]
     }
 
 
-def get_chat_title_prompt_template() -> str:
-    """Load chat title prompt template from prompts_config.yaml."""
+def get_chat_title_prompt_template(locale: Optional[str] = None) -> str:
+    """Load the chat session-title prompt template for ``locale``.
+
+    The ``template`` may be a flat string (legacy) or a per-language map
+    ({locale: body}); the latter is resolved with a default-language (``zh``)
+    fallback. Falls back to :data:`DEFAULT_CHAT_TITLE_PROMPT_TEMPLATE` when the
+    config is missing or malformed.
+    """
+    from app.i18n.prompts import select_localized_body
+
     path = _resolve_prompts_path()
     try:
         content = path.read_text(encoding="utf-8")
@@ -412,11 +445,11 @@ def get_chat_title_prompt_template() -> str:
 
     raw_prompt = chat_cfg.get("session_title_prompt")
     if isinstance(raw_prompt, dict):
-        template = raw_prompt.get("template")
+        template = select_localized_body(raw_prompt.get("template"), locale)
     elif isinstance(raw_prompt, str):
-        template = raw_prompt
+        template = raw_prompt.strip()
     else:
-        template = None
+        template = ""
 
     if isinstance(template, str) and template.strip():
         return template.strip()

@@ -17,7 +17,9 @@ from starlette.responses import Response
 from pydantic import BaseModel
 
 from app.api.admin import require_admin
+from app.api.users import get_request_locale
 from app.config import settings
+from app.i18n.messages import t
 
 BASE_DIR = Path(settings.base_dir)
 RELEASES_DIR = BASE_DIR / "data" / "releases"
@@ -94,16 +96,21 @@ async def upload_release(
     description: str = Form(""),
     file: UploadFile = File(...),
     _username: str = Depends(require_admin),
+    locale: str = Depends(get_request_locale),
 ) -> ReleaseResponse:
     if platform not in VALID_PLATFORMS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"platform 必须是以下之一: {', '.join(VALID_PLATFORMS)}",
+            detail=t(
+                "release.invalid_platform",
+                locale,
+                platforms=", ".join(VALID_PLATFORMS),
+            ),
         )
     if not version.strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="version 不能为空",
+            detail=t("release.version_empty", locale),
         )
 
     _ensure_releases_dir()
@@ -120,7 +127,7 @@ async def upload_release(
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"文件保存失败: {exc}",
+            detail=t("release.save_failed", locale, error=exc),
         )
 
     release: dict = {
@@ -139,7 +146,9 @@ async def upload_release(
     releases.append(release)
     _save_releases(releases)
 
-    return ReleaseResponse(data=_to_item(release), message="上传成功")
+    return ReleaseResponse(
+        data=_to_item(release), message=t("release.upload_success", locale)
+    )
 
 
 @admin_router.options("")
@@ -166,13 +175,14 @@ async def list_releases_admin(
 async def delete_release(
     release_id: str,
     _username: str = Depends(require_admin),
+    locale: str = Depends(get_request_locale),
 ) -> dict:
     releases = _load_releases()
     target = next((r for r in releases if r["id"] == release_id), None)
     if not target:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Release not found",
+            detail=t("release.not_found", locale),
         )
 
     file_path = Path(target["file_path"])
@@ -184,7 +194,7 @@ async def delete_release(
 
     releases = [r for r in releases if r["id"] != release_id]
     _save_releases(releases)
-    return {"success": True, "message": "已删除"}
+    return {"success": True, "message": t("release.deleted", locale)}
 
 
 @public_router.get("", response_model=ReleaseListResponse)
@@ -199,20 +209,23 @@ async def list_releases_public() -> ReleaseListResponse:
 
 
 @public_router.get("/{release_id}/download")
-async def download_release(release_id: str) -> FileResponse:
+async def download_release(
+    release_id: str,
+    locale: str = Depends(get_request_locale),
+) -> FileResponse:
     releases = _load_releases()
     target = next((r for r in releases if r["id"] == release_id), None)
     if not target:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Release not found",
+            detail=t("release.not_found", locale),
         )
 
     file_path = Path(target["file_path"])
     if not file_path.exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="文件不存在，可能已被删除",
+            detail=t("release.file_missing", locale),
         )
 
     for r in releases:

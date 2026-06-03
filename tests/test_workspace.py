@@ -19,7 +19,7 @@ import pytest
 def _make_log_record(
     archive_path: str = "",
     question: str = "test?",
-    log_type: str = "generic",
+    project_id: int | None = None,
     original_filename: str = "",
 ):
     r = MagicMock()
@@ -27,7 +27,7 @@ def _make_log_record(
     r.archive_path = archive_path
     r.issue_description = question
     r.hints = ""
-    r.log_type = log_type
+    r.project_id = project_id
     r.original_filename = original_filename
     return r
 

@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { API_BASE_URL } from './index'
+import { API_BASE_URL, localeHeaderInterceptor } from './index'
 import { adminToken } from './admin'
 import type { ApiResponse, ReleaseItem } from '@/types'
 
@@ -7,6 +7,8 @@ const publicClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
 })
+
+publicClient.interceptors.request.use(localeHeaderInterceptor)
 
 publicClient.interceptors.response.use(
   (response) => response.data,
@@ -21,7 +23,7 @@ const adminClient = axios.create({
 adminClient.interceptors.request.use((config) => {
   const token = adminToken.get()
   if (token) config.headers.Authorization = `Bearer ${token}`
-  return config
+  return localeHeaderInterceptor(config)
 })
 
 adminClient.interceptors.response.use(

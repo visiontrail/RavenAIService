@@ -60,6 +60,19 @@ const routes: RouteRecordRaw[] = [
         props: true,
       },
       {
+        path: 'bug-fixes',
+        name: 'BugFixList',
+        component: () => import('../views/BugFixList.vue'),
+        meta: { title: 'Bug 修复' },
+      },
+      {
+        path: 'bug-fixes/:id',
+        name: 'BugFixDetail',
+        component: () => import('../views/BugFixDetail.vue'),
+        meta: { title: 'Bug 修复详情' },
+        props: true,
+      },
+      {
         path: 'upload',
         name: 'Upload',
         component: () => import('../views/Upload.vue'),

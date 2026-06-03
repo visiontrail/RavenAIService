@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional, Tuple
 
 import yaml
 
+from app.i18n.prompts import select_localized_body
+
 _PROMPTS_CACHE: Dict[str, Any] = {}
 
 
@@ -32,20 +34,27 @@ def _load_config() -> Dict[str, Any]:
     return _PROMPTS_CACHE
 
 
-def get_prompts(log_type: Optional[str] = None) -> Tuple[str, str]:
-    """Return the generic (system_prompt, user_prompt_template).
+def get_prompts(
+    project_code: Optional[str] = None,
+    locale: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Return the generic (system_prompt, user_prompt_template) for ``locale``.
 
-    ``log_type`` is kept for caller compatibility, but prompt selection no
-    longer varies by log type.
+    ``project_code`` is kept for caller compatibility, but prompt selection
+    does not vary by project. ``locale`` selects the per-language body, falling
+    back to the default language (``zh``) when a variant is missing; a legacy
+    flat-string body is returned unchanged.
     """
     config = _load_config()
     agent_config: Dict[str, Any] = config.get("claude_agent_log_analysis", {})
     variant = agent_config.get("generic") or {}
 
-    system_prompt = variant.get("system_prompt", "")
-    user_prompt_template = variant.get("user_prompt_template", "")
+    system_prompt = select_localized_body(variant.get("system_prompt"), locale)
+    user_prompt_template = select_localized_body(
+        variant.get("user_prompt_template"), locale
+    )
 
-    return system_prompt.strip(), user_prompt_template.strip()
+    return system_prompt, user_prompt_template
 
 
 def render_user_prompt(
@@ -54,14 +63,16 @@ def render_user_prompt(
     task_id: str,
     workspace_dir: str = "",
     question: str,
-    log_type: Optional[str],
+    project_code: Optional[str] = None,
     hints: str,
 ) -> str:
     replacements = {
         "task_id": task_id,
         "workspace_dir": workspace_dir,
         "question": question,
-        "log_type": log_type or "generic",
+        "project_code": project_code or "generic",
+        # 保留 {log_type} 占位符向后兼容旧模板
+        "log_type": project_code or "generic",
         "hints": hints or "",
     }
     rendered = user_prompt_template

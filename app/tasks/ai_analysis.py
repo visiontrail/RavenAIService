@@ -393,21 +393,21 @@ def _write_task_json_fields(workspace_ctx, fields: Dict[str, Any]) -> None:
     )
 
 
-def _bind_query_to_workspace(workspace_ctx, *, query: str, log_type: Any) -> None:
+def _bind_query_to_workspace(workspace_ctx, *, query: str, project_id: Any = None) -> None:
     workspace_ctx.metadata["question"] = query or ""
-    workspace_ctx.metadata["log_type"] = log_type
+    workspace_ctx.metadata["project_id"] = project_id
     _write_task_json_fields(
         workspace_ctx,
         {
             "question": query or "",
-            "log_type": log_type,
+            "project_id": project_id,
         },
     )
     logger.info(
-        "AI analysis workspace query bound: task_id=%s query_len=%d log_type=%s",
+        "AI analysis workspace query bound: task_id=%s query_len=%d project_id=%s",
         getattr(workspace_ctx, "task_id", "?"),
         len(query or ""),
-        log_type or "-",
+        project_id if project_id is not None else "-",
     )
 
 
@@ -485,26 +485,39 @@ def _inject_repo_info(session, workspace_ctx) -> None:
         )
         return
 
-    candidates = _project_code_candidates_from_metadata(
-        meta,
-        getattr(workspace_ctx, "metadata", {}).get("log_type") if getattr(workspace_ctx, "metadata", None) else None,
+    # 优先使用 LogRecord 上绑定的 project_id 直接定位项目
+    bound_project_id = (
+        getattr(workspace_ctx, "metadata", {}).get("project_id")
+        if getattr(workspace_ctx, "metadata", None)
+        else None
     )
-
-    if not candidates:
-        logger.info("_inject_repo_info: no project identity in metadata.json")
-        return
-
     repo = None
     matched_code: Optional[str] = None
-    for code in candidates:
+    if bound_project_id:
         repo = (
             session.query(ProjectRepo)
-            .filter(ProjectRepo.project_code == code, ProjectRepo.enabled.is_(True))
+            .filter(ProjectRepo.id == bound_project_id, ProjectRepo.enabled.is_(True))
             .first()
         )
         if repo:
-            matched_code = code
-            break
+            matched_code = "project_id"
+
+    if repo is None:
+        candidates = _project_code_candidates_from_metadata(meta)
+
+        if not candidates:
+            logger.info("_inject_repo_info: no project identity (project_id/metadata)")
+            return
+
+        for code in candidates:
+            repo = (
+                session.query(ProjectRepo)
+                .filter(ProjectRepo.project_code == code, ProjectRepo.enabled.is_(True))
+                .first()
+            )
+            if repo:
+                matched_code = code
+                break
 
     if not repo:
         registered_codes = [
@@ -671,6 +684,61 @@ def _inject_repo_info_from_project_id(session, workspace_ctx, project_repo_id: i
     return True
 
 
+def _maybe_dispatch_bug_fix(
+    session,
+    *,
+    analysis_result: Dict[str, Any],
+    log_record: LogRecord,
+    analysis_task_id: Optional[str],
+    project_repo_id: Optional[int],
+) -> None:
+    """Best-effort: 当分析判定需要代码修复时创建 Bug 修复任务并异步派发。
+
+    完全包在 try/except 中，任何失败只记日志，绝不影响分析结果的持久化。
+    派发条件由结构化信号严格把关（见 ``bug_fix_service.should_dispatch``），
+    且需解析出一个已注册的 project_repo 才会派发。
+    """
+    try:
+        if not settings.bug_fix_auto_dispatch:
+            return
+        from app.services import bug_fix_service
+
+        if not bug_fix_service.should_dispatch(analysis_result):
+            return
+
+        # log_record.project_id 与显式 project_repo_id 都是 project_repo.id。
+        repo_id = project_repo_id or getattr(log_record, "project_id", None)
+        if not repo_id:
+            logger.info(
+                "bug_fix dispatch skipped: no registered project_repo for log_id=%s",
+                getattr(log_record, "id", "?"),
+            )
+            return
+
+        task = bug_fix_service.create_task_from_analysis(
+            session,
+            project_repo_id=int(repo_id),
+            analysis_result=analysis_result,
+            source_log_id=str(getattr(log_record, "id", None)) if getattr(log_record, "id", None) else None,
+            source_analysis_task_id=str(analysis_task_id) if analysis_task_id else None,
+        )
+        session.commit()
+
+        from app.tasks.bug_fix import run_bug_fix_task
+
+        run_bug_fix_task.delay(task.id)
+        logger.info(
+            "bug_fix dispatched: task=%s repo=%s log_id=%s",
+            task.id, repo_id, getattr(log_record, "id", "?"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("bug_fix dispatch failed (non-fatal): %s", exc)
+        try:
+            session.rollback()
+        except Exception:
+            pass
+
+
 @celery_app.task(
     bind=True,
     name="app.tasks.ai_analysis.run_ai_analysis_task",
@@ -683,8 +751,14 @@ def run_ai_analysis_task(
     log_id: str,
     query: str,
     project_repo_id: Optional[int] = None,
+    locale: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Celery 任务：调用 Claude Agent SDK LogAnalysisAgent 完成日志分析。"""
+    """Celery 任务：调用 Claude Agent SDK LogAnalysisAgent 完成日志分析。
+
+    ``locale`` is the active locale resolved at enqueue time (there is no
+    request inside the worker); it drives per-language prompt selection and the
+    response-language directive. ``None`` falls back to the system default.
+    """
     session = SessionLocal()
     log_record: Optional[LogRecord] = None
     task_id = getattr(current_task.request, "id", None)
@@ -752,8 +826,14 @@ def run_ai_analysis_task(
         _bind_query_to_workspace(
             workspace_ctx,
             query=query,
-            log_type=getattr(log_record, "log_type", None),
+            project_id=getattr(log_record, "project_id", None),
         )
+
+        # Carry the enqueue-time locale into the run so prompt selection and the
+        # response-language directive honour the requester's language.
+        from app.i18n import normalize as _normalize_locale
+
+        workspace_ctx.locale = _normalize_locale(locale)
 
         # Pre-resolve project_repo so the agent can clone via plain Bash.
         # Two paths:
@@ -835,6 +915,16 @@ def run_ai_analysis_task(
             logger.debug(
                 "ai_analysis: metrics record skipped log_id=%s: %s", log_id, exc
             )
+
+        # Best-effort: 分析判定需要代码修复时自动派发 Bug 修复任务。
+        # 分析结果已在上方提交，派发失败绝不影响其持久化。
+        _maybe_dispatch_bug_fix(
+            session,
+            analysis_result=analysis_result,
+            log_record=log_record,
+            analysis_task_id=task_id,
+            project_repo_id=project_repo_id,
+        )
 
         logger.info(
             "AI analysis complete: log_id=%s status=%s engine=%s model=%s "

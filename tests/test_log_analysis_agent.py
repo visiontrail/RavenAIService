@@ -150,7 +150,7 @@ def workspace_ctx():
 
     tmp = tempfile.mkdtemp()
     task_json = os.path.join(tmp, "task.json")
-    _json.dump({"log_id": 1, "question": "What failed?", "log_type": "generic", "hints": ""}, open(task_json, "w"))
+    _json.dump({"log_id": 1, "question": "What failed?", "project_id": None, "hints": ""}, open(task_json, "w"))
     os.makedirs(os.path.join(tmp, "repo"), exist_ok=True)
     os.makedirs(os.path.join(tmp, "logs"), exist_ok=True)
 
@@ -161,7 +161,7 @@ def workspace_ctx():
         repo_dir=os.path.join(tmp, "repo"),
         task_json_path=task_json,
     )
-    ctx.metadata = {"log_type": "generic", "question": "What failed?"}
+    ctx.metadata = {"project_code": "generic", "question": "What failed?"}
     yield ctx
 
     import shutil
@@ -197,7 +197,7 @@ def test_render_user_prompt_includes_workspace_dir():
         task_id="task-1",
         workspace_dir="/app/temp/code_repos/task-1",
         question="What failed?",
-        log_type="generic",
+        project_code="generic",
         hints="",
     )
 
@@ -418,6 +418,49 @@ class TestLogAnalysisAgentRun:
         assert "mcp__project_repo__lookup_project_repo" not in kwargs["allowed_tools"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("locale", ["en", "zh"])
+    async def test_run_threads_locale_into_prompts_and_directive(self, workspace_ctx, locale):
+        """End-to-end (4.4): the run honours ``ctx.locale`` — it selects the
+        per-language prompt body via ``get_prompts(locale=...)`` and appends the
+        matching response-language directive to the system prompt handed to
+        ``build_options``."""
+        from app.agents.log_analysis.agent import LogAnalysisAgent
+        from app.i18n.prompts import response_language_directive
+
+        workspace_ctx.locale = locale
+
+        captured_locale = {}
+
+        def _spy_get_prompts(*args, **kwargs):
+            captured_locale["value"] = kwargs.get("locale")
+            return ("You are a test agent.", "{question}")
+
+        fake_sdk = MagicMock()
+        fake_sdk.query = _fake_query_ok
+        fake_sdk.ClaudeAgentOptions = MagicMock
+
+        with _patch_build_options() as mock_build_options, _patch_mcp_server(), \
+             patch("app.agents.log_analysis.prompts.get_prompts", side_effect=_spy_get_prompts), \
+             _patch_skills(), \
+             patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
+             patch("app.config.settings", MagicMock(
+                 anthropic_model="deepseek-v4-pro",
+                 anthropic_provider="deepseek",
+                 anthropic_request_timeout_seconds=600,
+             )):
+            await LogAnalysisAgent().run(workspace_ctx)
+
+        # Locale flowed into prompt selection.
+        assert captured_locale["value"] == locale
+        # The matching response-language directive is appended last to the
+        # system prompt that reaches the SDK.
+        system_prompt = mock_build_options.call_args.kwargs["system_prompt"]
+        assert system_prompt.endswith(response_language_directive(locale))
+        # The other locale's directive must NOT be present.
+        other = "zh" if locale == "en" else "en"
+        assert response_language_directive(other) not in system_prompt
+
+    @pytest.mark.asyncio
     async def test_bash_tool_is_unrestricted_for_temp_workspace(self, workspace_ctx):
         from app.agents.log_analysis.agent import LogAnalysisAgent
 
@@ -612,3 +655,135 @@ class TestFastFailCeleryTask:
 
         import shutil
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ───────────────── code-fix signal (bug-fix dispatch) ─────────────────
+
+
+class TestCodeFixSignal:
+    """Unit tests for the `requires_code_fix` / `proposed_fixes` signal."""
+
+    def test_code_defect_populates_signal(self):
+        from app.agents.log_analysis.agent import _normalize_code_fix_signal
+
+        parsed = {
+            "requires_code_fix": True,
+            "proposed_fixes": [
+                {
+                    "title": "为 handler 增加空指针检查",
+                    "description": "在 src/main.c 的 handle() 入口判空",
+                    "rationale": "根因是 req 为 NULL 时解引用崩溃",
+                    "suspected_files": ["repo:src/main.c"],
+                    "suspected_symbols": ["handle"],
+                }
+            ],
+        }
+        requires, fixes = _normalize_code_fix_signal(parsed)
+        assert requires is True
+        assert len(fixes) == 1
+        assert fixes[0]["title"] == "为 handler 增加空指针检查"
+        assert fixes[0]["rationale"].startswith("根因")
+        assert fixes[0]["suspected_files"] == ["repo:src/main.c"]
+        assert fixes[0]["suspected_symbols"] == ["handle"]
+
+    def test_non_code_issue_clears_signal(self):
+        from app.agents.log_analysis.agent import _normalize_code_fix_signal
+
+        parsed = {"requires_code_fix": False, "proposed_fixes": []}
+        requires, fixes = _normalize_code_fix_signal(parsed)
+        assert requires is False
+        assert fixes == []
+
+    def test_legacy_response_defaults_safely(self):
+        from app.agents.log_analysis.agent import _normalize_code_fix_signal
+
+        # Legacy responses omit both fields entirely.
+        requires, fixes = _normalize_code_fix_signal({"status": "ok"})
+        assert requires is False
+        assert fixes == []
+
+    def test_requires_true_but_no_valid_fixes_does_not_trigger(self):
+        from app.agents.log_analysis.agent import _normalize_code_fix_signal
+
+        # A stray boolean with no usable fixes must not request a fix.
+        requires, fixes = _normalize_code_fix_signal(
+            {"requires_code_fix": True, "proposed_fixes": []}
+        )
+        assert requires is False
+        assert fixes == []
+
+    def test_malformed_fixes_are_dropped(self):
+        from app.agents.log_analysis.agent import _normalize_proposed_fixes
+
+        fixes = _normalize_proposed_fixes(
+            [
+                {"title": "ok", "description": "d", "rationale": "r"},
+                {"title": "missing rationale", "description": "d"},
+                {"description": "no title", "rationale": "r"},
+                "not a dict",
+                {"title": "  ", "description": "d", "rationale": "r"},
+            ]
+        )
+        assert len(fixes) == 1
+        assert fixes[0]["title"] == "ok"
+        # Optional fields omitted when absent.
+        assert "suspected_files" not in fixes[0]
+
+    @pytest.mark.asyncio
+    async def test_successful_run_surfaces_signal(self, workspace_ctx):
+        from app.agents.log_analysis.agent import LogAnalysisAgent
+
+        async def _fake_query_with_fix(*args, **kwargs):
+            payload = {
+                "status": "ok",
+                "question_type": "root_cause",
+                "answer": "空指针导致崩溃",
+                "summary": "空指针导致崩溃",
+                "severity": "error",
+                "root_cause_hypotheses": [],
+                "recommended_actions": [],
+                "related_keywords": [],
+                "requires_code_fix": True,
+                "proposed_fixes": [
+                    {"title": "判空", "description": "加空指针检查", "rationale": "根因是空指针"}
+                ],
+            }
+            yield FakeResultMessage(result=f"```json\n{json.dumps(payload, ensure_ascii=False)}\n```")
+
+        fake_sdk = MagicMock()
+        fake_sdk.query = _fake_query_with_fix
+        fake_sdk.ClaudeAgentOptions = MagicMock
+
+        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), _patch_skills(), \
+             patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
+             patch("app.config.settings", MagicMock(
+                 anthropic_model="deepseek-v4-pro",
+                 anthropic_provider="deepseek",
+                 anthropic_request_timeout_seconds=600,
+             )):
+            result = await LogAnalysisAgent().run(workspace_ctx)
+
+        assert result["requires_code_fix"] is True
+        assert len(result["proposed_fixes"]) == 1
+        assert result["proposed_fixes"][0]["title"] == "判空"
+
+    @pytest.mark.asyncio
+    async def test_legacy_run_defaults_signal(self, workspace_ctx):
+        from app.agents.log_analysis.agent import LogAnalysisAgent
+
+        # _fake_query_ok emits a legacy payload with no signal fields.
+        fake_sdk = MagicMock()
+        fake_sdk.query = _fake_query_ok
+        fake_sdk.ClaudeAgentOptions = MagicMock
+
+        with _patch_build_options(), _patch_mcp_server(), _patch_prompts(), _patch_skills(), \
+             patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
+             patch("app.config.settings", MagicMock(
+                 anthropic_model="deepseek-v4-pro",
+                 anthropic_provider="deepseek",
+                 anthropic_request_timeout_seconds=600,
+             )):
+            result = await LogAnalysisAgent().run(workspace_ctx)
+
+        assert result["requires_code_fix"] is False
+        assert result["proposed_fixes"] == []

@@ -10,7 +10,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.users import get_current_user, get_optional_user
+from app.api.users import get_current_user, get_optional_user, get_request_locale
+from app.i18n.messages import t
 from app.models.chat import ChatRequest, ChatResponse
 from app.models.database import get_db
 from app.services.ai_chat_service import ai_chat_service
@@ -75,6 +76,7 @@ logger = logging.getLogger(__name__)
 @router.post("/chat", response_model=ChatResponse, summary="AI 对话")
 async def chat_endpoint(
     request: ChatRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ) -> ChatResponse:
@@ -84,8 +86,17 @@ async def chat_endpoint(
     logger.info(f"session_id: {request.session_id}")
     logger.info(f"历史记录条数: {len(request.history) if request.history else 0}")
     logger.info("=" * 80)
+    from app.i18n.deps import LOCALE_HEADER, resolve_locale
+
+    locale = resolve_locale(
+        header_locale=http_request.headers.get(LOCALE_HEADER),
+        accept_language=http_request.headers.get("Accept-Language"),
+        user=current_user,
+    )
     try:
-        response = await ai_chat_service.chat(request, db=db, user=current_user)
+        response = await ai_chat_service.chat(
+            request, db=db, user=current_user, locale=locale
+        )
         logger.info("AI 对话请求处理成功")
         return response
     except Exception as exc:  # noqa: BLE001
@@ -128,6 +139,14 @@ async def chat_stream_endpoint(
     cookie_carrier = Response()
     owner_scope = resolve_owner_scope(http_request, cookie_carrier, current_user)
 
+    from app.i18n.deps import LOCALE_HEADER, resolve_locale
+
+    locale = resolve_locale(
+        header_locale=http_request.headers.get(LOCALE_HEADER),
+        accept_language=http_request.headers.get("Accept-Language"),
+        user=current_user,
+    )
+
     def _carry_cookies(target: StreamingResponse) -> StreamingResponse:
         for raw in cookie_carrier.raw_headers:
             name = raw[0].decode("latin-1") if isinstance(raw[0], bytes) else raw[0]
@@ -142,7 +161,7 @@ async def chat_stream_endpoint(
         if job is None:
             raise HTTPException(
                 status_code=400,
-                detail="message 为空且该会话无运行中的 run，无法订阅",
+                detail=t("chat.empty_message_no_run", locale),
             )
         async def _resume_stream():
             yield ai_chat_service._sse_event(  # noqa: SLF001
@@ -177,6 +196,7 @@ async def chat_stream_endpoint(
                 history=history,
                 system_prompt_override=request.system_prompt,
                 remember=request.remember,
+                locale=locale,
             )
         else:
             job = await chat_run_service.start_general_run(
@@ -188,6 +208,7 @@ async def chat_stream_endpoint(
                 history=history,
                 system_prompt_override=request.system_prompt,
                 remember=request.remember,
+                locale=locale,
             )
     except HTTPException:
         raise
@@ -219,10 +240,11 @@ async def chat_summarize_endpoint(
     payload: SummarizeRequest,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_optional_user),
+    locale: str = Depends(get_request_locale),
 ) -> SummarizeResponse:
     content = (payload.user_content or "").strip()
     if not content:
-        raise HTTPException(status_code=400, detail="user_content 不能为空")
+        raise HTTPException(status_code=400, detail=t("chat.user_content_empty", locale))
 
     max_length = max(4, min(40, int(payload.max_length or 16)))
     summary = await summarize_user_message(content, max_length=max_length)
@@ -266,6 +288,7 @@ async def chat_permission_resolve_endpoint(
     http_request: Request,
     response: Response,
     current_user=Depends(get_optional_user),
+    locale: str = Depends(get_request_locale),
 ) -> ChatPermissionResolveResponse:
     """Resolve a pending ``can_use_tool`` request raised by a DeviceAgent run.
 
@@ -282,10 +305,12 @@ async def chat_permission_resolve_endpoint(
     """
     decision = (payload.decision or "").strip().lower()
     if decision not in {"allow", "deny"}:
-        raise HTTPException(status_code=400, detail="decision must be 'allow' or 'deny'")
+        raise HTTPException(status_code=400, detail=t("chat.invalid_decision", locale))
 
     if payload.updated_args is not None and not isinstance(payload.updated_args, dict):
-        raise HTTPException(status_code=400, detail="updated_args must be a JSON object")
+        raise HTTPException(
+            status_code=400, detail=t("chat.updated_args_not_object", locale)
+        )
 
     decision_payload: dict = {"decision": decision}
     if payload.updated_args is not None:
@@ -327,7 +352,7 @@ async def chat_permission_resolve_endpoint(
 
     raise HTTPException(
         status_code=404,
-        detail=f"Permission request not found or already resolved: {request_id}",
+        detail=t("chat.permission_not_found", locale, request_id=request_id),
     )
 
 
@@ -343,6 +368,7 @@ async def chat_active_run_endpoint(
     http_request: Request,
     response: Response,
     current_user=Depends(get_optional_user),
+    locale: str = Depends(get_request_locale),
 ):
     """Return the session's current active run snapshot or 404 if none.
 
@@ -352,7 +378,7 @@ async def chat_active_run_endpoint(
     owner_scope = resolve_owner_scope(http_request, response, current_user)
     snapshot = chat_run_service.get_active_run_snapshot(owner_scope, session_id)
     if snapshot is None:
-        raise HTTPException(status_code=404, detail="无运行中的 run")
+        raise HTTPException(status_code=404, detail=t("chat.no_active_run", locale))
     return snapshot
 
 
@@ -366,6 +392,7 @@ async def chat_run_snapshot_endpoint(
     response: Response,
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_optional_user),
+    locale: str = Depends(get_request_locale),
 ):
     """In-memory snapshot first; fall back to ``chat_agent_runs`` for evicted
     terminal runs so users can still view historical trace events.
@@ -381,7 +408,7 @@ async def chat_run_snapshot_endpoint(
         db, run_id, owner_scope
     )
     if snapshot is None:
-        raise HTTPException(status_code=404, detail="未找到该 run")
+        raise HTTPException(status_code=404, detail=t("chat.run_not_found", locale))
     return snapshot
 
 
@@ -393,6 +420,7 @@ async def chat_run_stream_endpoint(
     run_id: str,
     http_request: Request,
     current_user=Depends(get_optional_user),
+    locale: str = Depends(get_request_locale),
 ):
     """SSE replay+follow for an existing run. Disconnect does not cancel the
     underlying agent job; clients can reconnect and resume from the buffer.
@@ -407,7 +435,7 @@ async def chat_run_stream_endpoint(
     if job is None or job.owner_scope != owner_scope:
         raise HTTPException(
             status_code=404,
-            detail="未找到该 run（可能已超出内存保留期，请改用 GET /chat/runs/{run_id}）",
+            detail=t("chat.run_not_found_evicted", locale),
         )
 
     async def _stream():
@@ -436,6 +464,7 @@ async def chat_run_cancel_endpoint(
     http_request: Request,
     response: Response,
     current_user=Depends(get_optional_user),
+    locale: str = Depends(get_request_locale),
 ):
     """Cancel the in-memory job (asyncio.Task.cancel) and let the run-driver
     persist the terminal ``cancelled`` state. Owner_scope mismatch → 404."""
@@ -445,7 +474,11 @@ async def chat_run_cancel_endpoint(
     except HTTPException:
         raise
     if not ok:
-        return {"run_id": run_id, "cancelled": False, "message": "未找到运行中的 run 或已终态"}
+        return {
+            "run_id": run_id,
+            "cancelled": False,
+            "message": t("chat.run_not_found_or_terminal", locale),
+        }
     return {"run_id": run_id, "cancelled": True}
 
 
@@ -474,6 +507,13 @@ async def log_analysis_stream_endpoint(
     logger.info("=" * 80)
     cookie_carrier = Response()
     owner_scope = resolve_owner_scope(http_request, cookie_carrier, current_user)
+    from app.i18n.deps import LOCALE_HEADER, resolve_locale
+
+    locale = resolve_locale(
+        header_locale=http_request.headers.get(LOCALE_HEADER),
+        accept_language=http_request.headers.get("Accept-Language"),
+        user=current_user,
+    )
     try:
         generator = log_analysis_chat_service.stream(
             message=message,
@@ -485,6 +525,7 @@ async def log_analysis_stream_endpoint(
             db=db,
             user=current_user,
             owner_scope=owner_scope,
+            locale=locale,
         )
         sr = StreamingResponse(
             generator,
@@ -509,13 +550,18 @@ async def log_analysis_stream_endpoint(
 async def log_analysis_cancel_endpoint(
     payload: LogAnalysisCancelRequest,
     current_user=Depends(get_optional_user),
+    locale: str = Depends(get_request_locale),
 ):
     try:
         ok = log_analysis_chat_service.cancel(payload.session_id, user=current_user)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if not ok:
-        return {"session_id": payload.session_id, "cancelled": False, "message": "未找到进行中的任务"}
+        return {
+            "session_id": payload.session_id,
+            "cancelled": False,
+            "message": t("chat.no_running_task", locale),
+        }
     return {"session_id": payload.session_id, "cancelled": True}
 
 
@@ -550,6 +596,14 @@ async def project_expert_stream_endpoint(
     logger.info("session_id: %s, project_repo_id=%s", session_id, project_repo_id)
     logger.info("=" * 80)
 
+    from app.i18n.deps import LOCALE_HEADER, resolve_locale
+
+    locale = resolve_locale(
+        header_locale=http_request.headers.get(LOCALE_HEADER),
+        accept_language=http_request.headers.get("Accept-Language"),
+        user=current_user,
+    )
+
     # New session requires an explicit project: there is no metadata.json
     # fallback for project identity. Fail fast with 4xx before streaming.
     if project_repo_id is None and not project_expert_chat_service.session_has_workspace(
@@ -559,7 +613,7 @@ async def project_expert_stream_endpoint(
             status_code=400,
             detail={
                 "reason": "project_repo_required",
-                "message": "请先选择一个关联项目，再开始向项目专家提问。",
+                "message": t("project_expert.project_required", locale),
             },
         )
 
@@ -575,6 +629,7 @@ async def project_expert_stream_endpoint(
             db=db,
             user=current_user,
             owner_scope=owner_scope,
+            locale=locale,
         )
         sr = StreamingResponse(
             generator,
@@ -601,13 +656,18 @@ async def project_expert_stream_endpoint(
 async def project_expert_cancel_endpoint(
     payload: ProjectExpertCancelRequest,
     current_user=Depends(get_optional_user),
+    locale: str = Depends(get_request_locale),
 ):
     try:
         ok = project_expert_chat_service.cancel(payload.session_id, user=current_user)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if not ok:
-        return {"session_id": payload.session_id, "cancelled": False, "message": "未找到进行中的任务"}
+        return {
+            "session_id": payload.session_id,
+            "cancelled": False,
+            "message": t("chat.no_running_task", locale),
+        }
     return {"session_id": payload.session_id, "cancelled": True}
 
 

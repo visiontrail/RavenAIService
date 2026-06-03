@@ -34,8 +34,9 @@ from app.agents.log_analysis.workspace import (
     prepare,
 )
 from app.config import settings
+from app.i18n import DEFAULT as I18N_DEFAULT, normalize as normalize_locale
 from app.models.chat import ChatMessage
-from app.models.log import LogLevel, LogMetadata, LogStatus, LogType, LogUploadRequest
+from app.models.log import LogLevel, LogMetadata, LogStatus, LogUploadRequest
 from app.models.user import User
 from app.services.chat_history_service import chat_history_service
 from app.services.log_service import log_service
@@ -67,6 +68,9 @@ class AgentJob:
     remember: bool
     filename: Optional[str]
     started_at: float
+    # Active locale for this run; drives prompt selection, the response-language
+    # directive, and the language of the generated session title.
+    locale: str = I18N_DEFAULT
     # run_id projects this job into the unified chat_agent_runs lifecycle so
     # the sidebar overlay and /active-run snapshot can see log-analysis runs
     # alongside DeviceAgent runs.
@@ -109,6 +113,7 @@ class LogAnalysisChatService:
         user: Optional[User],
         owner_scope: Optional[str] = None,
         project_repo_id: Optional[int] = None,
+        locale: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """SSE stream for one log-analysis turn.
 
@@ -240,6 +245,14 @@ class LogAnalysisChatService:
             )
             self._bind_question_and_hints(ctx, question=question, hints=history_hint)
 
+            # Resolve the active locale (explicit choice → user preference →
+            # default) and bind it to the workspace so the agent run selects
+            # localized prompts and appends the response-language directive.
+            effective_locale = normalize_locale(
+                locale or getattr(user, "language", None)
+            )
+            ctx.locale = effective_locale
+
             yield self._sse_event(
                 {
                     "event": "log_analysis_status",
@@ -262,6 +275,7 @@ class LogAnalysisChatService:
                 started_at=time.monotonic(),
                 run_id=run_id,
                 owner_scope=effective_owner_scope,
+                locale=effective_locale,
             )
             self._jobs[effective_session_id] = job
             # Project the job into the unified chat_agent_runs lifecycle so
@@ -448,7 +462,7 @@ class LogAnalysisChatService:
         request_payload: Dict[str, Any] = {
             "filename": job.filename,
             "log_id": job.context_meta.get("log_id"),
-            "log_type": job.context_meta.get("log_type"),
+            "project_id": job.context_meta.get("project_id"),
             "project_repo_id": job.context_meta.get("project_repo_id"),
         }
 
@@ -654,6 +668,7 @@ class LogAnalysisChatService:
                             question=job.question,
                             answer=answer_text,
                             filename=job.filename,
+                            locale=job.locale,
                         )
                     await db.commit()
                 except Exception:
@@ -787,11 +802,21 @@ class LogAnalysisChatService:
         old_context = self._load_context(session_id, user=user)
         old_ctx = old_context[0] if old_context else None
 
-        inferred_type = self._infer_log_type_from_filename(file.filename or "")
+        from app.services import project_repo_service
+
+        inferred_code = self._infer_project_code_from_filename(file.filename or "")
+        inferred_project = (
+            await project_repo_service.get_by_project_code(db, inferred_code)
+            if inferred_code
+            else None
+        )
+        inferred_project_id = inferred_project.id if inferred_project else None
         upload_request = LogUploadRequest(
-            # Force OAM during upload so LogService does not start the protocol
-            # stack processing Celery task; this endpoint owns analysis itself.
-            log_type=LogType.OAM_ANTENNA,
+            # Force OAM (project_code) during upload so LogService does not start
+            # the protocol stack processing Celery task; this endpoint owns
+            # analysis itself. The real project is assigned right after.
+            project_code="oam_antenna",
+            project_id=None,
             log_level=LogLevel.INFO,
             metadata=LogMetadata(
                 source="ai_chat",
@@ -804,7 +829,7 @@ class LogAnalysisChatService:
         if log_record is None:
             raise RuntimeError("日志包已上传但未找到数据库记录")
 
-        log_record.log_type = inferred_type
+        log_record.project_id = inferred_project_id
         log_record.status = LogStatus.COMPLETED
         log_record.progress = 100.0
         log_record.issue_description = question
@@ -820,7 +845,7 @@ class LogAnalysisChatService:
         ctx.metadata.update(
             {
                 "question": question,
-                "log_type": inferred_type.value,
+                "project_id": inferred_project_id,
                 "hints": "",
             }
         )
@@ -839,7 +864,7 @@ class LogAnalysisChatService:
             "task_json_path": ctx.task_json_path,
             "log_id": log_record.id,
             "filename": log_record.original_filename or log_record.filename,
-            "log_type": inferred_type.value,
+            "project_id": inferred_project_id,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
         }
@@ -891,7 +916,7 @@ class LogAnalysisChatService:
         try:
             from app.tasks.ai_analysis import _bind_query_to_workspace
 
-            _bind_query_to_workspace(ctx, query=question, log_type=ctx.metadata.get("log_type"))
+            _bind_query_to_workspace(ctx, query=question, project_id=ctx.metadata.get("project_id"))
         except Exception:
             ctx.metadata["question"] = question
 
@@ -977,6 +1002,7 @@ class LogAnalysisChatService:
         question: str,
         answer: str,
         filename: Optional[str],
+        locale: Optional[str] = None,
     ) -> None:
         """Persist the user / assistant exchange. Caller owns commit/rollback."""
         user_content = question
@@ -1000,6 +1026,7 @@ class LogAnalysisChatService:
                         answer,
                         user_id=str(user_id) if user_id is not None else None,
                         session_id=session_id,
+                        locale=locale,
                     ),
                     timeout=8,
                 )
@@ -1060,7 +1087,7 @@ class LogAnalysisChatService:
             task_json_path=meta["task_json_path"],
             metadata={
                 "question": "",
-                "log_type": meta.get("log_type"),
+                "project_id": meta.get("project_id"),
                 "hints": "",
             },
         )
@@ -1099,15 +1126,17 @@ class LogAnalysisChatService:
         return None
 
     @staticmethod
-    def _infer_log_type_from_filename(filename: str) -> LogType:
+    def _infer_project_code_from_filename(filename: str) -> Optional[str]:
         name = (filename or "").lower()
         has_stack = "stack" in name
         has_oam = ("oam" in name) or ("om" in name)
         if has_stack and has_oam:
-            return LogType.FULL
+            return "full"
         if has_stack:
-            return LogType.STACK
-        return LogType.OAM_ANTENNA
+            return "stack"
+        if has_oam:
+            return "oam_antenna"
+        return None
 
     @staticmethod
     def _format_agent_result(

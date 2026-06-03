@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from app.config import settings
+from app.i18n import DEFAULT as I18N_DEFAULT
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,10 @@ class WorkspaceContext:
     repo_dir: str           # temp_dir/repo/
     task_json_path: str     # temp_dir/task.json
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # Active locale for this run (drives prompt selection + the response-language
+    # directive). Resolved from the request/owner at stream time; defaults to the
+    # system default so legacy callers keep working.
+    locale: str = I18N_DEFAULT
 
 
 # ─────────────────────── Public API ────────────────────────────────

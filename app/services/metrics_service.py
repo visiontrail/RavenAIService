@@ -1389,7 +1389,7 @@ async def aggregate_log_metrics(
     summary: Dict[str, Any] = {
         "upload_count": 0,
         "uploaded_bytes": 0,
-        "counts_by_log_type": {},
+        "counts_by_project": {},
         "counts_by_status": {},
         "ai_analysis_counts": {},
     }
@@ -1410,8 +1410,8 @@ async def aggregate_log_metrics(
             ).one()
             summary["upload_count"] = int(row[0] or 0)
             summary["uploaded_bytes"] = int(row[1] or 0)
-            summary["counts_by_log_type"] = await _count_group(
-                session, LogRecord.log_type, log_window
+            summary["counts_by_project"] = await _count_group(
+                session, LogRecord.project_id, log_window
             )
             summary["counts_by_status"] = await _count_group(
                 session, LogRecord.status, log_window

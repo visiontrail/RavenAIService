@@ -1,10 +1,10 @@
 <template>
   <div class="rw-page">
-    <WorkbenchTopbar title="上传日志" :meta="`${recentUploads.length} 条最近记录`">
+    <WorkbenchTopbar :title="t('upload.title')" :meta="t('upload.recentMeta', { count: recentUploads.length })">
       <template #actions>
         <button type="button" class="rw-btn-secondary" @click="$router.push('/logs')">
           <el-icon><Document /></el-icon>
-          <span>日志列表</span>
+          <span>{{ t('upload.goToLogs') }}</span>
         </button>
       </template>
     </WorkbenchTopbar>
@@ -14,8 +14,8 @@
         <!-- 页面标题 -->
         <div class="page-header">
           <p class="page-kicker">LOG INGEST</p>
-          <h1 class="text-2xl font-bold text-gray-900 mb-2">上传日志文件</h1>
-          <p class="text-gray-600">支持上传未解析的协议栈日志包进行解析处理</p>
+          <h1 class="text-2xl font-bold text-gray-900 mb-2">{{ t('upload.pageTitle') }}</h1>
+          <p class="text-gray-600">{{ t('upload.pageDesc') }}</p>
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -27,7 +27,7 @@
               <el-icon class="text-blue-600">
                 <Upload />
               </el-icon>
-              <span class="font-medium">文件上传</span>
+              <span class="font-medium">{{ t('upload.cardUpload') }}</span>
             </div>
           </template>
 
@@ -50,11 +50,11 @@
                 </el-icon>
                 <div class="upload-text">
                   <p class="text-lg font-medium text-gray-700">
-                    将文件拖拽到此处，或
-                    <span class="text-blue-600">点击上传</span>
+                    {{ t('upload.dragText') }}
+                    <span class="text-blue-600">{{ t('upload.dragClickHint') }}</span>
                   </p>
                   <p class="text-sm text-gray-500 mt-2">
-                    支持 .log, .txt, .json, .zip, .tar.gz, .7z, .rar 等格式，单个文件不超过 {{ maxFileSize }}MB
+                    {{ t('upload.formatHint', { max: maxFileSize }) }}
                   </p>
                 </div>
               </div>
@@ -73,7 +73,7 @@
                 <el-icon class="mr-1" v-if="!uploading">
                   <Upload />
                 </el-icon>
-                {{ uploading ? '上传中...' : `上传文件 (${fileList.length})` }}
+                {{ uploading ? t('upload.uploading') : t('upload.uploadBtn', { count: fileList.length }) }}
               </el-button>
             </div>
           </div>
@@ -86,7 +86,7 @@
               <el-icon class="text-green-600">
                 <InfoFilled />
               </el-icon>
-              <span class="font-medium">上传说明</span>
+              <span class="font-medium">{{ t('upload.cardTips') }}</span>
             </div>
           </template>
 
@@ -96,25 +96,25 @@
                 <el-icon class="text-green-500 mt-0.5" size="14">
                   <Check />
                 </el-icon>
-                <span>支持批量上传多个文件</span>
+                <span>{{ t('upload.tip1') }}</span>
               </li>
               <li class="flex items-start space-x-2">
                 <el-icon class="text-green-500 mt-0.5" size="14">
                   <Check />
                 </el-icon>
-                <span>支持 .log、.txt、.json、.zip、.tar.gz、.7z、.rar 等格式</span>
+                <span>{{ t('upload.tip2') }}</span>
               </li>
               <li class="flex items-start space-x-2">
                 <el-icon class="text-green-500 mt-0.5" size="14">
                   <Check />
                 </el-icon>
-                <span>单个文件大小不超过 {{ maxFileSize }}MB</span>
+                <span>{{ t('upload.tip3', { max: maxFileSize }) }}</span>
               </li>
               <li class="flex items-start space-x-2">
                 <el-icon class="text-green-500 mt-0.5" size="14">
                   <Check />
                 </el-icon>
-                <span>上传后将自动进行日志分析处理</span>
+                <span>{{ t('upload.tip4') }}</span>
               </li>
             </ul>
           </div>
@@ -130,7 +130,7 @@
               <el-icon class="text-blue-600">
                 <Loading />
               </el-icon>
-              <span class="font-medium">上传进度</span>
+              <span class="font-medium">{{ t('upload.cardProgress') }}</span>
             </div>
           </template>
 
@@ -168,14 +168,14 @@
                 <el-icon class="text-green-600">
                   <Document />
                 </el-icon>
-                <span class="font-medium">最近上传</span>
+                <span class="font-medium">{{ t('upload.cardRecent') }}</span>
               </div>
               <el-button
                 type="text"
                 size="small"
                 @click="$router.push('/logs')"
               >
-                查看全部
+                {{ t('upload.viewAll') }}
               </el-button>
             </div>
           </template>
@@ -208,7 +208,7 @@
                   size="small"
                   @click="$router.push(`/log/${log.id}`)"
                 >
-                  查看
+                  {{ t('upload.view') }}
                 </el-button>
               </div>
             </div>
@@ -217,7 +217,7 @@
             <el-icon size="48" class="mb-2">
               <Document />
             </el-icon>
-            <p>暂无上传记录</p>
+            <p>{{ t('upload.empty') }}</p>
           </div>
         </el-card>
       </div>
@@ -229,6 +229,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import type { UploadFile, UploadFiles, UploadInstance } from 'element-plus'
 import { useLogStore } from '../stores/logs'
@@ -236,6 +237,8 @@ import { useAppStore } from '../stores/app'
 import { formatDateTime, getStatusColor, getStatusText } from '../utils'
 import type { UploadFile as CustomUploadFile } from '../types'
 import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'
+
+const { t } = useI18n()
 import {
   Upload,
   UploadFilled,
@@ -297,17 +300,17 @@ const beforeUpload = (file: File) => {
   // 检查文件大小
   const isLtMaxSize = file.size / 1024 / 1024 < maxFileSize.value
   if (!isLtMaxSize) {
-    ElMessage.error(`文件大小不能超过 ${maxFileSize.value}MB!`)
+    ElMessage.error(t('upload.fileTooLarge', { max: maxFileSize.value }))
     return false
   }
 
   const fileName = file.name.toLowerCase()
-  
+
   // 检查是否为支持的格式
   const isValidType = supportedLogFileSuffixes.some(type => fileName.endsWith(type))
-  
+
   if (!isValidType) {
-    ElMessage.error(`只支持 ${supportedLogFileLabel} 等格式的文件!`)
+    ElMessage.error(t('upload.unsupportedType'))
     return false
   }
 
@@ -328,7 +331,7 @@ const getProgressStatus = (status: string) => {
 // 处理上传
 const handleUpload = async () => {
   if (fileList.value.length === 0) {
-    ElMessage.warning('请先选择要上传的文件')
+    ElMessage.warning(t('upload.selectFirst'))
     return
   }
 
@@ -353,17 +356,17 @@ const handleUpload = async () => {
         item.progress = 100
 
         appStore.showNotification({
-          title: '上传成功',
-          message: `文件 ${item.file.name} 上传成功`,
+          title: t('upload.uploadSuccess'),
+          message: t('upload.uploadSuccessMsg', { filename: item.file.name }),
           type: 'success',
         })
       } catch (error) {
         item.status = 'error'
-        item.error = '上传失败'
+        item.error = t('upload.statusError')
 
         appStore.showNotification({
-          title: '上传失败',
-          message: `文件 ${item.file.name} 上传失败`,
+          title: t('upload.uploadFail'),
+          message: t('upload.uploadFailMsg', { filename: item.file.name }),
           type: 'error',
         })
       }

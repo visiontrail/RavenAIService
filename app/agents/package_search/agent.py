@@ -471,15 +471,23 @@ class PackageSearchAgent:
         *,
         session_id: Optional[str],
         emitter: Optional[TraceEmitter] = None,
+        locale: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Inner loop shared by ``run`` and ``stream``."""
-        from app.agents.package_search.prompts import SYSTEM_PROMPT
+        from app.agents.package_search.prompts import get_system_prompt
+        from app.i18n.prompts import response_language_directive
         from app.services.raven_package_service import raven_package_service
 
         task_id = session_id or f"pkgsearch-{uuid.uuid4()}"
         state = _RunState(task_id=task_id, emitter=emitter)
 
-        options, effective_model, provider = self._build_options(system_prompt=SYSTEM_PROMPT)
+        # Select the per-language system prompt (``zh`` fallback) and append the
+        # blunt response-language directive last so the answer language is
+        # decoupled from the package metadata (which is largely Chinese).
+        system_prompt = get_system_prompt(locale)
+        system_prompt += "\n\n" + response_language_directive(locale)
+
+        options, effective_model, provider = self._build_options(system_prompt=system_prompt)
 
         state.emit(
             build_event(
@@ -592,14 +600,16 @@ class PackageSearchAgent:
         self,
         query: str,
         session_id: Optional[str] = None,
+        locale: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run the agent loop to completion. Returns the structured result."""
-        return await self._drive(query, session_id=session_id, emitter=None)
+        return await self._drive(query, session_id=session_id, emitter=None, locale=locale)
 
     async def stream(
         self,
         query: str,
         session_id: Optional[str] = None,
+        locale: Optional[str] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Yield trace events for SSE.
 
@@ -619,7 +629,9 @@ class PackageSearchAgent:
 
         async def _runner() -> Dict[str, Any]:
             try:
-                result = await self._drive(query, session_id=session_id, emitter=emitter)
+                result = await self._drive(
+                    query, session_id=session_id, emitter=emitter, locale=locale
+                )
                 return result
             finally:
                 queue.put_nowait(DONE)  # type: ignore[arg-type]

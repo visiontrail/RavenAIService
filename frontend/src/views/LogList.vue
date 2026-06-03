@@ -1,6 +1,6 @@
 <template>
   <div class="rw-page">
-    <WorkbenchTopbar title="日志列表" :meta="`${logStore.pagination.total} 条记录`">
+    <WorkbenchTopbar :title="t('logList.title')" :meta="t('logList.records', { count: logStore.pagination.total })">
       <template #actions>
         <button class="rw-btn-secondary" @click="refreshData" :disabled="logStore.loading">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -9,7 +9,7 @@
             <path d="M21 3v5h-5" />
             <path d="M3 21v-5h5" />
           </svg>
-          <span>刷新</span>
+          <span>{{ t('common.refresh') }}</span>
         </button>
       </template>
     </WorkbenchTopbar>
@@ -20,7 +20,7 @@
         <div class="filter-row">
           <el-input
             v-model="searchQuery"
-            placeholder="搜索文件名或任务名称..."
+            :placeholder="t('logList.searchPlaceholder')"
             clearable
             @input="handleSearch"
             class="filter-input filter-search"
@@ -30,34 +30,38 @@
             </template>
           </el-input>
           <el-select
-            v-model="logTypeFilter"
-            placeholder="日志类型"
+            v-model="projectFilter"
+            :placeholder="t('logList.projectFilter')"
             clearable
-            @change="handleLogTypeFilter"
+            @change="handleProjectFilter"
             class="filter-input filter-type"
           >
-            <el-option label="协议栈日志" value="stack" />
-            <el-option label="OAM与天线日志" value="oam_antenna" />
-            <el-option label="全量日志" value="full" />
+            <el-option :label="t('logList.uncategorized')" :value="0" />
+            <el-option
+              v-for="opt in projectOptions"
+              :key="opt.id"
+              :label="opt.project_name"
+              :value="opt.id"
+            />
           </el-select>
           <el-select
             v-model="statusFilter"
-            placeholder="状态筛选"
+            :placeholder="t('logList.statusFilter')"
             clearable
             @change="handleStatusFilter"
             class="filter-input filter-status"
           >
-            <el-option label="待处理" value="pending" />
-            <el-option label="处理中" value="processing" />
-            <el-option label="已完成" value="completed" />
-            <el-option label="失败" value="failed" />
+            <el-option :label="t('logList.status.pending')" value="pending" />
+            <el-option :label="t('logList.status.processing')" value="processing" />
+            <el-option :label="t('logList.status.completed')" value="completed" />
+            <el-option :label="t('logList.status.failed')" value="failed" />
           </el-select>
           <el-date-picker
             v-model="dateRange"
             type="datetimerange"
-            range-separator="至"
-            start-placeholder="开始时间"
-            end-placeholder="结束时间"
+            :range-separator="t('logList.dateSeparator')"
+            :start-placeholder="t('logList.startTime')"
+            :end-placeholder="t('logList.endTime')"
             :shortcuts="dateShortcuts"
             value-format="YYYY-MM-DDTHH:mm:ss[Z]"
             class="filter-input filter-date"
@@ -65,8 +69,8 @@
             clearable
           />
           <div class="filter-actions">
-            <button class="rw-btn-primary" @click="applyFilters">搜索</button>
-            <button class="rw-btn-secondary" @click="resetFilters">重置</button>
+            <button class="rw-btn-primary" @click="applyFilters">{{ t('common.search') }}</button>
+            <button class="rw-btn-secondary" @click="resetFilters">{{ t('common.reset') }}</button>
           </div>
         </div>
       </section>
@@ -76,7 +80,7 @@
         <div class="mobile-search-row">
           <el-input
             v-model="searchQuery"
-            placeholder="搜索文件名或任务名称..."
+            :placeholder="t('logList.searchPlaceholder')"
             clearable
             @input="handleSearch"
           >
@@ -84,27 +88,27 @@
               <el-icon><Search /></el-icon>
             </template>
           </el-input>
-          <button class="rw-btn-secondary" @click="mobileFilterDrawerVisible = true">筛选</button>
+          <button class="rw-btn-secondary" @click="mobileFilterDrawerVisible = true">{{ t('logList.mobileFilter') }}</button>
         </div>
       </section>
 
       <!-- Batch action bar -->
       <div v-if="selectedLogs.length > 0" class="batch-bar">
-        <span class="batch-info">已选择 {{ selectedLogs.length }} 项</span>
+        <span class="batch-info">{{ t('logList.batchSelected', { count: selectedLogs.length }) }}</span>
         <div class="batch-buttons">
           <button
             class="rw-btn-danger"
             @click="handleBatchDelete"
             :disabled="hasProcessingInSelection"
           >
-            批量删除 ({{ selectedLogs.length }})
+            {{ t('logList.batchDelete', { count: selectedLogs.length }) }}
           </button>
           <button
             class="rw-btn-primary"
             @click="handleBatchDownload"
             :disabled="eligibleDownloadIds.length === 0"
           >
-            批量下载 ({{ eligibleDownloadIds.length }})
+            {{ t('logList.batchDownload', { count: eligibleDownloadIds.length }) }}
           </button>
         </div>
       </div>
@@ -114,10 +118,10 @@
         <div class="table-toolbar">
           <div class="sort-controls">
             <el-select v-model="sortBy" size="small" class="sort-select" @change="handleSortChange">
-              <el-option label="按创建时间" value="created_at" />
-              <el-option label="按文件大小" value="file_size" />
-              <el-option label="按更新时间" value="updated_at" />
-              <el-option label="按文件名" value="filename" />
+              <el-option :label="t('logList.sortByCreatedAt')" value="created_at" />
+              <el-option :label="t('logList.sortByFileSize')" value="file_size" />
+              <el-option :label="t('logList.sortByUpdatedAt')" value="updated_at" />
+              <el-option :label="t('logList.sortByFilename')" value="filename" />
             </el-select>
             <button class="rw-btn-secondary sort-toggle" @click="toggleSortOrder">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -125,7 +129,7 @@
                 <path d="M7 12h10" />
                 <path d="M11 18h4" />
               </svg>
-              <span>{{ sortOrder === 'desc' ? '降序' : '升序' }}</span>
+              <span>{{ sortOrder === 'desc' ? t('logList.sortDesc') : t('logList.sortAsc') }}</span>
             </button>
           </div>
         </div>
@@ -143,7 +147,7 @@
           >
             <el-table-column type="selection" width="55" resizable />
 
-            <el-table-column prop="filename" label="文件名" min-width="300" :show-overflow-tooltip="true" resizable>
+            <el-table-column prop="filename" :label="t('logList.colFilename')" min-width="300" :show-overflow-tooltip="true" resizable>
               <template #default="{ row }">
                 <div class="filename-cell">
                   <router-link
@@ -153,7 +157,7 @@
                   >
                     {{ getDisplayFilename(row) }}
                   </router-link>
-                  <button class="rw-icon-btn copy-btn" @click="copyLink(row)" title="复制链接">
+                  <button class="rw-icon-btn copy-btn" @click="copyLink(row)" :title="t('common.copyLink')">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                       <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
                       <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
@@ -163,31 +167,31 @@
               </template>
             </el-table-column>
 
-            <el-table-column prop="log_type" label="日志类型" width="140" resizable>
+            <el-table-column prop="project_name" :label="t('logList.colProject')" width="140" resizable>
               <template #default="{ row }">
-                <span :class="['rw-pill', row.log_type === 'stack' ? 'rw-pill-success' : 'rw-pill-warning']">
-                  {{ logTypeText(row.log_type) }}
+                <span :class="['rw-pill', row.project_id ? 'rw-pill-success' : 'rw-pill-warning']">
+                  {{ projectText(row) }}
                 </span>
               </template>
             </el-table-column>
 
-            <el-table-column prop="file_size" label="文件大小" width="120" sortable="custom" resizable>
+            <el-table-column prop="file_size" :label="t('logList.colFileSize')" width="120" sortable="custom" resizable>
               <template #default="{ row }">
                 <span class="mono-cell">{{ formatFileSize(row.file_size) }}</span>
               </template>
             </el-table-column>
 
-            <el-table-column prop="status" label="状态" min-width="180" resizable>
+            <el-table-column prop="status" :label="t('logList.colStatus')" min-width="180" resizable>
               <template #default="{ row }">
                 <div class="status-tags">
                   <span :class="['rw-pill', pillKindForStatus(row.status)]">
                     {{ getStatusDisplayText(row) }}
                   </span>
                   <span v-if="isAIAnalysisCompleted(row)" class="rw-pill rw-pill-preview">
-                    AI已分析
+                    {{ t('logList.aiAnalyzed') }}
                   </span>
                   <span v-if="hasManualAnalysis(row)" class="rw-pill rw-pill-info">
-                    人工已分析
+                    {{ t('logList.manualAnalyzed') }}
                   </span>
                 </div>
               </template>
@@ -195,7 +199,7 @@
 
             <el-table-column
               prop="metadata.service_name"
-              label="研发分析"
+              :label="t('logList.colServiceName')"
               width="140"
               :show-overflow-tooltip="true"
               resizable
@@ -205,19 +209,19 @@
               </template>
             </el-table-column>
 
-            <el-table-column prop="download_count" label="下载次数" width="100" resizable>
+            <el-table-column prop="download_count" :label="t('logList.colDownloads')" width="100" resizable>
               <template #default="{ row }">
                 <span class="mono-cell">{{ row.download_count ?? 0 }}</span>
               </template>
             </el-table-column>
 
-            <el-table-column prop="created_at" label="创建时间" width="180" sortable="custom" resizable>
+            <el-table-column prop="created_at" :label="t('logList.colCreatedAt')" width="180" sortable="custom" resizable>
               <template #default="{ row }">
                 <span class="mono-cell">{{ formatDateTime(row.created_at) }}</span>
               </template>
             </el-table-column>
 
-            <el-table-column label="操作" width="260" fixed="right" resizable>
+            <el-table-column :label="t('common.actions')" width="260" fixed="right" resizable>
               <template #default="{ row }">
                 <div class="row-actions">
                   <button
@@ -225,20 +229,20 @@
                     @click="handleDownload(row)"
                     :disabled="row.status === 'processing'"
                   >
-                    下载
+                    {{ t('common.download') }}
                   </button>
                   <button
                     class="rw-btn-secondary rw-btn-xs"
                     @click="$router.push(`/log/${row.id}`)"
                   >
-                    详情
+                    {{ t('common.detail') }}
                   </button>
                   <button
                     class="rw-btn-danger rw-btn-xs"
                     @click="handleDelete(row)"
                     :disabled="row.status === 'processing'"
                   >
-                    删除
+                    {{ t('common.delete') }}
                   </button>
                 </div>
               </template>
@@ -274,11 +278,11 @@
                 <span :class="['rw-pill', pillKindForStatus(row.status)]">
                   {{ getStatusDisplayText(row) }}
                 </span>
-                <span :class="['rw-pill', row.log_type === 'stack' ? 'rw-pill-success' : 'rw-pill-warning']">
-                  {{ logTypeText(row.log_type) }}
+                <span :class="['rw-pill', row.project_id ? 'rw-pill-success' : 'rw-pill-warning']">
+                  {{ projectText(row) }}
                 </span>
-                <span v-if="isAIAnalysisCompleted(row)" class="rw-pill rw-pill-preview">AI已分析</span>
-                <span v-if="hasManualAnalysis(row)" class="rw-pill rw-pill-info">人工已分析</span>
+                <span v-if="isAIAnalysisCompleted(row)" class="rw-pill rw-pill-preview">{{ t('logList.aiAnalyzed') }}</span>
+                <span v-if="hasManualAnalysis(row)" class="rw-pill rw-pill-info">{{ t('logList.manualAnalyzed') }}</span>
               </div>
 
               <div class="mobile-log-meta">
@@ -287,14 +291,14 @@
               </div>
 
               <div class="mobile-log-actions">
-                <button class="rw-btn-secondary" @click="$router.push(`/log/${row.id}`)">详情</button>
+                <button class="rw-btn-secondary" @click="$router.push(`/log/${row.id}`)">{{ t('common.detail') }}</button>
                 <button class="rw-btn-primary" :disabled="row.status === 'processing'" @click="handleDownload(row)">
-                  下载
+                  {{ t('common.download') }}
                 </button>
               </div>
             </article>
           </div>
-          <el-empty v-else description="暂无日志记录" />
+          <el-empty v-else :description="t('logList.empty')" />
 
           <div class="pagination-wrapper">
             <el-pagination
@@ -311,57 +315,61 @@
       </div>
     </div>
 
-    <el-drawer v-model="mobileFilterDrawerVisible" title="筛选日志" direction="btt" size="70%">
+    <el-drawer v-model="mobileFilterDrawerVisible" :title="t('logList.filterDrawerTitle')" direction="btt" size="70%">
       <div class="mobile-filter-drawer">
         <el-select
-          v-model="logTypeFilter"
-          placeholder="日志类型"
+          v-model="projectFilter"
+          :placeholder="t('logList.projectFilter')"
           clearable
-          @change="handleLogTypeFilter"
+          @change="handleProjectFilter"
         >
-          <el-option label="协议栈日志" value="stack" />
-          <el-option label="OAM与天线日志" value="oam_antenna" />
-          <el-option label="全量日志" value="full" />
+          <el-option :label="t('logList.uncategorized')" :value="0" />
+          <el-option
+            v-for="opt in projectOptions"
+            :key="opt.id"
+            :label="opt.project_name"
+            :value="opt.id"
+          />
         </el-select>
         <el-select
           v-model="statusFilter"
-          placeholder="状态筛选"
+          :placeholder="t('logList.statusFilter')"
           clearable
           @change="handleStatusFilter"
         >
-          <el-option label="待处理" value="pending" />
-          <el-option label="处理中" value="processing" />
-          <el-option label="已完成" value="completed" />
-          <el-option label="失败" value="failed" />
+          <el-option :label="t('logList.status.pending')" value="pending" />
+          <el-option :label="t('logList.status.processing')" value="processing" />
+          <el-option :label="t('logList.status.completed')" value="completed" />
+          <el-option :label="t('logList.status.failed')" value="failed" />
         </el-select>
         <el-date-picker
           v-model="dateRange"
           type="datetimerange"
-          range-separator="至"
-          start-placeholder="开始时间"
-          end-placeholder="结束时间"
+          :range-separator="t('logList.dateSeparator')"
+          :start-placeholder="t('logList.startTime')"
+          :end-placeholder="t('logList.endTime')"
           :shortcuts="dateShortcuts"
           value-format="YYYY-MM-DDTHH:mm:ss[Z]"
           @change="handleDateRangeChange"
           clearable
         />
-        <el-select v-model="sortBy" placeholder="排序字段" @change="handleSortChange">
-          <el-option label="按创建时间" value="created_at" />
-          <el-option label="按文件大小" value="file_size" />
-          <el-option label="按更新时间" value="updated_at" />
-          <el-option label="按文件名" value="filename" />
+        <el-select v-model="sortBy" :placeholder="t('logList.sortField')" @change="handleSortChange">
+          <el-option :label="t('logList.sortByCreatedAt')" value="created_at" />
+          <el-option :label="t('logList.sortByFileSize')" value="file_size" />
+          <el-option :label="t('logList.sortByUpdatedAt')" value="updated_at" />
+          <el-option :label="t('logList.sortByFilename')" value="filename" />
         </el-select>
         <el-segmented
           v-model="sortOrder"
           :options="[
-            { label: '降序', value: 'desc' },
-            { label: '升序', value: 'asc' },
+            { label: t('logList.sortDesc'), value: 'desc' },
+            { label: t('logList.sortAsc'), value: 'asc' },
           ]"
           @change="applyFilters"
         />
         <div class="mobile-filter-actions">
-          <button class="rw-btn-secondary" @click="resetFilters">重置</button>
-          <button class="rw-btn-primary" @click="applyFilters(); mobileFilterDrawerVisible = false">应用</button>
+          <button class="rw-btn-secondary" @click="resetFilters">{{ t('common.reset') }}</button>
+          <button class="rw-btn-primary" @click="applyFilters(); mobileFilterDrawerVisible = false">{{ t('common.apply') }}</button>
         </div>
       </div>
     </el-drawer>
@@ -370,21 +378,26 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { useLogStore } from '../stores/logs'
 import { useAppStore } from '../stores/app'
 import { formatFileSize, formatDateTime, getStatusText, downloadFile, debounce } from '../utils'
-import { logApi } from '../api'
+import { logApi, projectRepoApi } from '../api'
+import type { ProjectRepoOption } from '../api'
 import type { LogRecord } from '../types'
 import { Search } from '@element-plus/icons-vue'
 import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'
+
+const { t } = useI18n()
 
 const logStore = useLogStore()
 const appStore = useAppStore()
 
 const searchQuery = ref('')
 const statusFilter = ref('')
-const logTypeFilter = ref('')
+const projectFilter = ref<number | ''>('')
+const projectOptions = ref<ProjectRepoOption[]>([])
 const dateRange = ref<string[] | null>(null)
 const selectedLogs = ref<LogRecord[]>([])
 const mobileFilterDrawerVisible = ref(false)
@@ -392,9 +405,9 @@ const mobileFilterDrawerVisible = ref(false)
 const sortBy = ref<'created_at' | 'file_size' | 'updated_at' | 'filename'>(logStore.filters.sort_by)
 const sortOrder = ref<'asc' | 'desc'>(logStore.filters.sort_order)
 
-const dateShortcuts = [
+const dateShortcuts = computed(() => [
   {
-    text: '最近24小时',
+    text: t('logList.recent24h'),
     value: () => {
       const end = new Date()
       const start = new Date()
@@ -403,7 +416,7 @@ const dateShortcuts = [
     },
   },
   {
-    text: '最近7天',
+    text: t('logList.recent7d'),
     value: () => {
       const end = new Date()
       const start = new Date()
@@ -411,7 +424,7 @@ const dateShortcuts = [
       return [start, end]
     },
   },
-]
+])
 
 const hasProcessingInSelection = computed(() => selectedLogs.value.some(l => l.status === 'processing'))
 const eligibleDownloadIds = computed(() => selectedLogs.value.filter(l => l.status === 'completed').map(l => l.id))
@@ -422,8 +435,8 @@ const handleSearch = debounce(() => {
   logStore.fetchLogs()
 }, 500)
 
-const handleLogTypeFilter = () => {
-  logStore.setFilters({ log_type: logTypeFilter.value })
+const handleProjectFilter = () => {
+  logStore.setFilters({ project_id: projectFilter.value })
   logStore.setPagination({ page: 1 })
   logStore.fetchLogs()
 }
@@ -447,7 +460,7 @@ const applyFilters = () => {
   logStore.setFilters({
     search: searchQuery.value,
     status: statusFilter.value,
-    log_type: logTypeFilter.value,
+    project_id: projectFilter.value,
     start_time: dateRange.value?.[0] || '',
     end_time: dateRange.value?.[1] || '',
     sort_by: sortBy.value,
@@ -460,14 +473,14 @@ const applyFilters = () => {
 const resetFilters = () => {
   searchQuery.value = ''
   statusFilter.value = ''
-  logTypeFilter.value = ''
+  projectFilter.value = ''
   dateRange.value = null
   sortBy.value = 'created_at'
   sortOrder.value = 'desc'
   logStore.setFilters({
     search: '',
     status: '',
-    log_type: '',
+    project_id: '',
     start_time: '',
     end_time: '',
     sort_by: 'created_at',
@@ -526,8 +539,8 @@ const handleDownload = async (log: LogRecord) => {
     downloadFile(downloadUrl, log.filename)
 
     appStore.showNotification({
-      title: '下载开始',
-      message: `文件 ${log.filename} 已开始下载`,
+      title: t('logList.downloadStart'),
+      message: t('logList.downloadStartMsg', { filename: log.filename }),
       type: 'success',
     })
 
@@ -538,8 +551,8 @@ const handleDownload = async (log: LogRecord) => {
     }
   } catch (error) {
     appStore.showNotification({
-      title: '下载失败',
-      message: '文件下载失败，请稍后重试',
+      title: t('logList.downloadFail'),
+      message: t('logList.downloadFailMsg'),
       type: 'error',
     })
   }
@@ -549,7 +562,7 @@ const copyLink = async (log: LogRecord) => {
   const link = `${window.location.origin}/log/${log.id}`
   try {
     await navigator.clipboard.writeText(link)
-    ElMessage.success('链接已复制到剪贴板')
+    ElMessage.success(t('common.copyLinkSuccess'))
   } catch (error) {
     const textArea = document.createElement('textarea')
     textArea.value = link
@@ -557,9 +570,9 @@ const copyLink = async (log: LogRecord) => {
     textArea.select()
     try {
       document.execCommand('copy')
-      ElMessage.success('链接已复制到剪贴板')
+      ElMessage.success(t('common.copyLinkSuccess'))
     } catch (err) {
-      ElMessage.error('复制失败，请手动复制链接')
+      ElMessage.error(t('common.copyLinkFail'))
     }
     document.body.removeChild(textArea)
   }
@@ -568,7 +581,7 @@ const copyLink = async (log: LogRecord) => {
 const handleBatchDownload = async () => {
   try {
     if (eligibleDownloadIds.value.length === 0) {
-      ElMessage.warning('请选择已完成的文件进行打包下载')
+      ElMessage.warning(t('logList.batchDownloadEmpty'))
       return
     }
     appStore.setLoading(true)
@@ -577,15 +590,15 @@ const handleBatchDownload = async () => {
       const url = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8085') + res.data.download_url
       window.open(url, '_blank')
       appStore.showNotification({
-        title: '打包成功',
-        message: `正在下载 ${res.data.filename}`,
+        title: t('logList.batchPackSuccess'),
+        message: t('logList.batchPackSuccessMsg', { filename: res.data.filename }),
         type: 'success',
       })
     }
   } catch (e) {
     appStore.showNotification({
-      title: '打包失败',
-      message: '批量下载失败，请稍后重试',
+      title: t('logList.batchPackFail'),
+      message: t('logList.batchPackFailMsg'),
       type: 'error',
     })
   } finally {
@@ -596,26 +609,26 @@ const handleBatchDownload = async () => {
 const handleDelete = async (log: LogRecord) => {
   try {
     await ElMessageBox.confirm(
-      `确定要删除文件 "${log.filename}" 吗？此操作不可恢复。`,
-      '确认删除',
+      t('logList.deleteConfirmMsg', { filename: log.filename }),
+      t('logList.deleteConfirmTitle'),
       {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
+        confirmButtonText: t('common.confirm'),
+        cancelButtonText: t('common.cancel'),
         type: 'warning',
       }
     )
 
     await logStore.deleteLog(log.id)
     appStore.showNotification({
-      title: '删除成功',
-      message: `文件 ${log.filename} 已删除`,
+      title: t('logList.deleteSuccess'),
+      message: t('logList.deleteSuccessMsg', { filename: log.filename }),
       type: 'success',
     })
   } catch (error) {
     if (error !== 'cancel') {
       appStore.showNotification({
-        title: '删除失败',
-        message: '文件删除失败，请稍后重试',
+        title: t('logList.deleteFail'),
+        message: t('logList.deleteFailMsg'),
         type: 'error',
       })
     }
@@ -625,11 +638,11 @@ const handleDelete = async (log: LogRecord) => {
 const handleBatchDelete = async () => {
   try {
     await ElMessageBox.confirm(
-      `确定要删除选中的 ${selectedLogs.value.length} 个文件吗？此操作不可恢复。`,
-      '确认批量删除',
+      t('logList.batchDeleteConfirmMsg', { count: selectedLogs.value.length }),
+      t('logList.batchDeleteConfirmTitle'),
       {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
+        confirmButtonText: t('common.confirm'),
+        cancelButtonText: t('common.cancel'),
         type: 'warning',
       }
     )
@@ -638,15 +651,15 @@ const handleBatchDelete = async () => {
     await logStore.batchDeleteLogs(ids)
     selectedLogs.value = []
     appStore.showNotification({
-      title: '批量删除成功',
-      message: `已删除 ${ids.length} 个文件`,
+      title: t('logList.batchDeleteSuccess'),
+      message: t('logList.batchDeleteSuccessMsg', { count: ids.length }),
       type: 'success',
     })
   } catch (error) {
     if (error !== 'cancel') {
       appStore.showNotification({
-        title: '批量删除失败',
-        message: '批量删除失败，请稍后重试',
+        title: t('logList.batchDeleteFail'),
+        message: t('logList.batchDeleteFailMsg'),
         type: 'error',
       })
     }
@@ -670,7 +683,19 @@ const stopAutoRefresh = () => {
   }
 }
 
+const fetchProjectOptions = async () => {
+  try {
+    const response = await projectRepoApi.listEnabled()
+    if (response.success && response.data) {
+      projectOptions.value = response.data
+    }
+  } catch (error) {
+    console.error('加载项目列表失败:', error)
+  }
+}
+
 onMounted(() => {
+  fetchProjectOptions()
   logStore.fetchLogs().then(() => {
     startAutoRefresh()
   }).catch((error) => {
@@ -682,15 +707,8 @@ onBeforeUnmount(() => {
   stopAutoRefresh()
 })
 
-const logTypeText = (t?: string) => {
-  switch (t) {
-    case 'oam_antenna':
-      return 'OAM与天线日志'
-    case 'full':
-      return '全量日志'
-    default:
-      return '协议栈日志'
-  }
+const projectText = (row: LogRecord) => {
+  return row.project_name || t('logList.uncategorized')
 }
 
 const getDisplayFilename = (row: LogRecord) => {
@@ -714,8 +732,8 @@ const isAIAnalysisCompleted = (log: LogRecord) => {
 }
 
 const getStatusDisplayText = (log: LogRecord) => {
-  const isDecompressedLog = (log.log_type === 'stack' || log.log_type === 'full') && log.status === 'completed'
-  if (isDecompressedLog) return '已解压'
+  const isDecompressedLog = (log.project_code === 'stack' || log.project_code === 'full') && log.status === 'completed'
+  if (isDecompressedLog) return t('logList.status.decompressed')
   return getStatusText(log.status)
 }
 

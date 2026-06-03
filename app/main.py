@@ -15,6 +15,7 @@ from app.api import health, logs, tasks, admin, users, packages
 from app.api import ai_chat, device_link, metrics as metrics_api
 from app.api import admin_metrics
 from app.api import project_repos as project_repos_api
+from app.api import bug_fixes as bug_fixes_api
 from app.api.releases import admin_router as releases_admin_router, public_router as releases_public_router
 from app.middleware import RequestLoggingMiddleware, FileSizeLimitMiddleware
 from app.exceptions import register_exception_handlers
@@ -239,6 +240,7 @@ def create_app() -> FastAPI:
     app.include_router(metrics_api.router, tags=["Metrics"])
     app.include_router(logs.router, prefix="/api/v1/logs", tags=["日志管理"])
     app.include_router(project_repos_api.router, tags=["项目仓库"])
+    app.include_router(bug_fixes_api.router, tags=["Bug 修复"])
     app.include_router(tasks.router, prefix="/api/v1", tags=["任务管理"])
     app.include_router(ai_chat.router, prefix="/api/v1/ai-chat", tags=["AI Chat"])
     app.include_router(users.router, tags=["用户管理"])

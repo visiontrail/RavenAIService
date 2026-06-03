@@ -8,7 +8,7 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, validator, computed_field
 from enum import Enum
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, DateTime, Integer, Text, Enum as SQLEnum, UUID, Float, Boolean
+from sqlalchemy import String, DateTime, Integer, Text, Enum as SQLEnum, UUID, Float, Boolean, ForeignKey
 import uuid
 
 from .base import BaseResponse, PaginatedResponse
@@ -30,13 +30,6 @@ class LogLevel(str, Enum):
     WARN = "warn"
     ERROR = "error"
     FATAL = "fatal"
-
-
-class LogType(str, Enum):
-    """日志类型枚举"""
-    STACK = "stack"
-    OAM_ANTENNA = "oam_antenna"
-    FULL = "full"  # 全量日志（包含协议栈和OAM/天线日志）
 
 
 # ==================== SQLAlchemy 数据库模型 ====================
@@ -75,12 +68,13 @@ class LogRecord(Base, TimestampMixin):
         comment="文件存储路径"
     )
     
-    # 日志类型和状态
-    log_type: Mapped[LogType] = mapped_column(
-        SQLEnum(LogType),
-        nullable=False,
-        default=LogType.STACK,
-        comment="日志类型"
+    # 项目关联（替代原 log_type 枚举）
+    project_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("project_repo.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="关联的项目（project_repo.id），可空表示未分类"
     )
     status: Mapped[LogStatus] = mapped_column(
         SQLEnum(LogStatus),
@@ -213,7 +207,9 @@ class LogFileInfo(BaseModel):
     original_filename: str = Field(..., description="原始文件名")
     file_size: int = Field(..., description="文件大小（字节）")
     file_path: str = Field(..., description="文件存储路径")
-    log_type: LogType = Field(LogType.STACK, description="日志类型")
+    project_id: Optional[int] = Field(None, description="关联的项目ID（project_repo.id）")
+    project_code: Optional[str] = Field(None, description="关联项目的代号")
+    project_name: Optional[str] = Field(None, description="关联项目的展示名称")
     status: LogStatus = Field(LogStatus.PENDING, description="处理状态")
     progress: float = Field(0.0, ge=0.0, le=100.0, description="处理进度（0-100）")
     task_id: Optional[str] = Field(None, description="Celery任务ID")
@@ -292,7 +288,8 @@ class LogFileInfo(BaseModel):
 
 class LogUploadRequest(BaseModel):
     """日志上传请求"""
-    log_type: LogType = Field(LogType.STACK, description="日志类型")
+    project_code: Optional[str] = Field(None, description="关联项目代号（与 project_id 二选一）")
+    project_id: Optional[int] = Field(None, description="关联项目ID（与 project_code 二选一）")
     log_level: Optional[LogLevel] = Field(LogLevel.INFO, description="日志级别")
     metadata: Optional[LogMetadata] = Field(default_factory=LogMetadata, description="元数据")
     expires_in_days: Optional[int] = Field(None, ge=1, le=365, description="过期天数")
@@ -347,7 +344,7 @@ class LogListRequest(BaseModel):
     """日志列表查询请求模型"""
     page: int = Field(1, ge=1, description="页码")
     per_page: int = Field(20, ge=1, le=100, description="每页大小")
-    log_type: Optional[LogType] = Field(None, description="日志类型过滤")
+    project_id: Optional[int] = Field(None, description="项目过滤；0 或 None 表示未分类日志")
     log_level: Optional[LogLevel] = Field(None, description="日志级别过滤")
     status: Optional[LogStatus] = Field(None, description="状态过滤")
     start_time: Optional[datetime] = Field(None, description="开始时间")

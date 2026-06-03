@@ -129,6 +129,7 @@ class ProjectExpertChatService:
         db: Optional[AsyncSession],
         user: Optional[User],
         owner_scope: Optional[str] = None,
+        locale: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """SSE stream for one project-expert turn.
 
@@ -265,6 +266,13 @@ class ProjectExpertChatService:
                 session_id=effective_session_id,
                 history_json=history_json,
             )
+            # Drive prompt selection + the response-language directive for this
+            # run. Resolved from the request/owner at the API layer; falls back
+            # to the default when absent.
+            if locale:
+                from app.i18n import normalize
+
+                ctx.locale = normalize(locale)
             self._bind_question_and_hints(ctx, question=question, hints=history_hint)
 
             yield self._sse_event(

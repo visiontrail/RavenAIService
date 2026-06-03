@@ -94,6 +94,10 @@ class DeviceAgentContext:
     # 共享 broker 注册表（旧字典风格）：``{session_id_or_run_id: PermissionBroker}``。
     # 当 ``broker_register`` 未提供时使用；保留兼容旧 ``AIChatService`` 调用方。
     broker_registry: Optional[Dict[str, PermissionBroker]] = None
+    # 本轮活动语言（驱动每语言提示词选择 + 回复语言指令）。由调用方
+    # （``ChatRunService`` / ``AIChatService``）从请求/用户偏好解析后传入；
+    # 缺省时回退到系统默认语言，旧调用方无需改动即可工作。
+    locale: Optional[str] = None
 
 
 # ─────────────────────── Helpers ───────────────────────────────────
@@ -338,8 +342,15 @@ class DeviceAgent:
             )
 
             # --- Compose prompts --------------------------------------------
-            base_system, user_template = get_prompts(ctx.scene_hint)
+            base_system, user_template = get_prompts(ctx.scene_hint, locale=ctx.locale)
             system_prompt = _compose_system_prompt(base_system, ctx.system_prompt_override)
+            # 末尾追加直白的回复语言指令，使回复语言与（可能为中文的）设备
+            # 数据/历史解耦。
+            from app.i18n.prompts import response_language_directive
+
+            system_prompt = _compose_system_prompt(
+                system_prompt, response_language_directive(ctx.locale)
+            )
 
             max_history_turns = int(
                 getattr(settings, "anthropic_max_history_turns", 10)
