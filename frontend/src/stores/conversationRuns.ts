@@ -3,6 +3,7 @@ import { computed, reactive, ref } from 'vue'
 import { API_BASE_URL } from '@/api'
 import { userApi } from '@/api/user'
 import { projectExpertStream, resolveChatPermission } from '@/api/chat'
+import { i18n } from '@/i18n'
 import type { AgentTraceEvent } from '@/types/agentTrace'
 import type { ChatMessageRecord } from '@/types'
 
@@ -36,6 +37,11 @@ export type PendingPermission = {
 export type AgentKind = 'device' | 'log_analysis' | 'project_expert' | 'package'
 
 export type RunStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'stale'
+
+export const THINKING_PLACEHOLDER = '__RAVEN_AI_THINKING__'
+
+const t = (key: string, params?: Record<string, unknown>) =>
+  i18n.global.t(key, params || {})
 
 export type ConversationState = {
   sessionId: string
@@ -127,15 +133,15 @@ const getServiceUrl = (path: string) => {
 }
 
 const formatPlan = (steps: any[]) => {
-  if (!Array.isArray(steps) || steps.length === 0) return '未生成计划。'
-  const lines: string[] = ['**计划步骤**']
+  if (!Array.isArray(steps) || steps.length === 0) return t('aiChat.runs.noPlan')
+  const lines: string[] = [`**${t('aiChat.runs.planSteps')}**`]
   steps.forEach((step, index) => {
     const id = step?.id || `S${index + 1}`
     const type = step?.type ? ` (${step.type})` : ''
-    const goal = step?.goal || '无描述'
+    const goal = step?.goal || t('aiChat.runs.noDescription')
     lines.push(`- ${id}${type}: ${goal}`)
     if (Array.isArray(step?.success_criteria) && step.success_criteria.length) {
-      lines.push(`  - 验证: ${step.success_criteria.join('; ')}`)
+      lines.push(`  - ${t('aiChat.runs.validation')}: ${step.success_criteria.join('; ')}`)
     }
   })
   return lines.join('\n')
@@ -143,15 +149,15 @@ const formatPlan = (steps: any[]) => {
 
 const formatDeviceAction = (payload: any) => {
   const order = typeof payload?.step_index === 'number' ? payload.step_index + 1 : null
-  const label = payload?.step_id || (order ? `步骤${order}` : '设备动作')
-  const goal = payload?.step_goal ? `：${payload.step_goal}` : ''
-  const lines: string[] = [`**设备动作 ${label}${goal}**`]
+  const label = payload?.step_id || (order ? t('aiChat.runs.stepLabel', { order }) : t('aiChat.runs.defaultDeviceActionLabel'))
+  const goal = payload?.step_goal ? `${t('aiChat.runs.goalSeparator')}${payload.step_goal}` : ''
+  const lines: string[] = [`**${t('aiChat.runs.deviceAction')} ${label}${goal}**`]
   const answerText =
     typeof payload?.answer === 'string' ? payload.answer : payload?.answer ? String(payload.answer) : ''
   if (answerText) lines.push(answerText)
   else if (payload?.raw) lines.push(String(payload.raw))
-  else lines.push('无返回内容')
-  if (payload?.topic_id) lines.push(`- 话题ID: ${payload.topic_id}`)
+  else lines.push(t('aiChat.runs.emptyResponse'))
+  if (payload?.topic_id) lines.push(`- ${t('aiChat.runs.topicId')}: ${payload.topic_id}`)
   return lines.join('\n')
 }
 
@@ -194,7 +200,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
   const ensureAnswerMessage = (state: ConversationState, answerId: string): ChatEntry => {
     const idx = findMessageIndex(state, answerId)
     if (idx !== -1) return state.messages[idx]
-    const placeholder: ChatEntry = { id: answerId, role: 'ai', content: '正在思考...', kind: 'answer' }
+    const placeholder: ChatEntry = { id: answerId, role: 'ai', content: THINKING_PLACEHOLDER, kind: 'answer' }
     state.messages.push(placeholder)
     return placeholder
   }
@@ -279,8 +285,8 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     }
     if (type === 'log_analysis_status') {
       const target = ensureAnswerMessage(state, answerId)
-      const statusText = payload?.message || 'Log Analysis Agent 正在处理...'
-      target.content = `**日志分析 Agent**\n\n${statusText}`
+      const statusText = payload?.message || t('aiChat.runs.logAnalysisProcessing')
+      target.content = `**${t('aiChat.agents.logAnalysis')} Agent**\n\n${statusText}`
       return
     }
     if (type === 'log_analysis_context') return
@@ -316,8 +322,8 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       const chunk = typeof payload?.text_chunk === 'string' ? payload.text_chunk : ''
       if (!chunk) return
       const target = ensureAnswerMessage(state, answerId)
-      // First delta clears the "正在思考..." placeholder before appending.
-      if (target.content === '正在思考...') {
+      // First delta clears the placeholder before appending.
+      if (target.content === THINKING_PLACEHOLDER) {
         target.content = chunk.replace(/^\s+/, '')
       } else {
         target.content += chunk
@@ -380,7 +386,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     const target = ensureAnswerMessage(state, answerId)
     if (type === 'chunk' && typeof payload?.content === 'string') {
       const chunk = payload.content
-      if (target.content === '正在思考...') {
+      if (target.content === THINKING_PLACEHOLDER) {
         const trimmedChunk = chunk.trimStart()
         if (trimmedChunk) target.content = trimmedChunk
       } else {
@@ -388,7 +394,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       }
     } else if (type === 'done') {
       if (typeof payload?.answer === 'string' && payload.answer) target.content = payload.answer.trimStart()
-      else if (!target.content || target.content === '正在思考...') target.content = '（无回复内容）'
+      else if (!target.content || target.content === THINKING_PLACEHOLDER) target.content = t('aiChat.runs.emptyResponse')
       applySuggestedAgent(state, payload?.suggested_agent_type)
       const resultStatus = String(payload?.result?.status || '').toLowerCase()
       if (resultStatus === 'cancelled') state.runStatus = 'cancelled'
@@ -401,7 +407,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       // cases (e.g. missing metadata.json). Render it verbatim; only fall back
       // to a generic friendly line when no message was provided.
       const backendMsg = typeof payload?.message === 'string' ? payload.message.trim() : ''
-      target.content = backendMsg || '抱歉，处理这条请求时遇到了问题，请稍后重试。'
+      target.content = backendMsg || t('aiChat.runs.genericError')
       state.runStatus = 'failed'
       target.traceRunning = false
     }
@@ -516,7 +522,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     response: Response,
     abortSignal: AbortSignal,
   ): Promise<{ terminal: boolean }> => {
-    if (!response.body) throw new Error('响应体为空，无法流式读取')
+    if (!response.body) throw new Error('Empty response body; cannot stream')
     const reader = response.body.getReader()
     const decoder = new TextDecoder('utf-8')
     let buffer = ''
@@ -542,7 +548,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
             terminal = true
           }
         } catch (err) {
-          console.error('解析流式数据失败', err, jsonStr)
+          console.error('Failed to parse stream data', err, jsonStr)
         }
       }
       buffer = remaining
@@ -635,7 +641,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
             }
           }
         } catch (err) {
-          console.warn('加载会话消息失败', err)
+          console.warn('Failed to load session messages', err)
         }
       }
 
@@ -702,7 +708,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       if (terminal) markTerminal(state, state.runStatus === 'idle' ? 'succeeded' : state.runStatus)
     } catch (err: any) {
       if (err?.name === 'AbortError') return
-      console.warn('订阅 run 失败', err)
+      console.warn('Failed to subscribe to run', err)
       markTerminal(state, 'failed')
     } finally {
       if (state.subscription === ac) state.subscription = null
@@ -738,7 +744,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     state.messages.push({
       id: pendingAnswerId,
       role: 'ai',
-      content: '正在思考...',
+      content: THINKING_PLACEHOLDER,
       kind: 'answer',
       traceEvents: [],
       traceRunning: true,
@@ -798,7 +804,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       // first ``session`` frame with run_id sets activeRunId and we then
       // re-key the placeholder).
       const reKeyPump = async () => {
-        if (!resp.body) throw new Error('响应体为空，无法流式读取')
+        if (!resp.body) throw new Error('Empty response body; cannot stream')
         const reader = resp.body.getReader()
         const decoder = new TextDecoder('utf-8')
         let buffer = ''
@@ -834,7 +840,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
                 terminal = true
               }
             } catch (err) {
-              console.error('解析流式数据失败', err, jsonStr)
+              console.error('Failed to parse stream data', err, jsonStr)
             }
           }
           buffer = remaining
@@ -858,10 +864,10 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       if (terminal) markTerminal(state, terminalStatus(state))
     } catch (err: any) {
       if (err?.name === 'AbortError') return
-      console.error('启动 DeviceAgent run 失败', err)
+      console.error('Failed to start DeviceAgent run', err)
       const target = state.messages.find((m) => m.id === state.currentAnswerId)
       if (target) {
-        target.content = `调用后端失败：${err?.message || String(err)}`
+        target.content = t('aiChat.runs.backendCallFailed', { error: err?.message || String(err) })
         target.traceRunning = false
       }
       markTerminal(state, 'failed')
@@ -884,7 +890,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     if (state.isSending) return
 
     const userDisplay = payload.file
-      ? `${payload.message || '请分析这个日志包。'}\n\n附件：${payload.file.name}`
+      ? `${payload.message || t('aiChat.defaultLogAnalysisMessage')}\n\n${t('aiChat.runs.attachment')}: ${payload.file.name}`
       : payload.message
     state.messages.push({
       id: generateUUID(),
@@ -897,7 +903,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     state.messages.push({
       id: pendingAnswerId,
       role: 'ai',
-      content: '正在思考...',
+      content: THINKING_PLACEHOLDER,
       kind: 'answer',
       traceEvents: [],
       traceRunning: true,
@@ -933,7 +939,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       // Re-key inline as we discover run_id. The log-analysis stream may not
       // emit a session prologue frame; we accept either run_id or session_id
       // attribution.
-      if (!resp.body) throw new Error('响应体为空，无法流式读取')
+      if (!resp.body) throw new Error('Empty response body; cannot stream')
       const reader = resp.body.getReader()
       const decoder = new TextDecoder('utf-8')
       let buffer = ''
@@ -963,7 +969,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
             const t = evPayload?.event || evPayload?.type
             if (t === 'done' || t === 'error') terminal = true
           } catch (err) {
-            console.error('解析流式数据失败', err, jsonStr)
+            console.error('Failed to parse stream data', err, jsonStr)
           }
         }
         buffer = remaining
@@ -989,12 +995,12 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       }
     } catch (err: any) {
       if (err?.name === 'AbortError') return
-      console.error('启动日志分析 run 失败', err)
+      console.error('Failed to start log-analysis run', err)
       const target = state.messages.find((m) => m.id === state.currentAnswerId)
       if (target) {
         // Transport-level failure (network / non-2xx). Keep it friendly and
         // actionable rather than surfacing the raw error string.
-        target.content = '抱歉，日志分析服务暂时无法连接，请检查网络后稍后重试。'
+        target.content = t('aiChat.runs.logAnalysisUnavailable')
         target.traceRunning = false
       }
       markTerminal(state, 'failed')
@@ -1026,7 +1032,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     state.messages.push({
       id: pendingAnswerId,
       role: 'ai',
-      content: '正在思考...',
+      content: THINKING_PLACEHOLDER,
       kind: 'answer',
       traceEvents: [],
       traceRunning: true,
@@ -1060,7 +1066,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         throw new Error(detail || `HTTP ${resp.status}`)
       }
 
-      if (!resp.body) throw new Error('响应体为空，无法流式读取')
+        if (!resp.body) throw new Error('Empty response body; cannot stream')
       const reader = resp.body.getReader()
       const decoder = new TextDecoder('utf-8')
       let buffer = ''
@@ -1092,7 +1098,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
               terminal = true
             }
           } catch (err) {
-            console.error('解析项目专家流式数据失败', err, jsonStr)
+            console.error('Failed to parse project-expert stream data', err, jsonStr)
           }
         }
         buffer = remaining
@@ -1114,10 +1120,10 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       }
     } catch (err: any) {
       if (err?.name === 'AbortError') return
-      console.error('启动项目专家 run 失败', err)
+      console.error('Failed to start project-expert run', err)
       const target = state.messages.find((m) => m.id === state.currentAnswerId)
       if (target) {
-        target.content = `项目专家调用失败：${err?.message || String(err)}`
+        target.content = t('aiChat.runs.projectExpertFailed', { error: err?.message || String(err) })
         target.traceRunning = false
       }
       markTerminal(state, 'failed')
@@ -1141,7 +1147,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         credentials: 'include',
       })
     } catch (err) {
-      console.warn('取消 run 请求失败', err)
+      console.warn('Failed to cancel run', err)
     }
   }
 
@@ -1175,7 +1181,9 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         return
       }
       if (head) {
-        head.editingError = `提交失败：${err?.response?.data?.detail || err?.message || String(err)}`
+        head.editingError = t('aiChat.runs.submitFailed', {
+          error: err?.response?.data?.detail || err?.message || String(err),
+        })
       }
       throw err
     }
@@ -1194,6 +1202,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     startDeviceRun,
     startLogAnalysisRun,
     startProjectExpertRun,
+    THINKING_PLACEHOLDER,
     cancelActiveRun,
     submitPermission,
     abortSubscription,

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import {
   CheckCircle2,
   CircleAlert,
@@ -25,6 +26,7 @@ import { useAppStore } from '@/stores/app'
 import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
 import type { ProjectMember, ProjectRepo, ProjectRepoPayload, TestConnectionResult, UserProfile } from '@/types'
 
+const { t } = useI18n()
 const appStore = useAppStore()
 const route = useRoute()
 const router = useRouter()
@@ -91,7 +93,7 @@ const parseErrorMessage = (err: any): string => {
   if (err?.response?.data?.detail) return err.response.data.detail
   if (err?.response?.data?.message) return err.response.data.message
   if (err?.message) return err.message
-  return '操作失败'
+  return t('admin.parseError')
 }
 
 const formatTimestamp = (value?: string | null): string => {
@@ -123,19 +125,19 @@ const clearAuth = () => {
 
 const handleLogin = async () => {
   if (!authForm.username.trim() || !authForm.password) {
-    appStore.showNotification({ title: '请输入用户名和密码', type: 'warning' })
+    appStore.showNotification({ title: t('admin.loginWarning'), type: 'warning' })
     return
   }
   isLoggingIn.value = true
   try {
     const resp = await adminApi.login(authForm.username.trim(), authForm.password)
-    if (!resp?.success || !resp.data?.token) throw new Error(resp?.message || '登录失败')
+    if (!resp?.success || !resp.data?.token) throw new Error(resp?.message || t('admin.loginFailFallback'))
     adminToken.set(resp.data.token)
     isAuthenticated.value = true
-    appStore.showNotification({ title: '登录成功', message: `欢迎，${resp.data.username}`, type: 'success' })
+    appStore.showNotification({ title: t('admin.loginSuccessTitle'), message: t('admin.loginSuccessMsg', { username: resp.data.username }), type: 'success' })
     await fetchRepos()
   } catch (err: any) {
-    appStore.showNotification({ title: '登录失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.loginFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     isLoggingIn.value = false
   }
@@ -148,7 +150,7 @@ const handleLogout = async () => {
     // ignore
   } finally {
     clearAuth()
-    appStore.showNotification({ title: '已退出登录', type: 'info' })
+    appStore.showNotification({ title: t('admin.logoutSuccessTitle'), type: 'info' })
   }
 }
 
@@ -166,10 +168,10 @@ const fetchRepos = async () => {
       include_disabled: includeDisabled.value,
       limit: 200,
     })
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '获取项目仓库失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.projectRepos.loadFailFallback'))
     repos.value = resp.data
   } catch (err: any) {
-    appStore.showNotification({ title: '加载失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.loadFail'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     loadingRepos.value = false
   }
@@ -191,11 +193,11 @@ const fetchProjectMembers = async (repoId: number) => {
   loadingMembers.value = true
   try {
     const resp = await adminApi.listProjectRepoMembers(repoId)
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '获取项目成员失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.projectRepos.loadMembersFailFallback'))
     projectMembers.value = resp.data
     updateRepoMemberCount(repoId, resp.data.length)
   } catch (err: any) {
-    appStore.showNotification({ title: '成员加载失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.projectRepos.memberLoadFail'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     loadingMembers.value = false
   }
@@ -205,11 +207,11 @@ const fetchUserCandidates = async () => {
   loadingUsers.value = true
   try {
     const resp = await adminApi.listUsers()
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '获取用户列表失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.projectRepos.loadUsersFailFallback'))
     userCandidates.value = resp.data
   } catch (err: any) {
     userCandidates.value = []
-    appStore.showNotification({ title: '用户加载失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.projectRepos.userLoadFail'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     loadingUsers.value = false
   }
@@ -237,13 +239,13 @@ const addProjectMember = async (user: UserProfile) => {
   addingMemberId.value = user.id
   try {
     const resp = await adminApi.addProjectRepoMember(repo.id, user.id)
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '添加成员失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.projectRepos.addMemberFail'))
     projectMembers.value = resp.data
     updateRepoMemberCount(repo.id, resp.data.length)
     memberSearch.value = ''
-    appStore.showNotification({ title: '已添加成员', message: user.username, type: 'success' })
+    appStore.showNotification({ title: t('admin.projectRepos.addMemberSuccess'), message: user.username, type: 'success' })
   } catch (err: any) {
-    appStore.showNotification({ title: '添加失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.projectRepos.addMemberFail'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     addingMemberId.value = null
   }
@@ -252,15 +254,15 @@ const addProjectMember = async (user: UserProfile) => {
 const removeProjectMember = async (member: ProjectMember) => {
   const repo = selectedRepoForMembers.value
   if (!repo) return
-  if (!window.confirm(`确认从 ${repo.project_code} 移除成员 ${member.username}？`)) return
+  if (!window.confirm(t('admin.projectRepos.removeMemberConfirm', { project: repo.project_code, username: member.username }))) return
   removingMemberId.value = member.id
   try {
     await adminApi.removeProjectRepoMember(repo.id, member.id)
     projectMembers.value = projectMembers.value.filter((item) => item.id !== member.id)
     updateRepoMemberCount(repo.id, projectMembers.value.length)
-    appStore.showNotification({ title: '已移除成员', message: member.username, type: 'success' })
+    appStore.showNotification({ title: t('admin.projectRepos.removeMemberSuccess'), message: member.username, type: 'success' })
   } catch (err: any) {
-    appStore.showNotification({ title: '移除失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.projectRepos.removeMemberFail'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     removingMemberId.value = null
   }
@@ -318,9 +320,9 @@ const buildPayload = (): ProjectRepoPayload => {
 }
 
 const validateForm = () => {
-  if (!repoForm.project_code.trim()) return '请填写 project_code'
-  if (!repoForm.project_name.trim()) return '请填写项目名称'
-  if (!repoForm.repo_url.trim()) return '请填写 Git 仓库 URL'
+  if (!repoForm.project_code.trim()) return t('admin.projectRepos.projectCodeRequired')
+  if (!repoForm.project_name.trim()) return t('admin.projectRepos.projectNameRequired')
+  if (!repoForm.repo_url.trim()) return t('admin.projectRepos.repoUrlRequired')
   return ''
 }
 
@@ -338,31 +340,31 @@ const submitRepo = async () => {
       dialogMode.value === 'create'
         ? await adminApi.createProjectRepo(payload)
         : await adminApi.updateProjectRepo(editingRepoId.value as number, payload)
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '保存失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.projectRepos.saveFailFallback'))
     appStore.showNotification({
-      title: dialogMode.value === 'create' ? '已创建项目仓库' : '已更新项目仓库',
+      title: dialogMode.value === 'create' ? t('admin.projectRepos.createSuccess') : t('admin.projectRepos.updateSuccess'),
       message: resp.data.project_code,
       type: 'success',
     })
     dialogVisible.value = false
     await fetchRepos()
   } catch (err: any) {
-    appStore.showNotification({ title: '保存失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.projectRepos.saveFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     savingRepo.value = false
   }
 }
 
 const deleteRepo = async (repo: ProjectRepo) => {
-  if (!window.confirm(`确认删除项目仓库 ${repo.project_code}？`)) return
+  if (!window.confirm(t('admin.projectRepos.deleteConfirm', { code: repo.project_code }))) return
   deletingId.value = repo.id
   try {
     await adminApi.deleteProjectRepo(repo.id)
     repos.value = repos.value.filter((item) => item.id !== repo.id)
     delete testResults[repo.id]
-    appStore.showNotification({ title: '已删除项目仓库', message: repo.project_code, type: 'success' })
+    appStore.showNotification({ title: t('admin.projectRepos.deleteSuccess'), message: repo.project_code, type: 'success' })
   } catch (err: any) {
-    appStore.showNotification({ title: '删除失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.projectRepos.deleteFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     deletingId.value = null
   }
@@ -413,24 +415,24 @@ onMounted(() => bootstrap())
             class="admin-icon-btn"
             :disabled="!isAuthenticated"
             @click="toggleNavVisibility"
-            :title="navVisible ? '隐藏侧边栏' : '显示侧边栏'"
-            aria-label="切换侧边栏"
+            :title="navVisible ? t('admin.toggleSidebarHide') : t('admin.toggleSidebarShow')"
+            :aria-label="t('admin.toggleSidebarAriaLabel')"
           >
             <PanelLeftClose v-if="navVisible" :size="18" />
             <Menu v-else :size="18" />
           </button>
           <div>
-            <h1 class="admin-title">后台管理</h1>
-            <p class="admin-subtitle">项目仓库管理</p>
+            <h1 class="admin-title">{{ t('admin.title') }}</h1>
+            <p class="admin-subtitle">{{ t('admin.projectRepos.subtitle') }}</p>
           </div>
         </div>
         <div class="admin-topbar-right">
           <span class="px-3 py-1 text-xs font-semibold rounded-full bg-slate-700 text-slate-100">
-            {{ isAuthenticated ? `${enabledCount} 个启用 / ${disabledCount} 个停用` : '未登录' }}
+            {{ isAuthenticated ? t('admin.projectRepos.badge', { enabled: enabledCount, disabled: disabledCount }) : t('admin.badgeNotLoggedIn') }}
           </span>
           <button v-if="isAuthenticated" class="admin-logout-btn" @click="handleLogout">
             <LogOut :size="14" />
-            <span>退出</span>
+            <span>{{ t('admin.logoutBtn') }}</span>
           </button>
         </div>
       </div>
@@ -440,7 +442,7 @@ onMounted(() => bootstrap())
       v-if="isAuthenticated && navVisible"
       class="admin-sidebar-backdrop"
       @click="toggleNavVisibility"
-      aria-label="关闭侧边栏"
+      :aria-label="t('admin.closeSidebarAriaLabel')"
     />
 
     <aside v-if="isAuthenticated" class="admin-sidebar" :class="{ 'is-hidden': !navVisible }">
@@ -463,14 +465,14 @@ onMounted(() => bootstrap())
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
           <div class="flex items-center justify-between mb-4">
             <div>
-              <h2 class="text-lg font-semibold text-slate-900">登录后台</h2>
-              <p class="text-sm text-slate-500">请输入管理员凭证继续</p>
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.loginCardTitle') }}</h2>
+              <p class="text-sm text-slate-500">{{ t('admin.loginCardDesc') }}</p>
             </div>
-            <span class="text-xs text-slate-500">内部安全访问</span>
+            <span class="text-xs text-slate-500">{{ t('admin.secureAccess') }}</span>
           </div>
           <form class="space-y-4 max-w-sm" @submit.prevent="handleLogin">
             <label class="block">
-              <span class="text-sm text-slate-700">用户名</span>
+              <span class="text-sm text-slate-700">{{ t('admin.usernameLabel') }}</span>
               <input
                 v-model="authForm.username"
                 type="text"
@@ -480,7 +482,7 @@ onMounted(() => bootstrap())
               />
             </label>
             <label class="block">
-              <span class="text-sm text-slate-700">密码</span>
+              <span class="text-sm text-slate-700">{{ t('admin.passwordLabel') }}</span>
               <input
                 v-model="authForm.password"
                 type="password"
@@ -494,7 +496,7 @@ onMounted(() => bootstrap())
               class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-50"
               :disabled="isLoggingIn"
             >
-              {{ isLoggingIn ? '登录中…' : '登录' }}
+              {{ isLoggingIn ? t('admin.loginBtnLoading') : t('admin.loginBtn') }}
             </button>
           </form>
         </div>
@@ -504,9 +506,9 @@ onMounted(() => bootstrap())
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
           <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>
-              <h2 class="text-lg font-semibold text-slate-900">项目仓库注册表</h2>
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.projectRepos.listTitle') }}</h2>
               <p class="text-sm text-slate-500 mt-0.5">
-                维护 metadata.json 中 project_code 到 Git 仓库的映射，Claude Agent 会通过 lookup_project_repo 工具读取这里的配置。
+                {{ t('admin.projectRepos.listDesc') }}
               </p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
@@ -517,7 +519,7 @@ onMounted(() => bootstrap())
                   class="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
                   @change="fetchRepos"
                 />
-                显示停用项
+                {{ t('admin.projectRepos.showDisabled') }}
               </label>
               <button
                 class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
@@ -525,14 +527,14 @@ onMounted(() => bootstrap())
                 @click="fetchRepos"
               >
                 <RefreshCw :size="15" />
-                {{ loadingRepos ? '刷新中' : '刷新' }}
+                {{ loadingRepos ? t('admin.refreshing') : t('common.refresh') }}
               </button>
               <button
                 class="inline-flex items-center gap-1.5 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
                 @click="openCreateDialog"
               >
                 <Plus :size="16" />
-                新建项目仓库
+                {{ t('admin.projectRepos.newRepoBtn') }}
               </button>
             </div>
           </div>
@@ -542,45 +544,45 @@ onMounted(() => bootstrap())
           <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div>
               <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Code</p>
-              <p class="mt-1 text-sm text-slate-600">保存时自动 trim + lower-case，用于 metadata.json 匹配。</p>
+              <p class="mt-1 text-sm text-slate-600">{{ t('admin.projectRepos.projectCodeHint') }}</p>
             </div>
             <div>
               <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Token</p>
-              <p class="mt-1 text-sm text-slate-600">每个仓库可覆盖全局 Token；响应只显示是否已设置。</p>
+              <p class="mt-1 text-sm text-slate-600">{{ t('admin.projectRepos.tokenHint') }}</p>
             </div>
             <div>
               <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Members</p>
-              <p class="mt-1 text-sm text-slate-600">项目成员可查看该项目的 Bug 修复任务与 MR 详情。</p>
+              <p class="mt-1 text-sm text-slate-600">{{ t('admin.projectRepos.memberHint') }}</p>
             </div>
             <div>
               <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Connectivity</p>
-              <p class="mt-1 text-sm text-slate-600">测试连接会复用服务端 git ls-remote 检查。</p>
+              <p class="mt-1 text-sm text-slate-600">{{ t('admin.projectRepos.connectionHint') }}</p>
             </div>
           </div>
         </div>
 
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
           <div v-if="loadingRepos" class="px-5 py-12 text-center text-sm text-slate-400">
-            正在加载项目仓库…
+            {{ t('admin.projectRepos.loadingText') }}
           </div>
 
           <div v-else-if="!repos.length" class="px-5 py-12 text-center">
-            <p class="text-sm font-medium text-slate-700">还没有项目仓库条目</p>
-            <p class="mt-1 text-xs text-slate-400">点击右上角新建，先注册真实项目再运行日志 AI 分析。</p>
+            <p class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.emptyTitle') }}</p>
+            <p class="mt-1 text-xs text-slate-400">{{ t('admin.projectRepos.emptyHint') }}</p>
           </div>
 
           <div v-else class="overflow-x-auto">
             <table class="min-w-full text-sm text-slate-700">
               <thead>
                 <tr class="border-b border-slate-100 bg-slate-50">
-                  <th class="py-2.5 pl-5 pr-4 text-left font-semibold text-slate-600">项目</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">仓库 URL</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">默认分支</th>
+                  <th class="py-2.5 pl-5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.projectRepos.colProject') }}</th>
+                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.projectRepos.colRepoUrl') }}</th>
+                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.projectRepos.colBranch') }}</th>
                   <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">Token</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">成员</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">状态</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">更新时间</th>
-                  <th class="py-2.5 pr-5 text-right font-semibold text-slate-600">操作</th>
+                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.projectRepos.colMembers') }}</th>
+                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.projectRepos.colStatus') }}</th>
+                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.projectRepos.colUpdatedAt') }}</th>
+                  <th class="py-2.5 pr-5 text-right font-semibold text-slate-600">{{ t('admin.projectRepos.colActions') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -620,13 +622,13 @@ onMounted(() => bootstrap())
                       class="inline-flex rounded-full px-2 py-1 text-xs font-semibold"
                       :class="repo.git_token_set ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'"
                     >
-                      {{ repo.git_token_set ? '已设置' : '使用全局/匿名' }}
+                      {{ repo.git_token_set ? t('admin.projectRepos.tokenSet') : t('admin.projectRepos.tokenNotSet') }}
                     </span>
                   </td>
                   <td class="py-3 pr-4">
                     <span class="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-1 text-xs font-semibold text-indigo-700">
                       <Users :size="13" />
-                      {{ repo.member_count ?? 0 }} 人
+                      {{ t('admin.projectRepos.memberCount', { count: repo.member_count ?? 0 }) }}
                     </span>
                   </td>
                   <td class="py-3 pr-4">
@@ -634,7 +636,7 @@ onMounted(() => bootstrap())
                       class="inline-flex rounded-full px-2 py-1 text-xs font-semibold"
                       :class="repo.enabled ? 'bg-cyan-50 text-cyan-700' : 'bg-slate-100 text-slate-500'"
                     >
-                      {{ repo.enabled ? '启用' : '停用' }}
+                      {{ repo.enabled ? t('admin.projectRepos.statusEnabled') : t('admin.projectRepos.statusDisabled') }}
                     </span>
                   </td>
                   <td class="py-3 pr-4 whitespace-nowrap text-xs text-slate-400">{{ formatTimestamp(repo.updated_at) }}</td>
@@ -642,29 +644,29 @@ onMounted(() => bootstrap())
                     <div class="flex justify-end gap-2">
                       <button
                         class="admin-action-btn"
-                        title="项目 Skill"
+                        :title="t('admin.projectRepos.tooltipSkills')"
                         @click="router.push(`/admin/project-repos/${repo.project_code}/skills`)"
                       >
                         <FolderTree :size="15" />
                       </button>
-                      <button class="admin-action-btn" title="成员管理" @click="openMemberDialog(repo)">
+                      <button class="admin-action-btn" :title="t('admin.projectRepos.tooltipMembers')" @click="openMemberDialog(repo)">
                         <Users :size="15" />
                       </button>
                       <button
                         class="admin-action-btn"
                         :disabled="testingId === repo.id"
-                        title="测试连接"
+                        :title="t('admin.projectRepos.tooltipTestConn')"
                         @click="testConnection(repo)"
                       >
                         <PlugZap :size="15" />
                       </button>
-                      <button class="admin-action-btn" title="编辑" @click="openEditDialog(repo)">
+                      <button class="admin-action-btn" :title="t('common.edit')" @click="openEditDialog(repo)">
                         <Pencil :size="15" />
                       </button>
                       <button
                         class="admin-action-btn danger"
                         :disabled="deletingId === repo.id"
-                        title="删除"
+                        :title="t('common.delete')"
                         @click="deleteRepo(repo)"
                       >
                         <Trash2 :size="15" />
@@ -684,11 +686,11 @@ onMounted(() => bootstrap())
         <div class="mb-5 flex items-start justify-between gap-4">
           <div>
             <h3 class="text-base font-semibold text-slate-900">
-              {{ dialogMode === 'create' ? '新建项目仓库' : '编辑项目仓库' }}
+              {{ dialogMode === 'create' ? t('admin.projectRepos.dialogCreateTitle') : t('admin.projectRepos.dialogEditTitle') }}
             </h3>
-            <p class="mt-0.5 text-sm text-slate-500">Token 保存后不会回显；编辑时留空表示不修改。</p>
+            <p class="mt-0.5 text-sm text-slate-500">{{ t('admin.projectRepos.tokenHintEdit') }}</p>
           </div>
-          <button class="admin-close-btn" :disabled="savingRepo" title="关闭" @click="closeDialog">
+          <button class="admin-close-btn" :disabled="savingRepo" :title="t('admin.projectRepos.tooltipClose')" @click="closeDialog">
             <X :size="17" />
           </button>
         </div>
@@ -706,7 +708,7 @@ onMounted(() => bootstrap())
             />
           </label>
           <label class="block">
-            <span class="text-sm font-medium text-slate-700">项目名称 <span class="text-rose-500">*</span></span>
+            <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldProjectName') }} <span class="text-rose-500">*</span></span>
             <input
               v-model="repoForm.project_name"
               type="text"
@@ -715,7 +717,7 @@ onMounted(() => bootstrap())
             />
           </label>
           <label class="block md:col-span-2">
-            <span class="text-sm font-medium text-slate-700">Git 仓库 URL <span class="text-rose-500">*</span></span>
+            <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldRepoUrl') }} <span class="text-rose-500">*</span></span>
             <input
               v-model="repoForm.repo_url"
               type="url"
@@ -725,7 +727,7 @@ onMounted(() => bootstrap())
             />
           </label>
           <label class="block">
-            <span class="text-sm font-medium text-slate-700">默认分支</span>
+            <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldBranch') }}</span>
             <input
               v-model="repoForm.default_branch"
               type="text"
@@ -735,30 +737,30 @@ onMounted(() => bootstrap())
             />
           </label>
           <label class="block">
-            <span class="text-sm font-medium text-slate-700">仓库 Token</span>
+            <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldToken') }}</span>
             <input
               v-model="repoForm.git_token"
               type="password"
               autocomplete="new-password"
               class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-              :placeholder="dialogMode === 'edit' ? '留空表示不修改' : '可选，覆盖全局 Token'"
+              :placeholder="dialogMode === 'edit' ? t('admin.projectRepos.tokenPlaceholderEdit') : t('admin.projectRepos.tokenPlaceholderCreate')"
             />
           </label>
           <label class="block md:col-span-2">
-            <span class="text-sm font-medium text-slate-700">描述</span>
+            <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldDesc') }}</span>
             <textarea
               v-model="repoForm.description"
               rows="3"
               class="mt-1 w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-              placeholder="可选：适用日志、项目边界或维护负责人"
+              :placeholder="t('admin.projectRepos.descPlaceholder')"
             />
           </label>
         </div>
 
         <div class="mt-4 flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
           <div>
-            <p class="text-sm font-medium text-slate-700">启用此项目仓库</p>
-            <p class="text-xs text-slate-400">停用后 lookup_project_repo 不会返回该条目。</p>
+            <p class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.enableRepoLabel') }}</p>
+            <p class="text-xs text-slate-400">{{ t('admin.projectRepos.enableRepoHint') }}</p>
           </div>
           <label class="relative inline-flex cursor-pointer items-center">
             <input v-model="repoForm.enabled" type="checkbox" class="peer sr-only" />
@@ -773,7 +775,7 @@ onMounted(() => bootstrap())
             :disabled="savingRepo"
             @click="closeDialog"
           >
-            取消
+            {{ t('admin.projectRepos.cancelBtn') }}
           </button>
           <button
             class="inline-flex items-center gap-1.5 rounded-lg bg-cyan-600 px-5 py-2 text-sm font-semibold text-white hover:bg-cyan-700 disabled:opacity-60"
@@ -781,7 +783,7 @@ onMounted(() => bootstrap())
             @click="submitRepo"
           >
             <Save :size="16" />
-            {{ savingRepo ? '保存中…' : '保存' }}
+            {{ savingRepo ? t('admin.projectRepos.savingBtn') : t('admin.projectRepos.saveBtn') }}
           </button>
         </div>
       </div>
@@ -795,7 +797,7 @@ onMounted(() => bootstrap())
       <div class="admin-modal-card member-modal" @click.stop>
         <div class="mb-5 flex items-start justify-between gap-4">
           <div>
-            <h3 class="text-base font-semibold text-slate-900">项目成员管理</h3>
+            <h3 class="text-base font-semibold text-slate-900">{{ t('admin.projectRepos.memberMgmtTitle') }}</h3>
             <p class="mt-1 text-sm text-slate-500">
               {{ selectedRepoForMembers.project_name }}
               <code class="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
@@ -803,7 +805,7 @@ onMounted(() => bootstrap())
               </code>
             </p>
           </div>
-          <button class="admin-close-btn" title="关闭" @click="closeMemberDialog">
+          <button class="admin-close-btn" :title="t('admin.projectRepos.tooltipClose')" @click="closeMemberDialog">
             <X :size="17" />
           </button>
         </div>
@@ -812,8 +814,8 @@ onMounted(() => bootstrap())
           <section class="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <div class="mb-3 flex items-center justify-between gap-3">
               <div>
-                <h4 class="text-sm font-semibold text-slate-900">当前成员</h4>
-                <p class="text-xs text-slate-500">{{ projectMembers.length }} 个用户可见该项目的 Bug 修复</p>
+                <h4 class="text-sm font-semibold text-slate-900">{{ t('admin.projectRepos.currentMembersTitle') }}</h4>
+                <p class="text-xs text-slate-500">{{ t('admin.projectRepos.memberCountDesc', { count: projectMembers.length }) }}</p>
               </div>
               <button
                 class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-50"
@@ -821,16 +823,16 @@ onMounted(() => bootstrap())
                 @click="fetchProjectMembers(selectedRepoForMembers.id)"
               >
                 <RefreshCw :size="13" />
-                {{ loadingMembers ? '同步中' : '刷新' }}
+                {{ loadingMembers ? t('admin.refreshing') : t('common.refresh') }}
               </button>
             </div>
 
             <div v-if="loadingMembers" class="rounded-lg border border-dashed border-slate-300 bg-white px-4 py-8 text-center text-sm text-slate-400">
-              正在加载成员…
+              {{ t('admin.projectRepos.loadingMembers') }}
             </div>
             <div v-else-if="!projectMembers.length" class="rounded-lg border border-dashed border-slate-300 bg-white px-4 py-8 text-center">
-              <p class="text-sm font-medium text-slate-700">暂无成员</p>
-              <p class="mt-1 text-xs text-slate-400">从右侧搜索注册用户并加入。</p>
+              <p class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.noMembers') }}</p>
+              <p class="mt-1 text-xs text-slate-400">{{ t('admin.projectRepos.noMembersHint') }}</p>
             </div>
             <div v-else class="member-list-scroll space-y-2">
               <div
@@ -845,12 +847,12 @@ onMounted(() => bootstrap())
                       {{ member.username }}
                     </code>
                   </div>
-                  <p class="mt-0.5 truncate text-xs text-slate-500">{{ member.email || '未设置邮箱' }}</p>
+                  <p class="mt-0.5 truncate text-xs text-slate-500">{{ member.email || t('admin.projectRepos.noEmail') }}</p>
                 </div>
                 <button
                   class="admin-action-btn danger shrink-0"
                   :disabled="removingMemberId === member.id"
-                  title="移除成员"
+                  :title="t('admin.projectRepos.tooltipRemoveMember')"
                   @click="removeProjectMember(member)"
                 >
                   <UserMinus :size="15" />
@@ -861,32 +863,32 @@ onMounted(() => bootstrap())
 
           <section class="rounded-xl border border-slate-200 bg-white p-4">
             <div class="mb-3">
-              <h4 class="text-sm font-semibold text-slate-900">添加注册用户</h4>
-              <p class="text-xs text-slate-500">按用户名、邮箱或展示名检索；已加入的用户不会重复出现。</p>
+              <h4 class="text-sm font-semibold text-slate-900">{{ t('admin.projectRepos.addMembersTitle') }}</h4>
+              <p class="text-xs text-slate-500">{{ t('admin.projectRepos.addMembersDesc') }}</p>
             </div>
 
             <label class="block">
-              <span class="sr-only">搜索用户</span>
+              <span class="sr-only">{{ t('admin.projectRepos.addMembersTitle') }}</span>
               <div class="relative">
                 <Search class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" :size="16" />
                 <input
                   v-model="memberSearch"
                   type="search"
                   class="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-                  placeholder="搜索用户名 / 邮箱 / 展示名"
+                  :placeholder="t('admin.projectRepos.searchUserPlaceholder')"
                 />
               </div>
             </label>
 
             <div class="mt-3">
               <div v-if="loadingUsers" class="rounded-lg border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-slate-400">
-                正在加载注册用户…
+                {{ t('admin.projectRepos.loadingUsers') }}
               </div>
               <div v-else-if="!normalizedMemberSearch" class="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                输入关键词开始检索用户
+                {{ t('admin.projectRepos.enterKeyword') }}
               </div>
               <div v-else-if="!filteredUserCandidates.length" class="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                没有匹配的未加入用户
+                {{ t('admin.projectRepos.noMatchingUsers') }}
               </div>
               <div v-else class="member-list-scroll space-y-2">
                 <div
@@ -901,11 +903,11 @@ onMounted(() => bootstrap())
                         v-if="!user.is_active"
                         class="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500"
                       >
-                        已禁用
+                        {{ t('admin.projectRepos.userDisabled') }}
                       </span>
                     </div>
                     <p class="mt-0.5 truncate text-xs text-slate-500">
-                      {{ user.username }} · {{ user.email || '未设置邮箱' }}
+                      {{ user.username }} · {{ user.email || t('admin.projectRepos.noEmail') }}
                     </p>
                   </div>
                   <button
@@ -914,7 +916,7 @@ onMounted(() => bootstrap())
                     @click="addProjectMember(user)"
                   >
                     <UserPlus :size="14" />
-                    {{ addingMemberId === user.id ? '加入中' : '加入' }}
+                    {{ addingMemberId === user.id ? t('admin.projectRepos.addingMember') : t('admin.projectRepos.addMemberBtn') }}
                   </button>
                 </div>
               </div>

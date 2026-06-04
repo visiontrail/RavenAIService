@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   listRavenPackages,
@@ -25,6 +26,7 @@ import AgentTraceStream from '@/components/AgentTraceStream.vue'
 import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'
 
 const router = useRouter()
+const { t } = useI18n()
 
 const filters = reactive({
   search: '',
@@ -79,11 +81,11 @@ const searchRecommendedPackages = ref<RavenPackage[]>([])
 const searchRelevantPackages = ref<RavenPackage[]>([])
 const searchPackagesLoading = ref(false)
 const searchError = ref<string | null>(null)
-const searchSuggestions = ref<string[]>([
-  'LingXi-10 最新完整包',
-  '查找补丁包',
-  '包含 OAM 组件的版本',
-  'KaTx 最新发布',
+const searchSuggestions = computed<string[]>(() => [
+  t('raven.suggestion1'),
+  t('raven.suggestion2'),
+  t('raven.suggestion3'),
+  t('raven.suggestion4'),
 ])
 const searchDetailVisible = ref(false)
 const searchDetailLoading = ref(false)
@@ -146,10 +148,10 @@ const packageTypeText = (type?: string) => {
     'lingxi-07a': 'LingXi-07A',
     'ka-tx': 'KaTx',
     'ka-rx': 'KaRx',
-    config: '配置包',
+    config: t('raven.packageType.config'),
     'lingxi-06-thrid': 'LingXi-06-TRD',
   }
-  return map[type || ''] || type || '未知类型'
+  return map[type || ''] || type || t('raven.unknownType')
 }
 
 const packageTypePillClass = (type?: string) => {
@@ -184,11 +186,11 @@ const fetchPackages = async () => {
       pagination.totalItems = data.data.pagination.totalItems
       pagination.itemsPerPage = data.data.pagination.itemsPerPage
     } else {
-      throw new Error(data?.message || '获取包列表失败')
+      throw new Error(data?.message || t('raven.fetchListFail'))
     }
   } catch (error: any) {
     console.error(error)
-    ElMessage.error(error.message || '加载包列表失败')
+    ElMessage.error(error.message || t('raven.loadListFail'))
   } finally {
     loadingList.value = false
   }
@@ -219,32 +221,33 @@ const downloadPackage = (pkg: RavenPackage) => {
   const filename =
     pkg.name && pkg.name.includes('.') ? pkg.name : pkg.name ? `${pkg.name}.tgz` : 'package.tgz'
   downloadFileByUrl(url, filename)
-  ElMessage.success('下载开始')
+  ElMessage.success(t('raven.downloadStart'))
 }
 
 const deletePackage = async (pkg: RavenPackage) => {
   try {
     await ElMessageBox.confirm(
-      `确定删除包「${pkg.name || pkg.id}」吗？此操作不可恢复。`,
-      '删除确认',
+      t('raven.deleteConfirmMsg', { name: pkg.name || pkg.id }),
+      t('raven.deletingConfirm'),
       {
         type: 'warning',
-        confirmButtonText: '删除',
-        cancelButtonText: '取消',
+        confirmButtonText: t('common.delete'),
+        cancelButtonText: t('common.cancel'),
       }
     )
     const { data } = await deleteRavenPackage(pkg.id)
-    if (!data?.success) throw new Error(data?.message || '删除失败')
-    ElMessage.success('包已删除')
+    if (!data?.success) throw new Error(data?.message || t('raven.deleteFail'))
+    ElMessage.success(t('raven.deleteSuccess'))
     fetchPackages()
   } catch (error: any) {
     if (error === 'cancel' || error === 'close') return
     console.error(error)
-    ElMessage.error(error.message || '删除失败')
+    ElMessage.error(error.message || t('raven.deleteFail'))
   }
 }
 
-const humanizePatch = (pkg?: RavenPackage | null) => (isPatchPackage(pkg) ? '补丁包' : '正式包')
+const humanizePatch = (pkg?: RavenPackage | null) =>
+  isPatchPackage(pkg) ? t('raven.patch') : t('raven.release')
 
 const addFiles = (files: File[]) => {
   if (!files.length) return
@@ -255,7 +258,7 @@ const addFiles = (files: File[]) => {
     if (name.endsWith('.tgz') || name.endsWith('.tar.gz')) {
       validFiles.push(file)
     } else {
-      ElMessage.warning(`文件 ${file.name} 格式不支持，仅支持 .tgz/.tar.gz`)
+      ElMessage.warning(t('raven.fileTypeUnsupported', { name: file.name }))
     }
   })
 
@@ -302,13 +305,13 @@ const clearUpload = () => {
 
 const startUpload = async () => {
   if (!uploadFiles.value.length) {
-    ElMessage.warning('请先选择要上传的文件')
+    ElMessage.warning(t('raven.uploadSelectFirst'))
     return
   }
 
   uploading.value = true
   uploadProgress.value = 0
-  uploadStatus.value = '准备上传...'
+  uploadStatus.value = t('raven.uploadPreparing')
   uploadController.value = new AbortController()
 
   try {
@@ -320,28 +323,29 @@ const startUpload = async () => {
         if (payload.speedText) {
           uploadStatus.value =
             payload.percent >= 100
-              ? '处理中...'
-              : `上传中 ${payload.speedText}${
-                  payload.etaSeconds ? ` · 剩余 ${Math.max(1, Math.round(payload.etaSeconds))}s` : ''
-                }`
+              ? t('raven.uploadProcessing')
+              : t('raven.uploadingSpeed', { speed: payload.speedText }) +
+                (payload.etaSeconds
+                  ? t('raven.uploadEta', { eta: Math.max(1, Math.round(payload.etaSeconds)) })
+                  : '')
         }
       },
       uploadController.value.signal
     )
 
     uploadProgress.value = 100
-    uploadStatus.value = '上传完成'
-    ElMessage.success('上传完成，列表正在刷新')
+    uploadStatus.value = t('raven.uploadComplete')
+    ElMessage.success(t('raven.uploadCompleteMsg'))
     clearUpload()
     uploadDialogVisible.value = false
     await fetchPackages()
   } catch (error: any) {
     if (error?.code === 'ERR_CANCELED') {
-      ElMessage.info('上传已取消')
+      ElMessage.info(t('raven.uploadCancelled'))
       return
     }
     console.error(error)
-    ElMessage.error(error.message || '上传失败')
+    ElMessage.error(error.message || t('raven.uploadFail'))
   } finally {
     uploading.value = false
     uploadController.value = null
@@ -387,7 +391,7 @@ const renderedAnswer = computed(() =>
 )
 
 const searchDetailDescription = computed(() =>
-  renderMarkdown(searchDetailPackage.value?.metadata?.description || '暂无描述', { cleanXml: true })
+  renderMarkdown(searchDetailPackage.value?.metadata?.description || t('raven.noDesc'), { cleanXml: true })
 )
 
 const recommendedIdSet = computed(
@@ -419,12 +423,12 @@ const openSearchPackageDetail = async (payload: RavenPackage) => {
     if (data?.success && data.data) {
       searchDetailPackage.value = data.data
     } else {
-      throw new Error(data?.message || '获取包详情失败')
+      throw new Error(data?.message || t('raven.fetchDetailFail'))
     }
   } catch (error: any) {
     console.error(error)
     searchDetailPackage.value = payload
-    ElMessage.error(error.message || '加载详情失败')
+    ElMessage.error(error.message || t('raven.loadDetailFailShort'))
   } finally {
     searchDetailLoading.value = false
   }
@@ -449,7 +453,7 @@ const resolveRecommendedPackages = async (
           const { data } = await getRavenPackageDetail(id)
           if (data?.success && data.data) return data.data
         } catch (err) {
-          console.warn('包详情拉取失败', id, err)
+          console.warn('Failed to fetch package detail', id, err)
         }
         return null
       })
@@ -472,11 +476,11 @@ const resolveRecommendedPackages = async (
 const performSearch = async () => {
   const q = searchQuery.value.trim()
   if (!q) {
-    ElMessage.warning('请输入搜索内容')
+    ElMessage.warning(t('raven.searchEmpty'))
     return
   }
   if (q.length > 1000) {
-    ElMessage.warning('查询长度超过 1000 字符上限')
+    ElMessage.warning(t('raven.searchTooLong'))
     return
   }
 
@@ -506,19 +510,19 @@ const performSearch = async () => {
         }
       },
       onError: (err) => {
-        console.warn('agent-search SSE 错误', err)
+        console.warn('agent-search SSE error', err)
       },
     })
 
     if (!searchResult.value) {
-      throw new Error('未收到搜索结果')
+      throw new Error(t('raven.noSearchResult'))
     }
     await resolveRecommendedPackages(searchResult.value)
   } catch (error: any) {
     if (error?.name === 'AbortError') return
     console.error(error)
-    searchError.value = error?.message || '搜索失败'
-    ElMessage.error(searchError.value || '搜索失败')
+    searchError.value = error?.message || t('raven.searchFail')
+    ElMessage.error(searchError.value || t('raven.searchFail'))
   } finally {
     searchTraceRunning.value = false
     searchLoading.value = false
@@ -552,7 +556,9 @@ const closeSearchDialog = () => {
   searchDialogVisible.value = false
 }
 
-const topbarMeta = computed(() => `${pagination.totalItems || packages.value.length} 个包`)
+const topbarMeta = computed(() =>
+  t('raven.topbarMeta', { count: pagination.totalItems || packages.value.length })
+)
 
 onMounted(() => {
   fetchPackages()
@@ -561,15 +567,15 @@ onMounted(() => {
 
 <template>
   <div class="rw-page">
-    <WorkbenchTopbar title="重构包仓库" :meta="topbarMeta">
+    <WorkbenchTopbar :title="t('raven.listTitle')" :meta="topbarMeta">
       <template #actions>
         <button class="rw-btn-secondary" @click="openSearchDialog">
           <el-icon><MagicStick /></el-icon>
-          智能搜索
+          {{ t('raven.searchAi') }}
         </button>
         <button class="rw-btn-primary" @click="openUploadDialog">
           <el-icon><UploadFilled /></el-icon>
-          上传新包
+          {{ t('raven.uploadNew') }}
         </button>
       </template>
     </WorkbenchTopbar>
@@ -579,7 +585,7 @@ onMounted(() => {
         <div class="rw-filter-row">
           <el-input
             v-model="filters.search"
-            placeholder="按名称、版本或描述搜索"
+            :placeholder="t('raven.searchPlaceholder')"
             clearable
             class="rw-filter-search"
             @change="fetchPackages"
@@ -591,7 +597,7 @@ onMounted(() => {
           </el-input>
           <el-select
             v-model="filters.type"
-            placeholder="包类型"
+            :placeholder="t('raven.packageTypePlaceholder')"
             clearable
             class="rw-filter-control"
             @change="fetchPackages"
@@ -600,12 +606,12 @@ onMounted(() => {
             <el-option label="LingXi-07A" value="lingxi-07a" />
             <el-option label="KaTx" value="ka-tx" />
             <el-option label="KaRx" value="ka-rx" />
-            <el-option label="配置包" value="config" />
+            <el-option :label="t('raven.packageType.config')" value="config" />
             <el-option label="LingXi-06-TRD" value="lingxi-06-thrid" />
           </el-select>
           <el-input
             v-model="filters.version"
-            placeholder="版本号"
+            :placeholder="t('raven.versionPlaceholder')"
             clearable
             class="rw-filter-control rw-filter-narrow"
             @change="fetchPackages"
@@ -613,7 +619,7 @@ onMounted(() => {
           />
           <el-input
             v-model="filters.tags"
-            placeholder="标签包含"
+            :placeholder="t('raven.tagPlaceholder')"
             clearable
             class="rw-filter-control"
             @change="fetchPackages"
@@ -621,20 +627,20 @@ onMounted(() => {
           />
           <el-select
             v-model="filters.isPatch"
-            placeholder="补丁/正式"
+            :placeholder="t('raven.patchTypePlaceholder')"
             clearable
             class="rw-filter-control rw-filter-narrow"
             @change="fetchPackages"
           >
-            <el-option label="正式包" value="false" />
-            <el-option label="补丁包" value="true" />
+            <el-option :label="t('raven.release')" value="false" />
+            <el-option :label="t('raven.patch')" value="true" />
           </el-select>
           <div class="rw-filter-actions">
             <button class="rw-btn-primary" @click="fetchPackages">
               <el-icon><Search /></el-icon>
-              搜索
+              {{ t('common.search') }}
             </button>
-            <button class="rw-btn-secondary" @click="resetFilters">重置</button>
+            <button class="rw-btn-secondary" @click="resetFilters">{{ t('common.reset') }}</button>
           </div>
         </div>
       </section>
@@ -648,7 +654,7 @@ onMounted(() => {
             :row-class-name="() => 'rw-row'"
             @row-click="openPackageDetail"
           >
-            <el-table-column prop="name" label="名称 / 版本" min-width="340">
+            <el-table-column prop="name" :label="t('raven.colName')" min-width="340">
               <template #default="{ row }">
                 <div class="rw-name-cell">
                   <div class="rw-name-head">
@@ -656,18 +662,18 @@ onMounted(() => {
                     <span class="rw-pill" :class="packageTypePillClass(row.packageType)">
                       {{ packageTypeText(row.packageType) }}
                     </span>
-                    <span class="rw-pill rw-pill-neutral rw-pill-mono">v{{ row.version || '未知' }}</span>
+                    <span class="rw-pill rw-pill-neutral rw-pill-mono">v{{ row.version || t('raven.unknown') }}</span>
                     <span class="rw-pill" :class="isPatchPackage(row) ? 'rw-pill-warning' : 'rw-pill-success'">
                       {{ humanizePatch(row) }}
                     </span>
                   </div>
                   <p class="rw-pkg-desc" :title="row.metadata?.description">
-                    {{ row.metadata?.description || '暂无描述' }}
+                    {{ row.metadata?.description || t('raven.noDesc') }}
                   </p>
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="标签" min-width="160">
+            <el-table-column :label="t('raven.colTags')" min-width="160">
               <template #default="{ row }">
                 <div class="rw-pill-group">
                   <span
@@ -681,7 +687,7 @@ onMounted(() => {
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="组件" min-width="200">
+            <el-table-column :label="t('raven.colComponents')" min-width="200">
               <template #default="{ row }">
                 <div class="rw-pill-group">
                   <span
@@ -695,33 +701,33 @@ onMounted(() => {
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="大小" prop="size" width="110">
+            <el-table-column :label="t('raven.colSize')" prop="size" width="110">
               <template #default="{ row }">
                 <span class="rw-cell-mono">{{ formatFileSize(row.size) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="创建时间" prop="createdAt" width="170">
+            <el-table-column :label="t('raven.colCreatedAt')" prop="createdAt" width="170">
               <template #default="{ row }">
                 <span class="rw-cell-muted">{{ formatDateTime(row.createdAt) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="200" fixed="right">
+            <el-table-column :label="t('common.actions')" width="200" fixed="right">
               <template #default="{ row }">
                 <div class="rw-row-actions" @click.stop>
-                  <button class="rw-btn-ghost" @click="openPackageDetail(row.id)">详情</button>
-                  <button class="rw-btn-ghost" @click="downloadPackage(row)">下载</button>
-                  <button class="rw-btn-ghost rw-btn-ghost-danger" @click="deletePackage(row)">删除</button>
+                  <button class="rw-btn-ghost" @click="openPackageDetail(row.id)">{{ t('common.detail') }}</button>
+                  <button class="rw-btn-ghost" @click="downloadPackage(row)">{{ t('common.download') }}</button>
+                  <button class="rw-btn-ghost rw-btn-ghost-danger" @click="deletePackage(row)">{{ t('common.delete') }}</button>
                 </div>
               </template>
             </el-table-column>
             <template #empty>
-              <div class="rw-empty">暂无重构包</div>
+              <div class="rw-empty">{{ t('raven.emptyList') }}</div>
             </template>
           </el-table>
         </div>
 
         <div class="rw-pagination-row">
-          <span class="rw-pagination-meta">共 {{ pagination.totalItems }} 个包</span>
+          <span class="rw-pagination-meta">{{ t('raven.paginationCount', { count: pagination.totalItems }) }}</span>
           <el-pagination
             background
             layout="prev, pager, next, jumper"
@@ -741,7 +747,7 @@ onMounted(() => {
       destroy-on-close
       :close-on-click-modal="false"
       class="rw-dialog"
-      title="上传重构包"
+      :title="t('raven.uploadTitle')"
     >
       <div class="rw-upload-body">
         <div
@@ -760,20 +766,20 @@ onMounted(() => {
             @change="handleFileInput"
           />
           <el-icon class="rw-upload-icon"><UploadFilled /></el-icon>
-          <p class="rw-upload-hint">拖拽文件到此处，或</p>
+          <p class="rw-upload-hint">{{ t('raven.dragHint') }}</p>
           <button
             class="rw-btn-secondary"
             @click="triggerUploadInput"
           >
-            选择文件
+            {{ t('raven.selectFile') }}
           </button>
-          <p class="rw-upload-sub">支持 .tgz / .tar.gz，单次可选多个文件</p>
+          <p class="rw-upload-sub">{{ t('raven.uploadFormatHint') }}</p>
         </div>
 
         <div v-if="uploadFiles.length" class="rw-upload-files">
           <div class="rw-upload-files-head">
-            <span>已选择 {{ uploadFiles.length }} 个文件</span>
-            <button class="rw-btn-ghost" @click="uploadFiles = []">清空</button>
+            <span>{{ t('raven.selectedCount', { count: uploadFiles.length }) }}</span>
+            <button class="rw-btn-ghost" @click="uploadFiles = []">{{ t('raven.clear') }}</button>
           </div>
           <div class="rw-pill-group">
             <span
@@ -782,27 +788,27 @@ onMounted(() => {
               class="rw-pill rw-pill-neutral rw-pill-removable"
             >
               {{ file.name }}
-              <button class="rw-pill-close" @click="removeFile(file)" aria-label="移除文件">×</button>
+              <button class="rw-pill-close" @click="removeFile(file)" :aria-label="t('raven.removeFile')">×</button>
             </span>
           </div>
         </div>
 
         <div class="rw-upload-grid">
           <div class="rw-subcard">
-            <h4 class="rw-subcard-title">元数据</h4>
+            <h4 class="rw-subcard-title">{{ t('raven.metadata') }}</h4>
             <div class="rw-form-grid">
-              <el-select v-model="uploadMeta.packageType" placeholder="包类型">
+              <el-select v-model="uploadMeta.packageType" :placeholder="t('raven.packageTypePlaceholder')">
                 <el-option label="LingXi-10" value="lingxi-10" />
                 <el-option label="LingXi-07A" value="lingxi-07a" />
                 <el-option label="KaTx" value="ka-tx" />
                 <el-option label="KaRx" value="ka-rx" />
-                <el-option label="配置包" value="config" />
+                <el-option :label="t('raven.packageType.config')" value="config" />
                 <el-option label="LingXi-06-TRD" value="lingxi-06-thrid" />
               </el-select>
-              <el-input v-model="uploadMeta.version" placeholder="版本号，例如 1.0.0" />
-              <el-select v-model="uploadMeta.isPatch" placeholder="正式 / 补丁">
-                <el-option label="正式包" :value="false" />
-                <el-option label="补丁包" :value="true" />
+              <el-input v-model="uploadMeta.version" :placeholder="t('raven.versionPlaceholderInput')" />
+              <el-select v-model="uploadMeta.isPatch" :placeholder="t('raven.patchTypeSelect')">
+                <el-option :label="t('raven.release')" :value="false" />
+                <el-option :label="t('raven.patch')" :value="true" />
               </el-select>
             </div>
 
@@ -810,11 +816,11 @@ onMounted(() => {
               v-model="uploadMeta.description"
               type="textarea"
               :rows="3"
-              placeholder="为团队添加一句描述，支持 Markdown"
+              :placeholder="t('raven.descPlaceholder')"
             />
 
             <div class="rw-field">
-              <p class="rw-field-label">标签</p>
+              <p class="rw-field-label">{{ t('raven.tagsSection') }}</p>
               <div class="rw-pill-group">
                 <span
                   v-for="tag in uploadMeta.tags"
@@ -822,12 +828,12 @@ onMounted(() => {
                   class="rw-pill rw-pill-neutral rw-pill-removable"
                 >
                   {{ tag }}
-                  <button class="rw-pill-close" @click="removeTag(tag)" aria-label="移除标签">×</button>
+                  <button class="rw-pill-close" @click="removeTag(tag)" :aria-label="t('raven.removeTag')">×</button>
                 </span>
                 <el-input
                   v-model="tagDraft"
                   size="small"
-                  placeholder="输入后回车添加"
+                  :placeholder="t('raven.tagInputPlaceholder')"
                   class="rw-tag-input"
                   @keyup.enter="addTag"
                   @blur="addTag"
@@ -836,7 +842,7 @@ onMounted(() => {
             </div>
 
             <div class="rw-field">
-              <p class="rw-field-label">组件</p>
+              <p class="rw-field-label">{{ t('raven.componentsSection') }}</p>
               <div class="rw-pill-group">
                 <span
                   v-for="comp in uploadMeta.components"
@@ -844,21 +850,21 @@ onMounted(() => {
                   class="rw-pill rw-pill-info rw-pill-removable"
                 >
                   {{ comp.name }}<span v-if="comp.version" class="rw-pill-sub"> · {{ comp.version }}</span>
-                  <button class="rw-pill-close" @click="removeComponent(comp)" aria-label="移除组件">×</button>
+                  <button class="rw-pill-close" @click="removeComponent(comp)" :aria-label="t('raven.componentsSection')">×</button>
                 </span>
               </div>
               <div class="rw-component-input">
-                <el-input v-model="componentDraft.name" size="small" placeholder="组件名" />
-                <el-input v-model="componentDraft.version" size="small" placeholder="版本（可选）" />
-                <button class="rw-btn-secondary" @click="addComponent">添加</button>
+                <el-input v-model="componentDraft.name" size="small" :placeholder="t('raven.componentNamePlaceholder')" />
+                <el-input v-model="componentDraft.version" size="small" :placeholder="t('raven.componentVersionPlaceholder')" />
+                <button class="rw-btn-secondary" @click="addComponent">{{ t('common.add') }}</button>
               </div>
             </div>
           </div>
 
           <div class="rw-subcard">
-            <h4 class="rw-subcard-title">上传进度</h4>
+            <h4 class="rw-subcard-title">{{ t('raven.uploadProgress') }}</h4>
             <el-progress :percentage="uploadProgress" :indeterminate="uploading && uploadProgress === 0" />
-            <p class="rw-progress-status">{{ uploadStatus || '尚未开始' }}</p>
+            <p class="rw-progress-status">{{ uploadStatus || t('raven.notStarted') }}</p>
             <div class="rw-upload-actions">
               <button
                 class="rw-btn-primary"
@@ -866,13 +872,13 @@ onMounted(() => {
                 @click="startUpload"
               >
                 <el-icon><UploadFilled /></el-icon>
-                {{ uploading ? '上传中' : '开始上传' }}
+                {{ uploading ? t('raven.uploadingBtn') : t('raven.startUpload') }}
               </button>
-              <button v-if="uploading" class="rw-btn-secondary" @click="cancelUpload">取消</button>
-              <button class="rw-btn-ghost" :disabled="uploading" @click="clearUpload">重置</button>
+              <button v-if="uploading" class="rw-btn-secondary" @click="cancelUpload">{{ t('common.cancel') }}</button>
+              <button class="rw-btn-ghost" :disabled="uploading" @click="clearUpload">{{ t('common.reset') }}</button>
             </div>
             <p class="rw-progress-hint">
-              包元数据落盘后即对 AI Agent 可见，无需手动重建索引
+              {{ t('raven.uploadIndexHint') }}
             </p>
           </div>
         </div>
@@ -880,7 +886,7 @@ onMounted(() => {
 
       <template #footer>
         <div class="rw-dialog-footer">
-          <button class="rw-btn-ghost" @click="uploadDialogVisible = false">关闭</button>
+          <button class="rw-btn-ghost" @click="uploadDialogVisible = false">{{ t('common.close') }}</button>
         </div>
       </template>
     </el-dialog>
@@ -891,14 +897,14 @@ onMounted(() => {
       destroy-on-close
       :close-on-click-modal="false"
       class="rw-dialog"
-      title="AI Agent 智能搜索"
+      :title="t('raven.searchDialogTitle')"
       :before-close="(done: () => void) => { closeSearchDialog(); done() }"
     >
       <div class="rw-search-body">
         <div class="rw-search-bar">
           <el-input
             v-model="searchQuery"
-            placeholder="用自然语言描述需求，例如：lingxi-10 v2.3 以上的非补丁包"
+            :placeholder="t('raven.searchInputPlaceholder')"
             clearable
             class="rw-search-input"
             :disabled="searchLoading"
@@ -916,10 +922,10 @@ onMounted(() => {
             @click="performSearch"
           >
             <el-icon><Search /></el-icon>
-            智能搜索
+            {{ t('raven.searchAi') }}
           </button>
           <button v-else class="rw-btn-secondary" @click="cancelSearch">
-            停止
+            {{ t('raven.stop') }}
           </button>
         </div>
 
@@ -950,9 +956,9 @@ onMounted(() => {
             <div class="rw-answer-head">
               <span class="rw-pill rw-pill-ai">
                 <el-icon><StarFilled /></el-icon>
-                AI 回答
+                {{ t('raven.aiAnswer') }}
               </span>
-              <span class="rw-answer-disclaimer">由 Claude Agent + 工具调用生成</span>
+              <span class="rw-answer-disclaimer">{{ t('raven.aiAnswerDisclaimer') }}</span>
             </div>
             <div class="rw-markdown" v-html="renderedAnswer" />
             <p v-if="searchResult.notes" class="rw-answer-notes">{{ searchResult.notes }}</p>
@@ -973,11 +979,9 @@ onMounted(() => {
             class="rw-card rw-match-card"
           >
             <div class="rw-match-head">
-              <span class="rw-match-title">推荐包</span>
+              <span class="rw-match-title">{{ t('raven.recommendedPkgs') }}</span>
               <span class="rw-match-meta">
-                推荐 {{ searchResult.recommended_package_ids.length }} · 相关 {{
-                  searchResult.relevant_package_ids.length
-                }}
+                {{ t('raven.matchMeta', { rec: searchResult.recommended_package_ids.length, rel: searchResult.relevant_package_ids.length }) }}
               </span>
             </div>
             <div class="rw-match-grid">
@@ -994,16 +998,16 @@ onMounted(() => {
                       <span class="rw-pill" :class="packageTypePillClass(pkg.packageType)">
                         {{ packageTypeText(pkg.packageType) }}
                       </span>
-                      <span class="rw-pill rw-pill-neutral rw-pill-mono">v{{ pkg.version || '未知' }}</span>
+                      <span class="rw-pill rw-pill-neutral rw-pill-mono">v{{ pkg.version || t('raven.unknown') }}</span>
                     </div>
                     <p class="rw-match-item-desc">
-                      {{ pkg.metadata?.description || '暂无描述' }}
+                      {{ pkg.metadata?.description || t('raven.noDesc') }}
                     </p>
                   </div>
                   <div class="rw-match-item-tags">
                     <span v-if="isRecommendedPackage(pkg)" class="rw-pill rw-pill-ai">
                       <el-icon><StarFilled /></el-icon>
-                      AI 推荐
+                      {{ t('raven.aiRecommended') }}
                     </span>
                   </div>
                 </div>
@@ -1017,8 +1021,8 @@ onMounted(() => {
                   </span>
                 </div>
                 <div class="rw-match-item-actions">
-                  <button class="rw-btn-secondary" @click="openSearchPackageDetail(pkg)">详情</button>
-                  <button class="rw-btn-primary" @click="downloadPackage(pkg)">下载</button>
+                  <button class="rw-btn-secondary" @click="openSearchPackageDetail(pkg)">{{ t('common.detail') }}</button>
+                  <button class="rw-btn-primary" @click="downloadPackage(pkg)">{{ t('common.download') }}</button>
                 </div>
               </div>
             </div>
@@ -1028,7 +1032,7 @@ onMounted(() => {
             v-else-if="!searchPackagesLoading"
             class="rw-search-empty"
           >
-            Agent 未推荐任何包
+            {{ t('raven.noRecommend') }}
           </div>
         </div>
 
@@ -1036,13 +1040,13 @@ onMounted(() => {
           v-else-if="!searchTraceRunning && searchTraceEvents.length === 0"
           class="rw-search-empty"
         >
-          输入需求并执行智能搜索，Agent 的工具调用过程会显示在这里
+          {{ t('raven.searchEmptyHint') }}
         </div>
       </div>
 
       <template #footer>
         <div class="rw-dialog-footer">
-          <button class="rw-btn-ghost" @click="closeSearchDialog">关闭</button>
+          <button class="rw-btn-ghost" @click="closeSearchDialog">{{ t('common.close') }}</button>
         </div>
       </template>
     </el-dialog>
@@ -1053,16 +1057,16 @@ onMounted(() => {
       destroy-on-close
       :close-on-click-modal="false"
       class="rw-dialog"
-      title="包详情"
+      :title="t('raven.pkgDetailTitle')"
     >
       <div v-loading="searchDetailLoading" class="rw-detail-body">
         <div class="rw-detail-head">
           <h2 class="rw-detail-title">
-            {{ searchDetailPackage?.name || '加载中...' }}
+            {{ searchDetailPackage?.name || t('raven.loadingPkg') }}
           </h2>
           <div class="rw-pill-group">
             <span v-if="searchDetailPackage" class="rw-pill rw-pill-neutral rw-pill-mono">
-              v{{ searchDetailPackage.version || '未知' }}
+              v{{ searchDetailPackage.version || t('raven.unknown') }}
             </span>
             <span v-if="searchDetailPackage" class="rw-pill" :class="packageTypePillClass(searchDetailPackage.packageType)">
               {{ packageTypeText(searchDetailPackage.packageType) }}
@@ -1079,22 +1083,22 @@ onMounted(() => {
 
         <div class="rw-detail-meta">
           <div>
-            <span class="rw-detail-label">创建时间</span>
+            <span class="rw-detail-label">{{ t('raven.colCreatedAt') }}</span>
             <span class="rw-detail-value">{{ searchDetailPackage ? formatDateTime(searchDetailPackage.createdAt) : '-' }}</span>
           </div>
           <div>
-            <span class="rw-detail-label">大小</span>
+            <span class="rw-detail-label">{{ t('raven.colSize') }}</span>
             <span class="rw-detail-value">{{ searchDetailPackage ? formatFileSize(searchDetailPackage.size) : '-' }}</span>
           </div>
         </div>
 
         <div class="rw-field">
-          <p class="rw-field-label">描述</p>
+          <p class="rw-field-label">{{ t('raven.descSection') }}</p>
           <div class="rw-markdown rw-detail-desc" v-html="searchDetailDescription" />
         </div>
 
         <div v-if="normalizeTags(searchDetailPackage?.metadata?.tags).length" class="rw-field">
-          <p class="rw-field-label">标签</p>
+          <p class="rw-field-label">{{ t('raven.tagsSection') }}</p>
           <div class="rw-pill-group">
             <span
               v-for="tag in normalizeTags(searchDetailPackage?.metadata?.tags)"
@@ -1107,7 +1111,7 @@ onMounted(() => {
         </div>
 
         <div v-if="normalizeComponents(searchDetailPackage?.metadata?.components).length" class="rw-field">
-          <p class="rw-field-label">组件</p>
+          <p class="rw-field-label">{{ t('raven.componentsSection') }}</p>
           <div class="rw-pill-group">
             <span
               v-for="comp in normalizeComponents(searchDetailPackage?.metadata?.components)"
@@ -1122,16 +1126,16 @@ onMounted(() => {
 
       <template #footer>
         <div class="rw-dialog-footer rw-dialog-footer-split">
-          <span class="rw-detail-footnote">仅在智能搜索中以弹窗展示，其他入口依然跳转详情页</span>
+          <span class="rw-detail-footnote">{{ t('raven.detailFootnote') }}</span>
           <div class="rw-dialog-footer-actions">
             <button
               v-if="searchDetailPackage"
               class="rw-btn-secondary"
               @click="downloadPackage(searchDetailPackage)"
             >
-              下载
+              {{ t('common.download') }}
             </button>
-            <button class="rw-btn-primary" @click="searchDetailVisible = false">关闭</button>
+            <button class="rw-btn-primary" @click="searchDetailVisible = false">{{ t('common.close') }}</button>
           </div>
         </div>
       </template>

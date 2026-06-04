@@ -547,7 +547,7 @@ const handleDownload = async (log: LogRecord) => {
     try {
       await logApi.incrementDownloadCount(log.id)
     } catch (error) {
-      console.warn('下载计数更新失败:', error)
+      console.warn('download count update failed:', error)
     }
   } catch (error) {
     appStore.showNotification({
@@ -690,7 +690,7 @@ const fetchProjectOptions = async () => {
       projectOptions.value = response.data
     }
   } catch (error) {
-    console.error('加载项目列表失败:', error)
+    console.error('failed to load project list:', error)
   }
 }
 
@@ -699,7 +699,7 @@ onMounted(() => {
   logStore.fetchLogs().then(() => {
     startAutoRefresh()
   }).catch((error) => {
-    console.error('初始数据加载失败:', error)
+    console.error('initial data load failed:', error)
   })
 })
 

@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { LogOut, Menu, PanelLeftClose } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
 
+const { t } = useI18n()
 const appStore = useAppStore()
 const route = useRoute()
 const router = useRouter()
@@ -24,7 +26,7 @@ const parseErrorMessage = (err: any) => {
   if (err?.response?.data?.detail) return err.response.data.detail
   if (err?.response?.data?.message) return err.response.data.message
   if (err?.message) return err.message
-  return '操作失败'
+  return t('admin.parseError')
 }
 
 const persistToken = (token: string) => {
@@ -47,18 +49,18 @@ const toggleNavVisibility = () => {
 
 const handleLogin = async () => {
   if (!authForm.username || !authForm.password) {
-    appStore.showNotification({ title: '请输入用户名和密码', type: 'warning' })
+    appStore.showNotification({ title: t('admin.loginWarning'), type: 'warning' })
     return
   }
   isLoggingIn.value = true
   try {
     const resp = await adminApi.login(authForm.username.trim(), authForm.password)
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '登录失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.loginFailFallback'))
     persistToken(resp.data.token)
     isAuthenticated.value = true
-    appStore.showNotification({ title: '登录成功', message: `欢迎，${resp.data.username}`, type: 'success' })
+    appStore.showNotification({ title: t('admin.loginSuccessTitle'), message: t('admin.loginSuccessMsg', { username: resp.data.username }), type: 'success' })
   } catch (err: any) {
-    appStore.showNotification({ title: '登录失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.loginFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     isLoggingIn.value = false
   }
@@ -71,7 +73,7 @@ const handleLogout = async () => {
     // ignore
   } finally {
     clearAuth()
-    appStore.showNotification({ title: '已退出登录', type: 'info' })
+    appStore.showNotification({ title: t('admin.logoutSuccessTitle'), type: 'info' })
   }
 }
 
@@ -104,24 +106,24 @@ onMounted(() => {
             class="admin-icon-btn"
             :disabled="!isAuthenticated"
             @click="toggleNavVisibility"
-            :title="navVisible ? '隐藏侧边栏' : '显示侧边栏'"
-            aria-label="切换侧边栏"
+            :title="navVisible ? t('admin.toggleSidebarHide') : t('admin.toggleSidebarShow')"
+            :aria-label="t('admin.toggleSidebarAriaLabel')"
           >
             <PanelLeftClose v-if="navVisible" :size="18" />
             <Menu v-else :size="18" />
           </button>
           <div>
-            <h1 class="admin-title">后台管理</h1>
-            <p class="admin-subtitle">模型设置</p>
+            <h1 class="admin-title">{{ t('admin.title') }}</h1>
+            <p class="admin-subtitle">{{ t('admin.modelSettings.subtitle') }}</p>
           </div>
         </div>
         <div class="admin-topbar-right">
           <span class="px-3 py-1 text-xs font-semibold rounded-full bg-slate-700 text-slate-100">
-            {{ isAuthenticated ? '运行期配置' : '未登录' }}
+            {{ isAuthenticated ? t('admin.modelSettings.badge') : t('admin.badgeNotLoggedIn') }}
           </span>
           <button v-if="isAuthenticated" class="admin-logout-btn" @click="handleLogout">
             <LogOut :size="14" />
-            <span>退出</span>
+            <span>{{ t('admin.logoutBtn') }}</span>
           </button>
         </div>
       </div>
@@ -131,7 +133,7 @@ onMounted(() => {
       v-if="isAuthenticated && navVisible"
       class="admin-sidebar-backdrop"
       @click="toggleNavVisibility"
-      aria-label="关闭侧边栏"
+      :aria-label="t('admin.closeSidebarAriaLabel')"
     ></button>
 
     <aside v-if="isAuthenticated" class="admin-sidebar" :class="{ 'is-hidden': !navVisible }">
@@ -154,13 +156,13 @@ onMounted(() => {
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
           <div class="flex items-center justify-between mb-4">
             <div>
-              <h2 class="text-lg font-semibold text-slate-900">登录后台</h2>
-              <p class="text-sm text-slate-500">请输入管理员凭证继续</p>
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.loginCardTitle') }}</h2>
+              <p class="text-sm text-slate-500">{{ t('admin.loginCardDesc') }}</p>
             </div>
           </div>
           <form class="space-y-4 max-w-md" @submit.prevent="handleLogin">
             <label class="block">
-              <span class="text-sm text-slate-700">用户名</span>
+              <span class="text-sm text-slate-700">{{ t('admin.usernameLabel') }}</span>
               <input
                 v-model="authForm.username"
                 type="text"
@@ -170,7 +172,7 @@ onMounted(() => {
               />
             </label>
             <label class="block">
-              <span class="text-sm text-slate-700">密码</span>
+              <span class="text-sm text-slate-700">{{ t('admin.passwordLabel') }}</span>
               <input
                 v-model="authForm.password"
                 type="password"
@@ -184,7 +186,7 @@ onMounted(() => {
               class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-50"
               :disabled="isLoggingIn"
             >
-              {{ isLoggingIn ? '登录中…' : '登录' }}
+              {{ isLoggingIn ? t('admin.loginBtnLoading') : t('admin.loginBtn') }}
             </button>
           </form>
         </div>
@@ -194,41 +196,38 @@ onMounted(() => {
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
           <div class="flex items-center justify-between mb-4">
             <div>
-              <h2 class="text-lg font-semibold text-slate-900">Anthropic 模型配置</h2>
-              <p class="text-sm text-slate-500">
-                DeviceAgent 与 LogAnalysisAgent 统一通过 Claude Agent SDK 调用 Anthropic 兼容端点。
-                所有模型相关参数仅由环境变量 / <code>app/config.py</code> 控制，运行期不可覆盖。
-              </p>
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.modelSettings.sectionTitle') }}</h2>
+              <p class="text-sm text-slate-500">{{ t('admin.modelSettings.sectionDesc') }}</p>
             </div>
           </div>
 
           <div class="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3">
-            <div class="text-sm font-semibold text-slate-800 mb-2">必需环境变量</div>
+            <div class="text-sm font-semibold text-slate-800 mb-2">{{ t('admin.modelSettings.requiredVarsTitle') }}</div>
             <ul class="space-y-1 text-sm text-slate-700">
-              <li><code>ANTHROPIC_PROVIDER</code> — Provider 选择（如 <code>anthropic</code> / <code>deepseek</code>），DeviceAgent 需要支持 MCP 工具的 provider</li>
-              <li><code>ANTHROPIC_API_KEY</code> — Anthropic 兼容端点的 API Key</li>
+              <li><code>ANTHROPIC_PROVIDER</code> — {{ t('admin.modelSettings.varProviderDesc') }}</li>
+              <li><code>ANTHROPIC_API_KEY</code> — {{ t('admin.modelSettings.varApiKeyDesc') }}</li>
             </ul>
           </div>
 
           <div class="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 mt-3">
-            <div class="text-sm font-semibold text-slate-800 mb-2">可选环境变量</div>
+            <div class="text-sm font-semibold text-slate-800 mb-2">{{ t('admin.modelSettings.optionalVarsTitle') }}</div>
             <ul class="space-y-1 text-sm text-slate-700">
-              <li><code>ANTHROPIC_BASE_URL</code> — 自定义端点，未设置时走 provider profile 默认值</li>
-              <li><code>ANTHROPIC_MODEL</code> — 主力模型 id；未设置时使用 provider profile 默认值</li>
-              <li><code>ANTHROPIC_SMALL_FAST_MODEL</code> — 标题生成等轻量任务用的小/快模型；未设置时使用 provider profile 默认值</li>
-              <li><code>ANTHROPIC_MAX_HISTORY_TURNS</code> — 对话历史最大保留轮数，默认 <code>10</code></li>
-              <li><code>ANTHROPIC_SMALL_FAST_MAX_TOKENS</code> — 轻量任务最大输出 tokens，默认 <code>1024</code></li>
-              <li><code>ANTHROPIC_SMALL_FAST_REQUEST_TIMEOUT_SECONDS</code> — 轻量任务请求超时（秒），默认 <code>30</code></li>
-              <li><code>DEVICE_AGENT_PERMISSION_TIMEOUT_SECONDS</code> — HITL 用户确认超时（秒），默认 <code>120</code></li>
-              <li><code>DEVICE_AGENT_RESULT_EXCERPT_BYTES</code> — 单条 evidence 截断阈值，默认 <code>16384</code></li>
-              <li><code>DEVICE_AGENT_RESULT_MAX_BYTES</code> — 工具回包整体上限，超过替换为 <code>result_too_large</code>，默认 <code>262144</code></li>
-              <li><code>DEVICE_AGENT_MAX_REMOTE_TOOLS</code> — 单会话最多映射的设备 MCP 工具数，默认 <code>64</code></li>
+              <li><code>ANTHROPIC_BASE_URL</code> — {{ t('admin.modelSettings.varBaseUrlDesc') }}</li>
+              <li><code>ANTHROPIC_MODEL</code> — {{ t('admin.modelSettings.varModelDesc') }}</li>
+              <li><code>ANTHROPIC_SMALL_FAST_MODEL</code> — {{ t('admin.modelSettings.varSmallFastModelDesc') }}</li>
+              <li><code>ANTHROPIC_MAX_HISTORY_TURNS</code> — {{ t('admin.modelSettings.varMaxHistoryDesc') }}</li>
+              <li><code>ANTHROPIC_SMALL_FAST_MAX_TOKENS</code> — {{ t('admin.modelSettings.varSmallFastMaxTokensDesc') }}</li>
+              <li><code>ANTHROPIC_SMALL_FAST_REQUEST_TIMEOUT_SECONDS</code> — {{ t('admin.modelSettings.varSmallFastTimeoutDesc') }}</li>
+              <li><code>DEVICE_AGENT_PERMISSION_TIMEOUT_SECONDS</code> — {{ t('admin.modelSettings.varDevicePermTimeoutDesc') }}</li>
+              <li><code>DEVICE_AGENT_RESULT_EXCERPT_BYTES</code> — {{ t('admin.modelSettings.varDeviceExcerptDesc') }}</li>
+              <li><code>DEVICE_AGENT_RESULT_MAX_BYTES</code> — {{ t('admin.modelSettings.varDeviceMaxBytesDesc') }}</li>
+              <li><code>DEVICE_AGENT_MAX_REMOTE_TOOLS</code> — {{ t('admin.modelSettings.varDeviceMaxToolsDesc') }}</li>
             </ul>
           </div>
 
           <div class="text-sm text-slate-500 mt-3 space-y-1">
-            <p>· 修改环境变量后需要重启服务才能生效。</p>
-            <p>· DeepSeek profile 暂不支持 MCP server 工具，DeviceAgent 在该 provider 下会直接返回 <code>provider_no_mcp_support</code> 错误。</p>
+            <p>{{ t('admin.modelSettings.restartNote') }}</p>
+            <p>{{ t('admin.modelSettings.deepseekNote') }}</p>
           </div>
         </div>
       </section>

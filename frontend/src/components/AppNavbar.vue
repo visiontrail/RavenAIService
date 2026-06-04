@@ -10,7 +10,7 @@
               alt="Raven Logo"
               class="h-9 w-9 rounded-xl shadow-sm ring-1 ring-gray-200 object-contain"
             />
-            <span class="text-xl font-semibold text-gray-900 navbar-title">Raven智能测试平台</span>
+            <span class="text-xl font-semibold text-gray-900 navbar-title">{{ t('navbar.title') }}</span>
           </a>
         </div>
 
@@ -24,7 +24,7 @@
             <el-icon class="mr-2">
               <List />
             </el-icon>
-            <span class="font-medium">日志列表</span>
+            <span class="font-medium">{{ t('navbar.logs') }}</span>
           </router-link>
           
           <router-link
@@ -35,7 +35,7 @@
             <el-icon class="mr-2">
               <Monitor />
             </el-icon>
-            <span class="font-medium">设备机柜</span>
+            <span class="font-medium">{{ t('navbar.devices') }}</span>
           </router-link>
 
           <router-link
@@ -46,7 +46,7 @@
             <el-icon class="mr-2">
               <Box />
             </el-icon>
-            <span class="font-medium">重构包仓库</span>
+            <span class="font-medium">{{ t('navbar.raven') }}</span>
           </router-link>
         </div>
 
@@ -61,8 +61,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { Box, List, Monitor } from '@element-plus/icons-vue'
 import ravenLogo from '@/assets/raven-logo.png'
+
+const { t } = useI18n()
 
 const route = useRoute()
 const isRavenRoute = computed(() =>

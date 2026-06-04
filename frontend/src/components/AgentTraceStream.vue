@@ -1,6 +1,6 @@
 <template>
   <div v-if="hasContent" class="agent-trace">
-    <div v-if="loadedSkills.length" class="agent-trace__skills" title="本次 Agent 已通过 Skill 工具读取的 Skill">
+    <div v-if="loadedSkills.length" class="agent-trace__skills" :title="t('agentTrace.loadedSkillsTitle')">
       <span class="agent-trace__skills-label">Loaded Skills</span>
       <span
         v-for="skill in loadedSkills"
@@ -51,7 +51,7 @@
       />
 
       <div v-if="running && cards.length === 0" class="agent-trace__placeholder">
-        <span class="agent-trace__placeholder-label">思考中</span>
+        <span class="agent-trace__placeholder-label">{{ t('agentTrace.thinking') }}</span>
         <span class="agent-trace__placeholder-dots" aria-hidden="true">
           <span /><span /><span />
         </span>
@@ -64,7 +64,7 @@
           :disabled="cancelling"
           @click="onCancelClick"
         >
-          {{ cancelling ? '正在取消…' : '取消' }}
+          {{ cancelling ? t('agentTrace.cancelling') : t('agentTrace.cancel') }}
         </button>
       </div>
     </div>
@@ -73,11 +73,14 @@
 
 <script setup lang="ts">
 import { computed, ref, toRef, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { AlertTriangle, Ban, Check, ChevronDown } from 'lucide-vue-next'
 import type { AgentTraceEvent, TraceSummary } from '@/types/agentTrace'
 import { useAgentTraceStream } from '@/composables/useAgentTraceStream'
 import { useToolDisplayName, type ToolNameMap } from '@/composables/useToolDisplayName'
 import TraceStepCard from './TraceStepCard.vue'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   events: AgentTraceEvent[]

@@ -6,8 +6,8 @@
           <div class="pulse-ring"></div>
           <div class="pulse-core"></div>
         </div>
-        <h2 class="loading-title">AI正在分析日志</h2>
-        <p class="loading-subtitle">请稍候，这可能需要几分钟时间...</p>
+        <h2 class="loading-title">{{ t('aiAnalysis.loadingTitle') }}</h2>
+        <p class="loading-subtitle">{{ t('aiAnalysis.loadingSubtitle') }}</p>
       </div>
 
       <div class="progress-container">
@@ -18,7 +18,7 @@
       </div>
 
       <div v-if="currentStep" class="current-step">
-        <span class="step-label">当前步骤:</span>
+        <span class="step-label">{{ t('aiAnalysis.currentStep') }}</span>
         <span class="step-content">{{ currentStep }}</span>
       </div>
     </div>
@@ -30,9 +30,9 @@
         </div>
 
         <div class="header-content">
-          <h1 class="result-title">分析结果</h1>
+          <h1 class="result-title">{{ t('aiAnalysis.resultTitle') }}</h1>
           <div class="result-meta">
-            <span class="query-text">{{ result.query || '未知查询' }}</span>
+            <span class="query-text">{{ result.query || t('aiAnalysis.unknownQuery') }}</span>
             <span class="timestamp">{{ formatTimestamp(result.timestamp || new Date().toISOString()) }}</span>
           </div>
         </div>
@@ -42,22 +42,22 @@
       <div class="markdown-panel" ref="markdownPanel" v-html="renderedMarkdown"></div>
 
       <div class="metadata-line" v-if="result.metadata">
-        <span v-if="typeof result.metadata.execution_time === 'number'">执行时长：{{ formatDuration(result.metadata.execution_time) }}</span>
-        <span v-if="result.metadata.model_used">模型：{{ result.metadata.model_used }}</span>
+        <span v-if="typeof result.metadata.execution_time === 'number'">{{ t('aiAnalysis.executionTime', { time: formatDuration(result.metadata.execution_time) }) }}</span>
+        <span v-if="result.metadata.model_used">{{ t('aiAnalysis.modelUsed', { model: result.metadata.model_used }) }}</span>
       </div>
 
       <div class="actions-section">
         <button @click="copyResult" class="action-btn secondary">
           <Copy class="btn-icon" />
-          复制结果
+          {{ t('aiAnalysis.copyResult') }}
         </button>
         <button @click="downloadResult" class="action-btn secondary">
           <Download class="btn-icon" />
-          下载报告
+          {{ t('aiAnalysis.downloadReport') }}
         </button>
         <button @click="$emit('restart')" class="action-btn outline">
           <RotateCcw class="btn-icon" />
-          重新分析
+          {{ t('aiAnalysis.reAnalyze') }}
         </button>
       </div>
     </div>
@@ -66,11 +66,11 @@
       <div class="error-icon">
         <AlertCircle />
       </div>
-      <h2 class="error-title">分析失败</h2>
+      <h2 class="error-title">{{ t('aiAnalysis.errorTitle') }}</h2>
       <p class="error-message">{{ error }}</p>
       <button @click="$emit('retry')" class="retry-btn">
         <RotateCcw class="btn-icon" />
-        重试
+        {{ t('aiAnalysis.retry') }}
       </button>
     </div>
 
@@ -78,14 +78,15 @@
       <div class="empty-icon">
         <Brain />
       </div>
-      <h2 class="empty-title">准备开始AI分析</h2>
-      <p class="empty-message">请输入分析查询以开始智能日志分析</p>
+      <h2 class="empty-title">{{ t('aiAnalysis.emptyTitle') }}</h2>
+      <p class="empty-message">{{ t('aiAnalysis.emptyMessage') }}</p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import {
   CheckCircle,
@@ -107,6 +108,8 @@ interface Props {
   currentStep?: string
   error?: string
 }
+
+const { t } = useI18n()
 
 const props = withDefaults(defineProps<Props>(), {
   isLoading: false,
@@ -159,9 +162,9 @@ const getStatusIcon = (status: string) => {
 const formatTimestamp = (timestamp: string) => new Date(timestamp).toLocaleString('zh-CN')
 
 const formatDuration = (seconds: number) => {
-  if (seconds < 60) return `${seconds.toFixed(1)}秒`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}分${Math.floor(seconds % 60)}秒`
-  return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分钟`
+  if (seconds < 60) return t('aiAnalysis.durationSec', { seconds: seconds.toFixed(1) })
+  if (seconds < 3600) return t('aiAnalysis.durationMin', { minutes: Math.floor(seconds / 60), seconds: Math.floor(seconds % 60) })
+  return t('aiAnalysis.durationHour', { hours: Math.floor(seconds / 3600), minutes: Math.floor((seconds % 3600) / 60) })
 }
 
 const markdownPanel = ref<HTMLElement | null>(null)
@@ -198,36 +201,37 @@ const copyResult = async () => {
   const isSelection = !!selectedText
   const text = isSelection ? selectedText : cleanContent(rawMarkdown.value)
   if (!text) {
-    ElMessage.warning('暂无可复制内容')
+    ElMessage.warning(t('aiAnalysis.noCopyContent'))
     return
   }
 
   const success = await copyToClipboard(text)
   if (success) {
-    ElMessage.success(isSelection ? '选中内容已复制到剪贴板' : '分析结果已复制到剪贴板')
+    ElMessage.success(isSelection ? t('aiAnalysis.copySelectionSuccess') : t('aiAnalysis.copySuccess'))
   } else {
-    ElMessage.error('复制失败，请手动复制')
+    ElMessage.error(t('aiAnalysis.copyFail'))
   }
 }
 
 const downloadResult = () => {
   const content = rawMarkdown.value
   if (!content) {
-    ElMessage.warning('暂无可下载内容')
+    ElMessage.warning(t('aiAnalysis.noDownloadContent'))
     return
   }
 
+  const date = new Date().toISOString().slice(0, 10)
   const blob = new Blob([content], { type: 'text/markdown' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `AI分析报告_${new Date().toISOString().slice(0, 10)}.md`
+  a.download = t('aiAnalysis.reportFilename', { date })
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
 
-  ElMessage.success('报告已下载')
+  ElMessage.success(t('aiAnalysis.downloadSuccess'))
 }
 </script>
 

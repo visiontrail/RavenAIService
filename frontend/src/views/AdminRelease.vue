@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { LogOut, Menu, PanelLeftClose, RefreshCw, Upload } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { releasesAdminApi } from '@/api/releases'
@@ -8,6 +9,7 @@ import { useAppStore } from '@/stores/app'
 import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
 import type { ReleaseItem } from '@/types'
 
+const { t } = useI18n()
 const appStore = useAppStore()
 const route = useRoute()
 const router = useRouter()
@@ -53,7 +55,7 @@ const parseErrorMessage = (err: any): string => {
   if (err?.response?.data?.detail) return err.response.data.detail
   if (err?.response?.data?.message) return err.response.data.message
   if (err?.message) return err.message
-  return '操作失败'
+  return t('admin.parseError')
 }
 
 const normalizeReleaseList = (data: unknown): ReleaseItem[] => {
@@ -113,13 +115,13 @@ const fetchReleases = async () => {
   releaseLoadError.value = ''
   try {
     const resp = await releasesAdminApi.list()
-    if (!resp?.success) throw new Error(resp?.message || '获取列表失败')
+    if (!resp?.success) throw new Error(resp?.message || t('admin.release.loadFailFallback'))
     releases.value = normalizeReleaseList(resp.data)
   } catch (err: any) {
     const message = parseErrorMessage(err)
     releaseLoadError.value = message
     releases.value = []
-    appStore.showNotification({ title: '加载失败', message, type: 'error' })
+    appStore.showNotification({ title: t('admin.loadFail'), message, type: 'error' })
   } finally {
     loadingReleases.value = false
   }
@@ -127,19 +129,19 @@ const fetchReleases = async () => {
 
 const handleLogin = async () => {
   if (!authForm.username || !authForm.password) {
-    appStore.showNotification({ title: '请输入用户名和密码', type: 'warning' })
+    appStore.showNotification({ title: t('admin.loginWarning'), type: 'warning' })
     return
   }
   isLoggingIn.value = true
   try {
     const resp = await adminApi.login(authForm.username.trim(), authForm.password)
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '登录失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.loginFailFallback'))
     persistToken(resp.data.token)
     isAuthenticated.value = true
-    appStore.showNotification({ title: '登录成功', message: `欢迎，${resp.data.username}`, type: 'success' })
+    appStore.showNotification({ title: t('admin.loginSuccessTitle'), message: t('admin.loginSuccessMsg', { username: resp.data.username }), type: 'success' })
     await fetchReleases()
   } catch (err: any) {
-    appStore.showNotification({ title: '登录失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.loginFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     isLoggingIn.value = false
   }
@@ -153,7 +155,7 @@ const handleLogout = async () => {
   } finally {
     clearAuth()
     releases.value = []
-    appStore.showNotification({ title: '已退出登录', type: 'info' })
+    appStore.showNotification({ title: t('admin.logoutSuccessTitle'), type: 'info' })
   }
 }
 
@@ -183,11 +185,11 @@ const handleDrop = (e: DragEvent) => {
 
 const submitUpload = async () => {
   if (!uploadForm.version.trim()) {
-    appStore.showNotification({ title: '请填写版本号', type: 'warning' })
+    appStore.showNotification({ title: t('admin.release.versionRequired'), type: 'warning' })
     return
   }
   if (!selectedFile.value) {
-    appStore.showNotification({ title: '请选择文件', type: 'warning' })
+    appStore.showNotification({ title: t('admin.release.fileRequired'), type: 'warning' })
     return
   }
   uploading.value = true
@@ -198,27 +200,27 @@ const submitUpload = async () => {
       description: uploadForm.description,
       file: selectedFile.value,
     })
-    if (!resp?.success) throw new Error(resp?.message || '上传失败')
-    appStore.showNotification({ title: '上传成功', message: `${PLATFORM_LABELS[uploadForm.platform]} v${uploadForm.version}`, type: 'success' })
+    if (!resp?.success) throw new Error(resp?.message || t('admin.release.uploadFailFallback'))
+    appStore.showNotification({ title: t('admin.release.uploadSuccess'), message: `${PLATFORM_LABELS[uploadForm.platform]} v${uploadForm.version}`, type: 'success' })
     uploadDialogVisible.value = false
     await fetchReleases()
   } catch (err: any) {
-    appStore.showNotification({ title: '上传失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.release.uploadFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     uploading.value = false
   }
 }
 
 const deleteRelease = async (item: ReleaseItem) => {
-  if (!window.confirm(`确认删除 ${PLATFORM_LABELS[item.platform]} v${item.version}？`)) return
+  if (!window.confirm(t('admin.release.deleteConfirm', { platform: PLATFORM_LABELS[item.platform], version: item.version }))) return
   deletingId.value = item.id
   try {
     const resp = await releasesAdminApi.remove(item.id)
-    if (!resp?.success) throw new Error(resp?.message || '删除失败')
+    if (!resp?.success) throw new Error(resp?.message || t('admin.release.deleteFailFallback'))
     releases.value = releases.value.filter((r) => r.id !== item.id)
-    appStore.showNotification({ title: '已删除', message: `${item.filename}`, type: 'success' })
+    appStore.showNotification({ title: t('admin.release.deleteSuccess'), message: `${item.filename}`, type: 'success' })
   } catch (err: any) {
-    appStore.showNotification({ title: '删除失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.release.deleteFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     deletingId.value = ''
   }
@@ -252,23 +254,23 @@ onMounted(() => bootstrap())
             class="admin-icon-btn"
             :disabled="!isAuthenticated"
             @click="toggleNavVisibility"
-            :title="navVisible ? '隐藏侧边栏' : '显示侧边栏'"
+            :title="navVisible ? t('admin.toggleSidebarHide') : t('admin.toggleSidebarShow')"
           >
             <PanelLeftClose v-if="navVisible" :size="18" />
             <Menu v-else :size="18" />
           </button>
           <div>
-            <h1 class="admin-title">后台管理</h1>
-            <p class="admin-subtitle">App Release 管理</p>
+            <h1 class="admin-title">{{ t('admin.title') }}</h1>
+            <p class="admin-subtitle">{{ t('admin.release.subtitle') }}</p>
           </div>
         </div>
         <div class="admin-topbar-right">
           <span class="px-3 py-1 text-xs font-semibold rounded-full bg-slate-700 text-slate-100">
-            {{ isAuthenticated ? `共 ${releases.length} 个版本` : '未登录' }}
+            {{ isAuthenticated ? t('admin.release.badge', { count: releases.length }) : t('admin.badgeNotLoggedIn') }}
           </span>
           <button v-if="isAuthenticated" class="admin-logout-btn" @click="handleLogout">
             <LogOut :size="14" />
-            <span>退出</span>
+            <span>{{ t('admin.logoutBtn') }}</span>
           </button>
         </div>
       </div>
@@ -301,14 +303,14 @@ onMounted(() => bootstrap())
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
           <div class="flex items-center justify-between mb-4">
             <div>
-              <h2 class="text-lg font-semibold text-slate-900">登录后台</h2>
-              <p class="text-sm text-slate-500">请输入管理员凭证继续</p>
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.loginCardTitle') }}</h2>
+              <p class="text-sm text-slate-500">{{ t('admin.loginCardDesc') }}</p>
             </div>
-            <span class="text-xs text-slate-500">内部安全访问</span>
+            <span class="text-xs text-slate-500">{{ t('admin.secureAccess') }}</span>
           </div>
           <form class="space-y-4 max-w-sm" @submit.prevent="handleLogin">
             <label class="block">
-              <span class="text-sm text-slate-700">用户名</span>
+              <span class="text-sm text-slate-700">{{ t('admin.usernameLabel') }}</span>
               <input
                 v-model="authForm.username"
                 type="text"
@@ -318,7 +320,7 @@ onMounted(() => bootstrap())
               />
             </label>
             <label class="block">
-              <span class="text-sm text-slate-700">密码</span>
+              <span class="text-sm text-slate-700">{{ t('admin.passwordLabel') }}</span>
               <input
                 v-model="authForm.password"
                 type="password"
@@ -332,7 +334,7 @@ onMounted(() => bootstrap())
               class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-50"
               :disabled="isLoggingIn"
             >
-              {{ isLoggingIn ? '登录中…' : '登录' }}
+              {{ isLoggingIn ? t('admin.loginBtnLoading') : t('admin.loginBtn') }}
             </button>
           </form>
         </div>
@@ -344,11 +346,11 @@ onMounted(() => bootstrap())
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
           <div class="flex items-center justify-between">
             <div>
-              <h2 class="text-lg font-semibold text-slate-900">App Release 列表</h2>
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.release.listTitle') }}</h2>
               <p v-if="releaseLoadError" class="text-sm text-rose-600 mt-0.5">
                 {{ releaseLoadError }}
               </p>
-              <p v-else class="text-sm text-slate-500 mt-0.5">管理各平台安装包的上传与发布</p>
+              <p v-else class="text-sm text-slate-500 mt-0.5">{{ t('admin.release.listDesc') }}</p>
             </div>
             <div class="flex items-center gap-2">
               <button
@@ -357,14 +359,14 @@ onMounted(() => bootstrap())
                 @click="fetchReleases"
               >
                 <RefreshCw :size="15" />
-                {{ loadingReleases ? '同步中…' : '刷新' }}
+                {{ loadingReleases ? t('admin.release.syncingBtn') : t('common.refresh') }}
               </button>
               <button
                 class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition"
                 @click="openUploadDialog"
               >
                 <Upload :size="15" />
-                <span>上传 Release</span>
+                <span>{{ t('admin.release.uploadBtn') }}</span>
               </button>
             </div>
           </div>
@@ -375,7 +377,7 @@ onMounted(() => bootstrap())
           v-if="releaseLoadError"
           class="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 text-center"
         >
-          <h3 class="text-base font-semibold text-slate-900">Release 内容暂时无法加载</h3>
+          <h3 class="text-base font-semibold text-slate-900">{{ t('admin.release.loadErrorTitle') }}</h3>
           <p class="text-sm text-slate-500 mt-2">{{ releaseLoadError }}</p>
           <button
             class="mt-4 px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition"
@@ -383,7 +385,7 @@ onMounted(() => bootstrap())
             @click="fetchReleases"
           >
             <RefreshCw :size="15" />
-            <span>{{ loadingReleases ? '同步中…' : '重新加载' }}</span>
+            <span>{{ loadingReleases ? t('admin.release.syncingBtn') : t('admin.release.reloadBtn') }}</span>
           </button>
         </div>
 
@@ -397,25 +399,25 @@ onMounted(() => bootstrap())
               <span class="text-xl">{{ PLATFORM_ICONS[platform] }}</span>
               <div>
                 <span class="font-semibold text-slate-900">{{ PLATFORM_LABELS[platform] }}</span>
-                <span class="ml-2 text-xs text-slate-500">{{ groupedReleases[platform].length }} 个版本</span>
+                <span class="ml-2 text-xs text-slate-500">{{ t('admin.release.versionCount', { count: groupedReleases[platform].length }) }}</span>
               </div>
             </div>
 
             <div v-if="!groupedReleases[platform].length" class="px-5 py-8 text-center text-sm text-slate-400">
-              暂无 {{ PLATFORM_LABELS[platform] }} 版本，点击右上角"上传 Release"添加
+              {{ t('admin.release.noVersions', { platform: PLATFORM_LABELS[platform] }) }}
             </div>
 
             <div v-else class="release-table-wrapper overflow-x-auto">
               <table class="min-w-full text-sm text-slate-700">
                 <thead>
                   <tr class="border-b border-slate-100 bg-slate-50">
-                    <th class="py-2.5 pl-5 pr-4 text-left font-semibold text-slate-600">版本</th>
-                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">文件名</th>
-                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">大小</th>
-                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">下载数</th>
-                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">上传时间</th>
-                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">备注</th>
-                    <th class="py-2.5 pr-5 text-left font-semibold text-slate-600">操作</th>
+                    <th class="py-2.5 pl-5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.release.colVersion') }}</th>
+                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.release.colFilename') }}</th>
+                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.release.colSize') }}</th>
+                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.release.colDownloads') }}</th>
+                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.release.colUploadTime') }}</th>
+                    <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.release.colNotes') }}</th>
+                    <th class="py-2.5 pr-5 text-left font-semibold text-slate-600">{{ t('admin.release.colActions') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -444,7 +446,7 @@ onMounted(() => bootstrap())
                         :disabled="deletingId === item.id"
                         @click="deleteRelease(item)"
                       >
-                        {{ deletingId === item.id ? '删除中…' : '删除' }}
+                        {{ deletingId === item.id ? t('admin.release.deletingBtn') : t('admin.release.deleteBtn') }}
                       </button>
                     </td>
                   </tr>
@@ -461,15 +463,15 @@ onMounted(() => bootstrap())
       <div class="admin-modal-card upload-modal" @click.stop>
         <div class="flex items-center justify-between mb-5">
           <div>
-            <h3 class="text-base font-semibold text-slate-900">上传 Release</h3>
-            <p class="text-sm text-slate-500 mt-0.5">选择平台、填写版本后上传安装包</p>
+            <h3 class="text-base font-semibold text-slate-900">{{ t('admin.release.uploadDialogTitle') }}</h3>
+            <p class="text-sm text-slate-500 mt-0.5">{{ t('admin.release.uploadDialogDesc') }}</p>
           </div>
-          <button class="text-sm text-slate-500 hover:text-slate-800" :disabled="uploading" @click="closeUploadDialog">关闭</button>
+          <button class="text-sm text-slate-500 hover:text-slate-800" :disabled="uploading" @click="closeUploadDialog">{{ t('admin.release.closeBtn') }}</button>
         </div>
 
         <!-- Platform selector -->
         <div class="mb-5">
-          <span class="text-sm font-medium text-slate-700 block mb-2">目标平台</span>
+          <span class="text-sm font-medium text-slate-700 block mb-2">{{ t('admin.release.platformLabel') }}</span>
           <div class="flex gap-2">
             <button
               v-for="p in ['linux', 'macos', 'windows']"
@@ -487,21 +489,21 @@ onMounted(() => bootstrap())
         <!-- Version & Description -->
         <div class="grid grid-cols-2 gap-4 mb-5">
           <label class="block">
-            <span class="text-sm text-slate-700">版本号 <span class="text-rose-500">*</span></span>
+            <span class="text-sm text-slate-700">{{ t('admin.release.versionLabel') }} <span class="text-rose-500">*</span></span>
             <input
               v-model="uploadForm.version"
               type="text"
               class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-              placeholder="如 1.2.0"
+              :placeholder="t('admin.release.versionPlaceholder')"
             />
           </label>
           <label class="block">
-            <span class="text-sm text-slate-700">备注描述（可选）</span>
+            <span class="text-sm text-slate-700">{{ t('admin.release.notesLabel') }}</span>
             <input
               v-model="uploadForm.description"
               type="text"
               class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-              placeholder="如 修复了…"
+              :placeholder="t('admin.release.notesPlaceholder')"
             />
           </label>
         </div>
@@ -525,8 +527,8 @@ onMounted(() => bootstrap())
             <p class="text-xs text-slate-500">{{ formatBytes(selectedFile.size) }}</p>
           </div>
           <div v-else class="space-y-1">
-            <p class="text-sm text-slate-500">拖拽文件到此处，或点击选择文件</p>
-            <p class="text-xs text-slate-400">支持所有格式（.exe / .dmg / .tar.gz / .deb 等）</p>
+            <p class="text-sm text-slate-500">{{ t('admin.release.dropZoneHint') }}</p>
+            <p class="text-xs text-slate-400">{{ t('admin.release.dropZoneFormats') }}</p>
           </div>
         </div>
 
@@ -536,14 +538,14 @@ onMounted(() => bootstrap())
             :disabled="uploading"
             @click="closeUploadDialog"
           >
-            取消
+            {{ t('admin.release.cancelBtn') }}
           </button>
           <button
             class="px-5 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-60"
             :disabled="uploading"
             @click="submitUpload"
           >
-            {{ uploading ? '上传中…' : '确认上传' }}
+            {{ uploading ? t('admin.release.uploadingBtn') : t('admin.release.confirmUploadBtn') }}
           </button>
         </div>
       </div>

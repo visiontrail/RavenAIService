@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { LogOut, Menu, PanelLeftClose, RefreshCw, X } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
@@ -12,6 +13,7 @@ import type {
   MetricsUserRow,
 } from '@/types'
 
+const { t } = useI18n()
 const appStore = useAppStore()
 const route = useRoute()
 const router = useRouter()
@@ -34,11 +36,11 @@ type Bucket = 'hour' | 'day'
 const rangePreset = ref<RangePreset>('7d')
 const bucket = ref<Bucket>('day')
 
-const rangePresets: { key: RangePreset; label: string }[] = [
-  { key: '24h', label: '近 24 小时' },
-  { key: '7d', label: '近 7 天' },
-  { key: '30d', label: '近 30 天' },
-]
+const rangePresets = computed<{ key: RangePreset; label: string }[]>(() => [
+  { key: '24h', label: t('admin.metrics.timeRange24h') },
+  { key: '7d', label: t('admin.metrics.timeRange7d') },
+  { key: '30d', label: t('admin.metrics.timeRange30d') },
+])
 
 const computeRange = (): { from: string; to: string } => {
   const to = new Date()
@@ -78,7 +80,7 @@ const parseErrorMessage = (err: any) => {
   if (err?.response?.data?.detail) return err.response.data.detail
   if (err?.response?.data?.message) return err.response.data.message
   if (err?.message) return err.message
-  return '操作失败'
+  return t('admin.parseError')
 }
 
 const formatTimestamp = (value?: string | null) => {
@@ -116,7 +118,7 @@ const formatBytes = (value?: number | null) => {
 
 const formatCost = (overviewOrDetail: { estimated_cost_usd: number | null; cost_estimated: boolean } | null) => {
   if (!overviewOrDetail || !overviewOrDetail.cost_estimated || overviewOrDetail.estimated_cost_usd === null) {
-    return '未配置价格'
+    return t('admin.metrics.noPriceConfig')
   }
   return `$${overviewOrDetail.estimated_cost_usd.toFixed(4)}`
 }
@@ -150,10 +152,10 @@ const loadOverview = async () => {
   try {
     const { from, to } = computeRange()
     const resp = await adminApi.metricsOverview({ from, to, bucket: bucket.value })
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '加载概览失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.metrics.loadOverviewFail'))
     overview.value = resp.data
   } catch (err: any) {
-    appStore.showNotification({ title: '加载失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.loadFail'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     loadingOverview.value = false
   }
@@ -171,12 +173,12 @@ const loadUsers = async () => {
       per_page: userPerPage,
       sort: userSort.value,
     })
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '加载用户列表失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.metrics.loadUserListFail'))
     users.value = resp.data.rows
     userTotal.value = resp.data.total
     userPage.value = resp.data.page
   } catch (err: any) {
-    appStore.showNotification({ title: '加载失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.loadFail'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     loadingUsers.value = false
   }
@@ -194,12 +196,12 @@ const loadEvents = async () => {
       page: eventsPage.value,
       per_page: eventsPerPage,
     })
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '加载事件失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.metrics.loadEventsFail'))
     events.value = resp.data.events
     eventsTotal.value = resp.data.total
     eventsPage.value = resp.data.page
   } catch (err: any) {
-    appStore.showNotification({ title: '加载失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.loadFail'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     loadingEvents.value = false
   }
@@ -212,10 +214,10 @@ const openUserDetail = async (row: MetricsUserRow) => {
   try {
     const { from, to } = computeRange()
     const resp = await adminApi.metricsUserDetail(row.user_id, { from, to, bucket: bucket.value })
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '加载用户详情失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.metrics.loadUserDetailFail'))
     detail.value = resp.data
   } catch (err: any) {
-    appStore.showNotification({ title: '加载失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.loadFail'), message: parseErrorMessage(err), type: 'error' })
     detailVisible.value = false
   } finally {
     loadingDetail.value = false
@@ -285,19 +287,19 @@ const clearAuth = () => {
 
 const handleLogin = async () => {
   if (!authForm.username || !authForm.password) {
-    appStore.showNotification({ title: '请输入用户名和密码', type: 'warning' })
+    appStore.showNotification({ title: t('admin.loginWarning'), type: 'warning' })
     return
   }
   isLoggingIn.value = true
   try {
     const resp = await adminApi.login(authForm.username.trim(), authForm.password)
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '登录失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.loginFailFallback'))
     adminToken.set(resp.data.token)
     isAuthenticated.value = true
-    appStore.showNotification({ title: '登录成功', message: `欢迎，${resp.data.username}`, type: 'success' })
+    appStore.showNotification({ title: t('admin.loginSuccessTitle'), message: t('admin.loginSuccessMsg', { username: resp.data.username }), type: 'success' })
     await refreshAll()
   } catch (err: any) {
-    appStore.showNotification({ title: '登录失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.loginFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     isLoggingIn.value = false
   }
@@ -313,7 +315,7 @@ const handleLogout = async () => {
     overview.value = null
     users.value = []
     events.value = []
-    appStore.showNotification({ title: '已退出登录', type: 'info' })
+    appStore.showNotification({ title: t('admin.logoutSuccessTitle'), type: 'info' })
   }
 }
 
@@ -347,21 +349,21 @@ onMounted(() => {
             class="admin-icon-btn"
             :disabled="!isAuthenticated"
             @click="toggleNavVisibility"
-            :title="navVisible ? '隐藏侧边栏' : '显示侧边栏'"
-            aria-label="切换侧边栏"
+            :title="navVisible ? t('admin.toggleSidebarHide') : t('admin.toggleSidebarShow')"
+            :aria-label="t('admin.toggleSidebarAriaLabel')"
           >
             <PanelLeftClose v-if="navVisible" :size="18" />
             <Menu v-else :size="18" />
           </button>
           <div>
-            <h1 class="admin-title">后台管理</h1>
-            <p class="admin-subtitle">数据指标看板</p>
+            <h1 class="admin-title">{{ t('admin.title') }}</h1>
+            <p class="admin-subtitle">{{ t('admin.metrics.subtitle') }}</p>
           </div>
         </div>
         <div class="admin-topbar-right">
           <button v-if="isAuthenticated" class="admin-logout-btn" @click="handleLogout">
             <LogOut :size="14" />
-            <span>退出</span>
+            <span>{{ t('admin.logoutBtn') }}</span>
           </button>
         </div>
       </div>
@@ -371,7 +373,7 @@ onMounted(() => {
       v-if="isAuthenticated && navVisible"
       class="admin-sidebar-backdrop"
       @click="toggleNavVisibility"
-      aria-label="关闭侧边栏"
+      :aria-label="t('admin.closeSidebarAriaLabel')"
     ></button>
 
     <aside v-if="isAuthenticated" class="admin-sidebar" :class="{ 'is-hidden': !navVisible }">
@@ -395,14 +397,14 @@ onMounted(() => {
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
           <div class="flex items-center justify-between mb-4">
             <div>
-              <h2 class="text-lg font-semibold text-slate-900">登录后台</h2>
-              <p class="text-sm text-slate-500">请输入管理员凭证查看数据指标</p>
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.loginCardTitle') }}</h2>
+              <p class="text-sm text-slate-500">{{ t('admin.metrics.loginCardDesc') }}</p>
             </div>
-            <span class="text-xs text-slate-500">内部安全访问</span>
+            <span class="text-xs text-slate-500">{{ t('admin.secureAccess') }}</span>
           </div>
           <form class="space-y-4 max-w-sm" @submit.prevent="handleLogin">
             <label class="block">
-              <span class="text-sm text-slate-700">用户名</span>
+              <span class="text-sm text-slate-700">{{ t('admin.usernameLabel') }}</span>
               <input
                 v-model="authForm.username"
                 type="text"
@@ -412,7 +414,7 @@ onMounted(() => {
               />
             </label>
             <label class="block">
-              <span class="text-sm text-slate-700">密码</span>
+              <span class="text-sm text-slate-700">{{ t('admin.passwordLabel') }}</span>
               <input
                 v-model="authForm.password"
                 type="password"
@@ -426,7 +428,7 @@ onMounted(() => {
               class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-50"
               :disabled="isLoggingIn"
             >
-              {{ isLoggingIn ? '登录中…' : '登录' }}
+              {{ isLoggingIn ? t('admin.loginBtnLoading') : t('admin.loginBtn') }}
             </button>
           </form>
         </div>
@@ -436,7 +438,7 @@ onMounted(() => {
         <!-- Controls -->
         <div class="metrics-toolbar">
           <div class="metrics-control-group">
-            <span class="metrics-control-label">时间范围</span>
+            <span class="metrics-control-label">{{ t('admin.metrics.timeRangeLabel') }}</span>
             <div class="metrics-segment">
               <button
                 v-for="preset in rangePresets"
@@ -450,56 +452,56 @@ onMounted(() => {
             </div>
           </div>
           <div class="metrics-control-group">
-            <span class="metrics-control-label">粒度</span>
+            <span class="metrics-control-label">{{ t('admin.metrics.bucketLabel') }}</span>
             <div class="metrics-segment">
-              <button class="metrics-segment-btn" :class="{ 'is-active': bucket === 'hour' }" @click="applyBucket('hour')">小时</button>
-              <button class="metrics-segment-btn" :class="{ 'is-active': bucket === 'day' }" @click="applyBucket('day')">天</button>
+              <button class="metrics-segment-btn" :class="{ 'is-active': bucket === 'hour' }" @click="applyBucket('hour')">{{ t('admin.metrics.bucketHour') }}</button>
+              <button class="metrics-segment-btn" :class="{ 'is-active': bucket === 'day' }" @click="applyBucket('day')">{{ t('admin.metrics.bucketDay') }}</button>
             </div>
           </div>
           <button class="metrics-refresh-btn" :disabled="loadingOverview" @click="refreshAll">
             <RefreshCw :size="14" :class="{ 'animate-spin': loadingOverview }" />
-            <span>刷新</span>
+            <span>{{ t('admin.metrics.refreshBtn') }}</span>
           </button>
         </div>
 
         <!-- KPI cards -->
         <div class="metrics-kpi-grid">
           <div class="metrics-card metrics-kpi">
-            <span class="metrics-kpi-label">总 Token</span>
+            <span class="metrics-kpi-label">{{ t('admin.metrics.kpiTokens') }}</span>
             <span class="metrics-kpi-value">{{ formatNumber(overview?.tokens.total_tokens) }}</span>
             <span class="metrics-kpi-sub">
-              输入 {{ formatNumber(overview?.tokens.input_tokens) }} · 输出 {{ formatNumber(overview?.tokens.output_tokens) }}
+              {{ t('admin.metrics.kpiTokensDetail', { input: formatNumber(overview?.tokens.input_tokens), output: formatNumber(overview?.tokens.output_tokens) }) }}
             </span>
           </div>
           <div class="metrics-card metrics-kpi">
-            <span class="metrics-kpi-label">调用次数</span>
+            <span class="metrics-kpi-label">{{ t('admin.metrics.kpiCalls') }}</span>
             <span class="metrics-kpi-value">{{ formatNumber(overview?.invocation_count) }}</span>
             <span class="metrics-kpi-sub">
-              成功 {{ formatNumber(overview?.status_counts.succeeded) }} · 失败 {{ formatNumber(overview?.status_counts.failed) }}
+              {{ t('admin.metrics.kpiCallsDetail', { success: formatNumber(overview?.status_counts.succeeded), fail: formatNumber(overview?.status_counts.failed) }) }}
             </span>
           </div>
           <div class="metrics-card metrics-kpi">
-            <span class="metrics-kpi-label">估算成本</span>
+            <span class="metrics-kpi-label">{{ t('admin.metrics.kpiCost') }}</span>
             <span class="metrics-kpi-value">{{ formatCost(overview) }}</span>
-            <span class="metrics-kpi-sub">缓存读 {{ formatNumber(overview?.tokens.cache_read_tokens) }}</span>
+            <span class="metrics-kpi-sub">{{ t('admin.metrics.kpiCacheRead', { count: formatNumber(overview?.tokens.cache_read_tokens) }) }}</span>
           </div>
           <div class="metrics-card metrics-kpi">
-            <span class="metrics-kpi-label">耗时 (ms)</span>
+            <span class="metrics-kpi-label">{{ t('admin.metrics.kpiDuration') }}</span>
             <span class="metrics-kpi-value">{{ overview?.duration_ms_avg ? Math.round(overview.duration_ms_avg) : '--' }}</span>
-            <span class="metrics-kpi-sub">P95 {{ overview?.duration_ms_p95 ? Math.round(overview.duration_ms_p95) : '--' }} · 错误 {{ formatNumber(overview?.error_count) }}</span>
+            <span class="metrics-kpi-sub">{{ t('admin.metrics.kpiDurationDetail', { p95: overview?.duration_ms_p95 ? Math.round(overview.duration_ms_p95) : '--', errors: formatNumber(overview?.error_count) }) }}</span>
           </div>
         </div>
 
         <!-- Time series -->
         <div class="metrics-card">
-          <h3 class="metrics-card-title">Token 时间序列</h3>
-          <div v-if="!overview || !overview.time_series.length" class="metrics-empty">暂无数据</div>
+          <h3 class="metrics-card-title">{{ t('admin.metrics.tsTitle') }}</h3>
+          <div v-if="!overview || !overview.time_series.length" class="metrics-empty">{{ t('admin.metrics.emptyData') }}</div>
           <div v-else class="metrics-chart">
             <div
               v-for="(b, i) in overview.time_series"
               :key="i"
               class="metrics-bar-col"
-              :title="`${formatBucketLabel(b.bucket_start)}\nToken: ${formatNumber(b.total_tokens)}\n调用: ${formatNumber(b.invocation_count)}`"
+              :title="`${formatBucketLabel(b.bucket_start)}\nToken: ${formatNumber(b.total_tokens)}\n${t('admin.metrics.colCalls')}: ${formatNumber(b.invocation_count)}`"
             >
               <div class="metrics-bar-track">
                 <div
@@ -515,30 +517,30 @@ onMounted(() => {
         <!-- Distributions -->
         <div class="metrics-two-col">
           <div class="metrics-card">
-            <h3 class="metrics-card-title">按来源 (Source)</h3>
+            <h3 class="metrics-card-title">{{ t('admin.metrics.bySourceTitle') }}</h3>
             <table class="metrics-mini-table">
-              <thead><tr><th>Source</th><th class="text-right">调用</th><th class="text-right">Token</th></tr></thead>
+              <thead><tr><th>Source</th><th class="text-right">{{ t('admin.metrics.colCalls') }}</th><th class="text-right">Token</th></tr></thead>
               <tbody>
                 <tr v-for="g in overview?.invocations_by_source || []" :key="g.key || 'unknown'">
-                  <td>{{ g.key || '未知' }}</td>
+                  <td>{{ g.key || t('admin.metrics.unknownKey') }}</td>
                   <td class="text-right">{{ formatNumber(g.invocation_count) }}</td>
                   <td class="text-right">{{ formatNumber(g.total_tokens) }}</td>
                 </tr>
-                <tr v-if="!overview?.invocations_by_source?.length"><td colspan="3" class="metrics-empty">暂无数据</td></tr>
+                <tr v-if="!overview?.invocations_by_source?.length"><td colspan="3" class="metrics-empty">{{ t('admin.metrics.emptyData') }}</td></tr>
               </tbody>
             </table>
           </div>
           <div class="metrics-card">
-            <h3 class="metrics-card-title">按模型 (Model)</h3>
+            <h3 class="metrics-card-title">{{ t('admin.metrics.byModelTitle') }}</h3>
             <table class="metrics-mini-table">
-              <thead><tr><th>Model</th><th class="text-right">调用</th><th class="text-right">Token</th></tr></thead>
+              <thead><tr><th>Model</th><th class="text-right">{{ t('admin.metrics.colCalls') }}</th><th class="text-right">Token</th></tr></thead>
               <tbody>
                 <tr v-for="g in overview?.invocations_by_model || []" :key="g.key || 'unknown'">
-                  <td>{{ g.key || '未知' }}</td>
+                  <td>{{ g.key || t('admin.metrics.unknownKey') }}</td>
                   <td class="text-right">{{ formatNumber(g.invocation_count) }}</td>
                   <td class="text-right">{{ formatNumber(g.total_tokens) }}</td>
                 </tr>
-                <tr v-if="!overview?.invocations_by_model?.length"><td colspan="3" class="metrics-empty">暂无数据</td></tr>
+                <tr v-if="!overview?.invocations_by_model?.length"><td colspan="3" class="metrics-empty">{{ t('admin.metrics.emptyData') }}</td></tr>
               </tbody>
             </table>
           </div>
@@ -547,39 +549,39 @@ onMounted(() => {
         <!-- Business summaries -->
         <div class="metrics-biz-grid">
           <div class="metrics-card">
-            <h3 class="metrics-card-title">聊天 / 用户</h3>
+            <h3 class="metrics-card-title">{{ t('admin.metrics.chatUserTitle') }}</h3>
             <ul class="metrics-stat-list">
-              <li><span>总用户</span><b>{{ formatNumber(overview?.chat.total_users) }}</b></li>
-              <li><span>活跃用户</span><b>{{ formatNumber(overview?.chat.active_users) }}</b></li>
-              <li><span>会话数</span><b>{{ formatNumber(overview?.chat.chat_session_count) }}</b></li>
-              <li><span>消息数</span><b>{{ formatNumber(overview?.chat.chat_message_count) }}</b></li>
+              <li><span>{{ t('admin.metrics.chatTotalUsers') }}</span><b>{{ formatNumber(overview?.chat.total_users) }}</b></li>
+              <li><span>{{ t('admin.metrics.chatActiveUsers') }}</span><b>{{ formatNumber(overview?.chat.active_users) }}</b></li>
+              <li><span>{{ t('admin.metrics.chatSessions') }}</span><b>{{ formatNumber(overview?.chat.chat_session_count) }}</b></li>
+              <li><span>{{ t('admin.metrics.chatMessages') }}</span><b>{{ formatNumber(overview?.chat.chat_message_count) }}</b></li>
             </ul>
           </div>
           <div class="metrics-card">
-            <h3 class="metrics-card-title">日志</h3>
+            <h3 class="metrics-card-title">{{ t('admin.metrics.logsTitle') }}</h3>
             <ul class="metrics-stat-list">
-              <li><span>上传数</span><b>{{ formatNumber(overview?.logs.upload_count) }}</b></li>
-              <li><span>上传字节</span><b>{{ formatBytes(overview?.logs.uploaded_bytes) }}</b></li>
+              <li><span>{{ t('admin.metrics.logsUploadCount') }}</span><b>{{ formatNumber(overview?.logs.upload_count) }}</b></li>
+              <li><span>{{ t('admin.metrics.logsUploadBytes') }}</span><b>{{ formatBytes(overview?.logs.uploaded_bytes) }}</b></li>
               <li v-for="[k, v] in objToPairs(overview?.logs.ai_analysis_counts)" :key="k">
-                <span>AI 分析 · {{ k }}</span><b>{{ formatNumber(v) }}</b>
+                <span>{{ t('admin.metrics.logsAiAnalysis', { key: k }) }}</span><b>{{ formatNumber(v) }}</b>
               </li>
             </ul>
           </div>
           <div class="metrics-card">
-            <h3 class="metrics-card-title">软件包</h3>
+            <h3 class="metrics-card-title">{{ t('admin.metrics.packagesTitle') }}</h3>
             <ul class="metrics-stat-list">
-              <li><span>包总数</span><b>{{ formatNumber(overview?.packages.package_count) }}</b></li>
-              <li><span>总大小</span><b>{{ formatBytes(overview?.packages.total_bytes) }}</b></li>
-              <li><span>搜索次数</span><b>{{ formatNumber(overview?.packages.search_count) }}</b></li>
+              <li><span>{{ t('admin.metrics.packagesCount') }}</span><b>{{ formatNumber(overview?.packages.package_count) }}</b></li>
+              <li><span>{{ t('admin.metrics.packagesTotalSize') }}</span><b>{{ formatBytes(overview?.packages.total_bytes) }}</b></li>
+              <li><span>{{ t('admin.metrics.packagesSearchCount') }}</span><b>{{ formatNumber(overview?.packages.search_count) }}</b></li>
             </ul>
           </div>
           <div class="metrics-card">
-            <h3 class="metrics-card-title">设备连接</h3>
+            <h3 class="metrics-card-title">{{ t('admin.metrics.devicesTitle') }}</h3>
             <ul class="metrics-stat-list">
               <li v-for="[k, v] in objToPairs(overview?.devices.counts_by_state)" :key="k">
                 <span>{{ k }}</span><b>{{ formatNumber(v) }}</b>
               </li>
-              <li v-if="!objToPairs(overview?.devices.counts_by_state).length" class="metrics-empty-li">暂无连接</li>
+              <li v-if="!objToPairs(overview?.devices.counts_by_state).length" class="metrics-empty-li">{{ t('admin.metrics.noDeviceConnections') }}</li>
             </ul>
           </div>
         </div>
@@ -587,28 +589,28 @@ onMounted(() => {
         <!-- User ranking -->
         <div class="metrics-card">
           <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-            <h3 class="metrics-card-title mb-0">用户用量排名</h3>
+            <h3 class="metrics-card-title mb-0">{{ t('admin.metrics.userRankingTitle') }}</h3>
             <div class="flex items-center gap-2">
-              <span class="text-xs text-slate-500">排序：</span>
+              <span class="text-xs text-slate-500">{{ t('admin.metrics.sortLabel') }}</span>
               <div class="metrics-segment">
                 <button class="metrics-segment-btn" :class="{ 'is-active': userSort === 'total_tokens' }" @click="changeSort('total_tokens')">Token</button>
-                <button class="metrics-segment-btn" :class="{ 'is-active': userSort === 'run_count' }" @click="changeSort('run_count')">调用数</button>
+                <button class="metrics-segment-btn" :class="{ 'is-active': userSort === 'run_count' }" @click="changeSort('run_count')">{{ t('admin.metrics.sortByCalls') }}</button>
               </div>
             </div>
           </div>
-          <div v-if="loadingUsers" class="metrics-empty">加载中…</div>
-          <div v-else-if="!users.length" class="metrics-empty">暂无用户用量数据</div>
+          <div v-if="loadingUsers" class="metrics-empty">{{ t('admin.metrics.loadingUsers') }}</div>
+          <div v-else-if="!users.length" class="metrics-empty">{{ t('admin.metrics.noUserData') }}</div>
           <div v-else class="overflow-x-auto">
             <table class="metrics-table">
               <thead>
                 <tr>
-                  <th>用户</th>
-                  <th class="text-right">总 Token</th>
-                  <th class="text-right">输入</th>
-                  <th class="text-right">输出</th>
-                  <th class="text-right">调用</th>
-                  <th class="text-right">成功/失败</th>
-                  <th>最近活跃</th>
+                  <th>{{ t('admin.metrics.colUser') }}</th>
+                  <th class="text-right">{{ t('admin.metrics.colTotalTokens') }}</th>
+                  <th class="text-right">{{ t('admin.metrics.colInput') }}</th>
+                  <th class="text-right">{{ t('admin.metrics.colOutput') }}</th>
+                  <th class="text-right">{{ t('admin.metrics.colCallCount') }}</th>
+                  <th class="text-right">{{ t('admin.metrics.colSuccessFail') }}</th>
+                  <th>{{ t('admin.metrics.colLastActive') }}</th>
                   <th></th>
                 </tr>
               </thead>
@@ -624,45 +626,45 @@ onMounted(() => {
                   <td class="text-right">{{ formatNumber(row.run_count) }}</td>
                   <td class="text-right">{{ formatNumber(row.success_count) }} / {{ formatNumber(row.failure_count) }}</td>
                   <td class="text-slate-500 text-xs">{{ formatTimestamp(row.last_active_at) }}</td>
-                  <td class="text-right"><span class="metrics-link">详情</span></td>
+                  <td class="text-right"><span class="metrics-link">{{ t('admin.metrics.detailLink') }}</span></td>
                 </tr>
               </tbody>
             </table>
           </div>
           <div v-if="userTotal > userPerPage" class="metrics-pager">
-            <button :disabled="userPage <= 1" @click="gotoUserPage(userPage - 1)">上一页</button>
+            <button :disabled="userPage <= 1" @click="gotoUserPage(userPage - 1)">{{ t('admin.metrics.prevPage') }}</button>
             <span>{{ userPage }} / {{ userPageCount }}</span>
-            <button :disabled="userPage >= userPageCount" @click="gotoUserPage(userPage + 1)">下一页</button>
+            <button :disabled="userPage >= userPageCount" @click="gotoUserPage(userPage + 1)">{{ t('admin.metrics.nextPage') }}</button>
           </div>
         </div>
 
         <!-- Raw events -->
         <div class="metrics-card">
           <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-            <h3 class="metrics-card-title mb-0">原始事件（已脱敏）</h3>
+            <h3 class="metrics-card-title mb-0">{{ t('admin.metrics.eventsTitle') }}</h3>
             <div class="flex items-center gap-2">
               <input
                 v-model="eventSourceFilter"
                 type="text"
-                placeholder="按 source 过滤，如 device_agent"
+                :placeholder="t('admin.metrics.eventSourcePlaceholder')"
                 class="rounded-lg border border-slate-200 px-3 py-1.5 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
                 @keyup.enter="applyEventFilter"
               />
-              <button class="metrics-mini-btn" @click="applyEventFilter">过滤</button>
+              <button class="metrics-mini-btn" @click="applyEventFilter">{{ t('admin.metrics.filterBtn') }}</button>
             </div>
           </div>
-          <div v-if="loadingEvents" class="metrics-empty">加载中…</div>
-          <div v-else-if="!events.length" class="metrics-empty">暂无事件</div>
+          <div v-if="loadingEvents" class="metrics-empty">{{ t('admin.metrics.loadingEvents') }}</div>
+          <div v-else-if="!events.length" class="metrics-empty">{{ t('admin.metrics.noEvents') }}</div>
           <div v-else class="overflow-x-auto">
             <table class="metrics-table">
               <thead>
                 <tr>
-                  <th>时间</th>
-                  <th>类型</th>
+                  <th>{{ t('admin.metrics.colTime') }}</th>
+                  <th>{{ t('admin.metrics.colType') }}</th>
                   <th>Source</th>
-                  <th>触发用户</th>
+                  <th>{{ t('admin.metrics.colTriggerUser') }}</th>
                   <th>Model</th>
-                  <th>状态</th>
+                  <th>{{ t('admin.metrics.colStatus') }}</th>
                   <th class="text-right">Token</th>
                 </tr>
               </thead>
@@ -680,9 +682,9 @@ onMounted(() => {
             </table>
           </div>
           <div v-if="eventsTotal > eventsPerPage" class="metrics-pager">
-            <button :disabled="eventsPage <= 1" @click="gotoEventsPage(eventsPage - 1)">上一页</button>
+            <button :disabled="eventsPage <= 1" @click="gotoEventsPage(eventsPage - 1)">{{ t('admin.metrics.prevPage') }}</button>
             <span>{{ eventsPage }} / {{ eventsPageCount }}</span>
-            <button :disabled="eventsPage >= eventsPageCount" @click="gotoEventsPage(eventsPage + 1)">下一页</button>
+            <button :disabled="eventsPage >= eventsPageCount" @click="gotoEventsPage(eventsPage + 1)">{{ t('admin.metrics.nextPage') }}</button>
           </div>
         </div>
       </section>
@@ -694,56 +696,56 @@ onMounted(() => {
         <div class="flex items-center justify-between mb-4">
           <div>
             <h3 class="text-base font-semibold text-slate-900">
-              {{ detail?.display_name || detail?.username || detail?.user_id || '用户详情' }}
+              {{ detail?.display_name || detail?.username || detail?.user_id || t('admin.metrics.userDetailTitle') }}
             </h3>
             <p class="text-xs text-slate-400">{{ detail?.username || detail?.user_id }}</p>
           </div>
           <button class="admin-icon-btn !text-slate-600 !bg-slate-100 !border-slate-200" @click="closeDetail"><X :size="16" /></button>
         </div>
 
-        <div v-if="loadingDetail" class="metrics-empty">加载中…</div>
+        <div v-if="loadingDetail" class="metrics-empty">{{ t('admin.metrics.loadingUsers') }}</div>
         <div v-else-if="detail" class="space-y-4">
           <div class="metrics-kpi-grid">
             <div class="metrics-card metrics-kpi">
-              <span class="metrics-kpi-label">总 Token</span>
+              <span class="metrics-kpi-label">{{ t('admin.metrics.kpiUserTokens') }}</span>
               <span class="metrics-kpi-value">{{ formatNumber(detail.tokens.total_tokens) }}</span>
             </div>
             <div class="metrics-card metrics-kpi">
-              <span class="metrics-kpi-label">调用</span>
+              <span class="metrics-kpi-label">{{ t('admin.metrics.kpiUserCalls') }}</span>
               <span class="metrics-kpi-value">{{ formatNumber(detail.invocation_count) }}</span>
             </div>
             <div class="metrics-card metrics-kpi">
-              <span class="metrics-kpi-label">成功/失败</span>
+              <span class="metrics-kpi-label">{{ t('admin.metrics.kpiUserSuccessFail') }}</span>
               <span class="metrics-kpi-value">{{ formatNumber(detail.status_counts.succeeded) }}/{{ formatNumber(detail.status_counts.failed) }}</span>
             </div>
             <div class="metrics-card metrics-kpi">
-              <span class="metrics-kpi-label">估算成本</span>
+              <span class="metrics-kpi-label">{{ t('admin.metrics.kpiUserCost') }}</span>
               <span class="metrics-kpi-value">{{ formatCost(detail) }}</span>
             </div>
           </div>
 
           <div class="metrics-card">
-            <h3 class="metrics-card-title">按 Agent 类型</h3>
+            <h3 class="metrics-card-title">{{ t('admin.metrics.byAgentTitle') }}</h3>
             <table class="metrics-mini-table">
-              <thead><tr><th>Agent</th><th class="text-right">调用</th><th class="text-right">Token</th></tr></thead>
+              <thead><tr><th>Agent</th><th class="text-right">{{ t('admin.metrics.colCalls') }}</th><th class="text-right">Token</th></tr></thead>
               <tbody>
                 <tr v-for="g in detail.invocations_by_agent_kind" :key="g.key || 'unknown'">
-                  <td>{{ g.key || '未知' }}</td>
+                  <td>{{ g.key || t('admin.metrics.unknownKey') }}</td>
                   <td class="text-right">{{ formatNumber(g.invocation_count) }}</td>
                   <td class="text-right">{{ formatNumber(g.total_tokens) }}</td>
                 </tr>
-                <tr v-if="!detail.invocations_by_agent_kind.length"><td colspan="3" class="metrics-empty">暂无数据</td></tr>
+                <tr v-if="!detail.invocations_by_agent_kind.length"><td colspan="3" class="metrics-empty">{{ t('admin.metrics.emptyData') }}</td></tr>
               </tbody>
             </table>
           </div>
 
           <div v-if="detail.errors_by_kind.length" class="metrics-card">
-            <h3 class="metrics-card-title">错误分类</h3>
+            <h3 class="metrics-card-title">{{ t('admin.metrics.errorTypesTitle') }}</h3>
             <table class="metrics-mini-table">
-              <thead><tr><th>错误类型</th><th class="text-right">次数</th></tr></thead>
+              <thead><tr><th>{{ t('admin.metrics.colErrorType') }}</th><th class="text-right">{{ t('admin.metrics.colErrorCount') }}</th></tr></thead>
               <tbody>
                 <tr v-for="g in detail.errors_by_kind" :key="g.key || 'unknown'">
-                  <td>{{ g.key || '未知' }}</td>
+                  <td>{{ g.key || t('admin.metrics.unknownKey') }}</td>
                   <td class="text-right">{{ formatNumber(g.invocation_count) }}</td>
                 </tr>
               </tbody>
@@ -751,10 +753,10 @@ onMounted(() => {
           </div>
 
           <div class="metrics-card">
-            <h3 class="metrics-card-title">最近事件</h3>
-            <div v-if="!detail.recent_events.length" class="metrics-empty">暂无事件</div>
+            <h3 class="metrics-card-title">{{ t('admin.metrics.recentEventsTitle') }}</h3>
+            <div v-if="!detail.recent_events.length" class="metrics-empty">{{ t('admin.metrics.noEvents') }}</div>
             <table v-else class="metrics-mini-table">
-              <thead><tr><th>时间</th><th>Source</th><th>状态</th><th class="text-right">Token</th></tr></thead>
+              <thead><tr><th>{{ t('admin.metrics.colTime') }}</th><th>Source</th><th>{{ t('admin.metrics.colEventStatus') }}</th><th class="text-right">Token</th></tr></thead>
               <tbody>
                 <tr v-for="ev in detail.recent_events" :key="ev.id">
                   <td class="text-xs text-slate-500">{{ formatTimestamp(ev.occurred_at) }}</td>

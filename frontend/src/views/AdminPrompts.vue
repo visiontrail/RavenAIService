@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { LogOut, Menu, PanelLeftClose, RefreshCw, Save } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
@@ -23,6 +24,7 @@ interface PromptFunctionGroup {
   agents: PromptAgentGroup[]
 }
 
+const { t } = useI18n()
 const appStore = useAppStore()
 const router = useRouter()
 const route = useRoute()
@@ -90,12 +92,12 @@ const formatRelative = (value?: string) => {
   if (!value) return ''
   const diff = Date.now() - new Date(value).getTime()
   const minutes = Math.floor(diff / 60000)
-  if (minutes < 1) return '刚刚'
-  if (minutes < 60) return `${minutes} 分钟前`
+  if (minutes < 1) return t('admin.prompts.timeJustNow')
+  if (minutes < 60) return t('admin.prompts.timeMinutesAgo', { minutes })
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours} 小时前`
+  if (hours < 24) return t('admin.prompts.timeHoursAgo', { hours })
   const days = Math.floor(hours / 24)
-  return `${days} 天前`
+  return t('admin.prompts.timeDaysAgo', { days })
 }
 
 const snapshotPrompts = (prompts: PromptEntry[]): PromptSnapshot =>
@@ -126,6 +128,23 @@ const selectedPromptContent = computed({
     if (prompt) prompt.content = value
   },
 })
+
+const localeVariants = computed(() => {
+  const current = selectedPrompt.value
+  if (!current) return []
+  return configState.prompts.filter(
+    (p) =>
+      p.function_key === current.function_key &&
+      p.agent_key === current.agent_key &&
+      p.prompt_key === current.prompt_key &&
+      p.locale != null
+  )
+})
+
+const switchLocale = (locale: string) => {
+  const variant = localeVariants.value.find((p) => p.locale === locale)
+  if (variant) selectedPromptId.value = variant.id
+}
 
 const promptGroups = computed<PromptFunctionGroup[]>(() => {
   const functionMap = new Map<string, PromptFunctionGroup>()
@@ -158,11 +177,11 @@ const promptGroups = computed<PromptFunctionGroup[]>(() => {
 })
 
 const statusLabel = computed(() => {
-  if (!isAuthenticated.value) return '未登录'
-  if (loadingConfig.value) return '同步中'
-  if (saving.value) return '保存中'
-  if (conflict.value) return '检测到冲突'
-  return hasUnsavedChanges.value ? '草稿未保存' : '已同步'
+  if (!isAuthenticated.value) return t('admin.prompts.statusNotLoggedIn')
+  if (loadingConfig.value) return t('admin.prompts.statusSyncing')
+  if (saving.value) return t('admin.prompts.statusSaving')
+  if (conflict.value) return t('admin.prompts.statusConflict')
+  return hasUnsavedChanges.value ? t('admin.prompts.statusUnsaved') : t('admin.prompts.statusSynced')
 })
 
 const statusTone = computed(() => {
@@ -175,7 +194,7 @@ const statusTone = computed(() => {
 const navVisible = computed(() => appStore.adminSidebarVisible)
 
 const readableUpdatedAt = computed(() => {
-  if (!configState.updated_at) return '尚未加载'
+  if (!configState.updated_at) return t('admin.prompts.statusNotLoaded')
   return `${formatTimestamp(configState.updated_at)} (${formatRelative(configState.updated_at)})`
 })
 
@@ -185,7 +204,7 @@ const parseErrorMessage = (err: any) => {
   if (err?.response?.data?.detail) return err.response.data.detail
   if (err?.response?.data?.message) return err.response.data.message
   if (err?.message) return err.message
-  return '操作失败'
+  return t('admin.parseError')
 }
 
 const persistToken = (token: string) => {
@@ -210,7 +229,7 @@ const fetchConfig = async (withToast = false) => {
   try {
     const resp = await adminApi.fetchPromptsConfig()
     if (!resp?.success || !resp.data) {
-      throw new Error(resp?.message || '无法读取配置')
+      throw new Error(resp?.message || t('admin.prompts.cantReadConfigFallback'))
     }
     Object.assign(configState, resp.data)
     lastChecksum.value = resp.data.checksum
@@ -218,14 +237,14 @@ const fetchConfig = async (withToast = false) => {
     ensureSelectedPrompt()
     if (withToast) {
       appStore.showNotification({
-        title: '已从磁盘刷新',
-        message: `最近修改：${readableUpdatedAt.value}`,
+        title: t('admin.prompts.refreshedFromDisk'),
+        message: t('admin.prompts.lastModifiedMsg', { time: readableUpdatedAt.value }),
         type: 'info',
       })
     }
   } catch (err: any) {
     appStore.showNotification({
-      title: '读取失败',
+      title: t('admin.prompts.readFail'),
       message: parseErrorMessage(err),
       type: 'error',
     })
@@ -240,7 +259,7 @@ const fetchConfig = async (withToast = false) => {
 const handleLogin = async () => {
   if (!authForm.username || !authForm.password) {
     appStore.showNotification({
-      title: '请输入用户名和密码',
+      title: t('admin.loginWarning'),
       type: 'warning',
     })
     return
@@ -249,19 +268,19 @@ const handleLogin = async () => {
   try {
     const resp = await adminApi.login(authForm.username.trim(), authForm.password)
     if (!resp?.success || !resp.data) {
-      throw new Error(resp?.message || '登录失败')
+      throw new Error(resp?.message || t('admin.loginFailFallback'))
     }
     persistToken(resp.data.token)
     isAuthenticated.value = true
     appStore.showNotification({
-      title: '登录成功',
-      message: `欢迎，${resp.data.username}`,
+      title: t('admin.loginSuccessTitle'),
+      message: t('admin.loginSuccessMsg', { username: resp.data.username }),
       type: 'success',
     })
     await fetchConfig()
   } catch (err: any) {
     appStore.showNotification({
-      title: '登录失败',
+      title: t('admin.loginFailFallback'),
       message: parseErrorMessage(err),
       type: 'error',
     })
@@ -285,15 +304,15 @@ const handleSave = async (force = false) => {
       force,
     })
     if (!resp?.success || !resp.data) {
-      throw new Error(resp?.message || '保存失败')
+      throw new Error(resp?.message || t('admin.prompts.saveFailFallback'))
     }
     Object.assign(configState, resp.data)
     lastChecksum.value = resp.data.checksum
     lastSavedPrompts.value = snapshotPrompts(resp.data.prompts || [])
     ensureSelectedPrompt()
     appStore.showNotification({
-      title: '保存成功',
-      message: '系统提示词已更新并刷新 Agent 缓存',
+      title: t('admin.prompts.saveSuccess'),
+      message: t('admin.prompts.saveSuccessMsg'),
       type: 'success',
     })
   } catch (err: any) {
@@ -301,13 +320,13 @@ const handleSave = async (force = false) => {
       conflict.value = true
       conflictMessage.value = parseErrorMessage(err)
       appStore.showNotification({
-        title: '检测到新版本',
+        title: t('admin.prompts.newVersionDetected'),
         message: conflictMessage.value,
         type: 'warning',
       })
     } else {
       appStore.showNotification({
-        title: '保存失败',
+        title: t('admin.prompts.saveFailTitle'),
         message: parseErrorMessage(err),
         type: 'error',
       })
@@ -319,7 +338,7 @@ const handleSave = async (force = false) => {
 
 const handleReload = async () => {
   if (hasUnsavedChanges.value) {
-    const confirmed = window.confirm('有未保存的系统提示词修改，确定要丢弃并从磁盘重新加载吗？')
+    const confirmed = window.confirm(t('admin.prompts.discardConfirm'))
     if (!confirmed) return
   }
   await fetchConfig(true)
@@ -333,7 +352,7 @@ const handleLogout = async () => {
   } finally {
     clearAuth()
     appStore.showNotification({
-      title: '已退出登录',
+      title: t('admin.logoutSuccessTitle'),
       type: 'info',
     })
   }
@@ -393,15 +412,15 @@ onBeforeUnmount(() => {
             class="admin-icon-btn"
             :disabled="!isAuthenticated"
             @click="toggleNavVisibility"
-            :title="navVisible ? '隐藏侧边栏' : '显示侧边栏'"
-            aria-label="切换侧边栏"
+            :title="navVisible ? t('admin.toggleSidebarHide') : t('admin.toggleSidebarShow')"
+            :aria-label="t('admin.toggleSidebarAriaLabel')"
           >
             <PanelLeftClose v-if="navVisible" :size="18" />
             <Menu v-else :size="18" />
           </button>
           <div>
-            <h1 class="admin-title">后台管理</h1>
-            <p class="admin-subtitle">系统提示词配置</p>
+            <h1 class="admin-title">{{ t('admin.title') }}</h1>
+            <p class="admin-subtitle">{{ t('admin.prompts.subtitle') }}</p>
           </div>
         </div>
         <div class="admin-topbar-right">
@@ -414,7 +433,7 @@ onBeforeUnmount(() => {
             @click="handleLogout"
           >
             <LogOut :size="14" />
-            <span>退出</span>
+            <span>{{ t('admin.logoutBtn') }}</span>
           </button>
         </div>
       </div>
@@ -424,7 +443,7 @@ onBeforeUnmount(() => {
       v-if="isAuthenticated && navVisible"
       class="admin-sidebar-backdrop"
       @click="toggleNavVisibility"
-      aria-label="关闭侧边栏"
+      :aria-label="t('admin.closeSidebarAriaLabel')"
     ></button>
 
     <aside
@@ -456,15 +475,15 @@ onBeforeUnmount(() => {
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
           <div class="flex items-center justify-between mb-4">
             <div>
-              <h2 class="text-lg font-semibold text-slate-900">登录后台</h2>
-              <p class="text-sm text-slate-500">请输入管理员凭证继续</p>
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.loginCardTitle') }}</h2>
+              <p class="text-sm text-slate-500">{{ t('admin.loginCardDesc') }}</p>
             </div>
-            <span class="text-xs text-slate-500">内部安全访问</span>
+            <span class="text-xs text-slate-500">{{ t('admin.secureAccess') }}</span>
           </div>
           <div class="grid gap-4 md:grid-cols-2">
             <form class="space-y-4" @submit.prevent="handleLogin">
               <label class="block">
-                <span class="text-sm text-slate-700">用户名</span>
+                <span class="text-sm text-slate-700">{{ t('admin.usernameLabel') }}</span>
                 <input
                   v-model="authForm.username"
                   type="text"
@@ -474,7 +493,7 @@ onBeforeUnmount(() => {
                 />
               </label>
               <label class="block">
-                <span class="text-sm text-slate-700">密码</span>
+                <span class="text-sm text-slate-700">{{ t('admin.passwordLabel') }}</span>
                 <input
                   v-model="authForm.password"
                   type="password"
@@ -489,25 +508,25 @@ onBeforeUnmount(() => {
                   class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-50"
                   :disabled="isLoggingIn"
                 >
-                  {{ isLoggingIn ? '登录中…' : '登录' }}
+                  {{ isLoggingIn ? t('admin.loginBtnLoading') : t('admin.loginBtn') }}
                 </button>
                 <p class="text-xs text-slate-500">
-                  凭证在 admin_auth.yaml 配置，建议登录后立即更改
+                  {{ t('admin.credentialsHint') }}
                 </p>
               </div>
             </form>
             <div class="bg-slate-50 rounded-lg p-4 space-y-3 text-sm text-slate-700">
               <div class="flex items-center gap-2">
                 <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
-                <span>登录后按功能和 Agent 维护系统提示词</span>
+                <span>{{ t('admin.prompts.loginHint1') }}</span>
               </div>
               <div class="flex items-center gap-2">
                 <span class="h-2 w-2 rounded-full bg-cyan-400"></span>
-                <span>保存后立即刷新后台 Agent 提示词缓存</span>
+                <span>{{ t('admin.prompts.loginHint2') }}</span>
               </div>
               <div class="flex items-center gap-2">
                 <span class="h-2 w-2 rounded-full bg-amber-400"></span>
-                <span>会话基于 Bearer Token，关闭标签后自动清除</span>
+                <span>{{ t('admin.prompts.loginHint3') }}</span>
               </div>
             </div>
           </div>
@@ -518,9 +537,9 @@ onBeforeUnmount(() => {
         <div class="prompt-header-panel bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
           <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h2 class="text-lg font-semibold text-slate-900">Agent 系统提示词</h2>
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.prompts.listTitle') }}</h2>
               <p class="text-sm text-slate-500">
-                按功能与 Agent 选择对应的系统提示词，保存后立即刷新运行时缓存
+                {{ t('admin.prompts.listDesc') }}
               </p>
             </div>
             <div class="editor-toolbar-actions flex items-center gap-2">
@@ -530,7 +549,7 @@ onBeforeUnmount(() => {
                 @click="handleReload"
               >
                 <RefreshCw :size="15" />
-                <span>重新加载</span>
+                <span>{{ t('admin.prompts.reloadBtn') }}</span>
               </button>
               <button
                 class="admin-command-btn primary"
@@ -538,7 +557,7 @@ onBeforeUnmount(() => {
                 @click="() => handleSave()"
               >
                 <Save :size="15" />
-                <span>{{ saving ? '保存中' : '保存' }}</span>
+                <span>{{ saving ? t('admin.prompts.savingBtn') : t('admin.prompts.saveBtn') }}</span>
               </button>
               <button
                 v-if="conflict"
@@ -547,14 +566,14 @@ onBeforeUnmount(() => {
                 @click="handleSave(true)"
               >
                 <Save :size="15" />
-                <span>强制保存</span>
+                <span>{{ t('admin.prompts.forceSaveBtn') }}</span>
               </button>
             </div>
           </div>
           <div class="prompt-meta-strip">
-            <span>可编辑提示词：{{ configState.summary.editable_prompt_count || configState.prompts.length }}</span>
-            <span>配置大小：{{ formatBytes(configState.size) }}</span>
-            <span>最近修改：{{ readableUpdatedAt }}</span>
+            <span>{{ t('admin.prompts.editableCount', { count: configState.summary.editable_prompt_count || configState.prompts.length }) }}</span>
+            <span>{{ t('admin.prompts.configSize', { size: formatBytes(configState.size) }) }}</span>
+            <span>{{ t('admin.prompts.lastModifiedLabel', { time: readableUpdatedAt }) }}</span>
             <span class="prompt-path">{{ configState.path }}</span>
           </div>
         </div>
@@ -562,16 +581,16 @@ onBeforeUnmount(() => {
         <div class="prompt-workbench">
           <aside class="prompt-list-panel">
             <div class="prompt-list-title">
-              <span>功能与 Agent</span>
+              <span>{{ t('admin.prompts.agentGroup') }}</span>
               <span>{{ configState.prompts.length }}</span>
             </div>
             <div v-if="!promptGroups.length" class="prompt-empty">
-              未发现可编辑的系统提示词
+              {{ t('admin.prompts.noPrompts') }}
             </div>
             <div v-for="group in promptGroups" :key="group.key" class="prompt-function-group">
               <div class="prompt-function-name">
                 <span>{{ group.name }}</span>
-                <small>{{ group.agents.length }} 个 Agent</small>
+                <small>{{ t('admin.prompts.agentCount', { count: group.agents.length }) }}</small>
               </div>
               <p v-if="group.description" class="prompt-function-desc">{{ group.description }}</p>
               <button
@@ -579,12 +598,12 @@ onBeforeUnmount(() => {
                 :key="agent.key"
                 class="prompt-agent-item"
                 :class="{ 'is-active': agent.prompts.some((prompt) => prompt.id === selectedPromptId) }"
-                @click="selectedPromptId = agent.prompts[0]?.id || ''"
+                @click="selectedPromptId = (agent.prompts.find((p) => p.locale === 'zh') ?? agent.prompts[0])?.id || ''"
               >
                 <span class="prompt-agent-name">{{ agent.name }}</span>
                 <span class="prompt-agent-desc">{{ agent.description }}</span>
                 <span class="prompt-agent-foot">
-                  {{ agent.prompts.map((prompt) => prompt.prompt_label).join('、') }}
+                  {{ [...new Set(agent.prompts.map((p) => p.prompt_key))].join('、') }}
                 </span>
               </button>
             </div>
@@ -597,15 +616,28 @@ onBeforeUnmount(() => {
                   <div class="prompt-breadcrumb">
                     {{ selectedPrompt.function_name }} / {{ selectedPrompt.agent_name }}
                   </div>
-                  <h3>{{ selectedPrompt.prompt_label }}</h3>
+                  <h3>{{ selectedPrompt.prompt_key }}</h3>
                   <p v-if="selectedPrompt.agent_description">{{ selectedPrompt.agent_description }}</p>
                 </div>
-                <span
-                  class="prompt-dirty-badge"
-                  :class="currentPromptSnapshot[selectedPrompt.id] !== lastSavedPrompts[selectedPrompt.id] ? 'is-dirty' : 'is-clean'"
-                >
-                  {{ currentPromptSnapshot[selectedPrompt.id] !== lastSavedPrompts[selectedPrompt.id] ? '未保存' : '已同步' }}
-                </span>
+                <div class="prompt-editor-head-right">
+                  <div v-if="localeVariants.length > 1" class="locale-tabs">
+                    <button
+                      v-for="variant in localeVariants"
+                      :key="variant.id"
+                      class="locale-tab"
+                      :class="{ 'is-active': variant.id === selectedPromptId }"
+                      @click="switchLocale(variant.locale!)"
+                    >
+                      {{ variant.locale }}
+                    </button>
+                  </div>
+                  <span
+                    class="prompt-dirty-badge"
+                    :class="currentPromptSnapshot[selectedPrompt.id] !== lastSavedPrompts[selectedPrompt.id] ? 'is-dirty' : 'is-clean'"
+                  >
+                    {{ currentPromptSnapshot[selectedPrompt.id] !== lastSavedPrompts[selectedPrompt.id] ? t('admin.prompts.unsavedLabel') : t('admin.prompts.syncedLabel') }}
+                  </span>
+                </div>
               </div>
               <textarea
                 v-model="selectedPromptContent"
@@ -615,16 +647,16 @@ onBeforeUnmount(() => {
               ></textarea>
               <div class="prompt-editor-footer">
                 <div class="flex items-center gap-3 flex-wrap">
-                  <span>长度：{{ selectedPromptContent.length }} 字符</span>
+                  <span>{{ t('admin.prompts.promptLength', { count: selectedPromptContent.length }) }}</span>
                   <span v-if="conflict" class="text-amber-700 font-semibold">
-                    {{ conflictMessage || '文件在其他位置被更新' }}
+                    {{ conflictMessage || t('admin.prompts.conflictNote') }}
                   </span>
                 </div>
-                <span>校验和：{{ lastChecksum || configState.checksum }}</span>
+                <span>{{ t('admin.prompts.checksumLabel', { checksum: lastChecksum || configState.checksum }) }}</span>
               </div>
             </template>
             <div v-else class="prompt-empty editor-empty">
-              请选择一个 Agent 的系统提示词
+              {{ t('admin.prompts.selectPromptHint') }}
             </div>
           </section>
         </div>
@@ -955,6 +987,43 @@ onBeforeUnmount(() => {
   padding: 1rem;
   border-bottom: 1px solid #e2e8f0;
   background: #f8fafc;
+}
+
+.prompt-editor-head-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.locale-tabs {
+  display: flex;
+  gap: 0.25rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  padding: 0.2rem;
+  background: #ffffff;
+}
+
+.locale-tab {
+  padding: 0.2rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  border-radius: 0.35rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: background 0.15s, color 0.15s;
+}
+
+.locale-tab.is-active {
+  background: #0891b2;
+  color: #ffffff;
+}
+
+.locale-tab:not(.is-active):hover {
+  background: #f1f5f9;
+  color: #0f172a;
 }
 
 .prompt-editor-head h3 {

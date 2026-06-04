@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import {
   ArrowLeft,
   ChevronDown,
@@ -29,6 +30,7 @@ import type {
   SkillFileNode,
 } from '@/types'
 
+const { t } = useI18n()
 const appStore = useAppStore()
 const route = useRoute()
 const router = useRouter()
@@ -161,7 +163,7 @@ const parseErrorMessage = (err: any): string => {
   if (err?.response?.data?.detail) return err.response.data.detail
   if (err?.response?.data?.message) return err.response.data.message
   if (err?.message) return err.message
-  return '操作失败'
+  return t('admin.parseError')
 }
 
 const formatTimestamp = (value?: string | null): string => {
@@ -201,23 +203,23 @@ const clearAuth = () => {
 
 const handleLogin = async () => {
   if (!authForm.username.trim() || !authForm.password) {
-    appStore.showNotification({ title: '请输入用户名和密码', type: 'warning' })
+    appStore.showNotification({ title: t('admin.loginWarning'), type: 'warning' })
     return
   }
   isLoggingIn.value = true
   try {
     const resp = await adminApi.login(authForm.username.trim(), authForm.password)
-    if (!resp?.success || !resp.data?.token) throw new Error(resp?.message || '登录失败')
+    if (!resp?.success || !resp.data?.token) throw new Error(resp?.message || t('admin.loginFailFallback'))
     adminToken.set(resp.data.token)
     isAuthenticated.value = true
     appStore.showNotification({
-      title: '登录成功',
-      message: `欢迎，${resp.data.username}`,
+      title: t('admin.loginSuccessTitle'),
+      message: t('admin.loginSuccessMsg', { username: resp.data.username }),
       type: 'success',
     })
     await fetchSkills()
   } catch (err: any) {
-    appStore.showNotification({ title: '登录失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.loginFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     isLoggingIn.value = false
   }
@@ -230,7 +232,7 @@ const handleLogout = async () => {
     // ignore
   } finally {
     clearAuth()
-    appStore.showNotification({ title: '已退出登录', type: 'info' })
+    appStore.showNotification({ title: t('admin.logoutSuccessTitle'), type: 'info' })
   }
 }
 
@@ -239,10 +241,10 @@ const fetchSkills = async () => {
   loadingSkills.value = true
   try {
     const resp = await adminApi.listProjectSkills(projectCode.value)
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '获取 Skill 列表失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.projectSkills.loadSkillsFail'))
     skills.value = resp.data
   } catch (err: any) {
-    appStore.showNotification({ title: '加载失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.loadFail'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     loadingSkills.value = false
   }
@@ -281,8 +283,8 @@ const uploadSkillFile = async (file: File) => {
   if (!projectCode.value) return
   if (!file.name.toLowerCase().endsWith('.zip')) {
     appStore.showNotification({
-      title: '格式不支持',
-      message: '请选择 .zip 格式的 Skill 包',
+      title: t('admin.skills.invalidFormat'),
+      message: t('admin.skills.invalidFormatMsg'),
       type: 'warning',
     })
     return
@@ -296,15 +298,15 @@ const uploadSkillFile = async (file: File) => {
       overwrite.value,
       (p) => (uploadPercent.value = p)
     )
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '上传失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.skills.uploadFailFallback'))
     appStore.showNotification({
-      title: '上传成功',
-      message: `已安装 Skill: ${resp.data.name}`,
+      title: t('admin.skills.uploadSuccess'),
+      message: t('admin.skills.uploadSuccessMsg', { name: resp.data.name }),
       type: 'success',
     })
     await fetchSkills()
   } catch (err: any) {
-    appStore.showNotification({ title: '上传失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.skills.uploadFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     uploading.value = false
     uploadPercent.value = 0
@@ -317,25 +319,25 @@ const toggleSkill = async (skill: AgentSkill) => {
     const resp = await adminApi.updateProjectSkill(projectCode.value, skill.id, {
       enabled: !skill.enabled,
     })
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '更新失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.skills.updateFailFallback'))
     const idx = skills.value.findIndex((s) => s.id === skill.id)
     if (idx >= 0) skills.value[idx] = resp.data
   } catch (err: any) {
-    appStore.showNotification({ title: '更新失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.skills.updateFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     togglingId.value = null
   }
 }
 
 const deleteSkill = async (skill: AgentSkill) => {
-  if (!window.confirm(`确认删除 Skill「${skill.name}」？`)) return
+  if (!window.confirm(t('admin.skills.deleteConfirm', { name: skill.name }))) return
   deletingId.value = skill.id
   try {
     await adminApi.deleteProjectSkill(projectCode.value, skill.id)
     skills.value = skills.value.filter((s) => s.id !== skill.id)
-    appStore.showNotification({ title: '已删除', message: skill.name, type: 'success' })
+    appStore.showNotification({ title: t('admin.skills.deleteSuccess'), message: skill.name, type: 'success' })
   } catch (err: any) {
-    appStore.showNotification({ title: '删除失败', message: parseErrorMessage(err), type: 'error' })
+    appStore.showNotification({ title: t('admin.skills.deleteFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     deletingId.value = null
   }
@@ -376,14 +378,14 @@ const openSkillManager = async (skill: AgentSkill) => {
   skillTreeLoading.value = true
   try {
     const resp = await adminApi.listProjectSkillFiles(projectCode.value, skill.id)
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '加载失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.skills.loadingSkills'))
     skillTreeRoot.value = resp.data.tree
     expandedDirs.value = collectInitialExpandedDirs(resp.data.tree)
     const first = findFirstReadableFile(resp.data.tree)
     if (first) await selectSkillFile(first)
   } catch (err: any) {
     appStore.showNotification({
-      title: '加载文件失败',
+      title: t('admin.skills.loadFileFailTitle'),
       message: parseErrorMessage(err),
       type: 'error',
     })
@@ -421,7 +423,7 @@ const selectSkillFile = async (node: SkillFileNode) => {
       manageSkill.value.id,
       node.path
     )
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '读取失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.skills.readingFile'))
     activeFileContent.value = resp.data
   } catch (err: any) {
     activeFileError.value = parseErrorMessage(err)
@@ -462,26 +464,26 @@ onMounted(() => bootstrap())
             class="admin-icon-btn"
             :disabled="!isAuthenticated"
             @click="toggleNavVisibility"
-            :title="navVisible ? '隐藏侧边栏' : '显示侧边栏'"
-            aria-label="切换侧边栏"
+            :title="navVisible ? t('admin.toggleSidebarHide') : t('admin.toggleSidebarShow')"
+            :aria-label="t('admin.toggleSidebarAriaLabel')"
           >
             <PanelLeftClose v-if="navVisible" :size="18" />
             <Menu v-else :size="18" />
           </button>
           <div>
-            <h1 class="admin-title">后台管理</h1>
-            <p class="admin-subtitle">项目 Skill 管理</p>
+            <h1 class="admin-title">{{ t('admin.title') }}</h1>
+            <p class="admin-subtitle">{{ t('admin.projectSkills.subtitle') }}</p>
           </div>
         </div>
         <div class="admin-topbar-right">
           <span class="px-3 py-1 text-xs font-semibold rounded-full bg-slate-700 text-slate-100">
             {{ isAuthenticated
-              ? `${enabledCount} 启用 / ${disabledCount} 停用`
-              : '未登录' }}
+              ? t('admin.projectSkills.badge', { enabled: enabledCount, disabled: disabledCount })
+              : t('admin.badgeNotLoggedIn') }}
           </span>
           <button v-if="isAuthenticated" class="admin-logout-btn" @click="handleLogout">
             <LogOut :size="14" />
-            <span>退出</span>
+            <span>{{ t('admin.logoutBtn') }}</span>
           </button>
         </div>
       </div>
@@ -491,7 +493,7 @@ onMounted(() => bootstrap())
       v-if="isAuthenticated && navVisible"
       class="admin-sidebar-backdrop"
       @click="toggleNavVisibility"
-      aria-label="关闭侧边栏"
+      :aria-label="t('admin.closeSidebarAriaLabel')"
     />
 
     <aside v-if="isAuthenticated" class="admin-sidebar" :class="{ 'is-hidden': !navVisible }">
@@ -514,14 +516,14 @@ onMounted(() => bootstrap())
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
           <div class="flex items-center justify-between mb-4">
             <div>
-              <h2 class="text-lg font-semibold text-slate-900">登录后台</h2>
-              <p class="text-sm text-slate-500">请输入管理员凭证继续</p>
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.loginCardTitle') }}</h2>
+              <p class="text-sm text-slate-500">{{ t('admin.loginCardDesc') }}</p>
             </div>
-            <span class="text-xs text-slate-500">内部安全访问</span>
+            <span class="text-xs text-slate-500">{{ t('admin.secureAccess') }}</span>
           </div>
           <form class="space-y-4 max-w-sm" @submit.prevent="handleLogin">
             <label class="block">
-              <span class="text-sm text-slate-700">用户名</span>
+              <span class="text-sm text-slate-700">{{ t('admin.usernameLabel') }}</span>
               <input
                 v-model="authForm.username"
                 type="text"
@@ -531,7 +533,7 @@ onMounted(() => bootstrap())
               />
             </label>
             <label class="block">
-              <span class="text-sm text-slate-700">密码</span>
+              <span class="text-sm text-slate-700">{{ t('admin.passwordLabel') }}</span>
               <input
                 v-model="authForm.password"
                 type="password"
@@ -545,7 +547,7 @@ onMounted(() => bootstrap())
               class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-50"
               :disabled="isLoggingIn"
             >
-              {{ isLoggingIn ? '登录中…' : '登录' }}
+              {{ isLoggingIn ? t('admin.loginBtnLoading') : t('admin.loginBtn') }}
             </button>
           </form>
         </div>
@@ -561,15 +563,15 @@ onMounted(() => bootstrap())
                   @click="goBack"
                 >
                   <ArrowLeft :size="16" />
-                  返回项目列表
+                  {{ t('admin.projectSkills.backToRepos') }}
                 </button>
               </div>
               <h2 class="text-lg font-semibold text-slate-900">
-                项目 Skill 管理
+                {{ t('admin.projectSkills.listTitle') }}
                 <code class="ml-2 rounded bg-slate-100 px-2 py-0.5 text-sm font-mono text-slate-600">{{ projectCode }}</code>
               </h2>
               <p class="text-sm text-slate-500 mt-0.5">
-                上传 Skill 包 (.zip) 到此项目，Agent 在处理该项目时会自动加载这些 Skill。
+                {{ t('admin.projectSkills.listDesc') }}
               </p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
@@ -579,7 +581,7 @@ onMounted(() => bootstrap())
                 @click="fetchSkills"
               >
                 <RefreshCw :size="15" />
-                {{ loadingSkills ? '刷新中' : '刷新' }}
+                {{ loadingSkills ? t('admin.refreshing') : t('common.refresh') }}
               </button>
             </div>
           </div>
@@ -588,14 +590,12 @@ onMounted(() => bootstrap())
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
           <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <h3 class="text-sm font-semibold text-slate-900">上传 Skill 包</h3>
-              <p class="mt-1 text-xs text-slate-500">
-                zip 内应包含 <code class="rounded bg-slate-100 px-1 text-[11px] text-slate-600">SKILL.md</code>（或唯一顶层目录 <code class="rounded bg-slate-100 px-1 text-[11px] text-slate-600">&lt;name&gt;/SKILL.md</code>）。frontmatter 中的 <code class="rounded bg-slate-100 px-1 text-[11px] text-slate-600">name</code> 必须存在且仅含字母/数字/下划线/连字符。
-              </p>
+              <h3 class="text-sm font-semibold text-slate-900">{{ t('admin.skills.uploadSkillTitle') }}</h3>
+              <p class="mt-1 text-xs text-slate-500" v-html="t('admin.skills.skillRequirements')"></p>
             </div>
             <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600">
               <input v-model="overwrite" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500" />
-              覆盖同名 Skill
+              {{ t('admin.skills.overwriteSkill') }}
             </label>
           </div>
 
@@ -608,15 +608,15 @@ onMounted(() => bootstrap())
           >
             <FileArchive :size="36" class="text-slate-400" />
             <p class="mt-2 text-sm text-slate-600">
-              将 <span class="font-mono font-semibold">.zip</span> 文件拖到此处，或
-              <button class="ml-1 text-cyan-600 underline-offset-2 hover:underline" @click="triggerFilePicker">点击选择文件</button>
+              {{ t('admin.skills.dropZoneHint') }}
+              <button class="ml-1 text-cyan-600 underline-offset-2 hover:underline" @click="triggerFilePicker">{{ t('admin.skills.clickSelectFile') }}</button>
             </p>
-            <p class="mt-1 text-xs text-slate-400">单个文件 &le; 50 MiB &middot; 解压总量 &le; 200 MiB</p>
+            <p class="mt-1 text-xs text-slate-400">{{ t('admin.skills.fileSizeHint') }}</p>
             <div v-if="uploading" class="mt-3 w-full max-w-sm">
               <div class="h-1.5 w-full rounded-full bg-slate-200 overflow-hidden">
                 <div class="h-full bg-cyan-500 transition-all" :style="{ width: `${uploadPercent}%` }"></div>
               </div>
-              <p class="mt-1 text-xs text-slate-500">上传中… {{ uploadPercent }}%</p>
+              <p class="mt-1 text-xs text-slate-500">{{ t('admin.skills.uploadingProgress', { percent: uploadPercent }) }}</p>
             </div>
             <input
               ref="fileInput"
@@ -630,17 +630,17 @@ onMounted(() => bootstrap())
 
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
           <div class="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
-            <p class="text-sm font-semibold text-slate-900">已安装 Skill</p>
-            <p class="text-xs text-slate-400">共 {{ skills.length }} 项</p>
+            <p class="text-sm font-semibold text-slate-900">{{ t('admin.skills.installedTitle') }}</p>
+            <p class="text-xs text-slate-400">{{ t('admin.skills.installedCount', { count: skills.length }) }}</p>
           </div>
 
           <div v-if="loadingSkills" class="px-5 py-12 text-center text-sm text-slate-400">
-            正在加载…
+            {{ t('admin.skills.loadingSkills') }}
           </div>
 
           <div v-else-if="!skills.length" class="px-5 py-12 text-center">
-            <p class="text-sm font-medium text-slate-700">尚未上传 Skill</p>
-            <p class="mt-1 text-xs text-slate-400">通过上方拖拽或选择文件，为此项目安装第一个 Skill 包。</p>
+            <p class="text-sm font-medium text-slate-700">{{ t('admin.skills.noSkillsTitle') }}</p>
+            <p class="mt-1 text-xs text-slate-400">{{ t('admin.projectSkills.noSkillsHint') }}</p>
           </div>
 
           <div v-else class="overflow-x-auto">
@@ -648,11 +648,11 @@ onMounted(() => bootstrap())
               <thead>
                 <tr class="border-b border-slate-100 bg-slate-50">
                   <th class="py-2.5 pl-5 pr-4 text-left font-semibold text-slate-600">Skill</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">来源 zip</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">大小</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">状态</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">更新时间</th>
-                  <th class="py-2.5 pr-5 text-right font-semibold text-slate-600">操作</th>
+                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.skills.colSourceZip') }}</th>
+                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.skills.colSize') }}</th>
+                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.skills.colStatus') }}</th>
+                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.skills.colUpdatedAt') }}</th>
+                  <th class="py-2.5 pr-5 text-right font-semibold text-slate-600">{{ t('admin.skills.colActions') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -660,7 +660,7 @@ onMounted(() => bootstrap())
                   v-for="skill in skills"
                   :key="skill.id"
                   class="skill-row border-b border-slate-50 hover:bg-slate-50/70 transition-colors cursor-pointer"
-                  :title="`预览 ${skill.name} 的文件`"
+                  :title="t('admin.skills.previewSkillTitleAttr', { name: skill.name })"
                   @click="openSkillManager(skill)"
                 >
                   <td class="py-3 pl-5 pr-4">
@@ -684,7 +684,7 @@ onMounted(() => bootstrap())
                       class="inline-flex rounded-full px-2 py-1 text-xs font-semibold"
                       :class="skill.enabled ? 'bg-cyan-50 text-cyan-700' : 'bg-slate-100 text-slate-500'"
                     >
-                      {{ skill.enabled ? '启用' : '停用' }}
+                      {{ skill.enabled ? t('admin.skills.statusEnabled') : t('admin.skills.statusDisabled') }}
                     </span>
                   </td>
                   <td class="py-3 pr-4 whitespace-nowrap text-xs text-slate-400">{{ formatTimestamp(skill.updated_at) }}</td>
@@ -692,7 +692,7 @@ onMounted(() => bootstrap())
                     <div class="flex justify-end gap-2">
                       <button
                         class="admin-action-btn"
-                        title="查看文件"
+                        :title="t('admin.skills.fileStructure')"
                         @click.stop="openSkillManager(skill)"
                       >
                         <FolderTree :size="15" />
@@ -700,7 +700,7 @@ onMounted(() => bootstrap())
                       <button
                         class="admin-action-btn"
                         :disabled="togglingId === skill.id"
-                        :title="skill.enabled ? '停用' : '启用'"
+                        :title="skill.enabled ? t('admin.skills.statusDisabled') : t('admin.skills.statusEnabled')"
                         @click.stop="toggleSkill(skill)"
                       >
                         <Power :size="15" />
@@ -708,7 +708,7 @@ onMounted(() => bootstrap())
                       <button
                         class="admin-action-btn danger"
                         :disabled="deletingId === skill.id"
-                        title="删除"
+                        :title="t('common.delete')"
                         @click.stop="deleteSkill(skill)"
                       >
                         <Trash2 :size="15" />
@@ -733,7 +733,7 @@ onMounted(() => bootstrap())
       <div class="skill-manager-panel">
         <header class="skill-manager-header">
           <div class="min-w-0">
-            <p class="text-xs text-slate-400 uppercase tracking-wide">Skill 预览</p>
+            <p class="text-xs text-slate-400 uppercase tracking-wide">{{ t('admin.skills.previewTitle') }}</p>
             <h2 class="text-base font-semibold text-slate-900 truncate">
               {{ manageSkill.name }}
             </h2>
@@ -747,7 +747,7 @@ onMounted(() => bootstrap())
           </div>
           <button
             class="skill-manager-close"
-            aria-label="关闭"
+            :aria-label="t('admin.closeSidebarAriaLabel')"
             @click="closeSkillManager"
           >
             <X :size="18" />
@@ -758,14 +758,14 @@ onMounted(() => bootstrap())
           <aside class="skill-tree-pane">
             <div class="skill-tree-title">
               <FolderTree :size="14" />
-              <span>文件结构</span>
+              <span>{{ t('admin.skills.fileStructure') }}</span>
             </div>
-            <div v-if="skillTreeLoading" class="skill-tree-empty">加载中…</div>
+            <div v-if="skillTreeLoading" class="skill-tree-empty">{{ t('admin.skills.loadingTree') }}</div>
             <div
               v-else-if="!flatTreeRows.length"
               class="skill-tree-empty"
             >
-              此 Skill 没有可显示的文件
+              {{ t('admin.skills.noFiles') }}
             </div>
             <ul v-else class="skill-tree-list">
               <li
@@ -828,7 +828,7 @@ onMounted(() => bootstrap())
                   {{ activeFilePath }}
                 </p>
                 <p v-else class="text-xs text-slate-400">
-                  从左侧选择文件以预览内容
+                  {{ t('admin.skills.selectFileHint') }}
                 </p>
               </div>
               <div
@@ -840,14 +840,14 @@ onMounted(() => bootstrap())
                   v-if="activeFileContent.truncated"
                   class="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700"
                 >
-                  已截断
+                  {{ t('admin.skills.truncated') }}
                 </span>
               </div>
             </div>
 
             <div class="skill-content-body">
               <div v-if="activeFileLoading" class="skill-content-msg">
-                正在读取文件…
+                {{ t('admin.skills.readingFile') }}
               </div>
               <div v-else-if="activeFileError" class="skill-content-msg text-rose-600">
                 {{ activeFileError }}
@@ -856,13 +856,13 @@ onMounted(() => bootstrap())
                 v-else-if="!activeFileContent && !activeFilePath"
                 class="skill-content-msg"
               >
-                未选择文件
+                {{ t('admin.skills.noFileSelected') }}
               </div>
               <div
                 v-else-if="activeFileContent && activeFileContent.encoding === 'binary'"
                 class="skill-content-msg"
               >
-                此文件为二进制内容（{{ formatSize(activeFileContent.size) }}），不支持文本预览。
+                {{ t('admin.skills.binaryFile', { size: formatSize(activeFileContent.size) }) }}
               </div>
               <div
                 v-else-if="activeFileContent && isMarkdownFile && renderedMarkdown"

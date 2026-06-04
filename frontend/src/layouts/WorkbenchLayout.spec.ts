@@ -5,7 +5,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 
 import WorkbenchLayout from '@/layouts/WorkbenchLayout.vue'
-import { i18n } from '@/i18n'
+import { i18n, setI18nLocale } from '@/i18n'
 import { useChatSessionStore } from '@/stores/chatSession'
 import { useConversationRunsStore } from '@/stores/conversationRuns'
 import { useUserStore } from '@/stores/user'
@@ -67,6 +67,7 @@ const createHarness = async () => {
 
 describe('WorkbenchLayout running session sidebar', () => {
   beforeEach(() => {
+    setI18nLocale('zh')
     setActivePinia(createPinia())
   })
 

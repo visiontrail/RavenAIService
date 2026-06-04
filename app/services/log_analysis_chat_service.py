@@ -811,6 +811,12 @@ class LogAnalysisChatService:
             else None
         )
         inferred_project_id = inferred_project.id if inferred_project else None
+        # project_repo_id is already a project_repo.id — use it directly when the
+        # user has explicitly selected a project, otherwise fall back to the value
+        # inferred from the filename.
+        effective_project_id = (
+            project_repo_id if project_repo_id is not None else inferred_project_id
+        )
         upload_request = LogUploadRequest(
             # Force OAM (project_code) during upload so LogService does not start
             # the protocol stack processing Celery task; this endpoint owns
@@ -829,7 +835,7 @@ class LogAnalysisChatService:
         if log_record is None:
             raise RuntimeError("日志包已上传但未找到数据库记录")
 
-        log_record.project_id = inferred_project_id
+        log_record.project_id = effective_project_id
         log_record.status = LogStatus.COMPLETED
         log_record.progress = 100.0
         log_record.issue_description = question
@@ -845,7 +851,7 @@ class LogAnalysisChatService:
         ctx.metadata.update(
             {
                 "question": question,
-                "project_id": inferred_project_id,
+                "project_id": effective_project_id,
                 "hints": "",
             }
         )
@@ -864,7 +870,7 @@ class LogAnalysisChatService:
             "task_json_path": ctx.task_json_path,
             "log_id": log_record.id,
             "filename": log_record.original_filename or log_record.filename,
-            "project_id": inferred_project_id,
+            "project_id": effective_project_id,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
         }

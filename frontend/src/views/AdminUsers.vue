@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { LogOut, Menu, PanelLeftClose } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
 import type { UserProfile } from '@/types'
 
+const { t } = useI18n()
 const appStore = useAppStore()
 const route = useRoute()
 const router = useRouter()
@@ -44,7 +46,7 @@ const parseErrorMessage = (err: any) => {
   if (err?.response?.data?.detail) return err.response.data.detail
   if (err?.response?.data?.message) return err.response.data.message
   if (err?.message) return err.message
-  return '操作失败'
+  return t('admin.parseError')
 }
 
 const formatTimestamp = (value?: string | null) => {
@@ -90,12 +92,12 @@ const fetchUsers = async () => {
   try {
     const resp = await adminApi.listUsers()
     if (!resp?.success || !resp.data) {
-      throw new Error(resp?.message || '无法获取用户列表')
+      throw new Error(resp?.message || t('admin.users.loadFailFallback'))
     }
     users.value = resp.data
   } catch (err: any) {
     appStore.showNotification({
-      title: '加载失败',
+      title: t('admin.loadFail'),
       message: parseErrorMessage(err),
       type: 'error',
     })
@@ -107,7 +109,7 @@ const fetchUsers = async () => {
 const handleLogin = async () => {
   if (!authForm.username || !authForm.password) {
     appStore.showNotification({
-      title: '请输入用户名和密码',
+      title: t('admin.loginWarning'),
       type: 'warning',
     })
     return
@@ -116,19 +118,19 @@ const handleLogin = async () => {
   try {
     const resp = await adminApi.login(authForm.username.trim(), authForm.password)
     if (!resp?.success || !resp.data) {
-      throw new Error(resp?.message || '登录失败')
+      throw new Error(resp?.message || t('admin.loginFailFallback'))
     }
     persistToken(resp.data.token)
     isAuthenticated.value = true
     appStore.showNotification({
-      title: '登录成功',
-      message: `欢迎，${resp.data.username}`,
+      title: t('admin.loginSuccessTitle'),
+      message: t('admin.loginSuccessMsg', { username: resp.data.username }),
       type: 'success',
     })
     await fetchUsers()
   } catch (err: any) {
     appStore.showNotification({
-      title: '登录失败',
+      title: t('admin.loginFailFallback'),
       message: parseErrorMessage(err),
       type: 'error',
     })
@@ -146,7 +148,7 @@ const handleLogout = async () => {
     clearAuth()
     users.value = []
     appStore.showNotification({
-      title: '已退出登录',
+      title: t('admin.logoutSuccessTitle'),
       type: 'info',
     })
   }
@@ -163,7 +165,7 @@ const resetUserDialogForm = () => {
 const normalizeRole = (role?: string | null): 'user' | 'admin' =>
   (role || '').toString().toLowerCase() === 'admin' ? 'admin' : 'user'
 
-const roleLabel = (role?: string | null) => (normalizeRole(role) === 'admin' ? '管理员' : '普通用户')
+const roleLabel = (role?: string | null) => (normalizeRole(role) === 'admin' ? t('admin.users.roleAdmin') : t('admin.users.roleUser'))
 
 const openCreateUserDialog = () => {
   userDialogMode.value = 'create'
@@ -191,7 +193,7 @@ const closeUserDialog = () => {
 const submitUserDialog = async () => {
   if (userDialogMode.value === 'create' && (!userDialogForm.username || !userDialogForm.password)) {
     appStore.showNotification({
-      title: '请输入用户名和密码',
+      title: t('admin.loginWarning'),
       type: 'warning',
     })
     return
@@ -209,11 +211,11 @@ const submitUserDialog = async () => {
         role: userDialogForm.role,
       })
       if (!resp?.success || !resp.data) {
-        throw new Error(resp?.message || '创建失败')
+        throw new Error(resp?.message || t('admin.users.createFailFallback'))
       }
       appStore.showNotification({
-        title: '创建成功',
-        message: `已创建用户 ${resp.data.username}`,
+        title: t('admin.users.createSuccess'),
+        message: t('admin.users.createdMsg', { username: resp.data.username }),
         type: 'success',
       })
     } else {
@@ -232,11 +234,11 @@ const submitUserDialog = async () => {
       }
       const resp = await adminApi.updateUser(editingUserId.value as string, payload)
       if (!resp?.success || !resp.data) {
-        throw new Error(resp?.message || '更新失败')
+        throw new Error(resp?.message || t('admin.users.updateFailFallback'))
       }
       appStore.showNotification({
-        title: '更新成功',
-        message: `已更新用户 ${resp.data.username}`,
+        title: t('admin.users.updateSuccess'),
+        message: t('admin.users.updatedMsg', { username: resp.data.username }),
         type: 'success',
       })
     }
@@ -245,7 +247,7 @@ const submitUserDialog = async () => {
     await fetchUsers()
   } catch (err: any) {
     appStore.showNotification({
-      title: userDialogMode.value === 'create' ? '创建失败' : '更新失败',
+      title: userDialogMode.value === 'create' ? t('admin.users.createFailFallback') : t('admin.users.updateFailFallback'),
       message: parseErrorMessage(err),
       type: 'error',
     })
@@ -259,17 +261,17 @@ const toggleActive = async (user: UserProfile) => {
   try {
     const resp = await adminApi.updateUser(user.id, { is_active: nextStatus })
     if (!resp?.success || !resp.data) {
-      throw new Error(resp?.message || '更新失败')
+      throw new Error(resp?.message || t('admin.users.updateFailFallback'))
     }
     users.value = users.value.map((u) => (u.id === user.id ? resp.data as UserProfile : u))
     appStore.showNotification({
-      title: nextStatus ? '已启用' : '已禁用',
+      title: nextStatus ? t('admin.users.enabledTitle') : t('admin.users.disabledTitle'),
       message: resp.data.username,
       type: 'success',
     })
   } catch (err: any) {
     appStore.showNotification({
-      title: '状态更新失败',
+      title: t('admin.users.statusUpdateFail'),
       message: parseErrorMessage(err),
       type: 'error',
     })
@@ -277,21 +279,21 @@ const toggleActive = async (user: UserProfile) => {
 }
 
 const resetPassword = async (user: UserProfile) => {
-  const password = window.prompt(`为用户 ${user.username} 设置新密码：`)
+  const password = window.prompt(t('admin.users.resetPasswordPrompt', { username: user.username }))
   if (!password) return
   try {
     const resp = await adminApi.updateUser(user.id, { password })
     if (!resp?.success) {
-      throw new Error(resp?.message || '重置失败')
+      throw new Error(resp?.message || t('admin.users.resetFailFallback'))
     }
     appStore.showNotification({
-      title: '密码已重置',
+      title: t('admin.users.passwordResetSuccess'),
       message: user.username,
       type: 'success',
     })
   } catch (err: any) {
     appStore.showNotification({
-      title: '重置失败',
+      title: t('admin.users.resetFailFallback'),
       message: parseErrorMessage(err),
       type: 'error',
     })
@@ -299,23 +301,23 @@ const resetPassword = async (user: UserProfile) => {
 }
 
 const deleteUser = async (user: UserProfile) => {
-  const confirmed = window.confirm(`确认删除用户 ${user.username}？此操作不可恢复。`)
+  const confirmed = window.confirm(t('admin.users.deleteConfirm', { username: user.username }))
   if (!confirmed) return
   deletingUserId.value = user.id
   try {
     const resp = await adminApi.disableUser(user.id)
     if (!resp?.success) {
-      throw new Error(resp?.message || '删除失败')
+      throw new Error(resp?.message || t('admin.users.deleteFailFallback'))
     }
     users.value = users.value.filter((u) => u.id !== user.id)
     appStore.showNotification({
-      title: '删除成功',
+      title: t('admin.users.deleteSuccess'),
       message: user.username,
       type: 'success',
     })
   } catch (err: any) {
     appStore.showNotification({
-      title: '删除失败',
+      title: t('admin.users.deleteFailFallback'),
       message: parseErrorMessage(err),
       type: 'error',
     })
@@ -354,20 +356,20 @@ onMounted(() => {
             class="admin-icon-btn"
             :disabled="!isAuthenticated"
             @click="toggleNavVisibility"
-            :title="navVisible ? '隐藏侧边栏' : '显示侧边栏'"
-            aria-label="切换侧边栏"
+            :title="navVisible ? t('admin.toggleSidebarHide') : t('admin.toggleSidebarShow')"
+            :aria-label="t('admin.toggleSidebarAriaLabel')"
           >
             <PanelLeftClose v-if="navVisible" :size="18" />
             <Menu v-else :size="18" />
           </button>
           <div>
-            <h1 class="admin-title">后台管理</h1>
-            <p class="admin-subtitle">用户管理中心</p>
+            <h1 class="admin-title">{{ t('admin.title') }}</h1>
+            <p class="admin-subtitle">{{ t('admin.users.subtitle') }}</p>
           </div>
         </div>
         <div class="admin-topbar-right">
           <span class="px-3 py-1 text-xs font-semibold rounded-full bg-slate-700 text-slate-100">
-            {{ isAuthenticated ? `用户总数：${users.length}` : '未登录' }}
+            {{ isAuthenticated ? t('admin.users.badge', { count: users.length }) : t('admin.badgeNotLoggedIn') }}
           </span>
           <button
             v-if="isAuthenticated"
@@ -375,7 +377,7 @@ onMounted(() => {
             @click="handleLogout"
           >
             <LogOut :size="14" />
-            <span>退出</span>
+            <span>{{ t('admin.logoutBtn') }}</span>
           </button>
         </div>
       </div>
@@ -385,7 +387,7 @@ onMounted(() => {
       v-if="isAuthenticated && navVisible"
       class="admin-sidebar-backdrop"
       @click="toggleNavVisibility"
-      aria-label="关闭侧边栏"
+      :aria-label="t('admin.closeSidebarAriaLabel')"
     ></button>
 
     <aside
@@ -417,15 +419,15 @@ onMounted(() => {
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
           <div class="flex items-center justify-between mb-4">
             <div>
-              <h2 class="text-lg font-semibold text-slate-900">登录后台</h2>
-              <p class="text-sm text-slate-500">请输入管理员凭证继续</p>
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.loginCardTitle') }}</h2>
+              <p class="text-sm text-slate-500">{{ t('admin.loginCardDesc') }}</p>
             </div>
-            <span class="text-xs text-slate-500">内部安全访问</span>
+            <span class="text-xs text-slate-500">{{ t('admin.secureAccess') }}</span>
           </div>
           <div class="grid gap-4 md:grid-cols-2">
             <form class="space-y-4" @submit.prevent="handleLogin">
               <label class="block">
-                <span class="text-sm text-slate-700">用户名</span>
+                <span class="text-sm text-slate-700">{{ t('admin.usernameLabel') }}</span>
                 <input
                   v-model="authForm.username"
                   type="text"
@@ -435,7 +437,7 @@ onMounted(() => {
                 />
               </label>
               <label class="block">
-                <span class="text-sm text-slate-700">密码</span>
+                <span class="text-sm text-slate-700">{{ t('admin.passwordLabel') }}</span>
                 <input
                   v-model="authForm.password"
                   type="password"
@@ -450,25 +452,25 @@ onMounted(() => {
                   class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-50"
                   :disabled="isLoggingIn"
                 >
-                  {{ isLoggingIn ? '登录中…' : '登录' }}
+                  {{ isLoggingIn ? t('admin.loginBtnLoading') : t('admin.loginBtn') }}
                 </button>
                 <p class="text-xs text-slate-500">
-                  凭证在 admin_auth.yaml 配置，建议登录后立即更改
+                  {{ t('admin.credentialsHint') }}
                 </p>
               </div>
             </form>
             <div class="bg-slate-50 rounded-lg p-4 space-y-3 text-sm text-slate-700">
               <div class="flex items-center gap-2">
                 <span class="h-2 w-2 rounded-full bg-emerald-400"></span>
-                <span>仅限内部管理访问，凭证按需分发</span>
+                <span>{{ t('admin.users.loginHint1') }}</span>
               </div>
               <div class="flex items-center gap-2">
                 <span class="h-2 w-2 rounded-full bg-cyan-400"></span>
-                <span>登录后可管理用户与对话数据</span>
+                <span>{{ t('admin.users.loginHint2') }}</span>
               </div>
               <div class="flex items-center gap-2">
                 <span class="h-2 w-2 rounded-full bg-amber-400"></span>
-                <span>会话基于 Bearer Token，关闭标签后自动清除</span>
+                <span>{{ t('admin.users.loginHint3') }}</span>
               </div>
             </div>
           </div>
@@ -479,39 +481,39 @@ onMounted(() => {
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
           <div class="user-list-header flex items-center justify-between mb-4">
             <div>
-              <h2 class="text-lg font-semibold text-slate-900">用户列表</h2>
-              <p class="text-sm text-slate-500">支持新增、编辑、删除、启用/禁用与重置密码</p>
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.users.listTitle') }}</h2>
+              <p class="text-sm text-slate-500">{{ t('admin.users.listDesc') }}</p>
             </div>
             <div class="flex items-center gap-2">
               <button
                 class="px-3 py-1.5 text-sm rounded-lg border border-cyan-200 text-cyan-700 hover:bg-cyan-50"
                 @click="openCreateUserDialog"
               >
-                新增用户
+                {{ t('admin.users.createBtn') }}
               </button>
               <button
                 class="text-sm text-slate-600 hover:text-slate-900"
                 @click="fetchUsers"
                 :disabled="loadingUsers"
               >
-                {{ loadingUsers ? '同步中…' : '刷新' }}
+                {{ loadingUsers ? t('admin.users.syncingBtn') : t('common.refresh') }}
               </button>
             </div>
           </div>
 
-          <div v-if="loadingUsers" class="text-sm text-slate-500">正在加载用户...</div>
-          <div v-else-if="!users.length" class="text-sm text-slate-500">暂无用户</div>
+          <div v-if="loadingUsers" class="text-sm text-slate-500">{{ t('admin.users.loadingText') }}</div>
+          <div v-else-if="!users.length" class="text-sm text-slate-500">{{ t('admin.users.emptyText') }}</div>
           <div v-else class="users-table-wrapper overflow-x-auto touch-scroll">
             <table class="min-w-full text-left text-sm text-slate-700 users-table">
               <thead>
                 <tr class="border-b border-slate-200">
-                  <th class="py-2 pr-4 font-semibold">用户名</th>
-                  <th class="py-2 pr-4 font-semibold">展示名</th>
-                  <th class="py-2 pr-4 font-semibold">邮箱</th>
-                  <th class="py-2 pr-4 font-semibold">角色</th>
-                  <th class="py-2 pr-4 font-semibold">状态</th>
-                  <th class="py-2 pr-4 font-semibold">最近登录</th>
-                  <th class="py-2 pr-4 font-semibold">操作</th>
+                  <th class="py-2 pr-4 font-semibold">{{ t('admin.users.colUsername') }}</th>
+                  <th class="py-2 pr-4 font-semibold">{{ t('admin.users.colDisplayName') }}</th>
+                  <th class="py-2 pr-4 font-semibold">{{ t('admin.users.colEmail') }}</th>
+                  <th class="py-2 pr-4 font-semibold">{{ t('admin.users.colRole') }}</th>
+                  <th class="py-2 pr-4 font-semibold">{{ t('admin.users.colStatus') }}</th>
+                  <th class="py-2 pr-4 font-semibold">{{ t('admin.users.colLastLogin') }}</th>
+                  <th class="py-2 pr-4 font-semibold">{{ t('admin.users.colActions') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -532,7 +534,7 @@ onMounted(() => {
                       class="px-2 py-1 rounded-full text-xs font-semibold"
                       :class="user.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'"
                     >
-                      {{ user.is_active ? '启用' : '禁用' }}
+                      {{ user.is_active ? t('admin.users.statusEnabled') : t('admin.users.statusDisabled') }}
                     </span>
                   </td>
                   <td class="py-2 pr-4 text-slate-500">{{ formatTimestamp(user.last_login_at) }}</td>
@@ -541,26 +543,26 @@ onMounted(() => {
                       class="text-xs px-3 py-1 rounded-lg border border-slate-200 hover:bg-slate-50"
                       @click="toggleActive(user)"
                     >
-                      {{ user.is_active ? '禁用' : '启用' }}
+                      {{ user.is_active ? t('admin.users.toggleDisableBtn') : t('admin.users.toggleEnableBtn') }}
                     </button>
                     <button
                       class="text-xs px-3 py-1 rounded-lg border border-cyan-200 text-cyan-700 hover:bg-cyan-50"
                       @click="openEditUserDialog(user)"
                     >
-                      编辑
+                      {{ t('admin.users.editBtn') }}
                     </button>
                     <button
                       class="text-xs px-3 py-1 rounded-lg border border-amber-200 text-amber-700 hover:bg-amber-50"
                       @click="resetPassword(user)"
                     >
-                      重置密码
+                      {{ t('admin.users.resetPasswordBtn') }}
                     </button>
                     <button
                       class="text-xs px-3 py-1 rounded-lg border border-rose-200 text-rose-700 hover:bg-rose-50 disabled:opacity-60"
                       :disabled="deletingUserId === user.id"
                       @click="deleteUser(user)"
                     >
-                      {{ deletingUserId === user.id ? '删除中…' : '删除' }}
+                      {{ deletingUserId === user.id ? t('admin.users.deletingBtn') : t('admin.users.deleteBtn') }}
                     </button>
                   </td>
                 </tr>
@@ -577,20 +579,20 @@ onMounted(() => {
           <div class="admin-modal-card" @click.stop>
             <div class="flex items-center justify-between mb-3">
               <h3 class="text-base font-semibold text-slate-900">
-                {{ userDialogMode === 'create' ? '新增用户' : '编辑用户' }}
+                {{ userDialogMode === 'create' ? t('admin.users.dialogTitleCreate') : t('admin.users.dialogTitleEdit') }}
               </h3>
               <button
                 class="text-sm text-slate-500 hover:text-slate-800"
                 :disabled="savingUser"
                 @click="closeUserDialog"
               >
-                关闭
+                {{ t('admin.users.closeBtn') }}
               </button>
             </div>
 
             <div class="grid md:grid-cols-2 gap-4">
               <label class="text-sm text-slate-700">
-                用户名
+                {{ t('admin.users.formUsername') }}
                 <input
                   v-model="userDialogForm.username"
                   type="text"
@@ -600,16 +602,16 @@ onMounted(() => {
                 />
               </label>
               <label class="text-sm text-slate-700">
-                展示名
+                {{ t('admin.users.formDisplayName') }}
                 <input
                   v-model="userDialogForm.display_name"
                   type="text"
                   class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-                  placeholder="可选"
+                  :placeholder="t('admin.users.formDisplayNamePlaceholder')"
                 />
               </label>
               <label class="text-sm text-slate-700">
-                邮箱
+                {{ t('admin.users.formEmail') }}
                 <input
                   v-model="userDialogForm.email"
                   type="email"
@@ -618,24 +620,24 @@ onMounted(() => {
                 />
               </label>
               <label class="text-sm text-slate-700">
-                {{ userDialogMode === 'create' ? '初始密码' : '新密码（可选）' }}
+                {{ userDialogMode === 'create' ? t('admin.users.formInitialPassword') : t('admin.users.formNewPassword') }}
                 <input
                   v-model="userDialogForm.password"
                   type="password"
                   class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-                  :placeholder="userDialogMode === 'create' ? '至少 6 位' : '留空则不修改'"
+                  :placeholder="userDialogMode === 'create' ? t('admin.users.formInitialPasswordPlaceholder') : t('admin.users.formNewPasswordPlaceholder')"
                 />
               </label>
               <label class="text-sm text-slate-700">
-                角色
+                {{ t('admin.users.formRole') }}
                 <select
                   v-model="userDialogForm.role"
                   class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none bg-white"
                 >
-                  <option value="user">普通用户</option>
-                  <option value="admin">管理员</option>
+                  <option value="user">{{ t('admin.users.roleUser') }}</option>
+                  <option value="admin">{{ t('admin.users.roleAdmin') }}</option>
                 </select>
-                <p class="text-xs text-slate-500 mt-1">管理员可在对话窗口左下角进入后台管理。</p>
+                <p class="text-xs text-slate-500 mt-1">{{ t('admin.users.roleHint') }}</p>
               </label>
             </div>
 
@@ -645,14 +647,14 @@ onMounted(() => {
                 :disabled="savingUser"
                 @click="closeUserDialog"
               >
-                取消
+                {{ t('admin.users.cancelBtn') }}
               </button>
               <button
                 class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-60"
                 :disabled="savingUser"
                 @click="submitUserDialog"
               >
-                {{ savingUser ? '提交中…' : (userDialogMode === 'create' ? '创建用户' : '保存修改') }}
+                {{ savingUser ? t('admin.users.submittingBtn') : (userDialogMode === 'create' ? t('admin.users.createUserBtn') : t('admin.users.saveChangesBtn')) }}
               </button>
             </div>
           </div>

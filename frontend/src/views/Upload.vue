@@ -275,7 +275,6 @@ const supportedLogFileSuffixes = [
   '.rar',
 ]
 const acceptedLogFileTypes = supportedLogFileSuffixes.join(',')
-const supportedLogFileLabel = '.log、.txt、.json、.zip、.tar.gz、.7z、.rar'
 
 const maxFileSize = computed(() => {
   return parseInt(import.meta.env.VITE_MAX_FILE_SIZE || '1024')

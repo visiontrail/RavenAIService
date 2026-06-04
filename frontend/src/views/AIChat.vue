@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, nextTick, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { deviceLinkApi } from '@/api/deviceLink'
 import {
   streamPackagesAgentSearch,
@@ -21,6 +22,7 @@ import { useAppStore } from '@/stores/app'
 import { useChatSessionStore } from '@/stores/chatSession'
 import {
   useConversationRunsStore,
+  THINKING_PLACEHOLDER,
   type ChatEntry,
   type PendingPermission,
 } from '@/stores/conversationRuns'
@@ -30,30 +32,30 @@ import { downloadFile } from '@/utils'
 
 type AgentOption = {
   id: string
-  name: string
-  description?: string
+  nameKey: string
+  descriptionKey?: string
   agentType: 'package-manager' | 'log-analysis' | 'project-expert'
 }
 
 const packageAgentOption: AgentOption = {
   id: 'package-manager',
-  name: '重构包配置管理员',
+  nameKey: 'aiChat.agents.packageManager',
   agentType: 'package-manager',
-  description: '调用重构包智能搜索，返回详情、下载链接与重构提示词'
+  descriptionKey: 'aiChat.agentDescriptions.packageManager'
 }
 
 const logAnalysisAgentOption: AgentOption = {
   id: 'log-analysis',
-  name: '日志分析',
+  nameKey: 'aiChat.agents.logAnalysis',
   agentType: 'log-analysis',
-  description: '上传日志包并调用 Log Analysis Agent，保留工作区支持追问'
+  descriptionKey: 'aiChat.agentDescriptions.logAnalysis'
 }
 
 const projectExpertAgentOption: AgentOption = {
   id: 'project-expert',
-  name: '项目专家',
+  nameKey: 'aiChat.agents.projectExpert',
   agentType: 'project-expert',
-  description: '选择已登记项目后直接提问，复用项目源码工作区支持追问'
+  descriptionKey: 'aiChat.agentDescriptions.projectExpert'
 }
 
 // Archive packages (decompressed server-side) plus plain-text logs (analyzed as-is).
@@ -70,6 +72,10 @@ const userStore = useUserStore()
 const appStore = useAppStore()
 const sessionStore = useChatSessionStore()
 const runsStore = useConversationRunsStore()
+const { t } = useI18n()
+
+const agentName = (option: AgentOption) => t(option.nameKey)
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 const generateUUID = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -160,7 +166,7 @@ const ensureProjectRepoOptions = async () => {
     projectRepoOptions.value = Array.isArray(response?.data) ? response.data : []
     projectRepoOptionsLoaded.value = true
   } catch (err) {
-    console.warn('加载项目列表失败:', err)
+    console.warn('Failed to load project list:', err)
     projectRepoOptions.value = []
   } finally {
     projectRepoOptionsLoading.value = false
@@ -168,7 +174,7 @@ const ensureProjectRepoOptions = async () => {
 }
 
 const isLoggedIn = computed(() => userStore.isAuthenticated)
-const currentUserName = computed(() => userStore.profile?.display_name || userStore.profile?.username || '用户')
+const currentUserName = computed(() => userStore.profile?.display_name || userStore.profile?.username || t('aiChat.userFallback'))
 
 const isWelcomeMode = computed(() => chatHistory.value.length === 0 && !loadingMessages.value)
 
@@ -246,7 +252,7 @@ const fetchDevices = async () => {
     const res = await deviceLinkApi.listDevices()
     devices.value = res.devices || []
   } catch (error) {
-    console.error('加载设备列表失败', error)
+    console.error('Failed to load devices', error)
   } finally {
     isLoadingDevices.value = false
   }
@@ -299,8 +305,8 @@ const loadMessages = async (id: string) => {
     const state = runsStore.ensureState(id)
     restoreAgentSelectionFromState(state)
   } catch (error) {
-    console.error('加载会话消息失败', error)
-    appStore.showNotification({ title: '加载消息失败', type: 'error' })
+    console.error('Failed to load session messages', error)
+    appStore.showNotification({ title: t('aiChat.notifications.loadMessagesFailed'), type: 'error' })
   }
 }
 
@@ -324,7 +330,7 @@ const clearCurrentMessages = () => {
   showTopMoreMenu.value = false
   const state = currentConversation.value
   if (!state || !state.messages.length) return
-  if (!window.confirm('确定要清空当前消息吗？')) return
+  if (!window.confirm(t('aiChat.confirm.clearMessages'))) return
   state.messages = []
 }
 
@@ -332,15 +338,15 @@ const deleteCurrentSession = async () => {
   showTopMoreMenu.value = false
   const id = sessionStore.selectedSessionId
   if (!id) return
-  const confirmed = window.confirm('确定要删除该对话吗？此操作不可恢复。')
+  const confirmed = window.confirm(t('aiChat.confirm.deleteSession'))
   if (!confirmed) return
   try {
     await sessionStore.removeSession(id)
     runsStore.clearSession(id)
-    appStore.showNotification({ title: '会话已删除', type: 'success' })
+    appStore.showNotification({ title: t('aiChat.notifications.sessionDeleted'), type: 'success' })
   } catch (error) {
-    console.error('删除会话失败', error)
-    appStore.showNotification({ title: '删除失败', type: 'error' })
+    console.error('Failed to delete session', error)
+    appStore.showNotification({ title: t('aiChat.notifications.deleteFailed'), type: 'error' })
   }
 }
 
@@ -354,7 +360,7 @@ const toggleCurrentPin = async () => {
   showTopMoreMenu.value = false
   const id = sessionStore.selectedSessionId
   if (!id) {
-    appStore.showNotification({ title: '请先保存对话后再置顶', type: 'warning' })
+    appStore.showNotification({ title: t('aiChat.notifications.saveBeforePin'), type: 'warning' })
     return
   }
   const wasPinned = currentSessionPinned.value
@@ -362,13 +368,13 @@ const toggleCurrentPin = async () => {
     const ok = await sessionStore.togglePin(id)
     if (ok) {
       appStore.showNotification({
-        title: wasPinned ? '已取消置顶' : '已置顶对话',
+        title: wasPinned ? t('aiChat.notifications.unpinned') : t('aiChat.notifications.pinned'),
         type: 'success',
       })
     }
   } catch (error) {
-    console.error('置顶操作失败', error)
-    appStore.showNotification({ title: '操作失败', type: 'error' })
+    console.error('Failed to update pin state', error)
+    appStore.showNotification({ title: t('aiChat.notifications.operationFailed'), type: 'error' })
   }
 }
 
@@ -376,7 +382,7 @@ const openRenameModal = () => {
   showTopMoreMenu.value = false
   const id = sessionStore.selectedSessionId
   if (!id) {
-    appStore.showNotification({ title: '请先保存对话后再重命名', type: 'warning' })
+    appStore.showNotification({ title: t('aiChat.notifications.saveBeforeRename'), type: 'warning' })
     return
   }
   renameModalTitle.value = sessionStore.currentTitle || ''
@@ -391,7 +397,7 @@ const commitRenameFromModal = async () => {
   if (!id || renameModalInFlight.value) return
   const title = renameModalTitle.value.trim()
   if (!title) {
-    appStore.showNotification({ title: '名称不能为空', type: 'warning' })
+    appStore.showNotification({ title: t('aiChat.notifications.nameRequired'), type: 'warning' })
     return
   }
   renameModalInFlight.value = true
@@ -399,10 +405,10 @@ const commitRenameFromModal = async () => {
     const ok = await sessionStore.renameSession(id, title)
     if (ok) {
       showRenameModal.value = false
-      appStore.showNotification({ title: '已重命名', type: 'success' })
+      appStore.showNotification({ title: t('aiChat.notifications.renamed'), type: 'success' })
     }
   } catch {
-    appStore.showNotification({ title: '重命名失败', type: 'error' })
+    appStore.showNotification({ title: t('aiChat.notifications.renameFailed'), type: 'error' })
   } finally {
     renameModalInFlight.value = false
   }
@@ -429,29 +435,29 @@ const sanitizeMarkdownFilename = (name: string) => {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 80)
-  return cleaned || 'RavenAI-对话'
+  return cleaned || t('aiChat.export.defaultFilename')
 }
 
 const messageSpeakerName = (role: ChatEntry['role']) => {
   if (role === 'user') return currentUserName.value
   if (role === 'ai') return 'RAVENAI'
-  return '系统'
+  return t('aiChat.systemRole')
 }
 
 const buildConversationMarkdown = (exportedAt: Date) => {
-  const title = currentChatTitle.value || 'RavenAI 对话'
+  const title = currentChatTitle.value || t('aiChat.export.defaultTitle')
   const lines: string[] = [
     `# ${title}`,
     '',
-    `- 导出时间：${formatExportDateTime(exportedAt)}`,
-    `- 会话 ID：${effectiveSessionId.value || '本地新对话'}`,
-    `- 消息数：${chatHistory.value.length}`,
+    `- ${t('aiChat.export.exportedAt')}: ${formatExportDateTime(exportedAt)}`,
+    `- ${t('aiChat.export.sessionId')}: ${effectiveSessionId.value || t('aiChat.export.localSession')}`,
+    `- ${t('aiChat.export.messageCount')}: ${chatHistory.value.length}`,
     '',
     '---',
   ]
 
   chatHistory.value.forEach((message, index) => {
-    const content = (message.content || '').trim() || '（空消息）'
+    const content = (message.content || '').trim() || t('aiChat.export.emptyMessage')
     lines.push(
       '',
       `## ${index + 1}. ${messageSpeakerName(message.role)}`,
@@ -466,16 +472,16 @@ const buildConversationMarkdown = (exportedAt: Date) => {
 const exportCurrentConversationMarkdown = () => {
   showTopMoreMenu.value = false
   if (!chatHistory.value.length) {
-    appStore.showNotification({ title: '暂无可导出的消息', type: 'warning' })
+    appStore.showNotification({ title: t('aiChat.notifications.noExportMessages'), type: 'warning' })
     return
   }
 
   const exportedAt = new Date()
   const markdown = buildConversationMarkdown(exportedAt)
-  const filename = `${sanitizeMarkdownFilename(currentChatTitle.value || 'RavenAI-对话')}-${formatExportFileStamp(exportedAt)}.md`
+  const filename = `${sanitizeMarkdownFilename(currentChatTitle.value || t('aiChat.export.defaultFilename'))}-${formatExportFileStamp(exportedAt)}.md`
   const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
   downloadFile(blob, filename)
-  appStore.showNotification({ title: 'Markdown 已导出', type: 'success' })
+  appStore.showNotification({ title: t('aiChat.notifications.markdownExported'), type: 'success' })
 }
 
 const sortedDevices = computed<DeviceInfo[]>(() =>
@@ -493,7 +499,7 @@ const filteredDeviceOptions = computed<DeviceInfo[]>(() => {
   )
 })
 
-const targetAgentName = computed(() => targetAgent.value?.name || null)
+const targetAgentName = computed(() => targetAgent.value ? agentName(targetAgent.value) : null)
 const isPackageAgentSelected = computed(() => targetAgent.value?.agentType === 'package-manager')
 const isProjectExpertAgentSelected = computed(() => targetAgent.value?.agentType === 'project-expert')
 const isLogAnalysisAgentSelected = computed(() =>
@@ -595,10 +601,10 @@ const setTargetAgent = (option: AgentOption) => {
 // suggested_agent_type；这里给出醒目提示并支持一键切换（设备操作走独立入口，
 // 仅文字引导）。
 const SUGGESTED_AGENT_LABELS: Record<string, string> = {
-  device: '设备操作',
-  log_analysis: '日志分析',
-  package_search: '重构包配置管理员',
-  project_expert: '项目专家',
+  device: 'aiChat.agents.device',
+  log_analysis: 'aiChat.agents.logAnalysis',
+  package_search: 'aiChat.agents.packageManager',
+  project_expert: 'aiChat.agents.projectExpert',
 }
 
 const suggestedAgentType = computed(() => currentConversation.value?.suggestedAgentType || null)
@@ -617,7 +623,7 @@ const suggestedAgentAlreadySelected = computed(() => {
 const suggestedAgentLabel = computed(() => {
   const key = suggestedAgentType.value
   if (!key || suggestedAgentAlreadySelected.value) return null
-  return SUGGESTED_AGENT_LABELS[key] || null
+  return SUGGESTED_AGENT_LABELS[key] ? t(SUGGESTED_AGENT_LABELS[key]) : null
 })
 
 // 设备操作通过独立下拉选择，不在 AgentOption 体系内，故不提供一键切换。
@@ -703,8 +709,8 @@ const onThreadClick = (event: MouseEvent) => {
     const source = container?.dataset.mermaidSource || ''
     if (!source) return
     navigator.clipboard.writeText(source).then(
-      () => ElMessage.success('已复制 Mermaid 源码'),
-      () => ElMessage.error('复制失败，请手动选择源码')
+      () => ElMessage.success(t('aiChat.mermaid.sourceCopied')),
+      () => ElMessage.error(t('aiChat.mermaid.copySourceFailed'))
     )
     return
   }
@@ -723,7 +729,7 @@ const openMermaidZoom = (container: HTMLElement) => {
   nextTick(async () => {
     const host = mermaidDialogContainerRef.value
     if (!host) return
-    host.innerHTML = '<div class="mermaid-loading">图表渲染中…</div>'
+    host.innerHTML = `<div class="mermaid-loading">${t('aiChat.mermaid.rendering')}</div>`
     try {
       const mermaid = await loadMermaid()
       const { svg } = await mermaid.render(`mermaid-zoom-${Date.now()}`, mermaidZoomSource)
@@ -731,7 +737,7 @@ const openMermaidZoom = (container: HTMLElement) => {
       applyMermaidZoom()
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      host.innerHTML = `<div class="mermaid-error">⚠ 图表渲染失败：${message}</div>`
+      host.innerHTML = `<div class="mermaid-error">${t('aiChat.mermaid.renderFailed', { message })}</div>`
     }
   })
 }
@@ -845,7 +851,7 @@ const mermaidSvgToCanvas = async (svgEl: SVGSVGElement): Promise<HTMLCanvasEleme
   const img = new Image()
   await new Promise<void>((resolve, reject) => {
     img.onload = () => resolve()
-    img.onerror = () => reject(new Error('SVG 加载失败'))
+    img.onerror = () => reject(new Error('SVG load failed'))
     img.src = src
   })
 
@@ -854,7 +860,7 @@ const mermaidSvgToCanvas = async (svgEl: SVGSVGElement): Promise<HTMLCanvasEleme
   canvas.width = Math.max(1, Math.round(width * dpr))
   canvas.height = Math.max(1, Math.round(height * dpr))
   const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('无法创建画布上下文')
+  if (!ctx) throw new Error('Unable to create canvas context')
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
   ctx.scale(dpr, dpr)
@@ -871,7 +877,7 @@ const downloadMermaidImage = async () => {
   try {
     const canvas = await mermaidSvgToCanvas(svg)
     const blob = await canvasToBlob(canvas)
-    if (!blob) throw new Error('导出失败')
+    if (!blob) throw new Error('Export failed')
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -880,10 +886,10 @@ const downloadMermaidImage = async () => {
     a.click()
     a.remove()
     URL.revokeObjectURL(url)
-    ElMessage.success('已下载图片')
+    ElMessage.success(t('aiChat.mermaid.imageDownloaded'))
   } catch (err) {
-    console.warn('Mermaid 图片下载失败:', err)
-    ElMessage.error('图片下载失败')
+    console.warn('Failed to download Mermaid image:', err)
+    ElMessage.error(t('aiChat.mermaid.imageDownloadFailed'))
   }
 }
 
@@ -891,18 +897,18 @@ const copyMermaidImage = async () => {
   const svg = getZoomSvgElement()
   if (!svg) return
   if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
-    ElMessage.warning('当前浏览器不支持复制图片，请使用下载')
+    ElMessage.warning(t('aiChat.mermaid.copyUnsupported'))
     return
   }
   try {
     const canvas = await mermaidSvgToCanvas(svg)
     const blob = await canvasToBlob(canvas)
-    if (!blob) throw new Error('导出失败')
+    if (!blob) throw new Error('Export failed')
     await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-    ElMessage.success('已复制图片到剪贴板')
+    ElMessage.success(t('aiChat.mermaid.imageCopied'))
   } catch (err) {
-    console.warn('Mermaid 图片复制失败:', err)
-    ElMessage.error('图片复制失败')
+    console.warn('Failed to copy Mermaid image:', err)
+    ElMessage.error(t('aiChat.mermaid.imageCopyFailed'))
   }
 }
 
@@ -912,14 +918,14 @@ const packageTypeText = (type?: string) => {
     'lingxi-07a': 'LingXi-07A',
     'ka-tx': 'KaTx',
     'ka-rx': 'KaRx',
-    config: '配置包',
+    config: t('aiChat.package.type.config'),
     'lingxi-06-thrid': 'LingXi-06-TRD',
   }
-  return map[type || ''] || type || '未知类型'
+  return map[type || ''] || type || t('aiChat.package.type.unknown')
 }
 
 const buildRebuildPrompt = (downloadLink: string) =>
-  `请你帮忙下载${downloadLink}并上传到设备ftp，然后请向基带处理机发送重构包下载请求后，启动卫星升级流程`
+  t('aiChat.package.rebuildPrompt', { url: downloadLink })
 
 const buildPackageLinks = (pkg: RavenPackage) => {
   const detailLink = `${ravenBaseUrl}/package/${encodeURIComponent(pkg.id)}`
@@ -932,29 +938,29 @@ const formatPackageAgentAnswer = (
   recommendedPackages: RavenPackage[],
   rawQuery: string
 ) => {
-  const query = rawQuery.trim() || '（未提供查询）'
-  const lines: string[] = [`**重构包配置管理员** 已为你执行智能搜索：\`${query}\``]
+  const query = rawQuery.trim() || t('aiChat.package.noQuery')
+  const lines: string[] = [`**${t('aiChat.agents.packageManager')}** ${t('aiChat.package.searchSummary', { query })}`]
 
   const pushPackageLines = (pkg: RavenPackage) => {
     const links = buildPackageLinks(pkg)
     lines.push(
-      `## ${pkg.name || pkg.id} ⭐ AI 推荐 （${packageTypeText(pkg.packageType)} · v${pkg.version || '未知'}）`
+      `## ${pkg.name || pkg.id} ⭐ ${t('aiChat.package.aiRecommended')} (${packageTypeText(pkg.packageType)} · v${pkg.version || t('aiChat.package.unknownVersion')})`
     )
-    if (pkg.metadata?.description) lines.push(`- 描述：${pkg.metadata.description}`)
+    if (pkg.metadata?.description) lines.push(`- ${t('aiChat.package.description')}: ${pkg.metadata.description}`)
     lines.push(
-      `- 详情链接：[${links.detailLink}](${links.detailLink})`,
-      `- 下载链接：[${links.downloadLink}](${links.downloadLink})`,
-      '- 重构提示词：',
+      `- ${t('aiChat.package.detailLink')}: [${links.detailLink}](${links.detailLink})`,
+      `- ${t('aiChat.package.downloadLink')}: [${links.downloadLink}](${links.downloadLink})`,
+      `- ${t('aiChat.package.rebuildPromptLabel')}:`,
       `  \`${links.prompt}\``
     )
   }
 
   if (result.answer) lines.push('', result.answer)
   if (recommendedPackages.length > 0) {
-    lines.push('', `# Raven AI 推荐的重构包（${recommendedPackages.length} 个）：`)
+    lines.push('', `# ${t('aiChat.package.recommendedHeading', { count: recommendedPackages.length })}`)
     recommendedPackages.forEach(pushPackageLines)
   } else {
-    lines.push('', '未找到匹配的重构包。')
+    lines.push('', t('aiChat.package.noMatches'))
   }
   return lines.join('\n')
 }
@@ -1088,13 +1094,13 @@ const submitPermissionDecision = async (
     try {
       const parsed = JSON.parse(head.editingArgs || '{}')
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        head.editingError = '参数必须是 JSON 对象'
+        head.editingError = t('aiChat.permission.jsonObjectRequired')
         return
       }
       updatedArgs = parsed as Record<string, unknown>
       head.editingError = null
     } catch (err: any) {
-      head.editingError = `JSON 解析失败：${err?.message || String(err)}`
+      head.editingError = t('aiChat.permission.jsonParseFailed', { error: err?.message || String(err) })
       return
     }
   }
@@ -1120,7 +1126,10 @@ const handleKeydown = (event: KeyboardEvent) => {
   }
 }
 
-const extractPackageQuery = (content: string) => content.replace(/@重构包配置管理员/g, '').trim()
+const extractPackageQuery = (content: string) => {
+  const label = agentName(packageAgentOption)
+  return content.replace(new RegExp(`@${escapeRegExp(label)}`, 'g'), '').trim()
+}
 
 const runPackageAgent = async (content: string, sid: string, state: ReturnType<typeof runsStore.ensureState>) => {
   // Streaming package-agent path. Trace + ``answer_delta`` events flow through
@@ -1133,7 +1142,7 @@ const runPackageAgent = async (content: string, sid: string, state: ReturnType<t
   const targetMessage = answerId ? state.messages.find((m) => m.id === answerId) : null
   if (!targetMessage) return
   if (!query) {
-    targetMessage.content = '请描述需要查找的重构包需求，例如型号、版本或用途。'
+    targetMessage.content = t('aiChat.package.queryRequired')
     return
   }
   if (!targetMessage.traceEvents) targetMessage.traceEvents = []
@@ -1152,7 +1161,7 @@ const runPackageAgent = async (content: string, sid: string, state: ReturnType<t
         const detail = await getRavenPackageDetail(id)
         if (detail.data?.success && detail.data.data) recommendedPackages.push(detail.data.data)
       } catch (err) {
-        console.warn('拉取推荐包详情失败', id, err)
+        console.warn('Failed to fetch recommended package detail', id, err)
       }
     }
     // Authoritative correction: replace the streamed prose with the formatted
@@ -1177,13 +1186,13 @@ const runPackageAgent = async (content: string, sid: string, state: ReturnType<t
         runsStore.applyEventToState(state, event)
       },
       onError: (err) => {
-        console.warn('重构包流式事件解析失败', err)
+        console.warn('Failed to parse package stream event', err)
       },
     })
     if (finalData) {
       await handleFinal(finalData)
-    } else if (targetMessage.content === '正在思考...') {
-      targetMessage.content = '（无回复内容）'
+    } else if (targetMessage.content === THINKING_PLACEHOLDER) {
+      targetMessage.content = t('aiChat.runs.emptyResponse')
     }
     targetMessage.traceRunning = false
     state.runStatus = 'succeeded'
@@ -1193,13 +1202,13 @@ const runPackageAgent = async (content: string, sid: string, state: ReturnType<t
         await userApi.saveMessages(sid, content, targetMessage.content, content.slice(0, 60))
         await sessionStore.load()
       } catch (error: any) {
-        console.warn('保存重构包配置管理员对话失败', error)
+        console.warn('Failed to save package-manager conversation', error)
       }
     }
   } catch (error: any) {
     if (error?.name === 'AbortError') return
-    console.error('重构包配置管理员调用失败', error)
-    targetMessage.content = `重构包配置管理员调用失败：${error?.message || String(error)}`
+    console.error('Package-manager call failed', error)
+    targetMessage.content = t('aiChat.package.callFailed', { error: error?.message || String(error) })
     targetMessage.traceRunning = false
     state.runStatus = 'failed'
   } finally {
@@ -1222,7 +1231,7 @@ const cancelActiveTraceAgent = async () => {
 
 const triggerSessionSummary = (userContent: string, sid: string | null) => {
   if (!userContent || !userContent.trim()) return
-  // Fire-and-forget: lightweight model 立即生成会话摘要，作为历史侧边栏标题。
+  // Fire-and-forget: lightweight model generates a sidebar session summary.
   userApi
     .summarizeUserMessage({
       user_content: userContent,
@@ -1239,7 +1248,7 @@ const triggerSessionSummary = (userContent: string, sid: string | null) => {
       }
     })
     .catch((err) => {
-      console.warn('生成会话摘要失败', err)
+      console.warn('Failed to generate session summary', err)
     })
 }
 
@@ -1272,16 +1281,16 @@ const sendMessage = async () => {
   }
 
   const shouldUseProjectExpertAgent =
-    isProjectExpertAgentSelected.value || content.includes(`@${projectExpertAgentOption.name}`)
+    isProjectExpertAgentSelected.value || content.includes(`@${agentName(projectExpertAgentOption)}`)
 
   const shouldUseLogAnalysisAgent =
     !shouldUseProjectExpertAgent &&
-    (isLogAnalysisAgentSelected.value || content.includes(`@${logAnalysisAgentOption.name}`) || !!fileForRequest)
+    (isLogAnalysisAgentSelected.value || content.includes(`@${agentName(logAnalysisAgentOption)}`) || !!fileForRequest)
 
   const shouldUsePackageAgent =
     !shouldUseProjectExpertAgent &&
     !shouldUseLogAnalysisAgent &&
-    (isPackageAgentSelected.value || content.includes(`@${packageAgentOption.name}`))
+    (isPackageAgentSelected.value || content.includes(`@${agentName(packageAgentOption)}`))
 
   if (shouldUseProjectExpertAgent && !isProjectExpertAgentSelected.value) {
     setTargetAgent(projectExpertAgentOption)
@@ -1295,11 +1304,11 @@ const sendMessage = async () => {
 
   if (shouldUseProjectExpertAgent && selectedProjectRepoId.value === null) {
     ensureProjectRepoOptions()
-    appStore.showNotification({ title: '请先选择关联项目', type: 'warning' })
+    appStore.showNotification({ title: t('aiChat.notifications.selectProjectFirst'), type: 'warning' })
     return
   }
 
-  const outgoingContent = content || '请分析这个日志包。'
+  const outgoingContent = content || t('aiChat.defaultLogAnalysisMessage')
   const authToken = (userStore.token as unknown as string) || null
 
   // History payload only for anonymous sessions; logged-in sessions reuse
@@ -1359,7 +1368,7 @@ const sendMessage = async () => {
       state.messages.push({
         id: placeholderId,
         role: 'ai',
-        content: '正在思考...',
+        content: THINKING_PLACEHOLDER,
         kind: 'answer',
         traceEvents: [],
         traceRunning: true,
@@ -1390,52 +1399,51 @@ const sendMessage = async () => {
     }
 
     if (isLoggedIn.value) {
-      try { await sessionStore.load() } catch (error) { console.warn('刷新会话列表失败', error) }
+      try { await sessionStore.load() } catch (error) { console.warn('Failed to refresh session list', error) }
     }
   } catch (error: any) {
-    console.error('请求失败', error)
+    console.error('Request failed', error)
   }
 }
 
 const welcomeGreeting = computed(() => {
   const h = new Date().getHours()
-  if (h < 6) return '凌晨好'
-  if (h < 11) return '早上好'
-  if (h < 13) return '中午好'
-  if (h < 18) return '下午好'
-  return '晚上好'
+  if (h < 6) return t('aiChat.greeting.beforeDawn')
+  if (h < 11) return t('aiChat.greeting.morning')
+  if (h < 13) return t('aiChat.greeting.noon')
+  if (h < 18) return t('aiChat.greeting.afternoon')
+  return t('aiChat.greeting.evening')
 })
 
 type CapabilityCard = {
   icon: string
-  label: string
+  labelKey: string
   kind: 'package' | 'device' | 'log'
-  desc: string
-  // 多个同义不同表达，重复点击时循环切换，引导用户填写自己的场景
-  prompts: string[]
+  descKey: string
+  promptKeys: string[]
 }
 
 const capabilityCards: CapabilityCard[] = [
-  { icon: 'box', label: '检索重构包', kind: 'package',
-    desc: '按版本、组件或修复内容找到正确的基带包，并对比 changelog。',
-    prompts: [
-      '帮我找一个基带包，具体需求是……',
-      '我想检索一个重构包，筛选条件是……',
-      '帮我定位某个版本的基带包，要求是……',
+  { icon: 'box', labelKey: 'aiChat.capabilities.package.label', kind: 'package',
+    descKey: 'aiChat.capabilities.package.desc',
+    promptKeys: [
+      'aiChat.capabilities.package.prompt1',
+      'aiChat.capabilities.package.prompt2',
+      'aiChat.capabilities.package.prompt3',
     ] },
-  { icon: 'device', label: '自然语言控设备', kind: 'device',
-    desc: '说人话即可下发参数；下发前会展示差异并请你确认。',
-    prompts: [
-      '帮我把某台设备调整一下，目标状态是……',
-      '我想给设备下发一组参数，具体是……',
-      '请帮我配置一台设备，需求是……',
+  { icon: 'device', labelKey: 'aiChat.capabilities.device.label', kind: 'device',
+    descKey: 'aiChat.capabilities.device.desc',
+    promptKeys: [
+      'aiChat.capabilities.device.prompt1',
+      'aiChat.capabilities.device.prompt2',
+      'aiChat.capabilities.device.prompt3',
     ] },
-  { icon: 'logs', label: '智能日志分析', kind: 'log',
-    desc: '粘贴或上传日志，自动定位异常并给出回流建议。',
-    prompts: [
-      '请分析这个日志包，具体现象是……',
-      '帮我看看这份日志哪里出了问题，现象是……',
-      '这段日志麻烦你诊断一下，表现为……',
+  { icon: 'logs', labelKey: 'aiChat.capabilities.log.label', kind: 'log',
+    descKey: 'aiChat.capabilities.log.desc',
+    promptKeys: [
+      'aiChat.capabilities.log.prompt1',
+      'aiChat.capabilities.log.prompt2',
+      'aiChat.capabilities.log.prompt3',
     ] },
 ]
 
@@ -1453,18 +1461,18 @@ const onPickCapability = (card: CapabilityCard, i: number) => {
   // 仅当输入框为空、或仍是上次自动填入的原文时才覆盖/循环；用户已改动则保留其内容
   const untouched = inputMessage.value === '' || inputMessage.value === lastInjectedPrompt.value
   if (untouched) {
-    const next = (capabilityVariantIdx[i] + 1) % card.prompts.length
+    const next = (capabilityVariantIdx[i] + 1) % card.promptKeys.length
     capabilityVariantIdx[i] = next
-    inputMessage.value = card.prompts[next]
-    lastInjectedPrompt.value = card.prompts[next]
+    inputMessage.value = t(card.promptKeys[next])
+    lastInjectedPrompt.value = inputMessage.value
   }
   nextTick(() => textareaRef.value?.focus())
 }
 
 const currentChatTitle = computed(() => {
   if (sessionStore.currentTitle) return sessionStore.currentTitle
-  if (isWelcomeMode.value) return '新对话'
-  return '当前对话'
+  if (isWelcomeMode.value) return t('aiChat.newChat')
+  return t('aiChat.currentChat')
 })
 
 const sessionMessageCount = computed(() => chatHistory.value.length)
@@ -1476,12 +1484,12 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
     <header class="rw-topbar">
       <div class="rw-topbar-left">
         <span class="rw-crumb">{{ currentChatTitle }}</span>
-        <span v-if="!isWelcomeMode" class="rw-crumb-meta">· {{ sessionMessageCount }} 条消息</span>
+        <span v-if="!isWelcomeMode" class="rw-crumb-meta">· {{ t('aiChat.messageCount', { count: sessionMessageCount }) }}</span>
       </div>
       <div class="rw-topbar-right">
         <button class="rw-model-pill" type="button">
           <span class="rw-model-dot"></span>
-          {{ devices.filter(d => d.status === 'online').length }} 在线 / {{ devices.length || 0 }} 台设备
+          {{ t('aiChat.deviceSummary', { online: devices.filter(d => d.status === 'online').length, total: devices.length || 0 }) }}
         </button>
         <div class="rw-top-more-wrap">
           <button
@@ -1499,35 +1507,35 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             class="rw-top-menu"
             role="menu"
           >
-            <div class="rw-top-menu-group">对话</div>
+            <div class="rw-top-menu-group">{{ t('aiChat.menu.conversation') }}</div>
             <button class="rw-menu-item" @click="openRenameModal">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16zM14 6l4 4"/></svg>
-              重命名对话 <span class="rw-kbd-right">F2</span>
+              {{ t('aiChat.menu.rename') }} <span class="rw-kbd-right">F2</span>
             </button>
             <button class="rw-menu-item" @click="toggleCurrentPin">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M9 8h6l2 6H7zM12 14v8"/></svg>
-              {{ currentSessionPinned ? '取消置顶' : '固定到顶部' }}
+              {{ currentSessionPinned ? t('aiChat.menu.unpin') : t('aiChat.menu.pin') }}
             </button>
 
             <div class="rw-menu-divider"/>
-            <div class="rw-top-menu-group">导出</div>
+            <div class="rw-top-menu-group">{{ t('aiChat.menu.export') }}</div>
             <button class="rw-menu-item" @click="showTopMoreMenu = false">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 14h2M9 17h6"/></svg>
-              生成测试报告 <span class="rw-kbd-right">PDF</span>
+              {{ t('aiChat.menu.generateReport') }} <span class="rw-kbd-right">PDF</span>
             </button>
             <button class="rw-menu-item" @click="showTopMoreMenu = false">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M16 6l-4-4-4 4M12 2v14"/></svg>
-              分享对话
+              {{ t('aiChat.menu.share') }}
             </button>
             <button class="rw-menu-item" @click="exportCurrentConversationMarkdown">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 15v-6l3 3 3-3v6M17 9v6M14 12l3 3 3-3"/></svg>
-              导出 Markdown
+              {{ t('aiChat.menu.exportMarkdown') }}
             </button>
 
             <div class="rw-menu-divider"/>
             <button class="rw-menu-item" @click="clearCurrentMessages">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
-              清空消息
+              {{ t('aiChat.menu.clearMessages') }}
             </button>
             <button
               v-if="sessionStore.selectedSessionId"
@@ -1535,7 +1543,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
               @click="deleteCurrentSession"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>
-              删除对话
+              {{ t('aiChat.menu.deleteSession') }}
             </button>
           </div>
         </div>
@@ -1548,13 +1556,13 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
       <div v-if="isWelcomeMode" class="rw-welcome">
         <div class="rw-welcome-badge">
           <span class="rw-dot-success"></span>
-          {{ devices.filter(d => d.status === 'online').length }} 台在线 / {{ devices.length || 0 }} 台设备
+          {{ t('aiChat.welcomeDeviceSummary', { online: devices.filter(d => d.status === 'online').length, total: devices.length || 0 }) }}
         </div>
         <h1 class="rw-welcome-title">
-          {{ welcomeGreeting }}，{{ currentUserName }}。<br/>今天想做哪件事？
+          {{ t('aiChat.welcomeTitle', { greeting: welcomeGreeting, name: currentUserName }) }}<br/>{{ t('aiChat.welcomeQuestion') }}
         </h1>
         <div class="rw-welcome-sub">
-          RavenAI 把代码提交、版本包、设备控制和测试日志串成一个闭环。在下方说出你的需求，或选一个常用入口开始。
+          {{ t('aiChat.welcomeSubtitle') }}
         </div>
         <div class="rw-cap-grid">
           <div
@@ -1567,15 +1575,15 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
               <svg v-if="c.icon === 'logs'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h16"/><circle cx="18" cy="12" r="1.4"/></svg>
               <svg v-else-if="c.icon === 'device'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="11" rx="1.5"/><path d="M8 21h8M12 17v4"/><circle cx="7" cy="11" r="0.4" fill="currentColor"/></svg>
               <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>
-              {{ c.label }}
+              {{ t(c.labelKey) }}
             </div>
-            <div class="rw-cap-desc">{{ c.desc }}</div>
+            <div class="rw-cap-desc">{{ t(c.descKey) }}</div>
           </div>
         </div>
       </div>
 
       <!-- Loading -->
-      <div v-else-if="loadingMessages" class="rw-loading">正在加载历史对话…</div>
+      <div v-else-if="loadingMessages" class="rw-loading">{{ t('aiChat.loadingHistory') }}</div>
 
       <!-- Thread -->
       <div v-else class="rw-thread">
@@ -1605,8 +1613,8 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
                 :running="!!msg.traceRunning"
                 :on-cancel="msg.traceRunning ? cancelActiveTraceAgent : undefined"
               />
-              <template v-if="msg.content === '正在思考...'">
-                <div v-if="!msg.traceRunning" class="rw-thinking">正在思考…</div>
+              <template v-if="msg.content === THINKING_PLACEHOLDER">
+                <div v-if="!msg.traceRunning" class="rw-thinking">{{ t('aiChat.thinking') }}</div>
               </template>
               <template v-else>
                 <div class="rw-ai-text" v-html="renderAiMessage(msg.content)"></div>
@@ -1623,10 +1631,10 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
       <div v-if="!isLoggedIn" class="rw-composer-alert is-login">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
         <span>
-          AI 功能需要登录后才能使用。
-          <button type="button" class="rw-alert-link" @click="appStore.requestLoginModal('login')">立即登录</button>
-          或
-          <button type="button" class="rw-alert-link" @click="appStore.requestLoginModal('register')">注册账户</button>
+          {{ t('aiChat.loginRequired.prefix') }}
+          <button type="button" class="rw-alert-link" @click="appStore.requestLoginModal('login')">{{ t('aiChat.loginRequired.login') }}</button>
+          {{ t('aiChat.loginRequired.or') }}
+          <button type="button" class="rw-alert-link" @click="appStore.requestLoginModal('register')">{{ t('aiChat.loginRequired.register') }}</button>
         </span>
       </div>
       <!-- Log analysis inline warnings — placed above the composer so the input
@@ -1636,21 +1644,21 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
       <div v-if="suggestedAgentLabel" class="rw-composer-alert is-suggest">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
         <span>
-          该请求需要使用 <strong>{{ suggestedAgentLabel }}</strong> 才能处理，请先在上方选择对应 Agent 后再发送你的请求。
-          <button v-if="suggestedAgentSwitchable" type="button" class="rw-alert-link" @click="chooseSuggestedAgent">切换到{{ suggestedAgentLabel }}</button>
+          {{ t('aiChat.suggest.prefix') }} <strong>{{ suggestedAgentLabel }}</strong> {{ t('aiChat.suggest.suffix') }}
+          <button v-if="suggestedAgentSwitchable" type="button" class="rw-alert-link" @click="chooseSuggestedAgent">{{ t('aiChat.suggest.switchTo', { agent: suggestedAgentLabel }) }}</button>
         </span>
       </div>
       <div v-if="logAnalysisMetadataError" class="rw-composer-alert is-error">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
         <span>
-          无法从该附件自动识别项目（压缩包内缺少 <code>metadata.json</code>，或上传的是纯文本日志）。请在下方「关联项目」下拉菜单中手动选择关联项目，或改用包含 <code>metadata.json</code> 的日志压缩包后重试。
+          {{ t('aiChat.alerts.metadataErrorBefore') }} <code>metadata.json</code>{{ t('aiChat.alerts.metadataErrorAfter') }}
         </span>
       </div>
       <div v-else-if="logAnalysisNoAttachmentWarning" class="rw-composer-alert is-warn">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
         <span>
-          <strong>日志分析</strong> 需要上传日志附件，支持压缩包 <code>.zip</code> <code>.tar.gz</code> <code>.tgz</code> <code>.tar.bz2</code> <code>.tar.xz</code> <code>.7z</code> <code>.rar</code> 等，也支持纯文本日志 <code>.log</code> <code>.txt</code> <code>.json</code> <code>.xml</code> <code>.csv</code> 等（纯文本日志需手动选择关联项目）。如需直接提问，可切换至
-          <button type="button" class="rw-alert-link" @click="toggleProjectExpertAgent">项目专家</button>。
+          <strong>{{ t('aiChat.agents.logAnalysis') }}</strong>{{ t('aiChat.alerts.logAttachmentBefore') }} <code>.zip</code> <code>.tar.gz</code> <code>.tgz</code> <code>.tar.bz2</code> <code>.tar.xz</code> <code>.7z</code> <code>.rar</code> {{ t('aiChat.alerts.logAttachmentMiddle') }} <code>.log</code> <code>.txt</code> <code>.json</code> <code>.xml</code> <code>.csv</code> {{ t('aiChat.alerts.logAttachmentAfter') }}
+          <button type="button" class="rw-alert-link" @click="toggleProjectExpertAgent">{{ t('aiChat.agents.projectExpert') }}</button>{{ t('aiChat.sentencePeriod') }}
         </span>
       </div>
       <div
@@ -1664,7 +1672,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
       >
         <!-- Target chip -->
         <div v-if="targetAgentName || targetDeviceName" class="rw-target-chip">
-          <span class="rw-target-label">当前目标</span>
+          <span class="rw-target-label">{{ t('aiChat.currentTarget') }}</span>
           <span class="rw-target-value">
             <template v-if="targetAgentName">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>
@@ -1676,7 +1684,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             class="rw-target-clear"
             type="button"
             @click="targetAgentName ? clearTargetAgent() : clearTargetDevice()"
-            aria-label="清除目标"
+            :aria-label="t('aiChat.clearTarget')"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
           </button>
@@ -1685,7 +1693,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
         <div v-if="selectedLogFile" class="rw-file-chip rw-file-chip--above">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11.5-9.5 9.5a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5L9.5 18.5a2 2 0 0 1-3-3L15 7"/></svg>
           <span>{{ selectedLogFile.name }}</span>
-          <button type="button" aria-label="移除附件" @click="clearSelectedLogFile">
+          <button type="button" :aria-label="t('aiChat.removeAttachment')" @click="clearSelectedLogFile">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
           </button>
         </div>
@@ -1694,7 +1702,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
           v-model="inputMessage"
           ref="textareaRef"
           class="rw-textarea"
-          :placeholder="isLoggedIn ? '给 RavenAI 说点什么，或粘贴一段日志…' : '请先登录后再使用 AI 功能'"
+          :placeholder="isLoggedIn ? t('aiChat.inputPlaceholder') : t('aiChat.inputLoginPlaceholder')"
           rows="2"
           :readonly="!isLoggedIn"
           @keydown="handleKeydown"
@@ -1705,8 +1713,8 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
           <button
             class="rw-mini-btn"
             :disabled="isLogFileUploadDisabled"
-            :title="isLogFileUploadDisabled ? '当前智能体不支持附件上传' : '附加日志包'"
-            aria-label="附加日志包"
+            :title="isLogFileUploadDisabled ? t('aiChat.attachmentDisabled') : t('aiChat.attachLog')"
+            :aria-label="t('aiChat.attachLog')"
             @click="triggerLogFilePicker"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11.5-9.5 9.5a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5L9.5 18.5a2 2 0 0 1-3-3L15 7"/></svg>
@@ -1729,7 +1737,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
               @click="toggleDeviceMenu"
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="11" rx="1.5"/><path d="M8 21h8M12 17v4"/><circle cx="7" cy="11" r="0.4" fill="currentColor"/></svg>
-              设备操作
+              {{ t('aiChat.agents.device') }}
               <svg class="rw-chip-caret" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
             </button>
             <div
@@ -1743,12 +1751,12 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
                 <input
                   v-model="deviceKeyword"
                   type="text"
-                  placeholder="搜索设备名称或 ID…"
+                  :placeholder="t('aiChat.deviceSearchPlaceholder')"
                   @keydown.stop
                 />
               </div>
-              <div v-if="isLoadingDevices" class="rw-device-empty">设备列表加载中…</div>
-              <div v-else-if="!filteredDeviceOptions.length" class="rw-device-empty">暂无匹配的设备</div>
+              <div v-if="isLoadingDevices" class="rw-device-empty">{{ t('aiChat.deviceLoading') }}</div>
+              <div v-else-if="!filteredDeviceOptions.length" class="rw-device-empty">{{ t('aiChat.deviceNoMatch') }}</div>
               <template v-else>
                 <button
                   v-for="device in filteredDeviceOptions"
@@ -1764,7 +1772,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
                   <div class="rw-device-meta">
                     <div class="rw-device-title">
                       {{ device.name || device.id }}
-                      <span class="rw-device-tag">{{ device.status === 'online' ? '在线' : '离线' }}</span>
+                      <span class="rw-device-tag">{{ device.status === 'online' ? t('aiChat.status.online') : t('aiChat.status.offline') }}</span>
                     </div>
                     <div class="rw-device-sub">ID: {{ device.id }}</div>
                   </div>
@@ -1778,7 +1786,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             @click="togglePackageAgent"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>
-            检索重构包
+            {{ t('aiChat.capabilities.package.label') }}
           </button>
           <button
             class="rw-tool-chip"
@@ -1786,7 +1794,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             @click="toggleLogAnalysisAgent"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h16"/><circle cx="18" cy="12" r="1.4"/></svg>
-            日志分析
+            {{ t('aiChat.agents.logAnalysis') }}
           </button>
           <button
             class="rw-tool-chip"
@@ -1794,7 +1802,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             @click="toggleProjectExpertAgent"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V6.75A2.75 2.75 0 0 1 6.75 4H20v13H6.75A2.75 2.75 0 0 0 4 19.5Z"/><path d="M8 8h8M8 12h6"/></svg>
-            项目专家
+            {{ t('aiChat.agents.projectExpert') }}
           </button>
           <select
             v-if="isProjectRepoSelectVisible"
@@ -1803,15 +1811,15 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             :class="{ required: isProjectRepoRequiredMissing }"
             :disabled="projectRepoOptionsLoading"
             :title="projectRepoOptionsLoading
-              ? '加载项目列表中…'
+              ? t('aiChat.project.loadingList')
               : isProjectExpertAgentSelected
-                ? '必选：项目专家需要一个已登记项目'
-                : '可选：选择关联项目；留空则后端从日志包内 metadata.json 自动识别'"
+                ? t('aiChat.project.requiredTitle')
+                : t('aiChat.project.optionalTitle')"
           >
             <option :value="null">
               {{ projectRepoOptionsLoading
-                ? '加载项目中…'
-                : isProjectExpertAgentSelected ? '选择关联项目（必选）' : '关联项目（自动识别）' }}
+                ? t('aiChat.project.loading')
+                : isProjectExpertAgentSelected ? t('aiChat.project.requiredPlaceholder') : t('aiChat.project.optionalPlaceholder') }}
             </option>
             <option
               v-for="repo in projectRepoOptions"
@@ -1824,7 +1832,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
           <button
             class="rw-send-btn"
             :disabled="activeTraceAgentSessionId ? cancelInFlight : sendDisabled"
-            :title="activeTraceAgentSessionId ? (cancelInFlight ? '正在取消...' : '取消当前任务') : ''"
+            :title="activeTraceAgentSessionId ? (cancelInFlight ? t('aiChat.canceling') : t('aiChat.cancelTask')) : ''"
             @click="activeTraceAgentSessionId ? cancelActiveTraceAgent() : sendMessage()"
           >
             <svg v-if="isSending" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="spin"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
@@ -1832,7 +1840,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
           </button>
         </div>
       </div>
-      <div class="rw-composer-hint">RavenAI 可能会出错。涉及在线设备的下发操作均需你二次确认。</div>
+      <div class="rw-composer-hint">{{ t('aiChat.disclaimer') }}</div>
     </div>
 
     <!-- Rename modal -->
@@ -1840,22 +1848,22 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
       <div class="rw-modal rw-rename-modal">
         <div class="rw-modal-head">
           <div>
-            <h3 class="rw-modal-title">重命名对话</h3>
-            <p class="rw-modal-sub">为该对话设置一个新的名称</p>
+            <h3 class="rw-modal-title">{{ t('aiChat.rename.title') }}</h3>
+            <p class="rw-modal-sub">{{ t('aiChat.rename.subtitle') }}</p>
           </div>
-          <button class="rw-modal-close" @click="showRenameModal = false" aria-label="关闭">
+          <button class="rw-modal-close" @click="showRenameModal = false" :aria-label="t('common.close')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
           </button>
         </div>
         <div class="rw-rename-modal-body">
           <label class="rw-form-field">
-            <span class="rw-form-label">对话名称</span>
+            <span class="rw-form-label">{{ t('aiChat.rename.nameLabel') }}</span>
             <input
               ref="renameModalInputRef"
               v-model="renameModalTitle"
               type="text"
               class="rw-input"
-              placeholder="输入新名称…"
+              :placeholder="t('aiChat.rename.placeholder')"
               maxlength="80"
               @keydown.enter.prevent="commitRenameFromModal"
               @keydown.esc.prevent="showRenameModal = false"
@@ -1868,8 +1876,8 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             class="rw-btn-primary"
             :disabled="renameModalInFlight || !renameModalTitle.trim()"
             @click="commitRenameFromModal"
-          >{{ renameModalInFlight ? '保存中…' : '保存' }}</button>
-          <button type="button" class="rw-btn-ghost" @click="showRenameModal = false">取消</button>
+          >{{ renameModalInFlight ? t('aiChat.rename.saving') : t('common.save') }}</button>
+          <button type="button" class="rw-btn-ghost" @click="showRenameModal = false">{{ t('common.cancel') }}</button>
         </div>
       </div>
     </div>
@@ -1879,10 +1887,10 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
       <div class="rw-modal rw-hitl-modal">
         <div class="rw-modal-head">
           <div>
-            <h3 class="rw-modal-title">设备工具调用待确认</h3>
+            <h3 class="rw-modal-title">{{ t('aiChat.permission.title') }}</h3>
             <p class="rw-modal-sub">
               <span class="rw-hitl-risk" :class="`risk-${currentPermission.risk}`">
-                {{ currentPermission.risk === 'destructive' ? '破坏性' : currentPermission.risk === 'write' ? '写入' : '读取' }}
+                {{ currentPermission.risk === 'destructive' ? t('aiChat.permission.risk.destructive') : currentPermission.risk === 'write' ? t('aiChat.permission.risk.write') : t('aiChat.permission.risk.read') }}
               </span>
               <span class="rw-hitl-tool mono">{{ currentPermission.tool_name }}</span>
             </p>
@@ -1893,7 +1901,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             {{ currentPermission.rationale }}
           </div>
           <label class="rw-form-field">
-            <span class="rw-form-label">参数（可编辑后再批准）</span>
+            <span class="rw-form-label">{{ t('aiChat.permission.argsLabel') }}</span>
             <textarea
               v-model="currentPermission.editingArgs"
               class="rw-input rw-hitl-args mono"
@@ -1905,7 +1913,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             {{ currentPermission.editingError }}
           </div>
           <p class="rw-hitl-warn">
-            模型希望调用该工具，请确认参数无误后允许执行，或拒绝以取消本次调用。
+            {{ t('aiChat.permission.warning') }}
           </p>
         </div>
         <div class="rw-modal-actions rw-hitl-actions">
@@ -1914,19 +1922,19 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             class="rw-btn-ghost"
             :disabled="permissionDecisionInFlight"
             @click="submitPermissionDecision('deny')"
-          >拒绝</button>
+          >{{ t('aiChat.permission.deny') }}</button>
           <button
             type="button"
             class="rw-btn-ghost"
             :disabled="permissionDecisionInFlight"
             @click="submitPermissionDecision('allow', { useEdited: true })"
-          >按编辑后的参数允许</button>
+          >{{ t('aiChat.permission.allowEdited') }}</button>
           <button
             type="button"
             class="rw-btn-primary"
             :disabled="permissionDecisionInFlight"
             @click="submitPermissionDecision('allow')"
-          >允许</button>
+          >{{ t('aiChat.permission.allow') }}</button>
         </div>
       </div>
     </div>
@@ -1941,15 +1949,15 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
     >
       <template #header>
         <div class="mermaid-zoom-header">
-          <span class="mermaid-zoom-title">图表查看</span>
+          <span class="mermaid-zoom-title">{{ t('aiChat.mermaid.title') }}</span>
           <div class="mermaid-zoom-toolbar">
-            <button class="mz-btn" type="button" title="缩小" @click="zoomOutMermaid">−</button>
+            <button class="mz-btn" type="button" :title="t('aiChat.mermaid.zoomOut')" @click="zoomOutMermaid">−</button>
             <span class="mz-scale">{{ Math.round(mermaidZoomScale * 100) }}%</span>
-            <button class="mz-btn" type="button" title="放大" @click="zoomInMermaid">＋</button>
-            <button class="mz-btn" type="button" title="重置缩放" @click="resetMermaidZoom">重置</button>
+            <button class="mz-btn" type="button" :title="t('aiChat.mermaid.zoomIn')" @click="zoomInMermaid">＋</button>
+            <button class="mz-btn" type="button" :title="t('aiChat.mermaid.resetZoom')" @click="resetMermaidZoom">{{ t('aiChat.mermaid.reset') }}</button>
             <span class="mz-divider"></span>
-            <button class="mz-btn" type="button" title="复制图片" @click="copyMermaidImage">复制图片</button>
-            <button class="mz-btn mz-btn-primary" type="button" title="下载图片" @click="downloadMermaidImage">下载图片</button>
+            <button class="mz-btn" type="button" :title="t('aiChat.mermaid.copyImage')" @click="copyMermaidImage">{{ t('aiChat.mermaid.copyImage') }}</button>
+            <button class="mz-btn mz-btn-primary" type="button" :title="t('aiChat.mermaid.downloadImage')" @click="downloadMermaidImage">{{ t('aiChat.mermaid.downloadImage') }}</button>
           </div>
         </div>
       </template>

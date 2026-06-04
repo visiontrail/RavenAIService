@@ -23,6 +23,8 @@ const workbenchRouteNames = new Set([
   'DeviceDetail',
   'RavenManager',
   'RavenPackageDetail',
+  'BugFixList',
+  'BugFixDetail',
   'Upload',
   'Download',
   'About',
@@ -48,6 +50,8 @@ const isWorkbenchRoute = computed(() => {
     route.path === '/raven/' ||
     route.path.startsWith('/raven/package/') ||
     route.path.startsWith('/package/') ||
+    route.path === '/bug-fixes' ||
+    route.path.startsWith('/bug-fixes/') ||
     route.path === '/upload' ||
     route.path === '/download'
   )

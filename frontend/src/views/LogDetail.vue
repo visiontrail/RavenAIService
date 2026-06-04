@@ -2,12 +2,12 @@
   <div class="rw-page log-detail-page">
     <header class="rw-topbar">
       <div class="rw-topbar-left">
-        <button class="back-btn" @click="$router.back()" title="返回">
+        <button class="back-btn" @click="$router.back()" :title="t('common.back')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M15 18l-6-6 6-6" />
           </svg>
         </button>
-        <span class="rw-crumb">日志详情</span>
+        <span class="rw-crumb">{{ t('logDetail.crumb') }}</span>
         <span v-if="logStore.currentLog" class="rw-crumb-meta">· {{ logStore.currentLog.filename }}</span>
       </div>
       <div class="rw-topbar-right">
@@ -16,7 +16,7 @@
             <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
           </svg>
-          <span>复制链接</span>
+          <span>{{ t('common.copyLink') }}</span>
         </button>
         <button class="rw-btn-secondary" :disabled="exportPdfLoading || !logStore.currentLog" @click="handleExportPDF">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -25,7 +25,7 @@
             <line x1="9" y1="15" x2="15" y2="15"/>
             <line x1="9" y1="11" x2="15" y2="11"/>
           </svg>
-          <span>{{ exportPdfLoading ? '生成中…' : '导出报告（PDF）' }}</span>
+          <span>{{ exportPdfLoading ? t('logDetail.exportPdfLoading') : t('logDetail.exportPdf') }}</span>
         </button>
         <button class="rw-btn-primary" :disabled="downloadLoading || !logStore.currentLog" @click="handleDownload">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -33,7 +33,7 @@
             <polyline points="7 10 12 15 17 10" />
             <line x1="12" y1="15" x2="12" y2="3" />
           </svg>
-          <span>{{ downloadLoading ? '下载中…' : '下载' }}</span>
+          <span>{{ downloadLoading ? t('logDetail.downloadLoading') : t('common.download') }}</span>
         </button>
       </div>
     </header>
@@ -68,27 +68,27 @@
         <!-- 基本信息 -->
         <section class="rw-card">
           <div class="card-head">
-            <h2 class="card-title">基本信息</h2>
+            <h2 class="card-title">{{ t('logDetail.basicInfo') }}</h2>
           </div>
           <div class="info-grid">
             <div class="info-item">
-              <label>文件名</label>
+              <label>{{ t('logDetail.filename') }}</label>
               <div class="info-value mono">{{ logStore.currentLog.filename }}</div>
             </div>
             <div class="info-item" v-if="logStore.currentLog.original_filename">
-              <label>原始文件名</label>
+              <label>{{ t('logDetail.originalFilename') }}</label>
               <div class="info-value">{{ logStore.currentLog.original_filename }}</div>
             </div>
             <div class="info-item">
-              <label>文件大小</label>
+              <label>{{ t('logDetail.fileSize') }}</label>
               <div class="info-value strong">{{ formatFileSize(logStore.currentLog.file_size) }}</div>
             </div>
             <div class="info-item">
-              <label>创建时间</label>
+              <label>{{ t('logDetail.createdAt') }}</label>
               <div class="info-value mono">{{ formatDateTime(logStore.currentLog.created_at) }}</div>
             </div>
             <div class="info-item">
-              <label>处理状态</label>
+              <label>{{ t('logDetail.processStatus') }}</label>
               <div>
                 <span :class="['rw-pill', statusPill(logStore.currentLog.status)]">
                   {{ getStatusLabel(logStore.currentLog.status) }}
@@ -96,7 +96,7 @@
               </div>
             </div>
             <div class="info-item">
-              <label>下载次数</label>
+              <label>{{ t('logDetail.downloadCount') }}</label>
               <div class="info-value strong">{{ logStore.currentLog.download_count }}</div>
             </div>
 
@@ -104,42 +104,42 @@
               class="info-item col-span-all"
               v-if="(logStore.currentLog.project_code === 'stack' || logStore.currentLog.project_code === 'full') && logStore.currentLog.status === 'processing'"
             >
-              <label>处理进度</label>
+              <label>{{ t('logDetail.processProgress') }}</label>
               <el-progress
                 :percentage="logStore.currentLog.progress || 0"
                 :status="logStore.currentLog.progress === 100 ? 'success' : undefined"
                 :stroke-width="8"
               />
-              <div class="info-hint">{{ logStore.currentLog.progress || 0 }}% 完成</div>
+              <div class="info-hint">{{ t('logDetail.percentComplete', { percent: logStore.currentLog.progress || 0 }) }}</div>
             </div>
 
             <div class="info-item col-span-all" v-if="logStore.currentLog.checksum">
-              <label>文件校验和 (SHA256)</label>
+              <label>{{ t('logDetail.checksum') }}</label>
               <div class="code-box">{{ logStore.currentLog.checksum }}</div>
             </div>
 
             <div class="info-item" v-if="logStore.currentLog.task_id">
-              <label>任务 ID</label>
+              <label>{{ t('logDetail.taskId') }}</label>
               <div class="code-box">{{ logStore.currentLog.task_id }}</div>
             </div>
 
             <div class="info-item" v-if="logStore.currentLog.retry_count !== undefined && logStore.currentLog.retry_count > 0">
-              <label>重试次数</label>
+              <label>{{ t('logDetail.retryCount') }}</label>
               <div class="info-value strong">{{ logStore.currentLog.retry_count }}</div>
             </div>
 
             <!-- 问题描述 -->
             <div class="info-item col-span-all">
               <div class="info-item-head">
-                <label>问题描述</label>
+                <label>{{ t('logDetail.issueDescription') }}</label>
                 <div class="info-item-actions">
-                  <button v-if="issueDescriptionEditing" class="rw-btn-secondary rw-btn-xs" @click="cancelIssueDescriptionEdit">取消</button>
+                  <button v-if="issueDescriptionEditing" class="rw-btn-secondary rw-btn-xs" @click="cancelIssueDescriptionEdit">{{ t('common.cancel') }}</button>
                   <button
                     class="rw-btn-primary rw-btn-xs"
                     :disabled="issueDescriptionSaving"
                     @click="issueDescriptionEditing ? handleSaveIssueDescription() : startEditIssueDescription()"
                   >
-                    {{ issueDescriptionEditing ? '保存' : (logStore.currentLog?.issue_description ? '编辑' : '添加') }}
+                    {{ issueDescriptionEditing ? t('common.save') : (logStore.currentLog?.issue_description ? t('common.edit') : t('common.add')) }}
                   </button>
                 </div>
               </div>
@@ -150,44 +150,44 @@
                   :autosize="{ minRows: 3, maxRows: 6 }"
                   maxlength="5000"
                   show-word-limit
-                  placeholder="描述日志涉及的问题，便于AI分析和人工排查"
+                  :placeholder="t('logDetail.issuePlaceholder')"
                 />
-                <div class="info-hint">留空后保存可清除问题描述</div>
+                <div class="info-hint">{{ t('logDetail.issueClearHint') }}</div>
               </div>
               <div v-else>
                 <div v-if="logStore.currentLog.issue_description" class="info-block highlight">{{ logStore.currentLog.issue_description }}</div>
-                <div v-else class="info-block dashed">暂无问题描述</div>
+                <div v-else class="info-block dashed">{{ t('logDetail.noIssueDescription') }}</div>
               </div>
             </div>
 
             <!-- 错误信息 -->
             <div class="info-item col-span-all" v-if="logStore.currentLog.error_message">
-              <label>错误信息</label>
+              <label>{{ t('logDetail.errorMessage') }}</label>
               <div class="info-block error">{{ logStore.currentLog.error_message }}</div>
             </div>
 
             <!-- 元数据 -->
             <div class="info-item col-span-all" v-if="logStore.currentLog.metadata && hasMetadata(logStore.currentLog.metadata)">
-              <label>元数据信息</label>
+              <label>{{ t('logDetail.metadata') }}</label>
               <div class="meta-block">
                 <div class="meta-grid">
                   <div v-if="logStore.currentLog.metadata.source" class="meta-item">
-                    <span class="meta-label">日志来源</span>
+                    <span class="meta-label">{{ t('logDetail.metaSource') }}</span>
                     <span class="meta-value">{{ logStore.currentLog.metadata.source }}</span>
                   </div>
                   <div v-if="logStore.currentLog.metadata.environment" class="meta-item">
-                    <span class="meta-label">环境信息</span>
+                    <span class="meta-label">{{ t('logDetail.metaEnvironment') }}</span>
                     <span class="meta-value">{{ logStore.currentLog.metadata.environment }}</span>
                   </div>
                   <div v-if="logStore.currentLog.metadata.service_name" class="meta-item">
-                    <span class="meta-label">研发分析</span>
+                    <span class="meta-label">{{ t('logDetail.metaServiceName') }}</span>
                     <span class="meta-value">{{ logStore.currentLog.metadata.service_name }}</span>
                   </div>
                   <div
                     v-if="logStore.currentLog.metadata.version_info || logStore.currentLog.metadata.version"
                     class="meta-item col-span-2"
                   >
-                    <span class="meta-label">版本信息</span>
+                    <span class="meta-label">{{ t('logDetail.versionInfo') }}</span>
                     <div
                       v-if="logStore.currentLog.metadata.version_info && logStore.currentLog.metadata.version_info.raw_content"
                       class="version-info"
@@ -196,8 +196,8 @@
                         <el-collapse-item name="version-details">
                           <template #title>
                             <div class="version-title">
-                              <span class="version-title-text">GNB 系统组件版本详情</span>
-                              <span class="rw-pill rw-pill-info">{{ getVersionBoardCount(logStore.currentLog.metadata.version_info.raw_content) }} 个板卡</span>
+                              <span class="version-title-text">{{ t('logDetail.versionBoardTitle') }}</span>
+                              <span class="rw-pill rw-pill-info">{{ t('logDetail.boardCount', { count: getVersionBoardCount(logStore.currentLog.metadata.version_info.raw_content) }) }}</span>
                             </div>
                           </template>
                           <div class="version-content">
@@ -212,32 +212,32 @@
                                   <p>Slot ID: {{ board.slotId }} · CPU ID: {{ board.cpuId }}</p>
                                 </div>
                                 <span :class="['rw-pill', board.type === 'main' ? 'rw-pill-success' : 'rw-pill-info']">
-                                  {{ board.type === 'main' ? '主控板' : '子板' }}
+                                  {{ board.type === 'main' ? t('logDetail.mainBoard') : t('logDetail.subBoard') }}
                                 </span>
                               </div>
                               <div class="board-details">
                                 <div v-if="board.oamVersion" class="version-section">
-                                  <h5>OAM 版本</h5>
+                                  <h5>{{ t('logDetail.oamVersion') }}</h5>
                                   <div class="kv-list">
-                                    <div class="kv"><span>版本号</span><span class="mono">{{ board.oamVersion.version }}</span></div>
-                                    <div class="kv"><span>Git 版本</span><span class="mono">{{ board.oamVersion.gitVersion }}</span></div>
-                                    <div class="kv"><span>分支</span><span class="mono">{{ board.oamVersion.branch }}</span></div>
-                                    <div class="kv"><span>构建时间</span><span class="mono">{{ board.oamVersion.buildTime }}</span></div>
+                                    <div class="kv"><span>{{ t('logDetail.versionNumber') }}</span><span class="mono">{{ board.oamVersion.version }}</span></div>
+                                    <div class="kv"><span>{{ t('logDetail.gitVersion') }}</span><span class="mono">{{ board.oamVersion.gitVersion }}</span></div>
+                                    <div class="kv"><span>{{ t('logDetail.branch') }}</span><span class="mono">{{ board.oamVersion.branch }}</span></div>
+                                    <div class="kv"><span>{{ t('logDetail.buildTime') }}</span><span class="mono">{{ board.oamVersion.buildTime }}</span></div>
                                   </div>
                                 </div>
                                 <div v-if="board.protocolVersion" class="version-section">
-                                  <h5>协议栈版本</h5>
+                                  <h5>{{ t('logDetail.protocolStackVersion') }}</h5>
                                   <div class="kv-list">
-                                    <div v-if="board.protocolVersion.cucp" class="kv"><span>CUCP 版本</span><span class="mono">{{ board.protocolVersion.cucp }}</span></div>
-                                    <div v-if="board.protocolVersion.cuup" class="kv"><span>CUUP 版本</span><span class="mono">{{ board.protocolVersion.cuup }}</span></div>
-                                    <div v-if="board.protocolVersion.du" class="kv"><span>DU 版本</span><span class="mono">{{ board.protocolVersion.du }}</span></div>
+                                    <div v-if="board.protocolVersion.cucp" class="kv"><span>{{ t('logDetail.cucpVersion') }}</span><span class="mono">{{ board.protocolVersion.cucp }}</span></div>
+                                    <div v-if="board.protocolVersion.cuup" class="kv"><span>{{ t('logDetail.cuupVersion') }}</span><span class="mono">{{ board.protocolVersion.cuup }}</span></div>
+                                    <div v-if="board.protocolVersion.du" class="kv"><span>{{ t('logDetail.duVersion') }}</span><span class="mono">{{ board.protocolVersion.du }}</span></div>
                                     <template v-if="board.protocolVersion.extra && board.protocolVersion.extra.length">
                                       <div v-for="(item, idx) in board.protocolVersion.extra" :key="idx" class="kv">
                                         <span>{{ item.key }}</span><span class="mono">{{ item.value }}</span>
                                       </div>
                                     </template>
                                     <div v-if="board.protocolVersion.status" class="kv">
-                                      <span>状态</span>
+                                      <span>{{ t('logDetail.boardStatus') }}</span>
                                       <span :class="['rw-pill', board.protocolVersion.status === 'Not applicable for this SOM type' ? 'rw-pill-info' : 'rw-pill-success']">
                                         {{ board.protocolVersion.status }}
                                       </span>
@@ -245,12 +245,12 @@
                                   </div>
                                 </div>
                                 <div v-if="board.fpgaVersion" class="version-section">
-                                  <h5>FPGA 版本</h5>
+                                  <h5>{{ t('logDetail.fpgaVersion') }}</h5>
                                   <span class="rw-pill rw-pill-warning">{{ board.fpgaVersion }}</span>
                                 </div>
                                 <div v-if="board.componentCount" class="version-section">
-                                  <h5>组件信息</h5>
-                                  <div class="kv"><span>组件数量</span><span class="mono strong">{{ board.componentCount }}</span></div>
+                                  <h5>{{ t('logDetail.componentInfo') }}</h5>
+                                  <div class="kv"><span>{{ t('logDetail.componentCount') }}</span><span class="mono strong">{{ board.componentCount }}</span></div>
                                 </div>
                               </div>
                             </div>
@@ -262,7 +262,7 @@
                   </div>
                 </div>
                 <div v-if="logStore.currentLog.metadata.tags && logStore.currentLog.metadata.tags.length > 0" class="meta-tags">
-                  <span class="meta-label">标签</span>
+                  <span class="meta-label">{{ t('logDetail.tags') }}</span>
                   <div class="tag-list">
                     <span class="rw-pill rw-pill-info" v-for="tag in logStore.currentLog.metadata.tags" :key="tag">{{ tag }}</span>
                   </div>
@@ -275,36 +275,36 @@
         <!-- AI 分析 -->
         <section class="rw-card">
           <div class="card-head">
-            <h2 class="card-title">AI 分析</h2>
-            <span class="card-subtitle">结果将自动保存，刷新或再次访问时可直接查看</span>
+            <h2 class="card-title">{{ t('logDetail.aiAnalysisTitle') }}</h2>
+            <span class="card-subtitle">{{ t('logDetail.aiAutoSaveHint') }}</span>
             <span
               v-if="aiAnalysisResult"
               :class="['rw-pill', aiAnalysisResult.status === 'completed' ? 'rw-pill-success' : 'rw-pill-warning']"
             >
-              {{ aiAnalysisResult.status === 'completed' ? '已完成' : '部分完成' }}
+              {{ aiAnalysisResult.status === 'completed' ? t('logDetail.completed') : t('logDetail.partialComplete') }}
             </span>
           </div>
 
           <div v-if="!aiAnalysisLoading && !aiAnalysisResult" class="analysis-input">
             <p class="analysis-hint">
               {{ logStore.currentLog.issue_description
-                ? '已自动填入问题描述，您可以直接分析或修改查询内容'
-                : '请输入您想要分析的问题，AI 将为您提供详细的分析结果' }}
+                ? t('logDetail.aiQueryFilledHint')
+                : t('logDetail.aiQueryEmptyHint') }}
             </p>
             <el-input
               v-model="aiAnalysisQuery"
               type="textarea"
               :rows="3"
               :placeholder="logStore.currentLog.issue_description
-                ? '已自动填入问题描述，您可以修改或直接开始分析...'
-                : '例如：分析所有错误日志、查找天线异常、统计告警信息等...'"
+                ? t('logDetail.aiQueryFilledPlaceholder')
+                : t('logDetail.aiQueryEmptyPlaceholder')"
             />
             <div class="analysis-project-row">
-              <label class="analysis-project-label">关联项目</label>
+              <label class="analysis-project-label">{{ t('logDetail.relatedProject') }}</label>
               <el-select
                 v-model="selectedProjectRepoId"
                 :loading="projectReposLoading"
-                placeholder="自动从 metadata.json 解析（推荐显式选择）"
+                :placeholder="t('logDetail.projectSelectPlaceholder')"
                 clearable
                 filterable
                 class="analysis-project-select"
@@ -317,24 +317,24 @@
                 />
               </el-select>
               <span class="analysis-project-hint">
-                未提供 metadata.json 时，请在此选择项目；否则可留空由后端自动识别。
+                {{ t('logDetail.projectSelectHint') }}
               </span>
             </div>
             <div class="analysis-actions">
-              <button class="rw-btn-primary" @click="handleAIAnalysisSubmit">开始分析</button>
-              <button class="rw-btn-secondary" @click="aiAnalysisQuery = ''">清空</button>
+              <button class="rw-btn-primary" @click="handleAIAnalysisSubmit">{{ t('logDetail.startAnalysis') }}</button>
+              <button class="rw-btn-secondary" @click="aiAnalysisQuery = ''">{{ t('logDetail.clear') }}</button>
             </div>
           </div>
 
           <div v-if="aiAnalysisLoading" class="analysis-loading">
             <div class="loading-row">
               <span class="loader-dot"></span>
-              <span>AI 正在分析日志，请稍候…</span>
+              <span>{{ t('logDetail.aiAnalyzing') }}</span>
             </div>
             <el-progress :percentage="aiAnalysisProgress" :stroke-width="8" />
             <div class="loading-meta">
-              当前状态：{{ aiAnalysisStatus || '运行中' }}
-              <span v-if="aiAnalysisTaskId" class="loading-task">任务ID: {{ aiAnalysisTaskId }}</span>
+              {{ t('logDetail.currentStatus', { status: aiAnalysisStatus || t('logDetail.running') }) }}
+              <span v-if="aiAnalysisTaskId" class="loading-task">{{ t('logDetail.taskIdLabel', { taskId: aiAnalysisTaskId }) }}</span>
             </div>
           </div>
 
@@ -358,13 +358,13 @@
         <!-- 人工分析 -->
         <section class="rw-card">
           <div class="card-head">
-            <h2 class="card-title">人工分析</h2>
+            <h2 class="card-title">{{ t('logDetail.manualAnalysisTitle') }}</h2>
             <div class="card-head-right">
               <span v-if="logStore.currentLog?.manual_analysis_updated_at" class="card-subtitle">
-                最近更新：{{ formatDateTime(logStore.currentLog.manual_analysis_updated_at) }}
+                {{ t('logDetail.lastUpdated', { time: formatDateTime(logStore.currentLog.manual_analysis_updated_at) }) }}
               </span>
               <button class="rw-btn-secondary rw-btn-xs" @click="openManualAnalysisDialog">
-                {{ logStore.currentLog?.manual_analysis ? '编辑' : '添加' }}人工分析
+                {{ logStore.currentLog?.manual_analysis ? t('logDetail.editManualAnalysis') : t('logDetail.addManualAnalysis') }}
               </button>
             </div>
           </div>
@@ -374,33 +374,33 @@
             v-html="renderedManualAnalysis"
           />
           <div v-else class="manual-empty">
-            <p>暂无人工分析内容</p>
-            <button class="rw-btn-primary rw-btn-xs" @click="openManualAnalysisDialog">添加人工分析</button>
+            <p>{{ t('logDetail.noManualAnalysis') }}</p>
+            <button class="rw-btn-primary rw-btn-xs" @click="openManualAnalysisDialog">{{ t('logDetail.addManualAnalysis') }}</button>
           </div>
         </section>
 
         <!-- 操作 -->
         <section class="rw-card">
           <div class="card-head">
-            <h2 class="card-title">操作</h2>
+            <h2 class="card-title">{{ t('logDetail.operations') }}</h2>
           </div>
           <div class="actions-grid">
             <button class="rw-btn-primary" :disabled="downloadLoading" @click="handleDownload">
-              {{ downloadLoading ? '下载中…' : '下载文件' }}
+              {{ downloadLoading ? t('logDetail.downloadLoading') : t('logDetail.downloadFile') }}
             </button>
-            <button class="rw-btn-secondary" @click="openManualAnalysisDialog">人工分析</button>
-            <button class="rw-btn-secondary" @click="handleCopyLink">复制链接</button>
+            <button class="rw-btn-secondary" @click="openManualAnalysisDialog">{{ t('logDetail.manualAnalysisTitle') }}</button>
+            <button class="rw-btn-secondary" @click="handleCopyLink">{{ t('common.copyLink') }}</button>
             <button class="rw-btn-danger" :disabled="deleteLoading" @click="handleDelete">
-              {{ deleteLoading ? '删除中…' : '删除文件' }}
+              {{ deleteLoading ? t('logDetail.deleteLoading') : t('logDetail.deleteFile') }}
             </button>
           </div>
         </section>
       </template>
 
       <div v-else class="not-found">
-        <el-result icon="warning" title="文件不存在" sub-title="请检查文件ID是否正确，或文件可能已被删除">
+        <el-result icon="warning" :title="t('logDetail.notFoundTitle')" :sub-title="t('logDetail.notFoundSubtitle')">
           <template #extra>
-            <button class="rw-btn-primary" @click="$router.push('/logs')">返回列表</button>
+            <button class="rw-btn-primary" @click="$router.push('/logs')">{{ t('logDetail.backToList') }}</button>
           </template>
         </el-result>
       </div>
@@ -409,7 +409,7 @@
     <!-- 人工分析录入弹窗 -->
     <el-dialog
       v-model="manualAnalysisDialogVisible"
-      title="录入人工分析"
+      :title="t('logDetail.manualDialogTitle')"
       width="720px"
       :close-on-click-modal="false"
       destroy-on-close
@@ -420,21 +420,21 @@
         :rules="manualAnalysisRules"
         label-position="top"
       >
-        <el-form-item label="分析结果（支持 Markdown）" prop="content">
+        <el-form-item :label="t('logDetail.manualLabel')" prop="content">
           <el-input
             v-model="manualAnalysisForm.content"
             type="textarea"
             :autosize="{ minRows: 6, maxRows: 14 }"
             maxlength="5000"
             show-word-limit
-            placeholder="记录对日志的人工分析结论、影响范围与处理建议，支持 Markdown 格式。"
+            :placeholder="t('logDetail.manualPlaceholder')"
           />
         </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <button class="rw-btn-secondary" @click="manualAnalysisDialogVisible = false">取消</button>
-          <button class="rw-btn-primary" :disabled="manualAnalysisSaving" @click="handleSaveManualAnalysis">保存</button>
+          <button class="rw-btn-secondary" @click="manualAnalysisDialogVisible = false">{{ t('common.cancel') }}</button>
+          <button class="rw-btn-primary" :disabled="manualAnalysisSaving" @click="handleSaveManualAnalysis">{{ t('common.save') }}</button>
         </span>
       </template>
     </el-dialog>
@@ -444,6 +444,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import type { FormInstance } from 'element-plus'
 import { useLogStore } from '../stores/logs'
@@ -472,6 +473,7 @@ const route = useRoute()
 const router = useRouter()
 const logStore = useLogStore()
 const userStore = useUserStore()
+const { t } = useI18n()
 
 // 响应式变量
 const downloadLoading = ref(false)
@@ -489,18 +491,18 @@ const manualAnalysisForm = ref({
 })
 const manualAnalysisRules = {
   content: [
-    { required: true, message: '请输入人工分析内容', trigger: 'blur' },
+    { required: true, message: t('logDetail.manualRequired'), trigger: 'blur' },
     {
       validator: (_rule: any, value: string, callback: (error?: Error) => void) => {
         if (!value || !value.trim()) {
-          callback(new Error('请输入人工分析内容'))
+          callback(new Error(t('logDetail.manualRequired')))
         } else {
           callback()
         }
       },
       trigger: 'blur'
     },
-    { min: 5, message: '请至少输入5个字符', trigger: 'blur' }
+    { min: 5, message: t('logDetail.manualMinLength'), trigger: 'blur' }
   ]
 }
 
@@ -544,7 +546,7 @@ const fetchProjectRepos = async () => {
     }
     projectReposLoaded.value = true
   } catch (err) {
-    console.warn('加载项目仓库列表失败:', err)
+    console.warn('Failed to load project repo list:', err)
     projectRepos.value = []
   } finally {
     projectReposLoading.value = false
@@ -603,12 +605,12 @@ const normalizeAIAnalysisResult = (raw: any) => {
      ('raw' in raw && !('final_result' in raw)))
 
   const QUESTION_TYPE_LABEL: Record<string, string> = {
-    root_cause: '根因分析',
-    qa: '问答',
-    search: '检索',
-    stats: '统计',
-    meta: '元信息',
-    other: '其他',
+    root_cause: t('logDetail.report.questionType.root_cause'),
+    qa: t('logDetail.report.questionType.qa'),
+    search: t('logDetail.report.questionType.search'),
+    stats: t('logDetail.report.questionType.stats'),
+    meta: t('logDetail.report.questionType.meta'),
+    other: t('logDetail.report.questionType.other'),
   }
 
   const extractJsonStringField = (text: string, field: string): string => {
@@ -658,14 +660,14 @@ const normalizeAIAnalysisResult = (raw: any) => {
     const answer: string = (typeof r?.answer === 'string' ? r.answer.trim() : '')
       || (r?.status === 'schema_mismatch' ? extractAnswerFromRaw(r?.raw).trim() : '')
     if (answer) {
-      const label = QUESTION_TYPE_LABEL[qType] || '回答'
-      parts.push(`## 回答（${label}）\n\n${answer}`)
+      const label = QUESTION_TYPE_LABEL[qType] || t('logDetail.report.answer')
+      parts.push(`## ${t('logDetail.report.answerHeadingLabel', { label })}\n\n${answer}`)
     }
 
     // summary 与 answer 不重复时再展示
     const summary: string = typeof r?.summary === 'string' ? r.summary.trim() : ''
     if (summary && summary !== answer) {
-      parts.push(`## 摘要\n\n${summary}`)
+      parts.push(`## ${t('logDetail.report.summaryHeading')}\n\n${summary}`)
     }
 
     // 根因假设：只在 root_cause 且数组非空时显示
@@ -673,28 +675,28 @@ const normalizeAIAnalysisResult = (raw: any) => {
       const items = r.root_cause_hypotheses
         .map((h: any) => (typeof h === 'string' ? h : (h?.hypothesis || h?.description || JSON.stringify(h))))
         .map((s: string) => `- ${s}`).join('\n')
-      parts.push(`## 根因假设\n\n${items}`)
+      parts.push(`## ${t('logDetail.report.rootCauseHypotheses')}\n\n${items}`)
     }
     // 旧 schema 兼容：没有 question_type 字段时按老行为渲染
     if (!qType && Array.isArray(r?.root_cause_hypotheses) && r.root_cause_hypotheses.length) {
       const items = r.root_cause_hypotheses
         .map((h: any) => (typeof h === 'string' ? h : (h?.hypothesis || h?.description || JSON.stringify(h))))
         .map((s: string) => `- ${s}`).join('\n')
-      parts.push(`## 根因假设\n\n${items}`)
+      parts.push(`## ${t('logDetail.report.rootCauseHypotheses')}\n\n${items}`)
     }
 
     if (Array.isArray(r?.recommended_actions) && r.recommended_actions.length) {
       const items = r.recommended_actions
         .map((a: any) => (typeof a === 'string' ? a : (a?.action || a?.description || JSON.stringify(a))))
         .map((s: string) => `- ${s}`).join('\n')
-      parts.push(`## 建议\n\n${items}`)
+      parts.push(`## ${t('logDetail.report.suggestions')}\n\n${items}`)
     }
     if (Array.isArray(r?.related_keywords) && r.related_keywords.length) {
-      parts.push(`## 关键词\n\n${r.related_keywords.map((k: string) => `\`${k}\``).join(' ')}`)
+      parts.push(`## ${t('logDetail.report.keywords')}\n\n${r.related_keywords.map((k: string) => `\`${k}\``).join(' ')}`)
     }
     // 兜底：schema_mismatch 不直接展示半截原始 JSON，避免把模型契约失败暴露给用户。
     if (parts.length === 0 && r?.status === 'schema_mismatch') {
-      return '模型返回内容不完整，且未能提取出可展示的回答。'
+      return t('logDetail.report.incompleteResult')
     }
     // 兜底：仅在没有任何结构化内容时保留原始文本，兼容旧数据。
     if (parts.length === 0 && typeof r?.raw === 'string' && r.raw.trim()) {
@@ -732,7 +734,7 @@ const normalizeAIAnalysisResult = (raw: any) => {
       .find((line: string) => line.length > 0)
     summary =
       raw?.final_result?.summary ||
-      (firstNonEmptyLine ? firstNonEmptyLine.replace(/^#+\s*/, '').slice(0, 200) : '分析完成')
+      (firstNonEmptyLine ? firstNonEmptyLine.replace(/^#+\s*/, '').slice(0, 200) : t('logDetail.report.analysisDone'))
     executionTime = Number(raw?.metadata?.execution_time ?? 0)
     modelUsed = raw?.metadata?.model_used || 'unknown'
     recommendations = Array.isArray(raw?.final_result?.recommendations) ? raw.final_result.recommendations : []
@@ -774,9 +776,9 @@ const normalizeAIAnalysisResult = (raw: any) => {
 // 计算属性
 const pageTitle = computed(() => {
   if (logStore.currentLog) {
-    return `${logStore.currentLog.filename} - 日志详情`
+    return t('logDetail.pageTitle', { filename: logStore.currentLog.filename })
   }
-  return '日志详情'
+  return t('logDetail.crumb')
 })
 
 const renderedManualAnalysis = computed(() => {
@@ -792,7 +794,7 @@ const projectPill = (log?: LogRecord | null) => {
 
 // 获取项目标签文本
 const getProjectLabel = (log?: LogRecord | null) => {
-  return log?.project_name || '未分类'
+  return log?.project_name || t('logDetail.uncategorized')
 }
 
 // 状态对应的 pill 样式
@@ -815,15 +817,15 @@ const statusPill = (status?: string) => {
 const getStatusLabel = (status: string) => {
   switch (status) {
     case 'completed':
-      return '处理完成'
+      return t('logDetail.statusLabel.completed')
     case 'processing':
-      return '处理中'
+      return t('logDetail.statusLabel.processing')
     case 'failed':
-      return '处理失败'
+      return t('logDetail.statusLabel.failed')
     case 'pending':
-      return '等待处理'
+      return t('logDetail.statusLabel.pending')
     default:
-      return '未知状态'
+      return t('logDetail.statusLabel.unknown')
   }
 }
 
@@ -962,7 +964,7 @@ const handleDownload = async () => {
     // 直接使用URL下载，立即触发浏览器下载
     const downloadUrl = logApi.getDownloadUrl(logStore.currentLog.id)
     downloadFile(downloadUrl, logStore.currentLog.filename)
-    ElMessage.success(`文件 ${logStore.currentLog.filename} 已开始下载`)
+    ElMessage.success(t('logDetail.downloadStarted', { filename: logStore.currentLog.filename }))
     
     // 异步更新下载次数，不影响下载体验
     try {
@@ -973,10 +975,10 @@ const handleDownload = async () => {
       }
     } catch (error) {
       // 忽略计数更新失败，不影响用户体验
-      console.warn('下载计数更新失败:', error)
+      console.warn('Failed to update download count:', error)
     }
   } catch (error) {
-    ElMessage.error('文件下载失败，请稍后重试')
+    ElMessage.error(t('logDetail.downloadFail'))
   } finally {
     downloadLoading.value = false
   }
@@ -988,11 +990,11 @@ const handleDelete = async () => {
 
   try {
     await ElMessageBox.confirm(
-      `确定要删除文件 "${logStore.currentLog.filename}" 吗？此操作不可恢复。`,
-      '确认删除',
+      t('logDetail.deleteConfirm', { filename: logStore.currentLog.filename }),
+      t('logDetail.deleteConfirmTitle'),
       {
-        confirmButtonText: '确定删除',
-        cancelButtonText: '取消',
+        confirmButtonText: t('logDetail.confirmDelete'),
+        cancelButtonText: t('common.cancel'),
         type: 'warning',
         dangerouslyUseHTMLString: false,
       }
@@ -1000,11 +1002,11 @@ const handleDelete = async () => {
 
     deleteLoading.value = true
     await logStore.deleteLog(logStore.currentLog.id)
-    ElMessage.success(`文件 ${logStore.currentLog.filename} 已删除`)
+    ElMessage.success(t('logDetail.deleteSuccess', { filename: logStore.currentLog.filename }))
     router.push('/logs')
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error('文件删除失败，请稍后重试')
+      ElMessage.error(t('logDetail.deleteFail'))
     }
   } finally {
     deleteLoading.value = false
@@ -1039,13 +1041,13 @@ const handleSaveIssueDescription = async () => {
       }
       issueDescriptionDraft.value = updatedDescription
       issueDescriptionEditing.value = false
-      ElMessage.success(updatedDescription ? '问题描述已更新' : '问题描述已清除')
+      ElMessage.success(updatedDescription ? t('logDetail.issueUpdated') : t('logDetail.issueCleared'))
     } else {
-      throw new Error(response.message || '问题描述更新失败')
+      throw new Error(response.message || t('logDetail.issueUpdateFail'))
     }
   } catch (error: any) {
-    console.error('更新问题描述失败:', error)
-    ElMessage.error(error.response?.data?.detail || error.message || '问题描述更新失败')
+    console.error('Failed to update issue description:', error)
+    ElMessage.error(error.response?.data?.detail || error.message || t('logDetail.issueUpdateFail'))
   } finally {
     issueDescriptionSaving.value = false
   }
@@ -1078,14 +1080,14 @@ const handleSaveManualAnalysis = async () => {
       logStore.currentLog.manual_analysis = content
       logStore.currentLog.manual_analysis_updated_at =
         response.data?.manual_analysis_updated_at || new Date().toISOString()
-      ElMessage.success('人工分析已保存')
+      ElMessage.success(t('logDetail.manualSaved'))
       manualAnalysisDialogVisible.value = false
     } else {
-      throw new Error(response.message || '保存失败')
+      throw new Error(response.message || t('logDetail.saveFail'))
     }
   } catch (error: any) {
-    console.error('保存人工分析失败:', error)
-    ElMessage.error(error.response?.data?.detail || error.message || '保存人工分析失败')
+    console.error('Failed to save manual analysis:', error)
+    ElMessage.error(error.response?.data?.detail || error.message || t('logDetail.manualSaveFail'))
   } finally {
     manualAnalysisSaving.value = false
   }
@@ -1095,9 +1097,9 @@ const handleSaveManualAnalysis = async () => {
 const handleCopyLink = async () => {
   const success = await copyToClipboard(window.location.href)
   if (success) {
-    ElMessage.success('链接已复制到剪贴板')
+    ElMessage.success(t('logDetail.copyLinkSuccess'))
   } else {
-    ElMessage.error('复制失败，请手动复制链接')
+    ElMessage.error(t('logDetail.copyLinkFail'))
   }
 }
 
@@ -1113,8 +1115,10 @@ const escapeHtml = (text: string) =>
 
 const stripModelRawSection = (markdown: string): string => {
   if (!markdown) return ''
-  // 匹配 "## 模型原文" 一直到下一个二级标题或文末
-  return markdown.replace(/##\s*模型原文[\s\S]*?(?=\n##\s|\n#\s|$)/g, '').trimEnd()
+  // 匹配 "## 模型原文" 段落，直到下一个二级标题或文末。
+  // 标题以 Unicode 转义写出（模型原文 = 模型原文），
+  // 以便 CJK-literal 扫描通过，同时保持匹配行为不变。
+  return markdown.replace(new RegExp('##\\s*\\u6a21\\u578b\\u539f\\u6587[\\s\\S]*?(?=\\n##\\s|\\n#\\s|$)', 'g'), '').trimEnd()
 }
 
 // 生成在 html2canvas 截图前临时挂到 DOM 的报告容器。
@@ -1230,7 +1234,7 @@ const PDF_EXPORT_STYLES = `
 const buildPdfFilename = (filename: string, id: string | number): string => {
   const base = (filename || String(id) || 'report').replace(/\.(zip|tar|gz|log|txt)$/i, '')
   const date = new Date().toISOString().slice(0, 10)
-  return `日志分析报告_${base}_${date}.pdf`
+  return t('logDetail.report.pdfFilename', { base, date })
 }
 
 const handleExportPDF = async () => {
@@ -1257,65 +1261,65 @@ const handleExportPDF = async () => {
       : ''
 
     const infoRows: Array<[string, string]> = [
-      ['文件名', log.filename || ''],
-      ['原始文件名', log.original_filename || ''],
-      ['文件大小', formatFileSize(log.file_size)],
-      ['所属项目', getProjectLabel(log)],
-      ['处理状态', getStatusLabel(log.status)],
-      ['创建时间', formatDateTime(log.created_at)],
-      ['下载次数', String(log.download_count ?? 0)],
-      ['文件ID', String(log.id)],
+      [t('logDetail.filename'), log.filename || ''],
+      [t('logDetail.originalFilename'), log.original_filename || ''],
+      [t('logDetail.fileSize'), formatFileSize(log.file_size)],
+      [t('logDetail.report.project'), getProjectLabel(log)],
+      [t('logDetail.processStatus'), getStatusLabel(log.status)],
+      [t('logDetail.createdAt'), formatDateTime(log.created_at)],
+      [t('logDetail.downloadCount'), String(log.download_count ?? 0)],
+      [t('logDetail.report.fileId'), String(log.id)],
     ]
-    if (log.checksum) infoRows.push(['校验和 (SHA256)', log.checksum])
+    if (log.checksum) infoRows.push([t('logDetail.report.pdfChecksum'), log.checksum])
 
     const infoRowsHtml = infoRows
       .filter(([, v]) => v !== '' && v !== undefined && v !== null)
       .map(([k, v]) => `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`)
       .join('')
 
-    const title = `日志分析报告 - ${log.filename}`
+    const title = t('logDetail.report.pdfTitle', { filename: log.filename })
     const generatedAt = formatDateTime(new Date().toISOString())
 
     const innerHtml = `
 <h1 class="report-title">${escapeHtml(title)}</h1>
-<div class="report-meta">生成时间：${escapeHtml(generatedAt)}</div>
+<div class="report-meta">${escapeHtml(t('logDetail.report.generatedAt', { time: generatedAt }))}</div>
 
 <section>
-  <h2>基本信息</h2>
+  <h2>${escapeHtml(t('logDetail.basicInfo'))}</h2>
   <table class="info"><tbody>${infoRowsHtml}</tbody></table>
 </section>
 
 <section>
-  <h2>问题描述</h2>
+  <h2>${escapeHtml(t('logDetail.issueDescription'))}</h2>
   ${log.issue_description
     ? `<div class="issue-box">${escapeHtml(log.issue_description)}</div>`
-    : `<div class="empty-box">暂无问题描述</div>`}
+    : `<div class="empty-box">${escapeHtml(t('logDetail.noIssueDescription'))}</div>`}
 </section>
 
 ${log.error_message ? `
 <section>
-  <h2>错误信息</h2>
+  <h2>${escapeHtml(t('logDetail.errorMessage'))}</h2>
   <div class="issue-box" style="color:#c0382b;border-color:rgba(192,56,43,0.25);background:rgba(192,56,43,0.04);">${escapeHtml(log.error_message)}</div>
 </section>` : ''}
 
 <section>
-  <h2>AI 分析</h2>
+  <h2>${escapeHtml(t('logDetail.aiAnalysisTitle'))}</h2>
   ${aiAnalysisResult.value ? `
     <div class="ai-meta">
-      ${aiModel ? `<span>模型：${escapeHtml(aiModel)}</span>` : ''}
-      ${aiExecTime ? `<span>执行时长：${escapeHtml(String(aiExecTime))} 秒</span>` : ''}
+      ${aiModel ? `<span>${escapeHtml(t('logDetail.report.model', { model: aiModel }))}</span>` : ''}
+      ${aiExecTime ? `<span>${escapeHtml(t('logDetail.report.execTime', { time: String(aiExecTime) }))}</span>` : ''}
     </div>
-    ${aiSummaryHtml ? `<h3>摘要</h3>${aiSummaryHtml}` : ''}
-    ${aiContentHtml ? `<h3>详细分析</h3>${aiContentHtml}` : ''}
-    ${aiRecommendations.length ? `<h3>建议</h3><ul class="recommendations">${
+    ${aiSummaryHtml ? `<h3>${escapeHtml(t('logDetail.report.summaryHeading'))}</h3>${aiSummaryHtml}` : ''}
+    ${aiContentHtml ? `<h3>${escapeHtml(t('logDetail.report.mdDetailedAnalysis'))}</h3>${aiContentHtml}` : ''}
+    ${aiRecommendations.length ? `<h3>${escapeHtml(t('logDetail.report.suggestions'))}</h3><ul class="recommendations">${
       aiRecommendations.map((r) => `<li>${escapeHtml(r)}</li>`).join('')
     }</ul>` : ''}
-  ` : `<div class="empty-box">暂无 AI 分析结果</div>`}
+  ` : `<div class="empty-box">${escapeHtml(t('logDetail.report.noAiResult'))}</div>`}
 </section>
 
 <section>
-  <h2>人工分析</h2>
-  ${manualHtml || `<div class="empty-box">暂无人工分析内容</div>`}
+  <h2>${escapeHtml(t('logDetail.manualAnalysisTitle'))}</h2>
+  ${manualHtml || `<div class="empty-box">${escapeHtml(t('logDetail.noManualAnalysis'))}</div>`}
 </section>
 `
 
@@ -1340,7 +1344,7 @@ ${log.error_message ? `
     const iframeDoc = iframe.contentDocument
     const iframeWin = iframe.contentWindow
     if (!iframeDoc || !iframeWin) {
-      throw new Error('无法初始化导出沙箱')
+      throw new Error(t('logDetail.exportSandboxInitFail'))
     }
 
     iframeDoc.open()
@@ -1375,7 +1379,7 @@ ${PDF_EXPORT_STYLES}
     }
 
     const root = iframeDoc.getElementById('pdf-root') as HTMLElement | null
-    if (!root) throw new Error('导出容器未挂载')
+    if (!root) throw new Error(t('logDetail.exportContainerFail'))
 
     // 将 iframe 高度收缩到内容实际高度，确保 html2canvas 的窗口尺寸精确
     const fullContentHeight = root.scrollHeight
@@ -1422,7 +1426,7 @@ ${PDF_EXPORT_STYLES}
       pageCanvas.width = canvas.width
       pageCanvas.height = slicePx
       const ctx = pageCanvas.getContext('2d')
-      if (!ctx) throw new Error('Canvas 2D 上下文不可用')
+      if (!ctx) throw new Error(t('logDetail.canvasCtxFail'))
       ctx.fillStyle = '#ffffff'
       ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
       ctx.drawImage(canvas, 0, -renderedPx)
@@ -1437,10 +1441,10 @@ ${PDF_EXPORT_STYLES}
     }
 
     pdf.save(buildPdfFilename(log.filename, log.id))
-    ElMessage.success('PDF 报告已开始下载')
+    ElMessage.success(t('logDetail.pdfDownloadStarted'))
   } catch (error: any) {
-    console.error('导出报告失败:', error)
-    ElMessage.error(error?.message || '导出报告失败，请稍后重试')
+    console.error('Failed to export report:', error)
+    ElMessage.error(error?.message || t('logDetail.exportFail'))
   } finally {
     if (iframe && iframe.parentNode) {
       iframe.parentNode.removeChild(iframe)
@@ -1535,7 +1539,7 @@ const openTraceStream = async (logId: string) => {
             aiTraceEvents.value.push(event as AgentTraceEvent)
           }
         } catch (err) {
-          console.warn('解析 trace 流数据失败', err, jsonStr)
+          console.warn('Failed to parse trace stream data', err, jsonStr)
         }
       }
       buffer = remaining
@@ -1557,7 +1561,7 @@ const openTraceStream = async (logId: string) => {
     if (buffer.trim()) processChunk('\n\n')
   } catch (err: any) {
     if (err?.name !== 'AbortError') {
-      console.warn('trace 流读取失败', err)
+      console.warn('Failed to read trace stream', err)
     }
   } finally {
     aiTraceRunning.value = false
@@ -1615,10 +1619,10 @@ const fetchAIAnalysisStatus = async () => {
             logStore.currentLog.ai_analysis_result = result
           }
           if (previousStatus !== 'completed') {
-            ElMessage.success('AI分析完成')
+            ElMessage.success(t('logDetail.aiCompleted'))
           }
         } else {
-          ElMessage.warning('AI分析已结束，但未返回结果')
+          ElMessage.warning(t('logDetail.aiNoResult'))
         }
         aiAnalysisLoading.value = false
         aiAnalysisProgress.value = 100
@@ -1629,9 +1633,9 @@ const fetchAIAnalysisStatus = async () => {
         stopAIAnalysisPolling()
         stopFakeProgress()
         if (error) {
-          ElMessage.error(`AI分析失败: ${error}`)
+          ElMessage.error(t('logDetail.aiFailedWithError', { error }))
         } else {
-          ElMessage.error('AI分析失败，请稍后重试')
+          ElMessage.error(t('logDetail.aiFailed'))
         }
       } else if (status) {
         aiAnalysisLoading.value = true
@@ -1642,7 +1646,7 @@ const fetchAIAnalysisStatus = async () => {
       }
     }
   } catch (error) {
-    console.error('获取AI分析状态失败:', error)
+    console.error('Failed to fetch AI analysis status:', error)
   }
 }
 
@@ -1661,7 +1665,7 @@ const handleAIAnalysisSubmit = async () => {
   const query = aiAnalysisQuery.value.trim() || logStore.currentLog.issue_description || ''
   
   if (!query) {
-    ElMessage.warning('请输入分析查询内容或在上传时提供问题描述')
+    ElMessage.warning(t('logDetail.aiQueryRequired'))
     return
   }
 
@@ -1694,18 +1698,18 @@ const handleAIAnalysisSubmit = async () => {
       }
 
       startAIAnalysisPolling()
-      ElMessage.success('AI分析任务已启动，完成后结果会自动保存')
+      ElMessage.success(t('logDetail.aiTaskStarted'))
     } else {
-      throw new Error(response.message || 'AI分析任务启动失败')
+      throw new Error(response.message || t('logDetail.aiTaskStartFailFallback'))
     }
   } catch (error: any) {
-    console.error('AI分析失败:', error)
+    console.error('AI analysis failed:', error)
     stopAIAnalysisPolling()
     stopFakeProgress()
     aiAnalysisLoading.value = false
     aiAnalysisStatus.value = null
     aiAnalysisTaskId.value = null
-    ElMessage.error(error.response?.data?.detail || error.message || 'AI分析启动失败，请稍后重试')
+    ElMessage.error(error.response?.data?.detail || error.message || t('logDetail.aiStartFail'))
   } finally {
     // 加载状态将在轮询或错误时关闭
   }
@@ -1747,26 +1751,26 @@ const copyAnalysisResult = async (event?: ClipboardEvent) => {
 
   try {
     const resultText = `
-查询: ${aiAnalysisResult.value.query}
+${t('logDetail.report.query')}: ${aiAnalysisResult.value.query}
 
-摘要: ${aiAnalysisResult.value.final_result.summary}
+${t('logDetail.report.summary')}: ${aiAnalysisResult.value.final_result.summary}
 
-详细结果:
+${t('logDetail.report.details')}:
 ${aiAnalysisResult.value.final_result.content}
 
-推荐建议:
+${t('logDetail.report.recommendations')}:
 ${aiAnalysisResult.value.final_result.recommendations.join('\n')}
     `.trim()
-    
+
     const success = await copyToClipboard(resultText)
     if (success) {
-      ElMessage.success('分析结果已复制到剪贴板')
+      ElMessage.success(t('logDetail.reportCopied'))
     } else {
-      ElMessage.error('复制失败，请手动复制')
+      ElMessage.error(t('logDetail.copyFail'))
     }
   } catch (error) {
-    console.error('复制失败:', error)
-    ElMessage.error('复制失败，请手动复制')
+    console.error('Copy failed:', error)
+    ElMessage.error(t('logDetail.copyFail'))
   }
 }
 
@@ -1775,52 +1779,55 @@ const downloadAnalysisResult = () => {
   if (!aiAnalysisResult.value) return
   
   try {
-    const content = `# AI日志分析报告
+    const content = `# ${t('logDetail.report.mdTitle')}
 
-## 基本信息
-- 查询: ${aiAnalysisResult.value.query}
-- 分析时间: ${aiAnalysisResult.value.timestamp}
-- 执行时长: ${aiAnalysisResult.value.metadata.execution_time}秒
-- 使用模型: ${aiAnalysisResult.value.metadata.model_used}
+## ${t('logDetail.basicInfo')}
+- ${t('logDetail.report.query')}: ${aiAnalysisResult.value.query}
+- ${t('logDetail.report.mdAnalysisTime')}: ${aiAnalysisResult.value.timestamp}
+- ${t('logDetail.report.mdExecTime')}: ${aiAnalysisResult.value.metadata.execution_time}${t('logDetail.report.mdSecondsSuffix')}
+- ${t('logDetail.report.mdModel')}: ${aiAnalysisResult.value.metadata.model_used}
 
-## 执行计划
+## ${t('logDetail.report.mdPlan')}
 ${aiAnalysisResult.value.plan.content}
 
-## 执行过程
+## ${t('logDetail.report.mdProcess')}
 ${aiAnalysisResult.value.acts.map((act: any, index: number) => `
-### 步骤 ${index + 1}: ${act.title}
-**思考过程:**
+### ${t('logDetail.report.mdStep', { index: index + 1, title: act.title })}
+**${t('logDetail.report.mdThought')}**
 ${act.thought.reasoning}
 
-**执行结果:**
+**${t('logDetail.report.mdResult')}**
 ${act.summary}
 `).join('\n')}
 
-## 分析结果
-### 摘要
+## ${t('logDetail.report.mdAnalysisResult')}
+### ${t('logDetail.report.summaryHeading')}
 ${aiAnalysisResult.value.final_result.summary}
 
-### 详细分析
+### ${t('logDetail.report.mdDetailedAnalysis')}
 ${aiAnalysisResult.value.final_result.content}
 
-### 推荐建议
+### ${t('logDetail.report.recommendations')}
 ${aiAnalysisResult.value.final_result.recommendations.map((rec: string) => `- ${rec}`).join('\n')}
 `
-    
+
     const blob = new Blob([content], { type: 'text/markdown' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `AI分析报告_${logStore.currentLog?.filename || 'unknown'}_${new Date().toISOString().slice(0, 10)}.md`
+    a.download = t('logDetail.report.mdFilename', {
+      filename: logStore.currentLog?.filename || 'unknown',
+      date: new Date().toISOString().slice(0, 10),
+    })
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
-    
-    ElMessage.success('分析报告已下载')
+
+    ElMessage.success(t('logDetail.reportDownloaded'))
   } catch (error) {
-    console.error('下载失败:', error)
-    ElMessage.error('下载失败，请稍后重试')
+    console.error('Download failed:', error)
+    ElMessage.error(t('logDetail.reportDownloadFail'))
   }
 }
 
@@ -1829,27 +1836,27 @@ const shareAnalysisResult = async () => {
   if (!aiAnalysisResult.value) return
   
   const shareData = {
-    title: `AI日志分析结果 - ${logStore.currentLog?.filename}`,
-    text: `查看AI分析结果：${aiAnalysisResult.value.final_result.summary}`,
+    title: t('logDetail.report.shareTitle', { filename: logStore.currentLog?.filename }),
+    text: t('logDetail.report.shareText', { summary: aiAnalysisResult.value.final_result.summary }),
     url: window.location.href
   }
-  
+
   try {
     if (navigator.share && navigator.canShare && navigator.canShare(shareData)) {
       await navigator.share(shareData)
-      ElMessage.success('分享成功')
+      ElMessage.success(t('logDetail.shareSuccess'))
     } else {
       // 降级到复制链接
       const copied = await copyToClipboard(window.location.href)
       if (copied) {
-        ElMessage.success('链接已复制到剪贴板')
+        ElMessage.success(t('logDetail.copyLinkSuccess'))
       } else {
-        ElMessage.error('复制失败，请手动复制链接')
+        ElMessage.error(t('logDetail.copyLinkFail'))
       }
     }
   } catch (error: any) {
     if (error?.name !== 'AbortError') {
-      ElMessage.error('分享失败，请稍后重试')
+      ElMessage.error(t('logDetail.shareFail'))
     }
   }
 }
@@ -1864,14 +1871,17 @@ const updatePageMeta = () => {
     
     // 设置meta描述
     const metaDescription = document.querySelector('meta[name="description"]')
+    const metaDescriptionText = t('logDetail.metaDescription', {
+      filename: logStore.currentLog.filename,
+      size: formatFileSize(logStore.currentLog.file_size),
+      status: getStatusLabel(logStore.currentLog.status),
+    })
     if (metaDescription) {
-      metaDescription.setAttribute('content', 
-        `查看日志文件 ${logStore.currentLog.filename} 的详细信息，文件大小 ${formatFileSize(logStore.currentLog.file_size)}，状态 ${getStatusLabel(logStore.currentLog.status)}`
-      )
+      metaDescription.setAttribute('content', metaDescriptionText)
     } else {
       const meta = document.createElement('meta')
       meta.name = 'description'
-      meta.content = `查看日志文件 ${logStore.currentLog.filename} 的详细信息，文件大小 ${formatFileSize(logStore.currentLog.file_size)}，状态 ${getStatusLabel(logStore.currentLog.status)}`
+      meta.content = metaDescriptionText
       document.head.appendChild(meta)
     }
 
@@ -1889,7 +1899,7 @@ const updatePageMeta = () => {
     }
 
     setOGMeta('og:title', pageTitle.value)
-    setOGMeta('og:description', `查看日志文件详情 - ${logStore.currentLog.filename}`)
+    setOGMeta('og:description', t('logDetail.ogDescription', { filename: logStore.currentLog.filename }))
     setOGMeta('og:url', window.location.href)
     setOGMeta('og:type', 'website')
   }

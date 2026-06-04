@@ -162,7 +162,7 @@ const copyRebuildPrompt = async () => {
     ElMessage.warning(t('raven.noDownloadLink'))
     return
   }
-  const prompt = `请你帮忙下载${downloadLink.value}并上传到设备ftp，然后请向基带处理机发送重构包下载请求后，启动卫星升级流程`
+  const prompt = t('raven.rebuildPromptTemplate', { url: downloadLink.value })
   const ok = await copyToClipboard(prompt)
   if (ok) {
     ElMessage.success(t('raven.copyPromptSuccess'))

@@ -92,14 +92,14 @@ const userButtonRef = ref<HTMLElement | null>(null)
 
 const isLoggedIn = computed(() => userStore.isAuthenticated)
 const currentUserName = computed(() =>
-  userStore.profile?.display_name || userStore.profile?.username || '用户'
+  userStore.profile?.display_name || userStore.profile?.username || t('workbench.userFallback')
 )
 const currentUserEmail = computed(() => userStore.profile?.email || '')
 const currentUserRole = computed(() => (userStore.profile?.role || 'user').toString().toLowerCase())
 const isAdmin = computed(() => isLoggedIn.value && currentUserRole.value === 'admin')
 const userInitial = computed(() => (currentUserName.value || 'U').slice(0, 2).toUpperCase())
 const currentUserStatusText = computed(() =>
-  currentUserEmail.value || (isLoggedIn.value ? '已登录' : '未登录')
+  currentUserEmail.value || (isLoggedIn.value ? t('workbench.loggedIn') : t('workbench.notLoggedIn'))
 )
 
 const openAuthModal = (mode: 'login' | 'register' = 'login') => {
@@ -118,9 +118,9 @@ const goToBugFixes = () => {
 }
 
 const navItems = computed(() => ([
-  { id: 'logs',    label: '日志列表',   to: '/logs',          icon: 'logs', activeNames: ['Logs', 'LogDetail'] },
-  { id: 'devices', label: '设备机柜',   to: '/devices',       icon: 'device', activeNames: ['DeviceList', 'DeviceDetail'] },
-  { id: 'pkgs',    label: '重构包仓库', to: '/raven-manager', icon: 'box' },
+  { id: 'logs',    label: t('navbar.logs'),    to: '/logs',          icon: 'logs', activeNames: ['Logs', 'LogDetail'] },
+  { id: 'devices', label: t('navbar.devices'), to: '/devices',       icon: 'device', activeNames: ['DeviceList', 'DeviceDetail'] },
+  { id: 'pkgs',    label: t('navbar.raven'),   to: '/raven-manager', icon: 'box' },
 ]))
 
 const isNavItemActive = (item: { activeNames?: string[] }, isActive: boolean) => {
@@ -142,10 +142,10 @@ const groupedSessions = computed(() => {
 
   const pinned: ChatSessionSummary[] = []
   const groups: { label: string; items: ChatSessionSummary[] }[] = [
-    { label: '今天', items: [] },
-    { label: '昨天', items: [] },
-    { label: '本周', items: [] },
-    { label: '更早', items: [] },
+    { label: t('workbench.sessionGroups.today'), items: [] },
+    { label: t('workbench.sessionGroups.yesterday'), items: [] },
+    { label: t('workbench.sessionGroups.thisWeek'), items: [] },
+    { label: t('workbench.sessionGroups.earlier'), items: [] },
   ]
 
   for (const s of filteredSessions.value) {
@@ -160,7 +160,7 @@ const groupedSessions = computed(() => {
     else groups[3].items.push(s)
   }
   const ordered = pinned.length
-    ? [{ label: '置顶', items: pinned }, ...groups]
+    ? [{ label: t('workbench.sessionGroups.pinned'), items: pinned }, ...groups]
     : groups
   return ordered.filter((g) => g.items.length > 0)
 })
@@ -178,9 +178,9 @@ const commitRename = async (id: string) => {
   if (!title) return
   try {
     const ok = await sessionStore.renameSession(id, title)
-    if (ok) appStore.showNotification({ title: '已重命名', type: 'success' })
+    if (ok) appStore.showNotification({ title: t('workbench.notifications.renamed'), type: 'success' })
   } catch {
-    appStore.showNotification({ title: '重命名失败', type: 'error' })
+    appStore.showNotification({ title: t('workbench.notifications.renameFailed'), type: 'error' })
   }
 }
 
@@ -252,7 +252,7 @@ onUnmounted(() => {
 watch(isLoggedIn, async (loggedIn) => {
   if (loggedIn) {
     try { await sessionStore.load() } catch {
-      appStore.showNotification({ title: '同步会话失败', type: 'error' })
+      appStore.showNotification({ title: t('workbench.notifications.syncSessionsFailed'), type: 'error' })
     }
   } else {
     sessionStore.reset()
@@ -276,7 +276,7 @@ const startNewChat = () => {
 
 const reloadSessions = async () => {
   try { await sessionStore.load() } catch {
-    appStore.showNotification({ title: '同步会话失败', type: 'error' })
+    appStore.showNotification({ title: t('workbench.notifications.syncSessionsFailed'), type: 'error' })
   }
 }
 
@@ -287,27 +287,27 @@ const togglePinSession = async (session: ChatSessionSummary) => {
     const ok = await sessionStore.togglePin(session.id)
     if (ok) {
       appStore.showNotification({
-        title: wasPinned ? '已取消置顶' : '已置顶对话',
+        title: wasPinned ? t('workbench.notifications.unpinned') : t('workbench.notifications.pinned'),
         type: 'success',
       })
     }
   } catch (error) {
-    console.error('置顶操作失败', error)
-    appStore.showNotification({ title: '操作失败', type: 'error' })
+    console.error('Pin operation failed', error)
+    appStore.showNotification({ title: t('workbench.notifications.operationFailed'), type: 'error' })
   }
 }
 
 const deleteSession = async (id: string) => {
   openRowMenuId.value = null
-  const confirmed = window.confirm('确定要删除该对话吗？此操作不可恢复。')
+  const confirmed = window.confirm(t('workbench.confirm.deleteSession'))
   if (!confirmed) return
   try {
     await sessionStore.removeSession(id)
     runsStore.clearSession(id)
-    appStore.showNotification({ title: '会话已删除', type: 'success' })
+    appStore.showNotification({ title: t('workbench.notifications.sessionDeleted'), type: 'success' })
   } catch (error) {
-    console.error('删除会话失败', error)
-    appStore.showNotification({ title: '删除失败', type: 'error' })
+    console.error('Delete session failed', error)
+    appStore.showNotification({ title: t('workbench.notifications.deleteFailed'), type: 'error' })
   }
 }
 
@@ -338,24 +338,24 @@ const parseAuthError = (error: any, fallback: string) => {
 
 const handleUserLogin = async () => {
   if (!loginForm.username || !loginForm.password) {
-    appStore.showNotification({ title: '请输入用户名和密码', type: 'warning' })
+    appStore.showNotification({ title: t('workbench.notifications.usernamePasswordRequired'), type: 'warning' })
     return
   }
   isLoggingIn.value = true
   try {
     const resp = await userApi.login(loginForm.username.trim(), loginForm.password)
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '登录失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('workbench.notifications.loginFailed'))
     userStore.setToken(resp.data.token)
     userStore.setProfile(resp.data.user)
     // 登录后 profile 语言偏好优先于本地 localStorage
     appStore.initLocale()
-    appStore.showNotification({ title: '登录成功', type: 'success' })
+    appStore.showNotification({ title: t('workbench.notifications.loginSuccess'), type: 'success' })
     closeAuthModal()
     await sessionStore.load()
   } catch (error: any) {
     appStore.showNotification({
-      title: '登录失败',
-      message: parseAuthError(error, '请检查账号密码'),
+      title: t('workbench.notifications.loginFailed'),
+      message: parseAuthError(error, t('workbench.notifications.checkCredentials')),
       type: 'error',
     })
   } finally {
@@ -365,15 +365,15 @@ const handleUserLogin = async () => {
 
 const handleUserRegister = async () => {
   if (!loginForm.username.trim() || !loginForm.password) {
-    appStore.showNotification({ title: '请输入用户名和密码', type: 'warning' })
+    appStore.showNotification({ title: t('workbench.notifications.usernamePasswordRequired'), type: 'warning' })
     return
   }
   if (loginForm.password.length < 6) {
-    appStore.showNotification({ title: '密码至少 6 位', type: 'warning' })
+    appStore.showNotification({ title: t('workbench.notifications.passwordTooShort'), type: 'warning' })
     return
   }
   if (loginForm.password !== loginForm.confirmPassword) {
-    appStore.showNotification({ title: '两次输入的密码不一致', type: 'warning' })
+    appStore.showNotification({ title: t('workbench.notifications.passwordMismatch'), type: 'warning' })
     return
   }
   isLoggingIn.value = true
@@ -384,18 +384,18 @@ const handleUserRegister = async () => {
       display_name: loginForm.displayName.trim() || null,
       email: loginForm.email.trim() || null,
     })
-    if (!resp?.success || !resp.data) throw new Error(resp?.message || '注册失败')
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('workbench.notifications.registerFailed'))
     userStore.setToken(resp.data.token)
     userStore.setProfile(resp.data.user)
     // 新用户：把当前匿名期选择的语言写入新 profile
     appStore.setLocale(appStore.locale)
-    appStore.showNotification({ title: '注册成功', type: 'success' })
+    appStore.showNotification({ title: t('workbench.notifications.registerSuccess'), type: 'success' })
     closeAuthModal()
     await sessionStore.load()
   } catch (error: any) {
     appStore.showNotification({
-      title: '注册失败',
-      message: parseAuthError(error, '请稍后重试'),
+      title: t('workbench.notifications.registerFailed'),
+      message: parseAuthError(error, t('workbench.notifications.tryAgainLater')),
       type: 'error',
     })
   } finally {
@@ -428,7 +428,7 @@ const handleUserLogout = () => {
             <div class="rw-brand-sub">BASEBAND · WORKBENCH</div>
           </div>
         </div>
-        <button class="rw-icon-btn" title="搜索对话" @click="showSearchBox = !showSearchBox" aria-label="搜索对话">
+        <button class="rw-icon-btn" :title="t('workbench.searchConversations')" @click="showSearchBox = !showSearchBox" :aria-label="t('workbench.searchConversations')">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
         </button>
       </div>
@@ -437,7 +437,7 @@ const handleUserLogout = () => {
       <button class="rw-new-btn" @click="startNewChat">
         <span class="rw-new-btn-left">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-          新建对话
+          {{ t('workbench.newChat') }}
         </span>
         <span class="rw-kbd">⌘ N</span>
       </button>
@@ -468,14 +468,14 @@ const handleUserLogout = () => {
       <!-- Chat list -->
       <div class="rw-chat-list">
         <div class="rw-group-header">
-          <span class="rw-group-label">最近对话</span>
+          <span class="rw-group-label">{{ t('workbench.recentConversations') }}</span>
           <span v-if="isLoggedIn" class="rw-group-count">{{ sessionStore.sessions.length }}</span>
           <button
             v-if="isLoggedIn"
             class="rw-refresh-btn"
             :disabled="sessionStore.loading"
             @click="reloadSessions"
-            title="刷新"
+            :title="t('common.refresh')"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" :class="{ spin: sessionStore.loading }"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
           </button>
@@ -483,18 +483,18 @@ const handleUserLogout = () => {
 
         <template v-if="!isLoggedIn">
           <div class="rw-login-hint">
-            <div class="rw-login-hint-title">登录可同步历史对话</div>
+            <div class="rw-login-hint-title">{{ t('workbench.loginHintTitle') }}</div>
             <div class="rw-login-actions">
-              <button class="rw-login-link" @click="openAuthModal('login')">立即登录</button>
-              <button class="rw-login-link" @click="openAuthModal('register')">注册账户</button>
+              <button class="rw-login-link" @click="openAuthModal('login')">{{ t('workbench.loginNow') }}</button>
+              <button class="rw-login-link" @click="openAuthModal('register')">{{ t('workbench.registerAccount') }}</button>
             </div>
           </div>
         </template>
         <template v-else-if="sessionStore.loading">
-          <div class="rw-empty">会话加载中…</div>
+          <div class="rw-empty">{{ t('workbench.sessionsLoading') }}</div>
         </template>
         <template v-else-if="!sessionStore.sessions.length">
-          <div class="rw-empty">暂无会话，开始新的对话吧</div>
+          <div class="rw-empty">{{ t('workbench.emptySessions') }}</div>
         </template>
         <template v-else>
           <div v-for="group in groupedSessions" :key="group.label">
@@ -529,12 +529,12 @@ const handleUserLogout = () => {
                 />
               </div>
               <template v-else>
-                <span class="rw-chat-row-text">{{ session.title || '未命名对话' }}</span>
+                <span class="rw-chat-row-text">{{ session.title || t('workbench.untitledSession') }}</span>
                 <span
                   v-if="isSessionRunning(session.id)"
                   class="rw-row-thinking"
-                  title="正在思考"
-                  aria-label="正在思考"
+                  :title="t('workbench.thinking')"
+                  :aria-label="t('workbench.thinking')"
                 >
                   <span></span>
                   <span></span>
@@ -544,7 +544,7 @@ const handleUserLogout = () => {
                   class="rw-row-more"
                   :class="{ visible: hoverSessionId === session.id || openRowMenuId === session.id }"
                   @click.stop="openRowMenuId = openRowMenuId === session.id ? null : session.id"
-                  aria-label="更多"
+                  :aria-label="t('common.more')"
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/></svg>
                 </button>
@@ -555,16 +555,16 @@ const handleUserLogout = () => {
                 >
                   <button class="rw-menu-item" @click="startRenameSession(session)">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16zM14 6l4 4"/></svg>
-                    重命名对话
+                    {{ t('workbench.renameConversation') }}
                   </button>
                   <button class="rw-menu-item" @click="togglePinSession(session)">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M9 8h6l2 6H7zM12 14v8"/></svg>
-                    {{ session.is_pinned ? '取消置顶' : '置顶对话' }}
+                    {{ session.is_pinned ? t('workbench.unpinConversation') : t('workbench.pinConversation') }}
                   </button>
                   <div class="rw-menu-divider"/>
                   <button class="rw-menu-item is-danger" @click="deleteSession(session.id)">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>
-                    删除对话
+                    {{ t('workbench.deleteConversation') }}
                   </button>
                 </div>
               </template>
@@ -587,7 +587,7 @@ const handleUserLogout = () => {
               <div style="flex:1; min-width:0;">
                 <div class="rw-user-menu-name">
                   {{ currentUserName }}
-                  <span v-if="isAdmin" class="rw-role-badge">管理员</span>
+                  <span v-if="isAdmin" class="rw-role-badge">{{ t('workbench.adminRole') }}</span>
                 </div>
                 <div class="rw-user-menu-mail">{{ currentUserStatusText }}</div>
               </div>
@@ -598,7 +598,7 @@ const handleUserLogout = () => {
               @click="goToAdminConsole"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><path d="M12 3l8 4v6c0 4.5-3.5 7-8 8-4.5-1-8-3.5-8-8V7l8-4z"/><path d="m9 12 2 2 4-4"/></svg>
-              后台管理
+              {{ t('workbench.adminConsole') }}
               <span class="rw-kbd-right">/admin</span>
             </button>
             <button
@@ -607,7 +607,7 @@ const handleUserLogout = () => {
               @click="goToBugFixes"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
-              Bug 修复
+              {{ t('workbench.bugFixes') }}
               <span class="rw-kbd-right">/bug-fixes</span>
             </button>
             <div v-if="isLoggedIn || isAdmin" class="rw-menu-divider"/>
@@ -615,18 +615,18 @@ const handleUserLogout = () => {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
               <span>{{ t('language.label') }}</span>
               <span class="rw-lang-pill" role="group" :aria-label="t('language.switchTo')">
-                <span class="rw-lang-opt" :class="{ active: activeLocale === 'zh' }" @click="setLanguage('zh')">中</span>
+                <span class="rw-lang-opt" :class="{ active: activeLocale === 'zh' }" @click="setLanguage('zh')">{{ t('workbench.zhShort') }}</span>
                 <span class="rw-lang-opt" :class="{ active: activeLocale === 'en' }" @click="setLanguage('en')">EN</span>
               </span>
             </div>
             <button class="rw-user-menu-item" @click="showUserMenu = false">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33 1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-              设置
+              {{ t('workbench.settings') }}
               <span class="rw-kbd-right">⌘ ,</span>
             </button>
             <button class="rw-user-menu-item" @click="showUserMenu = false">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 3.5"/><circle cx="12" cy="17" r="0.4" fill="currentColor"/></svg>
-              帮助与快捷键
+              {{ t('workbench.helpShortcuts') }}
               <span class="rw-kbd-right">?</span>
             </button>
             <div class="rw-menu-divider"/>
@@ -635,7 +635,7 @@ const handleUserLogout = () => {
               @click="isLoggedIn ? handleUserLogout() : (showUserMenu = false, openAuthModal('login'))"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
-              {{ isLoggedIn ? '退出登录' : '立即登录' }}
+              {{ isLoggedIn ? t('workbench.logout') : t('workbench.loginNow') }}
             </button>
           </div>
           <div
@@ -648,9 +648,9 @@ const handleUserLogout = () => {
             <div class="rw-user-meta">
               <div class="rw-user-name">{{ currentUserName }}</div>
               <div class="rw-user-role">
-                <span v-if="isAdmin">管理员 · {{ currentUserStatusText }}</span>
+                <span v-if="isAdmin">{{ t('workbench.adminRole') }} · {{ currentUserStatusText }}</span>
                 <span v-else-if="isLoggedIn">{{ currentUserStatusText }}</span>
-                <span v-else>未登录 · 点击登录</span>
+                <span v-else>{{ t('workbench.notLoggedInCta') }}</span>
               </div>
             </div>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-chevron" :class="{ flipped: showUserMenu }"><path d="m6 9 6 6 6-6"/></svg>
@@ -669,49 +669,49 @@ const handleUserLogout = () => {
       <div class="rw-modal">
         <div class="rw-modal-head">
           <div>
-            <h3 class="rw-modal-title">{{ authMode === 'register' ? '注册账户' : '登录账户' }}</h3>
-            <p class="rw-modal-sub">{{ authMode === 'register' ? '创建账户后自动登录' : '登录可同步历史对话' }}</p>
+            <h3 class="rw-modal-title">{{ authMode === 'register' ? t('workbench.auth.registerTitle') : t('workbench.auth.loginTitle') }}</h3>
+            <p class="rw-modal-sub">{{ authMode === 'register' ? t('workbench.auth.registerSubtitle') : t('workbench.auth.loginSubtitle') }}</p>
           </div>
-          <button class="rw-modal-close" @click="closeAuthModal" aria-label="关闭">
+          <button class="rw-modal-close" @click="closeAuthModal" :aria-label="t('common.close')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
           </button>
         </div>
-        <div class="rw-auth-tabs" role="tablist" aria-label="账户操作">
-          <button type="button" :class="{ active: authMode === 'login' }" @click="switchAuthMode('login')">登录</button>
-          <button type="button" :class="{ active: authMode === 'register' }" @click="switchAuthMode('register')">注册</button>
+        <div class="rw-auth-tabs" role="tablist" :aria-label="t('workbench.auth.accountActions')">
+          <button type="button" :class="{ active: authMode === 'login' }" @click="switchAuthMode('login')">{{ t('workbench.auth.loginTab') }}</button>
+          <button type="button" :class="{ active: authMode === 'register' }" @click="switchAuthMode('register')">{{ t('workbench.auth.registerTab') }}</button>
         </div>
         <form class="rw-modal-form" @submit.prevent="handleAuthSubmit">
           <label class="rw-form-field">
-            <span class="rw-form-label">用户名</span>
-            <input v-model="loginForm.username" type="text" class="rw-input" placeholder="输入用户名" autocomplete="username" />
+            <span class="rw-form-label">{{ t('workbench.auth.username') }}</span>
+            <input v-model="loginForm.username" type="text" class="rw-input" :placeholder="t('workbench.auth.usernamePlaceholder')" autocomplete="username" />
           </label>
           <label v-if="authMode === 'register'" class="rw-form-field">
-            <span class="rw-form-label">展示名称</span>
-            <input v-model="loginForm.displayName" type="text" class="rw-input" placeholder="可选" autocomplete="name" />
+            <span class="rw-form-label">{{ t('workbench.auth.displayName') }}</span>
+            <input v-model="loginForm.displayName" type="text" class="rw-input" :placeholder="t('workbench.auth.optional')" autocomplete="name" />
           </label>
           <label v-if="authMode === 'register'" class="rw-form-field">
-            <span class="rw-form-label">邮箱</span>
-            <input v-model="loginForm.email" type="email" class="rw-input" placeholder="可选" autocomplete="email" />
+            <span class="rw-form-label">{{ t('workbench.auth.email') }}</span>
+            <input v-model="loginForm.email" type="email" class="rw-input" :placeholder="t('workbench.auth.optional')" autocomplete="email" />
           </label>
           <label class="rw-form-field">
-            <span class="rw-form-label">密码</span>
+            <span class="rw-form-label">{{ t('workbench.auth.password') }}</span>
             <input
               v-model="loginForm.password"
               type="password"
               class="rw-input"
-              placeholder="输入密码"
+              :placeholder="t('workbench.auth.passwordPlaceholder')"
               :autocomplete="authMode === 'register' ? 'new-password' : 'current-password'"
             />
           </label>
           <label v-if="authMode === 'register'" class="rw-form-field">
-            <span class="rw-form-label">确认密码</span>
-            <input v-model="loginForm.confirmPassword" type="password" class="rw-input" placeholder="再次输入密码" autocomplete="new-password" />
+            <span class="rw-form-label">{{ t('workbench.auth.confirmPassword') }}</span>
+            <input v-model="loginForm.confirmPassword" type="password" class="rw-input" :placeholder="t('workbench.auth.confirmPasswordPlaceholder')" autocomplete="new-password" />
           </label>
           <div class="rw-modal-actions">
             <button type="submit" class="rw-btn-primary" :disabled="isLoggingIn">
-              {{ isLoggingIn ? (authMode === 'register' ? '注册中…' : '登录中…') : (authMode === 'register' ? '注册并登录' : '立即登录') }}
+              {{ isLoggingIn ? (authMode === 'register' ? t('workbench.auth.registerLoading') : t('workbench.auth.loginLoading')) : (authMode === 'register' ? t('workbench.auth.registerSubmit') : t('workbench.loginNow')) }}
             </button>
-            <button type="button" class="rw-btn-ghost" @click="closeAuthModal">取消</button>
+            <button type="button" class="rw-btn-ghost" @click="closeAuthModal">{{ t('common.cancel') }}</button>
           </div>
         </form>
       </div>

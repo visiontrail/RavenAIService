@@ -254,6 +254,7 @@ export interface PromptEntry {
   prompt_type: string
   path: string[]
   content: string
+  locale?: string | null
 }
 
 export interface PromptsConfigData {

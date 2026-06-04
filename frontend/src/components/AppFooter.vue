@@ -10,36 +10,36 @@
               alt="Raven Logo"
               class="footer-brand-logo"
             />
-            <span class="text-sm font-bold tracking-wide text-gray-900">Raven 智能测试平台</span>
+            <span class="text-sm font-bold tracking-wide text-gray-900">Raven {{ t('navbar.title') }}</span>
           </div>
           <p class="text-xs text-gray-500 leading-relaxed max-w-[220px]">
-            高效的日志分析与设备协同能力，让测试工作更智能、更简单。
+            {{ t('footer.brandTagline') }}
           </p>
           <div class="mt-4 flex items-center gap-1">
             <router-link to="/download" class="download-badge">
               <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
                 <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
               </svg>
-              <span>下载客户端</span>
+              <span>{{ t('footer.downloadClient') }}</span>
             </router-link>
           </div>
         </div>
 
         <!-- Product column -->
         <div class="footer-col footer-panel">
-          <h4 class="footer-col-title">产品功能</h4>
+          <h4 class="footer-col-title">{{ t('footer.productSection') }}</h4>
           <nav class="space-y-2">
-            <router-link to="/logs" class="footer-link">日志列表</router-link>
-            <router-link to="/upload" class="footer-link">上传日志</router-link>
-            <router-link to="/devices" class="footer-link">设备机柜</router-link>
-            <router-link to="/raven-manager" class="footer-link">重构包管理</router-link>
-            <router-link to="/workbench" class="footer-link">AI 对话</router-link>
+            <router-link to="/logs" class="footer-link">{{ t('footer.navLogs') }}</router-link>
+            <router-link to="/upload" class="footer-link">{{ t('footer.navUpload') }}</router-link>
+            <router-link to="/devices" class="footer-link">{{ t('footer.navDevices') }}</router-link>
+            <router-link to="/raven-manager" class="footer-link">{{ t('footer.navRaven') }}</router-link>
+            <router-link to="/workbench" class="footer-link">{{ t('footer.navWorkbench') }}</router-link>
           </nav>
         </div>
 
         <!-- Download column -->
         <div class="footer-col footer-panel">
-          <h4 class="footer-col-title">下载客户端</h4>
+          <h4 class="footer-col-title">{{ t('footer.downloadSection') }}</h4>
           <nav class="space-y-2">
             <router-link to="/download" class="footer-link footer-link-platform">
               <PlatformBrandIcon platform="linux" class="footer-platform-icon" />
@@ -53,19 +53,19 @@
               <PlatformBrandIcon platform="windows" class="footer-platform-icon" />
               <span>Windows</span>
             </router-link>
-            <router-link to="/download" class="footer-link text-blue-600 font-medium mt-1">全部版本 →</router-link>
+            <router-link to="/download" class="footer-link text-blue-600 font-medium mt-1">{{ t('footer.allVersions') }}</router-link>
           </nav>
         </div>
 
         <!-- Support column -->
         <div class="footer-col footer-panel">
-          <h4 class="footer-col-title">更多</h4>
+          <h4 class="footer-col-title">{{ t('footer.moreSection') }}</h4>
           <nav class="space-y-2">
-            <router-link to="/about" class="footer-link">关于 Raven</router-link>
-            <router-link to="/changelog" class="footer-link">更新日志</router-link>
-            <router-link to="/privacy" class="footer-link">隐私政策</router-link>
-            <router-link to="/terms" class="footer-link">服务条款</router-link>
-            <router-link to="/admin" class="footer-link footer-link-admin">后台管理</router-link>
+            <router-link to="/about" class="footer-link">{{ t('footer.navAbout') }}</router-link>
+            <router-link to="/changelog" class="footer-link">{{ t('footer.navChangelog') }}</router-link>
+            <router-link to="/privacy" class="footer-link">{{ t('footer.navPrivacy') }}</router-link>
+            <router-link to="/terms" class="footer-link">{{ t('footer.navTerms') }}</router-link>
+            <router-link to="/admin" class="footer-link footer-link-admin">{{ t('footer.navAdmin') }}</router-link>
           </nav>
         </div>
       </div>
@@ -78,9 +78,9 @@
           © {{ currentYear }} RavenAIService · GalaxySpace. All rights reserved.
         </p>
         <div class="footer-bottom-links flex items-center gap-4">
-          <router-link to="/privacy" class="text-xs text-gray-400 hover:text-gray-600 transition">隐私政策</router-link>
-          <router-link to="/terms" class="text-xs text-gray-400 hover:text-gray-600 transition">服务条款</router-link>
-          <router-link to="/download" class="text-xs text-blue-500 hover:text-blue-600 transition font-medium">下载客户端</router-link>
+          <router-link to="/privacy" class="text-xs text-gray-400 hover:text-gray-600 transition">{{ t('footer.navPrivacy') }}</router-link>
+          <router-link to="/terms" class="text-xs text-gray-400 hover:text-gray-600 transition">{{ t('footer.navTerms') }}</router-link>
+          <router-link to="/download" class="text-xs text-blue-500 hover:text-blue-600 transition font-medium">{{ t('footer.downloadClient') }}</router-link>
         </div>
       </div>
     </div>
@@ -88,9 +88,11 @@
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import PlatformBrandIcon from '@/components/icons/PlatformBrandIcon.vue'
 import ravenLogo from '@/assets/raven-logo.png'
 
+const { t } = useI18n()
 const currentYear = new Date().getFullYear()
 </script>
 

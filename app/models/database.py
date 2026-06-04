@@ -147,6 +147,25 @@ class DatabaseManager:
                     "default": "TIMESTAMP",
                 },
             },
+            "users": {
+                "language": {
+                    "sqlite": "VARCHAR(8) NOT NULL DEFAULT 'zh'",
+                    "default": "VARCHAR(8) NOT NULL DEFAULT 'zh'",
+                },
+            },
+            "log_records": {
+                "project_id": {
+                    "sqlite": "INTEGER",
+                    "default": "INTEGER REFERENCES project_repo(id) ON DELETE SET NULL",
+                },
+            },
+        }
+
+        # Columns that were removed from ORM models and must be dropped from
+        # existing databases. SQLite supports DROP COLUMN since 3.35.0;
+        # PostgreSQL has always supported it.
+        removed: dict[str, list[str]] = {
+            "log_records": ["log_type"],
         }
 
         inspector = inspect(conn)
@@ -163,6 +182,16 @@ class DatabaseManager:
                     text(f"ALTER TABLE {table} ADD COLUMN {column} {type_clause}")
                 )
                 logger.info("已为表 %s 补充缺失列: %s", table, column)
+
+        for table, columns in removed.items():
+            if table not in existing_tables:
+                continue
+            present = {col["name"] for col in inspector.get_columns(table)}
+            for column in columns:
+                if column not in present:
+                    continue
+                conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {column}"))
+                logger.info("已从表 %s 删除废弃列: %s", table, column)
 
     async def drop_tables(self):
         """删除所有表"""
