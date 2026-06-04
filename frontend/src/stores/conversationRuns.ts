@@ -4,6 +4,7 @@ import { API_BASE_URL } from '@/api'
 import { userApi } from '@/api/user'
 import { projectExpertStream, resolveChatPermission } from '@/api/chat'
 import { i18n } from '@/i18n'
+import { getActiveLocale, LOCALE_HEADER } from '@/i18n/runtime'
 import type { AgentTraceEvent } from '@/types/agentTrace'
 import type { ChatMessageRecord } from '@/types'
 
@@ -572,7 +573,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
   // ---- public API ---------------------------------------------------------
 
   const buildAuthHeaders = (authToken?: string | null): Record<string, string> => {
-    const headers: Record<string, string> = {}
+    const headers: Record<string, string> = { [LOCALE_HEADER]: getActiveLocale() }
     if (authToken) headers.Authorization = `Bearer ${authToken}`
     return headers
   }

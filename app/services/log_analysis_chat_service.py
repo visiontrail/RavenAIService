@@ -35,6 +35,7 @@ from app.agents.log_analysis.workspace import (
 )
 from app.config import settings
 from app.i18n import DEFAULT as I18N_DEFAULT, normalize as normalize_locale
+from app.i18n.prompts import response_language_directive
 from app.models.chat import ChatMessage
 from app.models.log import LogLevel, LogMetadata, LogStatus, LogUploadRequest
 from app.models.user import User
@@ -71,6 +72,8 @@ class AgentJob:
     # Active locale for this run; drives prompt selection, the response-language
     # directive, and the language of the generated session title.
     locale: str = I18N_DEFAULT
+    started_at_utc: str = ""
+    user_snapshot: Dict[str, Any] = field(default_factory=dict)
     # run_id projects this job into the unified chat_agent_runs lifecycle so
     # the sidebar overlay and /active-run snapshot can see log-analysis runs
     # alongside DeviceAgent runs.
@@ -252,6 +255,7 @@ class LogAnalysisChatService:
                 locale or getattr(user, "language", None)
             )
             ctx.locale = effective_locale
+            self._bind_locale_to_task(ctx, effective_locale)
 
             yield self._sse_event(
                 {
@@ -270,9 +274,11 @@ class LogAnalysisChatService:
                 context_meta=context_meta,
                 question=question,
                 user_id=getattr(user, "id", None),
+                user_snapshot=self._user_snapshot(user),
                 remember=bool(remember),
                 filename=context_meta.get("filename"),
                 started_at=time.monotonic(),
+                started_at_utc=datetime.utcnow().isoformat(),
                 run_id=run_id,
                 owner_scope=effective_owner_scope,
                 locale=effective_locale,
@@ -401,6 +407,7 @@ class LogAnalysisChatService:
             result = await asyncio.to_thread(
                 LogAnalysisAgent().run_sync, ctx, job.cancel_event, _emit_trace
             )
+            result = self._attach_trigger_context(job, result)
             job.result = result
             answer_text = self._format_agent_result(
                 result, question=job.question, context_meta=job.context_meta
@@ -863,6 +870,7 @@ class LogAnalysisChatService:
         context_meta = {
             "session_id": session_id,
             "owner_user_id": getattr(user, "id", None),
+            "owner_user": self._user_snapshot(user),
             "task_id": ctx.task_id,
             "temp_dir": ctx.temp_dir,
             "logs_dir": ctx.logs_dir,
@@ -940,6 +948,29 @@ class LogAnalysisChatService:
         task_path.write_text(json.dumps(task_data, ensure_ascii=False, indent=2), encoding="utf-8")
         ctx.metadata["question"] = question
         ctx.metadata["hints"] = hints
+
+    @staticmethod
+    def _bind_locale_to_task(ctx: WorkspaceContext, locale: str) -> None:
+        """Persist the active response-language contract into task.json.
+
+        The log-analysis agent is instructed through the system prompt too, but
+        it reads task.json early and loaded skills may anchor on that file. Put
+        the locale contract there as an additional source of truth.
+        """
+        task_path = Path(ctx.task_json_path)
+        try:
+            task_data = json.loads(task_path.read_text(encoding="utf-8"))
+            if not isinstance(task_data, dict):
+                task_data = {}
+        except Exception:
+            task_data = {}
+
+        task_data["response_locale"] = normalize_locale(locale)
+        task_data["response_language_instruction"] = response_language_directive(locale)
+        task_path.write_text(
+            json.dumps(task_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     async def _build_history_hint(
         self,
@@ -1059,6 +1090,42 @@ class LogAnalysisChatService:
             await log_service.save_ai_analysis_result(db, context_meta["log_id"], result)
         except Exception as exc:  # noqa: BLE001
             logger.warning("log-analysis chat: failed to save result to log record: %s", exc)
+
+    @staticmethod
+    def _user_snapshot(user: Optional[User]) -> Dict[str, Any]:
+        if user is None:
+            return {}
+        return {
+            "id": getattr(user, "id", None),
+            "username": getattr(user, "username", None),
+            "display_name": getattr(user, "display_name", None),
+            "email": getattr(user, "email", None),
+        }
+
+    @staticmethod
+    def _attach_trigger_context(job: AgentJob, result: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(result, dict):
+            return result
+
+        enriched = dict(result)
+        user_snapshot = {
+            key: value
+            for key, value in (job.user_snapshot or {}).items()
+            if value is not None
+        }
+        if not user_snapshot and job.user_id is not None:
+            user_snapshot = {"id": str(job.user_id)}
+
+        triggered_by = {
+            "source": "ai_chat",
+            "run_id": job.run_id,
+            "session_id": job.session_id,
+            "task_id": job.task_id,
+            "user": user_snapshot,
+            "started_at": job.started_at_utc or datetime.utcnow().isoformat(),
+        }
+        enriched["triggered_by"] = triggered_by
+        return enriched
 
     def _load_context(
         self,

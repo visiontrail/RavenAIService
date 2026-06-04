@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { API_BASE_URL, localeHeaderInterceptor } from '@/api'
+import { getActiveLocale, LOCALE_HEADER } from '@/i18n/runtime'
 
 export type ChatPermissionDecision = 'allow' | 'deny'
 
@@ -124,7 +125,7 @@ export const projectExpertStream = (payload: ProjectExpertStreamPayload): Promis
   formData.append('project_repo_id', String(payload.projectRepoId))
   if (payload.history) formData.append('history', JSON.stringify(payload.history))
 
-  const headers: Record<string, string> = {}
+  const headers: Record<string, string> = { [LOCALE_HEADER]: getActiveLocale() }
   if (payload.authToken) headers.Authorization = `Bearer ${payload.authToken}`
 
   return fetch(getChatServiceUrl('/api/v1/ai-chat/project-expert/stream'), {
@@ -140,7 +141,10 @@ export const projectExpertCancel = (
   sessionId: string,
   authToken?: string | null,
 ): Promise<ProjectExpertCancelResponse> => {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    [LOCALE_HEADER]: getActiveLocale(),
+  }
   if (authToken) headers.Authorization = `Bearer ${authToken}`
   return fetch(getChatServiceUrl('/api/v1/ai-chat/project-expert/cancel'), {
     method: 'POST',
@@ -157,7 +161,7 @@ export const projectExpertResult = (
   sessionId: string,
   authToken?: string | null,
 ): Promise<ProjectExpertResultResponse> => {
-  const headers: Record<string, string> = {}
+  const headers: Record<string, string> = { [LOCALE_HEADER]: getActiveLocale() }
   if (authToken) headers.Authorization = `Bearer ${authToken}`
   return fetch(
     getChatServiceUrl(`/api/v1/ai-chat/project-expert/result?session_id=${encodeURIComponent(sessionId)}`),

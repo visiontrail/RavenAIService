@@ -87,6 +87,53 @@ def test_format_agent_result_recovers_answer_without_raw_json():
     assert "```json" not in rendered
 
 
+def test_bind_locale_to_task_persists_response_language_contract(tmp_path):
+    from app.i18n.prompts import response_language_directive
+
+    ctx = _make_ctx(tmp_path)
+
+    LogAnalysisChatService._bind_locale_to_task(ctx, "zh")
+
+    task_data = json.loads((tmp_path / "task.json").read_text(encoding="utf-8"))
+    assert task_data["response_locale"] == "zh"
+    assert task_data["response_language_instruction"] == response_language_directive("zh")
+    assert "answer" in task_data["response_language_instruction"]
+
+
+def test_attach_trigger_context_adds_ai_chat_user_snapshot():
+    service = LogAnalysisChatService()
+    job = AgentJob(
+        session_id="session-1",
+        task_id="task-1",
+        context_meta=_make_context_meta(),
+        question="why failed?",
+        user_id="user-1",
+        user_snapshot={
+            "id": "user-1",
+            "username": "alice",
+            "display_name": "Alice",
+            "email": "alice@example.com",
+        },
+        remember=False,
+        filename="main_oam.tgz",
+        started_at=time.monotonic(),
+        started_at_utc="2026-06-04T01:02:03",
+        run_id="run-1",
+    )
+
+    enriched = service._attach_trigger_context(
+        job,
+        {"status": "ok", "answer": "done"},
+    )
+
+    assert enriched["triggered_by"]["source"] == "ai_chat"
+    assert enriched["triggered_by"]["run_id"] == "run-1"
+    assert enriched["triggered_by"]["session_id"] == "session-1"
+    assert enriched["triggered_by"]["started_at"] == "2026-06-04T01:02:03"
+    assert enriched["triggered_by"]["user"]["display_name"] == "Alice"
+    assert enriched["triggered_by"]["user"]["username"] == "alice"
+
+
 @pytest.mark.asyncio
 async def test_log_analysis_stream_sends_elapsed_status_while_agent_runs(monkeypatch, tmp_path):
     ctx = _make_ctx(tmp_path)

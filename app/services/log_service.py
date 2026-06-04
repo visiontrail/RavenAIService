@@ -1269,6 +1269,15 @@ class LogService(BaseCRUDService[LogRecord]):
             logger.error("_db_to_pydantic: extra_fields 提取异常 record_id=%s: %s", record.id, e, exc_info=True)
             ai_analysis_result = None
 
+        if (
+            db is not None
+            and isinstance(ai_analysis_result, dict)
+            and not isinstance(ai_analysis_result.get("triggered_by"), dict)
+        ):
+            ai_analysis_result = await self._enrich_ai_analysis_trigger(
+                db, record, ai_analysis_result
+            )
+
         metadata_payload = metadata or LogMetadata()
         try:
             if getattr(metadata_payload, "extra_fields", None) and isinstance(metadata_payload.extra_fields, dict):
@@ -1311,6 +1320,84 @@ class LogService(BaseCRUDService[LogRecord]):
             manual_analysis=manual_analysis_content,
             manual_analysis_updated_at=manual_analysis_updated_at,
         )
+
+    async def _enrich_ai_analysis_trigger(
+        self,
+        db: AsyncSession,
+        record: LogRecord,
+        ai_analysis_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Best-effort backfill for old ai_chat analysis results.
+
+        New ai_chat results persist ``triggered_by`` directly. Older rows can
+        still be identified through ``chat_agent_runs.request_json.log_id``.
+        """
+        try:
+            from app.models.user import ChatAgentRun, User
+
+            result = await db.execute(
+                select(ChatAgentRun)
+                .where(
+                    ChatAgentRun.agent_kind == "log_analysis",
+                    ChatAgentRun.request_json.ilike(f"%{record.id}%"),
+                )
+                .order_by(ChatAgentRun.started_at.desc())
+                .limit(20)
+            )
+            matched_run = None
+            for run in result.scalars().all():
+                try:
+                    payload = json.loads(run.request_json or "{}")
+                except Exception:
+                    payload = {}
+                if isinstance(payload, dict) and str(payload.get("log_id") or "") == str(record.id):
+                    matched_run = run
+                    break
+
+            if matched_run is None:
+                return ai_analysis_result
+
+            user_payload: Dict[str, Any] = {}
+            if matched_run.user_id:
+                user_result = await db.execute(
+                    select(User).where(User.id == matched_run.user_id)
+                )
+                user = user_result.scalar_one_or_none()
+                if user is not None:
+                    user_payload = {
+                        "id": user.id,
+                        "username": user.username,
+                        "display_name": user.display_name,
+                        "email": user.email,
+                    }
+                else:
+                    user_payload = {"id": matched_run.user_id}
+
+            enriched = dict(ai_analysis_result)
+            enriched["triggered_by"] = {
+                "source": "ai_chat",
+                "run_id": matched_run.id,
+                "session_id": matched_run.session_id,
+                "user": {k: v for k, v in user_payload.items() if v is not None},
+                "started_at": (
+                    matched_run.started_at.isoformat()
+                    if matched_run.started_at
+                    else None
+                ),
+                "finished_at": (
+                    matched_run.finished_at.isoformat()
+                    if matched_run.finished_at
+                    else None
+                ),
+            }
+            return enriched
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "_enrich_ai_analysis_trigger skipped record_id=%s: %s",
+                record.id,
+                exc,
+            )
+            return ai_analysis_result
 
     async def _create_metadata_content(self, log_record: LogRecord) -> str:
         """创建元数据内容"""

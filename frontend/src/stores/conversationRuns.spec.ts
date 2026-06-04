@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
-import { useConversationRunsStore } from '@/stores/conversationRuns'
+import { THINKING_PLACEHOLDER, useConversationRunsStore } from '@/stores/conversationRuns'
 import { userApi } from '@/api/user'
 import { resolveChatPermission } from '@/api/chat'
+import { LOCALE_HEADER, setActiveLocale } from '@/i18n/runtime'
 import type { ChatEntry, PendingPermission } from '@/stores/conversationRuns'
 import type { AgentTraceEvent } from '@/types/agentTrace'
 
@@ -63,6 +64,7 @@ describe('conversationRuns store', () => {
     setActivePinia(createPinia())
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    setActiveLocale('zh')
   })
 
   it('routes streamed events by session/run and keeps another selected session clean', () => {
@@ -119,7 +121,10 @@ describe('conversationRuns store', () => {
     const sessionB = store.ensureState('session-b')
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/v1/ai-chat/chat/stream'),
-      expect.objectContaining({ method: 'POST' }),
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ [LOCALE_HEADER]: 'zh' }),
+      }),
     )
     expect(sessionA.isSending).toBe(true)
     expect(sessionA.activeRunId).toBe('run-a')
@@ -475,7 +480,7 @@ describe('conversationRuns store', () => {
     store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
 
     const answer = state.messages.find((m: ChatEntry) => m.id === 'run:run-a:assistant')
-    expect(answer?.content).toBe('正在思考...')
+    expect(answer?.content).toBe(THINKING_PLACEHOLDER)
 
     store.applyEventToState(state, answerDelta('run-a', 'session-a', 2, '根据'))
     expect(answer?.content).toBe('根据')
@@ -538,7 +543,7 @@ describe('conversationRuns store', () => {
     store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
 
     const answer = state.messages.find((m: ChatEntry) => m.id === 'run:run-a:assistant')
-    expect(answer?.content).toBe('正在思考...')
+    expect(answer?.content).toBe(THINKING_PLACEHOLDER)
 
     store.applyEventToState(state, {
       ...traceEvent('run-a', 'session-a', 2, 'run_complete'),

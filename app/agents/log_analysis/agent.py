@@ -996,6 +996,9 @@ class LogAnalysisAgent:
                 "claude-agent-sdk is required. Install with: pip install claude-agent-sdk>=0.1"
             ) from exc
 
+        from app.i18n.prompts import response_language_directive
+
+        language_directive = response_language_directive(ctx.locale)
         system_prompt, user_prompt_template = get_prompts(locale=ctx.locale)
         system_prompt += (
             "\n\n## 当前运行工作区\n"
@@ -1114,14 +1117,14 @@ class LogAnalysisAgent:
             system_prompt += skill_activation_prompt
             user_prompt += skill_activation_prompt
 
+        user_prompt += "\n\nOutput language requirement:\n" + language_directive
+
         setting_sources = ["project"] if materialized_skills else None
 
         # Response-language directive last: an explicit final instruction is the
         # most reliable lever on output language, decoupling the answer language
         # from the (possibly mixed-language) log/source input.
-        from app.i18n.prompts import response_language_directive
-
-        system_prompt += "\n\n" + response_language_directive(ctx.locale)
+        system_prompt += "\n\n" + language_directive
 
         options = build_options(
             system_prompt=system_prompt,

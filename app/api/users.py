@@ -91,7 +91,7 @@ async def get_request_locale(
     """Resolve the active locale for the current request.
 
     Priority: explicit locale header → authenticated user's stored language →
-    default. Always returns a supported code.
+    Accept-Language → default. Always returns a supported code.
     """
     return resolve_locale(
         header_locale=request.headers.get(LOCALE_HEADER),

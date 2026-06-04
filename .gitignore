@@ -192,3 +192,4 @@ bin/tool_log_decompress
 .build_cache_lock
 .npm_install_cache
 .env.example.bak_*
+certs/

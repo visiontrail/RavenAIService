@@ -87,7 +87,11 @@ class ChatHistoryService(BaseService):
         soft-deleted session.
         """
         session = await self.ensure_session(db, user_id, session_id=session_id)
-        if (session.message_count or 0) == 0 and role == "user":
+        if (
+            (session.message_count or 0) == 0
+            and role == "user"
+            and (not session.title or session.title.strip() == "新对话")
+        ):
             preferred_title = title_hint or content
             if preferred_title:
                 session.title = self._title_from_hint(preferred_title, fallback=session.title)

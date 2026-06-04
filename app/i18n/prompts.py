@@ -28,8 +28,21 @@ from app.i18n import DEFAULT, normalize
 # code. Kept deliberately blunt — an explicit final instruction is the most
 # reliable lever on output language even when the prompt body drifts.
 _RESPONSE_LANGUAGE_DIRECTIVES: dict[str, str] = {
-    "zh": "请全程使用简体中文回答，即使日志、源码或其他输入是其他语言。",
-    "en": "Respond entirely in English, even when the logs, source code, or other input are in another language.",
+    "zh": (
+        "请全程使用简体中文回答。最终围栏 JSON 中所有面向用户的自然语言字段"
+        "（尤其 answer、summary、root_cause_hypotheses[].hypothesis、"
+        "recommended_actions、proposed_fixes 的 title/description/rationale）"
+        "必须使用简体中文；日志关键字、代码标识符、协议字段名、文件路径和"
+        "原始错误可保留原文。"
+    ),
+    "en": (
+        "Respond entirely in English. In the final fenced JSON, every user-facing "
+        "natural-language field, especially answer, summary, "
+        "root_cause_hypotheses[].hypothesis, recommended_actions, and proposed_fixes "
+        "title/description/rationale, must be English; log keywords, code "
+        "identifiers, protocol field names, file paths, and raw errors may stay "
+        "verbatim."
+    ),
 }
 
 

@@ -47,7 +47,12 @@ def test_resolve_locale_header_wins_over_user() -> None:
     assert resolve_locale(header_locale="zh", user=_User("en")) == "zh"
 
 
-def test_resolve_locale_accept_language_when_no_explicit_header() -> None:
+def test_resolve_locale_user_preference_wins_over_accept_language() -> None:
+    assert resolve_locale(accept_language="en-US,en;q=0.9", user=_User("zh")) == "zh"
+    assert resolve_locale(accept_language="zh-CN,zh;q=0.9", user=_User("en")) == "en"
+
+
+def test_resolve_locale_accept_language_when_no_app_or_user_preference() -> None:
     assert resolve_locale(accept_language="en-US,en;q=0.9", user=None) == "en"
 
 

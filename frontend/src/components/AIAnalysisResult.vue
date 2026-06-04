@@ -85,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import {
@@ -98,7 +98,7 @@ import {
   RotateCcw,
   Brain,
 } from 'lucide-vue-next'
-import { renderMarkdown, cleanContent } from '../utils/markdownRenderer'
+import { renderMarkdown, cleanContent, processMermaidBlocks } from '../utils/markdownRenderer'
 import { copyToClipboard } from '../utils'
 
 interface Props {
@@ -168,6 +168,24 @@ const formatDuration = (seconds: number) => {
 }
 
 const markdownPanel = ref<HTMLElement | null>(null)
+let mermaidRenderScheduled = false
+
+const scheduleMermaidRender = () => {
+  if (props.isLoading || !props.result || mermaidRenderScheduled) return
+
+  mermaidRenderScheduled = true
+  nextTick(() => {
+    mermaidRenderScheduled = false
+    if (props.isLoading || !props.result) return
+    void processMermaidBlocks(markdownPanel.value)
+  })
+}
+
+watch(
+  [renderedMarkdown, () => props.isLoading],
+  scheduleMermaidRender,
+  { immediate: true, flush: 'post' }
+)
 
 // 获取用户在分析结果面板内选中的文本，若无有效选区则返回空字符串
 const getSelectedTextInPanel = (): string => {

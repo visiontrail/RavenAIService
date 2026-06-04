@@ -430,13 +430,19 @@ class TestLogAnalysisAgentRun:
         workspace_ctx.locale = locale
 
         captured_locale = {}
+        captured_prompt = {}
 
         def _spy_get_prompts(*args, **kwargs):
             captured_locale["value"] = kwargs.get("locale")
             return ("You are a test agent.", "{question}")
 
+        async def _spy_query(*args, **kwargs):
+            captured_prompt["value"] = kwargs.get("prompt")
+            async for message in _fake_query_ok(*args, **kwargs):
+                yield message
+
         fake_sdk = MagicMock()
-        fake_sdk.query = _fake_query_ok
+        fake_sdk.query = _spy_query
         fake_sdk.ClaudeAgentOptions = MagicMock
 
         with _patch_build_options() as mock_build_options, _patch_mcp_server(), \
@@ -456,9 +462,11 @@ class TestLogAnalysisAgentRun:
         # system prompt that reaches the SDK.
         system_prompt = mock_build_options.call_args.kwargs["system_prompt"]
         assert system_prompt.endswith(response_language_directive(locale))
+        assert captured_prompt["value"].endswith(response_language_directive(locale))
         # The other locale's directive must NOT be present.
         other = "zh" if locale == "en" else "en"
         assert response_language_directive(other) not in system_prompt
+        assert response_language_directive(other) not in captured_prompt["value"]
 
     @pytest.mark.asyncio
     async def test_bash_tool_is_unrestricted_for_temp_workspace(self, workspace_ctx):

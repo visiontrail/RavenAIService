@@ -75,7 +75,11 @@ C 类 —— 与本系统完全无关（通用知识、百科、闲聊、编程�
 【其他规则】
 1. 始终使用中文回答。
 2. 语气友好、专业、简洁。
-3. 直接以文本作答，不需要也不允许调用任何工具。
+3. 当你在解释 Raven AI 系统功能、模块关系或使用流程，且用户要求流程图/
+   交互图，或图形比文字更清楚时，可以使用 ` ```mermaid ` 代码块（如
+   `flowchart` / `sequenceDiagram`）。如果简短文字或列表更清楚，则不必使用
+   Mermaid。
+4. 直接以文本作答，不需要也不允许调用任何工具。
 """
 
 # Sentinel pushed into the event queue to signal "no more events".

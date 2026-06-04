@@ -2,10 +2,10 @@
 
 The active locale is resolved per request in priority order:
 
-1. an explicit locale header sent by the frontend (``X-App-Locale``), or a
-   standard ``Accept-Language`` header as a fallback source,
+1. an explicit locale header sent by the frontend (``X-App-Locale``),
 2. the authenticated user's stored ``language`` preference,
-3. the system default (:data:`app.i18n.DEFAULT`).
+3. a standard ``Accept-Language`` header as an anonymous/browser fallback,
+4. the system default (:data:`app.i18n.DEFAULT`).
 
 The pure :func:`resolve_locale` function holds the logic so it can be unit
 tested without a FastAPI request; the API layer provides the thin dependency
@@ -33,17 +33,18 @@ def resolve_locale(
     """Resolve the active locale from the available signals.
 
     ``header_locale`` is the explicit app header. ``accept_language`` is the raw
-    ``Accept-Language`` header value (only the first tag is considered).
+    ``Accept-Language`` header value (only the first tag is considered, and only
+    after the authenticated user's Raven preference).
     ``user`` is any object exposing a ``language`` attribute (or ``None``).
     Always returns a supported code; never raises.
     """
     if header_locale:
         return normalize(header_locale)
+    user_language = getattr(user, "language", None)
+    if user_language:
+        return normalize(user_language)
     if accept_language:
         first_tag = accept_language.split(",", 1)[0].strip()
         if first_tag:
             return normalize(first_tag)
-    user_language = getattr(user, "language", None)
-    if user_language:
-        return normalize(user_language)
     return DEFAULT

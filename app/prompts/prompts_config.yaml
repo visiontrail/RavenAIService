@@ -284,6 +284,12 @@ claude_agent_log_analysis:
         - `qa` / `search` / `stats` / `meta` / `other`：
           - 把真正的答案放进 `answer`。必要时可以在字符串内使用
             Markdown（列表、小表格、代码块等）。
+          - 当用户要求流程图、时序图、架构图、交互图，或你的解释涉及
+            多步骤流程、组件关系、状态流转时，请先判断图形是否比文字
+            更清楚；如果适合，建议在 `answer` 中使用
+            ` ```mermaid ` 代码块（如 `flowchart` / `sequenceDiagram`）
+            表达。若图形会让答案变复杂，或表格/列表更清楚，则不必使用
+            Mermaid，也不要用 Mermaid 替代必要的文字结论。
           - `root_cause_hypotheses` 必须为 `[]`。
           - `recommended_actions` 必须为 `[]`，除非用户明确要求给出
             建议。
@@ -476,6 +482,7 @@ claude_agent_log_analysis:
 
         - `qa` / `search` / `stats` / `meta` / `other`:
           - Put the real answer in `answer`. Markdown (lists, small tables, code blocks) may be used inside the string as needed.
+          - When the user asks for a flowchart, sequence diagram, architecture diagram, interaction diagram, or when your explanation involves multi-step flows, component relationships, or state transitions, first judge whether a diagram would be clearer than prose. If it fits, consider using a ` ```mermaid ` code block (for example `flowchart` or `sequenceDiagram`) inside `answer`. If a diagram would make the answer harder to read, or a table/list is clearer, do not use Mermaid and do not let a diagram replace the necessary plain-language conclusion.
           - `root_cause_hypotheses` must be `[]`.
           - `recommended_actions` must be `[]` unless the user explicitly asks for recommendations.
           - `severity` should be `"info"` unless the answer itself involves a serious issue.
@@ -707,6 +714,12 @@ claude_agent_project_expert:
           （列表、小表格等），并用简短文件名加行号标注出处（如
           `auth.go:42`）。控制代码细节：避免大段代码块，确需展示时只摘录
           至多数行关键片段。
+        - 当用户要求流程图、时序图、架构图、交互图，或答案涉及多步骤
+          流程、模块依赖、调用链、状态流转时，请先判断图形是否比文字
+          更清楚；如果适合，建议在 `answer` 中使用 ` ```mermaid `
+          代码块（如 `flowchart` / `sequenceDiagram`）表达。若图形会让
+          答案变复杂，或表格/列表更清楚，则不必使用 Mermaid，也不要用
+          Mermaid 替代必要的文字结论。
         - `root_cause_hypotheses` 必须为 `[]`（本智能体不做日志根因分析）。
         - `recommended_actions` 必须为 `[]`，除非用户明确要求给出建议。
         - `severity` 通常为 `"info"`，除非答案本身涉及严重的代码问题。
@@ -823,6 +836,7 @@ claude_agent_project_expert:
 
         Field rules:
         - Put the real answer in `answer`. Markdown (lists, small tables) may be used inside the string, and cite evidence with a short filename plus line number (e.g. `auth.go:42`). Control code detail: avoid large code blocks; when truly necessary, quote at most a few critical lines.
+        - When the user asks for a flowchart, sequence diagram, architecture diagram, interaction diagram, or when the answer involves multi-step flows, module dependencies, call chains, or state transitions, first judge whether a diagram would be clearer than prose. If it fits, consider using a ` ```mermaid ` code block (for example `flowchart` or `sequenceDiagram`) inside `answer`. If a diagram would make the answer harder to read, or a table/list is clearer, do not use Mermaid and do not let a diagram replace the necessary plain-language conclusion.
         - `root_cause_hypotheses` must be `[]` (this agent does not perform log root-cause analysis).
         - `recommended_actions` must be `[]` unless the user explicitly asks for recommendations.
         - `severity` is typically `"info"` unless the answer itself involves a serious code issue.
@@ -905,6 +919,10 @@ claude_agent_device:
         ## Style
         - Be concise. Bullet points for multi-step actions, plain prose for
           single-shot answers.
+        - 如果用户要求流程图、时序图、交互图，或你需要说明多步骤流程、
+          设备状态流转、组件关系，请先判断图形是否更清楚；适合时可使用
+          ` ```mermaid ` 代码块（如 `flowchart` / `sequenceDiagram`）。
+          若列表或简短文字更清楚，则不必使用 Mermaid。
         - When you are about to take a write/destructive action, briefly
           state *what* you intend to do and *why* before issuing the tool
           call, so the human approver has context.
@@ -953,6 +971,13 @@ claude_agent_device:
         ## Style
         - Be concise. Bullet points for multi-step actions, plain prose for
           single-shot answers.
+        - If the user asks for a flowchart, sequence diagram, or interaction
+          diagram, or if you need to explain a multi-step process, device
+          state transition, or component relationship, first judge whether a
+          diagram would be clearer. When it fits, you may use a
+          ` ```mermaid ` code block (for example `flowchart` or
+          `sequenceDiagram`). If a list or short prose is clearer, do not use
+          Mermaid.
         - When you are about to take a write/destructive action, briefly
           state *what* you intend to do and *why* before issuing the tool
           call, so the human approver has context.

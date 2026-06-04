@@ -63,6 +63,35 @@ async def test_append_user_then_ai_increments_count(session: AsyncSession, user:
 
 
 @pytest.mark.asyncio
+async def test_append_first_user_message_preserves_preseeded_summary_title(
+    session: AsyncSession, user: User
+):
+    sid = str(uuid.uuid4())
+    seeded = await chat_history_service.ensure_session(
+        session,
+        user.id,
+        session_id=sid,
+    )
+    await chat_history_service.update_session_title(
+        session,
+        user_id=user.id,
+        session_id=seeded.id,
+        title="轻量模型摘要标题",
+    )
+
+    chat_session, _ = await chat_history_service.append_message(
+        session,
+        user_id=user.id,
+        session_id=sid,
+        role="user",
+        content="用户输入的长问题不应该覆盖摘要标题",
+    )
+
+    assert chat_session.message_count == 1
+    assert chat_session.title == "轻量模型摘要标题"
+
+
+@pytest.mark.asyncio
 async def test_append_message_revives_soft_deleted_session(
     session: AsyncSession, user: User
 ):

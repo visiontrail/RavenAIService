@@ -175,6 +175,10 @@
                     <span class="meta-label">{{ t('logDetail.metaSource') }}</span>
                     <span class="meta-value">{{ logStore.currentLog.metadata.source }}</span>
                   </div>
+                  <div v-if="triggerDisplayName" class="meta-item">
+                    <span class="meta-label">{{ t('logDetail.metaUsername') }}</span>
+                    <span class="meta-value">{{ triggerDisplayName }}</span>
+                  </div>
                   <div v-if="logStore.currentLog.metadata.environment" class="meta-item">
                     <span class="meta-label">{{ t('logDetail.metaEnvironment') }}</span>
                     <span class="meta-value">{{ logStore.currentLog.metadata.environment }}</span>
@@ -370,6 +374,7 @@
           </div>
           <div
             v-if="logStore.currentLog?.manual_analysis"
+            ref="manualAnalysisBodyRef"
             class="manual-analysis-body"
             v-html="renderedManualAnalysis"
           />
@@ -442,7 +447,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessageBox, ElMessage } from 'element-plus'
@@ -462,7 +467,7 @@ import AIAnalysisResult from '../components/AIAnalysisResult.vue'
 import AgentTraceStream from '../components/AgentTraceStream.vue'
 import type { AgentTraceEvent } from '../types/agentTrace'
 import { useUserStore } from '../stores/user'
-import { renderMarkdown } from '../utils/markdownRenderer'
+import { renderMarkdown, processMermaidBlocks } from '../utils/markdownRenderer'
 
 interface Props {
   id: string
@@ -486,6 +491,7 @@ const issueDescriptionDraft = ref('')
 const manualAnalysisDialogVisible = ref(false)
 const manualAnalysisSaving = ref(false)
 const manualAnalysisFormRef = ref<FormInstance>()
+const manualAnalysisBodyRef = ref<HTMLElement | null>(null)
 const manualAnalysisForm = ref({
   content: ''
 })
@@ -787,6 +793,31 @@ const renderedManualAnalysis = computed(() => {
   return renderMarkdown(content, { wrapperClass: 'markdown-content', cleanXml: true })
 })
 
+let manualAnalysisMermaidRenderScheduled = false
+
+const scheduleManualAnalysisMermaidRender = () => {
+  if (!renderedManualAnalysis.value || manualAnalysisMermaidRenderScheduled) return
+
+  manualAnalysisMermaidRenderScheduled = true
+  nextTick(() => {
+    manualAnalysisMermaidRenderScheduled = false
+    void processMermaidBlocks(manualAnalysisBodyRef.value)
+  })
+}
+
+const triggerInfo = computed(() => {
+  const value = aiAnalysisResult.value?.triggered_by || logStore.currentLog?.ai_analysis_result?.triggered_by
+  return value && typeof value === 'object' ? value : null
+})
+
+const triggerDisplayName = computed(() => {
+  const user = triggerInfo.value?.user
+  if (!user || typeof user !== 'object') return ''
+  return String(user.display_name || user.username || user.email || user.id || '')
+})
+
+const logSource = computed(() => logStore.currentLog?.metadata?.source || '')
+
 // 项目对应的 pill 样式
 const projectPill = (log?: LogRecord | null) => {
   return log?.project_id ? 'rw-pill-success' : 'rw-pill-neutral'
@@ -836,6 +867,7 @@ const hasMetadata = (metadata: any) => {
   
   return !!(
     metadata.source ||
+    triggerDisplayName.value ||
     metadata.environment ||
     metadata.service_name ||
     metadata.version ||
@@ -1103,7 +1135,7 @@ const handleCopyLink = async () => {
   }
 }
 
-// 导出 PDF 报告：使用 html2pdf.js 直接在浏览器端生成并下载 PDF 文件。
+// 导出 PDF 报告：交给浏览器原生打印/PDF 引擎渲染，保留可选中文本。
 // 报告内容中刻意剔除 "模型原文" 段落，避免冗余 raw 文本进入正式报告。
 const escapeHtml = (text: string) =>
   text
@@ -1121,18 +1153,31 @@ const stripModelRawSection = (markdown: string): string => {
   return markdown.replace(new RegExp('##\\s*\\u6a21\\u578b\\u539f\\u6587[\\s\\S]*?(?=\\n##\\s|\\n#\\s|$)', 'g'), '').trimEnd()
 }
 
-// 生成在 html2canvas 截图前临时挂到 DOM 的报告容器。
+// 生成在打印 iframe 中渲染的报告容器。
 // 所有样式都用 `.pdf-export-root` 作为前缀作用域，避免污染当前页面。
 const PDF_EXPORT_STYLES = `
+@page {
+  size: A4 portrait;
+  margin: 12mm;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #ffffff;
+}
 .pdf-export-root, .pdf-export-root * { box-sizing: border-box; }
 .pdf-export-root {
-  width: 794px;
-  padding: 32px 36px;
+  width: auto;
+  max-width: none;
+  padding: 0;
   font-family: 'PingFang SC', 'Microsoft YaHei', -apple-system, system-ui, sans-serif;
   color: #171717;
   background: #ffffff;
   line-height: 1.6;
   font-size: 13px;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
 }
 .pdf-export-root .report-title {
   font-size: 22px;
@@ -1147,7 +1192,11 @@ const PDF_EXPORT_STYLES = `
   border-bottom: 1px solid #e5e5e5;
   padding-bottom: 12px;
 }
-.pdf-export-root section { margin-bottom: 24px; page-break-inside: avoid; }
+.pdf-export-root section {
+  margin-bottom: 24px;
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+}
 .pdf-export-root h2 {
   font-size: 15px;
   margin: 0 0 10px;
@@ -1155,9 +1204,22 @@ const PDF_EXPORT_STYLES = `
   border-bottom: 1px solid #e5e5e5;
   letter-spacing: -0.1px;
   font-weight: 600;
+  break-after: avoid-page;
+  page-break-after: avoid;
 }
-.pdf-export-root h3 { font-size: 13.5px; margin: 14px 0 6px; font-weight: 600; }
-.pdf-export-root table.info { width: 100%; border-collapse: collapse; }
+.pdf-export-root h3 {
+  font-size: 13.5px;
+  margin: 14px 0 6px;
+  font-weight: 600;
+  break-after: avoid-page;
+  page-break-after: avoid;
+}
+.pdf-export-root table.info {
+  width: 100%;
+  border-collapse: collapse;
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+}
 .pdf-export-root table.info th,
 .pdf-export-root table.info td {
   text-align: left;
@@ -1178,6 +1240,8 @@ const PDF_EXPORT_STYLES = `
   border: 1px solid #eee;
   border-radius: 6px;
   background: #fafafa;
+  break-inside: avoid-page;
+  page-break-inside: avoid;
 }
 .pdf-export-root .empty-box { color: #999; font-style: italic; }
 .pdf-export-root .ai-meta { font-size: 12px; color: #666; margin-bottom: 8px; }
@@ -1187,11 +1251,23 @@ const PDF_EXPORT_STYLES = `
 .pdf-export-root .md h1,
 .pdf-export-root .md h2,
 .pdf-export-root .md h3,
-.pdf-export-root .md h4 { margin: 1em 0 0.4em; line-height: 1.3; font-weight: 600; }
+.pdf-export-root .md h4 {
+  margin: 1em 0 0.4em;
+  line-height: 1.3;
+  font-weight: 600;
+  break-after: avoid-page;
+  page-break-after: avoid;
+}
 .pdf-export-root .md h1 { font-size: 16px; }
 .pdf-export-root .md h2 { font-size: 14.5px; border: none; padding: 0; }
 .pdf-export-root .md h3 { font-size: 13.5px; }
-.pdf-export-root .md p { margin: 0.5em 0; }
+.pdf-export-root .md p {
+  margin: 0.5em 0;
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+  orphans: 3;
+  widows: 3;
+}
 .pdf-export-root .md code {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   background: #f5f5f7;
@@ -1210,6 +1286,8 @@ const PDF_EXPORT_STYLES = `
   word-break: break-word;
   font-size: 12px;
   line-height: 1.5;
+  break-inside: avoid-page;
+  page-break-inside: avoid;
 }
 .pdf-export-root .md pre code {
   background: transparent;
@@ -1217,17 +1295,35 @@ const PDF_EXPORT_STYLES = `
   padding: 0;
   color: inherit;
 }
-.pdf-export-root .md table { width: 100%; border-collapse: collapse; margin: 0.8em 0; }
+.pdf-export-root .md table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.8em 0;
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+}
 .pdf-export-root .md th,
 .pdf-export-root .md td { border: 1px solid #ddd; padding: 4px 8px; font-size: 12.5px; }
 .pdf-export-root .md th { background: #f5f5f7; }
 .pdf-export-root .md ul,
 .pdf-export-root .md ol { padding-left: 1.6em; }
+.pdf-export-root .md li {
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+  orphans: 3;
+  widows: 3;
+}
 .pdf-export-root .md blockquote {
   border-left: 3px solid #d4d4d4;
   padding-left: 12px;
   color: #555;
   margin: 0.6em 0;
+  break-inside: avoid-page;
+  page-break-inside: avoid;
+}
+.pdf-export-root tr {
+  break-inside: avoid-page;
+  page-break-inside: avoid;
 }
 `
 
@@ -1242,6 +1338,20 @@ const handleExportPDF = async () => {
   const log = logStore.currentLog
 
   let iframe: HTMLIFrameElement | null = null
+  let cleanupTimer: number | null = null
+  let deferCleanup = false
+
+  const cleanupIframe = () => {
+    if (cleanupTimer !== null) {
+      window.clearTimeout(cleanupTimer)
+      cleanupTimer = null
+    }
+    if (iframe && iframe.parentNode) {
+      iframe.parentNode.removeChild(iframe)
+    }
+    iframe = null
+  }
+
   try {
     exportPdfLoading.value = true
 
@@ -1261,16 +1371,15 @@ const handleExportPDF = async () => {
       : ''
 
     const infoRows: Array<[string, string]> = [
-      [t('logDetail.filename'), log.filename || ''],
       [t('logDetail.originalFilename'), log.original_filename || ''],
       [t('logDetail.fileSize'), formatFileSize(log.file_size)],
       [t('logDetail.report.project'), getProjectLabel(log)],
+      [t('logDetail.metaSource'), logSource.value],
+      [t('logDetail.metaUsername'), triggerDisplayName.value],
       [t('logDetail.processStatus'), getStatusLabel(log.status)],
       [t('logDetail.createdAt'), formatDateTime(log.created_at)],
       [t('logDetail.downloadCount'), String(log.download_count ?? 0)],
-      [t('logDetail.report.fileId'), String(log.id)],
     ]
-    if (log.checksum) infoRows.push([t('logDetail.report.pdfChecksum'), log.checksum])
 
     const infoRowsHtml = infoRows
       .filter(([, v]) => v !== '' && v !== undefined && v !== null)
@@ -1323,19 +1432,15 @@ ${log.error_message ? `
 </section>
 `
 
-    // 在隔离的 iframe 中渲染报告，避免主文档中的 Tailwind v4 oklch() 颜色
-    // 导致 html2canvas 渲染空白（这是空白 PDF 的根因）。
     iframe = document.createElement('iframe')
     iframe.setAttribute('aria-hidden', 'true')
-    // visibility:hidden 仍保留布局，display:none 会导致 0 尺寸截图为空
     iframe.style.cssText = [
       'position: fixed',
-      'left: 0',
+      'left: -10000px',
       'top: 0',
-      'width: 820px',
-      'height: 20000px',
+      'width: 210mm',
+      'height: 297mm',
       'border: 0',
-      'opacity: 0',
       'pointer-events: none',
       'z-index: -1',
     ].join('; ')
@@ -1352,9 +1457,8 @@ ${log.error_message ? `
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<title>${escapeHtml(title)}</title>
+<title>${escapeHtml(buildPdfFilename(log.filename, log.id).replace(/\.pdf$/i, ''))}</title>
 <style>
-html, body { margin: 0; padding: 0; background: #ffffff; }
 ${PDF_EXPORT_STYLES}
 </style>
 </head>
@@ -1381,74 +1485,17 @@ ${PDF_EXPORT_STYLES}
     const root = iframeDoc.getElementById('pdf-root') as HTMLElement | null
     if (!root) throw new Error(t('logDetail.exportContainerFail'))
 
-    // 将 iframe 高度收缩到内容实际高度，确保 html2canvas 的窗口尺寸精确
-    const fullContentHeight = root.scrollHeight
-    iframe.style.height = `${fullContentHeight + 20}px`
-    await new Promise((r) => setTimeout(r, 80))
-
-    // 并行动态 import，按需加载，不进入主包
-    const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
-      import('html2canvas-pro'),
-      import('jspdf'),
-    ])
-
-    const captureWidth = root.scrollWidth
-    const captureHeight = root.scrollHeight
-    const canvas = await html2canvas(root, {
-      scale: 2,
-      useCORS: true,
-      backgroundColor: '#ffffff',
-      logging: false,
-      width: captureWidth,
-      height: captureHeight,
-      windowWidth: captureWidth,
-      windowHeight: captureHeight,
-    })
-
-    // A4 纸张毫米 → 像素的换算关系基于 canvas 的实际宽度
-    const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait', compress: true })
-    const pageWidthMm = pdf.internal.pageSize.getWidth()
-    const pageHeightMm = pdf.internal.pageSize.getHeight()
-    const marginMm = 10
-    const contentWidthMm = pageWidthMm - marginMm * 2
-    const contentHeightMm = pageHeightMm - marginMm * 2
-
-    // canvas 等比缩放到内容宽度后对应的总高度
-    const pxPerMm = canvas.width / contentWidthMm
-    const pageHeightPx = Math.floor(contentHeightMm * pxPerMm)
-
-    let renderedPx = 0
-    const totalPx = canvas.height
-    while (renderedPx < totalPx) {
-      const slicePx = Math.min(pageHeightPx, totalPx - renderedPx)
-      // 把当前页切片绘制到临时 canvas
-      const pageCanvas = document.createElement('canvas')
-      pageCanvas.width = canvas.width
-      pageCanvas.height = slicePx
-      const ctx = pageCanvas.getContext('2d')
-      if (!ctx) throw new Error(t('logDetail.canvasCtxFail'))
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
-      ctx.drawImage(canvas, 0, -renderedPx)
-
-      const imgData = pageCanvas.toDataURL('image/jpeg', 0.95)
-      const sliceHeightMm = slicePx / pxPerMm
-
-      if (renderedPx > 0) pdf.addPage()
-      pdf.addImage(imgData, 'JPEG', marginMm, marginMm, contentWidthMm, sliceHeightMm)
-
-      renderedPx += slicePx
-    }
-
-    pdf.save(buildPdfFilename(log.filename, log.id))
+    iframeWin.addEventListener('afterprint', cleanupIframe, { once: true })
+    cleanupTimer = window.setTimeout(cleanupIframe, 60_000)
+    iframeWin.focus()
+    iframeWin.print()
+    deferCleanup = true
     ElMessage.success(t('logDetail.pdfDownloadStarted'))
   } catch (error: any) {
     console.error('Failed to export report:', error)
     ElMessage.error(error?.message || t('logDetail.exportFail'))
   } finally {
-    if (iframe && iframe.parentNode) {
-      iframe.parentNode.removeChild(iframe)
-    }
+    if (!deferCleanup) cleanupIframe()
     exportPdfLoading.value = false
   }
 }
@@ -1918,6 +1965,12 @@ watch(
     }
   },
   { immediate: true }
+)
+
+watch(
+  renderedManualAnalysis,
+  scheduleManualAnalysisMermaidRender,
+  { immediate: true, flush: 'post' }
 )
 
 // 监听AI分析结果的持久化数据，进入页面时优先展示最近一次结果

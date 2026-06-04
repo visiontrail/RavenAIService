@@ -1,4 +1,6 @@
 import axios from 'axios'
+import { localeHeaderInterceptor } from '@/api'
+import { getActiveLocale, LOCALE_HEADER } from '@/i18n/runtime'
 import type {
   ApiResponse,
   PackageAgentSearchResponse,
@@ -37,6 +39,8 @@ const ravenApi = axios.create({
     'Content-Type': 'application/json',
   },
 })
+
+ravenApi.interceptors.request.use(localeHeaderInterceptor)
 
 export const listRavenPackages = (params: {
   page?: number
@@ -101,6 +105,7 @@ export const streamPackagesAgentSearch = async (
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'text/event-stream',
+    [LOCALE_HEADER]: getActiveLocale(),
   }
 
   let resp: Response
