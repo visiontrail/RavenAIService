@@ -327,13 +327,6 @@ const resetPanel = () => {
   nextTick(() => textareaRef.value?.focus())
 }
 
-const clearCurrentMessages = () => {
-  showTopMoreMenu.value = false
-  const state = currentConversation.value
-  if (!state || !state.messages.length) return
-  if (!window.confirm(t('aiChat.confirm.clearMessages'))) return
-  state.messages = []
-}
 
 const deleteCurrentSession = async () => {
   showTopMoreMenu.value = false
@@ -1751,10 +1744,6 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             </button>
 
             <div class="rw-menu-divider"/>
-            <button class="rw-menu-item" @click="clearCurrentMessages">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>
-              {{ t('aiChat.menu.clearMessages') }}
-            </button>
             <button
               v-if="sessionStore.selectedSessionId"
               class="rw-menu-item is-danger"

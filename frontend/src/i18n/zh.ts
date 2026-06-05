@@ -1084,7 +1084,6 @@ export default {
       selectProjectFirst: '请先选择关联项目',
     },
     confirm: {
-      clearMessages: '确定要清空当前消息吗？',
       deleteSession: '确定要删除该对话吗？此操作不可恢复。',
     },
     export: {
@@ -1114,7 +1113,6 @@ export default {
       export: '导出',
       share: '分享对话',
       exportMarkdown: '导出 Markdown',
-      clearMessages: '清空消息',
       deleteSession: '删除对话',
     },
     greeting: {

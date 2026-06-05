@@ -1084,7 +1084,6 @@ export default {
       selectProjectFirst: 'Please select a related project first',
     },
     confirm: {
-      clearMessages: 'Clear all messages in the current conversation?',
       deleteSession: 'Delete this conversation? This action cannot be undone.',
     },
     export: {
@@ -1114,7 +1113,6 @@ export default {
       export: 'Export',
       share: 'Share conversation',
       exportMarkdown: 'Export Markdown',
-      clearMessages: 'Clear messages',
       deleteSession: 'Delete conversation',
     },
     greeting: {
