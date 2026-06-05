@@ -4,51 +4,56 @@
 
 > Release, packaging, and Docker workflows are now centralized in [QUICKSTART.md](QUICKSTART.md). Use `scripts/docker-start.sh`, `scripts/docker-stop.sh`, and `scripts/docker-publish.sh`; the old root-level scripts have been removed.
 
-RavenAIService is the core service repository of the `Raven` intelligent testing platform. It is designed for complex telecom testing scenarios and brings together log intake, intelligent analysis, device collaboration, version asset management, and release operations into one platform foundation.
+RavenAIService is the core service repository of the Raven intelligent testing platform. The platform is evolving from a single-purpose log tool into a multi-project, multi-agent general testing platform, built around **project-based management, multi-agent collaboration, device integration, and version asset governance** for complex telecom testing scenarios.
 
-It is no longer just a “log staging service”. It is the business backbone that connects test data, AI capabilities, device-side execution, and package assets across testing, R&D, delivery, and operations workflows.
+Logs, AI, devices, code assets, and releases are no longer isolated modules — they are organized by “project” and driven by specialized agents, forming a closed-loop collaboration across testing, R&D, delivery, and operations.
 
 ## Product Positioning
 
-Raven focuses on a few recurring pain points in telecom testing:
+Raven focuses on recurring pain points in telecom testing and is evolving toward a true platform:
 
 - logs come from many places and are hard to standardize or reuse
 - protocol-stack logs are expensive to process and slow to investigate
 - troubleshooting is still heavily experience-driven and difficult to scale
 - platform workflows and device workflows are disconnected
 - packages, patches, releases, and test assets are scattered across tools
+- different projects and teams lack a unified testing backbone
 
 RavenAIService is built to turn those fragmented steps into a more complete intelligent testing flow:
 
-- unify test log intake and issue context
+- organize logs, code repositories, agent skills, and analysis results around **projects** as the core unit
+- use a **multi-agent architecture** (general chat, log analysis, device operations, code expert, bug fix, package search) so each scenario is handled by the most appropriate agent
 - automate protocol-stack processing and reduce waiting time
-- bring AI into analysis, retrieval, and troubleshooting collaboration
 - connect platform and device capabilities into a closed-loop workflow
 - centralize rebuild packages, patches, and client releases for better governance
+- support Chinese / English multi-language UI for global teams
 
 ## Platform Value
 
-- Higher testing efficiency: logs, AI, devices, and admin workflows live in one place
-- Faster issue turnaround: teams move from upload to analysis with fewer handoffs
-- Better asset reuse: logs, analysis results, package data, and actions become reusable knowledge
-- Stronger collaboration: testing, R&D, delivery, and operations work on shared context
-- Better version governance: packages, patches, and releases are managed through one asset center
+- **Project-based management**: logs, repositories, and agent skills are organized per project — each team gets its own context
+- **Multi-agent collaboration**: general chat, log analysis, code expert, device operations, bug fix, package search — the platform automatically routes to the best agent for each scenario
+- **Higher testing efficiency**: logs, AI, devices, and admin workflows live in one place
+- **Faster issue turnaround**: teams move from upload to analysis with fewer handoffs
+- **Better asset reuse**: logs, analysis results, package data, and actions become reusable knowledge
+- **Global support**: the frontend supports Chinese / English switching for multi-language teams
 
 ## Typical Scenarios
 
-- Test teams ingest field or lab logs in batches for fast archiving, filtering, and investigation
-- Different log types such as protocol-stack, antenna, and full logs can enter dedicated handling flows
-- Test and R&D engineers can ask AI questions grounded in real log context
-- The platform can forward AI instructions to a target device and wait for execution results
-- Product versions, patches, and delivery packages can be managed through one traceable asset center
+- Admins create projects for different products / teams, link code repositories, and configure per-project agent skills
+- Test teams ingest field or lab logs in batches, archived by project, for fast filtering and analysis
+- The platform auto-detects protocol-stack, antenna, full, and other log types and routes them into the right processing flow
+- Test and R&D engineers ask questions in AI Chat — GeneralAgent routes to log analysis, code expert, device operations, or other agents as needed
+- BugFixAgent takes log analysis conclusions and automatically locates code, generating fix suggestions
+- The platform forwards AI instructions to target devices and waits for execution results
+- Product versions, patches, and delivery packages are managed through one traceable asset center
 
 ## Platform Overview
 
-To support that end-to-end workflow, the repository includes these platform modules:
+The repository includes these platform modules:
 
-- `FastAPI` main service: core business flows for logs, AI, users, devices, and releases
-- `Vue 3 + Vite` console: the unified web workspace for testers and administrators
-- `FastAPI Raven package module`: rebuild package center, search, and download distribution
+- `FastAPI` main service: core business flows for logs, AI, users, devices, projects, and releases
+- `Vue 3 + Vite` console: the unified multi-language web workspace for testers and administrators
+- `Multi-agent engine`: GeneralAgent (router), LogAnalysisAgent, DeviceAgent, ProjectExpertAgent, BugFixAgent, PackageSearchAgent
 - `Celery + Redis`: asynchronous execution for protocol-stack processing, AI analysis, and maintenance jobs
 - `Nginx`: a single external entry to simplify deployment and access
 
@@ -60,7 +65,7 @@ Browser
   | http://localhost:8085
   v
 Nginx
-  |-- /                -> Vue SPA
+  |-- /                -> Vue SPA (zh/en)
   |-- /api/*           -> FastAPI (8085)
   |-- /raven/api/*     -> FastAPI Raven package API
   |-- /ws/device-link  -> FastAPI WebSocket
@@ -69,16 +74,24 @@ Nginx
 FastAPI
   |-- /health
   |-- /api/v1/logs/*
-  |-- /api/v1/ai-chat/*
+  |-- /api/v1/ai-chat/*       -> multi-agent routing
   |-- /api/v1/users/*
   |-- /api/v1/device-links/*
   |-- /api/v1/releases/*
+  |-- /api/v1/projects/*      -> project & repo management
+  |-- /api/v1/bug-fixes/*
+  |-- /api/v1/metrics/*       -> system & user usage stats
   |-- /raven/api/packages/*
-  |-- /raven/api/upload/*
-  |-- /raven/api/download/*
-  |-- /raven/api/search/*
   |-- /admin/*
   |-- frontend/dist static site
+
+Agent Engine
+  |-- GeneralAgent          general chat & agent routing
+  |-- LogAnalysisAgent      intelligent log analysis
+  |-- DeviceAgent           device operation integration
+  |-- ProjectExpertAgent    code repository Q&A
+  |-- BugFixAgent           bug location & fix suggestions
+  |-- PackageSearchAgent    rebuild package semantic search
 
 Celery + Redis
   |-- protocol-stack log processing
@@ -88,49 +101,54 @@ Celery + Redis
 
 ## Capability Map
 
-### 1. Turning Test Logs into Managed Assets
+### 1. Project-Based Management
+
+- Logs are no longer classified by type alone — they are linked to projects via `project_id` for multi-project isolation
+- Each project can be linked to one or more code repositories, providing knowledge sources for the code expert agent
+- Per-project agent skill configuration lets admins enable or customize agent behavior for each project
+- Admin console provides project repository management, skill configuration, model settings, and usage statistics
+
+### 2. Multi-Agent Collaboration Engine
+
+The platform includes six specialized agents, unified by GeneralAgent routing:
+
+| Agent | Responsibility |
+| --- | --- |
+| **GeneralAgent** | General chat entry point; automatically routes to specialized agents based on user intent |
+| **LogAnalysisAgent** | Intelligent log analysis combining protocol-stack parsing, metadata, and project context |
+| **DeviceAgent** | Connects to devices via WebSocket to execute remote operations and relay results |
+| **ProjectExpertAgent** | Answers source-code-level questions based on the project's linked repositories |
+| **BugFixAgent** | Starts from log analysis conclusions, locates code issues, and generates fix suggestions |
+| **PackageSearchAgent** | Semantic search across rebuild package assets for package selection and version tracing |
+
+- All agents support streaming responses; the frontend renders Markdown and Mermaid diagrams in real time
+- AI chat sessions support pinning, Markdown export, drag-and-drop log file upload, and more
+
+### 3. Test Log Asset Management
 
 - Supports `upload-simple`, `upload`, and `upload-t04` entry points
-- Detects `stack`, `oam_antenna`, and `full` log types automatically
+- Auto-detects protocol-stack, antenna, full, and other log types; logs are archived by project
 - Extracts `metadata.json` from archives to enrich issue, environment, and version context
+- Protocol-stack logs are processed asynchronously via Celery with automatic retry on startup
 - Provides pagination, filtering, sorting, single download, batch download, and batch delete
-- Supports manual issue description updates and manual analysis notes for knowledge retention
-
-### 2. Automated Protocol-Stack Processing
-
-- Runs protocol-stack log processing asynchronously through `Celery`
-- Retries failed protocol-stack jobs on application startup
-- Relies on the external `bin/tool_log_decompress` utility for private archive formats
-- Can use `pigz` for faster parallel recompression, with automatic fallback
-
-### 3. AI-Assisted Analysis and Test Conversation
-
-- Exposes standard and streaming chat APIs
-- Persists chat sessions and messages for authenticated users
-- Writes AI analysis task state and results back into log metadata
-- Can use repository URL and commit information embedded in metadata for deeper investigation
-- Frontend supports package search and device-linked workflows inside AI Chat
 
 ### 4. Platform-to-Device Collaboration
 
-- Devices register through `WebSocket /ws/device-link`
-- The service tracks online state, capabilities, and last heartbeat
-- AI Chat can forward prompts to a specific device and wait for the device response
-- Devices can report MCP capabilities so prompts can better match real device-side abilities
+- Devices register through `WebSocket /ws/device-link` for a unified connection entry
+- The service tracks online state, MCP capability descriptions, and last heartbeat
+- DeviceAgent can forward instructions to a specific device and wait for the device response
+- Devices can report MCP capabilities so the platform can generate better-matched action chains
 
-### 5. Version Asset Center and Semantic Retrieval
+### 5. Version Asset Center
 
-- The FastAPI backend handles upload, delete, detail, download, and batch download flows
-- Package metadata is stored in `data/raven/package-metadata.json` and remains compatible with existing volumes
-- The unified `/raven/api/search/*` API provides search, suggestions, index status, and index rebuild
-- Supports index rebuild and index status inspection
-- Default package entry is `http://localhost:8085/raven`
-
-### 6. Release Operations and Admin Management
-
+- The FastAPI backend handles rebuild package upload, delete, detail, download, and batch download
+- Semantic search API provides package search, suggestions, and vector index management
 - Admin UI can upload Linux / macOS / Windows client release artifacts
-- Admin UI can edit `app/prompts/prompts_config.yaml`
-- Admin UI can manage end-user accounts
+
+### 6. Platform Operations and Monitoring
+
+- System-level and user-level AI usage statistics; admins can view agent call trends in the console
+- Online editing of prompt configuration, model settings, user management, and release management
 - Admin authentication is configured in `app/admin_auth.yaml`
 
 ## Repository Layout
@@ -139,7 +157,13 @@ Celery + Redis
 RavenAIService/
 ├── app/                         # FastAPI main service
 │   ├── api/                     # HTTP / WebSocket routes
-│   ├── agents/                  # AI agents and toolchain
+│   ├── agents/                  # multi-agent engine
+│   │   ├── general_agent/       #   general chat & routing
+│   │   ├── log_analysis/        #   intelligent log analysis
+│   │   ├── device_agent/        #   device operation integration
+│   │   ├── project_expert/      #   code repository Q&A
+│   │   ├── bug_fix/             #   bug fix suggestions
+│   │   └── package_search/      #   rebuild package semantic search
 │   ├── middleware/              # request logging, file size limits, etc.
 │   ├── models/                  # SQLAlchemy and Pydantic models
 │   ├── services/                # service layer
@@ -148,7 +172,7 @@ RavenAIService/
 │   ├── prompts/                 # prompt configuration
 │   ├── config.py                # main config entry
 │   └── main.py                  # FastAPI app entry
-├── frontend/                    # Vue 3 + Vite frontend
+├── frontend/                    # Vue 3 + Vite frontend (zh/en multi-language)
 ├── data/                        # local placeholder; container data lives in Docker volumes
 ├── logs/                        # local placeholder; container logs live in Docker volumes
 ├── scripts/                     # Docker start/stop/clean/publish scripts
@@ -230,147 +254,26 @@ Common scripts:
 
 | Path | Purpose |
 | --- | --- |
-| `/` | main log list and log workflow UI |
+| `/workbench` | AI workbench (chat, agent interaction) |
+| `/logs` | log list and filtering |
+| `/log/:id` | log detail and analysis |
 | `/upload` | log upload |
-| `/log/:id` | log detail |
-| `/ai-chat` | AI chat |
-| `/devices` | device list |
+| `/devices` | device list and status |
+| `/bug-fixes` | bug fix ticket list |
+| `/raven-manager` | rebuild package management |
+| `/raven/package/:id` | rebuild package detail |
 | `/download` | client download page |
+| `/admin/project-repos` | project repository management |
+| `/admin/agent-skills` | agent skill configuration |
+| `/admin/model-settings` | model settings |
+| `/admin/metrics` | usage statistics |
 | `/admin/prompts` | prompt admin page |
 | `/admin/users` | user admin page |
 | `/admin/releases` | release admin page |
-| `/raven` | rebuild package center |
-| `/raven/package/:id` | rebuild package detail |
-
-## API Overview
-
-### FastAPI main service
-
-#### Health and operations
-
-- `GET /health`
-- `POST /cleanup/temp-directories`
-
-#### Logs
-
-- `POST /api/v1/logs/upload-simple`
-- `POST /api/v1/logs/upload`
-- `POST /api/v1/logs/upload-t04`
-- `GET /api/v1/logs`
-- `GET /api/v1/logs/{log_id}`
-- `DELETE /api/v1/logs/{log_id}`
-- `GET /api/v1/logs/{log_id}/download`
-- `POST /api/v1/logs/{log_id}/download-count`
-- `POST /api/v1/logs/batch/delete`
-- `POST /api/v1/logs/batch/download`
-- `POST /api/v1/logs/{log_id}/analyze`
-- `GET /api/v1/logs/{log_id}/analysis/status`
-- `PUT /api/v1/logs/{log_id}/issue-description`
-- `POST /api/v1/logs/{log_id}/manual-analysis`
-
-#### AI Chat
-
-- `POST /api/v1/ai-chat/chat`
-- `POST /api/v1/ai-chat/chat/stream`
-
-#### Device link
-
-- `WS /ws/device-link`
-- `GET /api/v1/device-links`
-- `GET /api/v1/device-links/{device_id}/ping`
-- `DELETE /api/v1/device-links/{device_id}`
-
-#### Users and sessions
-
-- `POST /api/v1/users/auth/login`
-- `GET /api/v1/users/auth/me`
-- `GET /api/v1/users/chat-sessions`
-- `GET /api/v1/users/chat-sessions/{session_id}/messages`
-- `DELETE /api/v1/users/chat-sessions/{session_id}`
-
-#### Admin
-
-- `POST /admin/auth/login`
-- `POST /admin/auth/logout`
-- `GET /admin/auth/me`
-- `GET /admin/prompts/config`
-- `PUT /admin/prompts/config`
-- `GET /admin/releases`
-- `POST /admin/releases`
-- `POST /admin/releases/upload`
-- `DELETE /admin/releases/{release_id}`
-
-#### Public releases
-
-- `GET /api/v1/releases`
-- `GET /api/v1/releases/{release_id}/download`
-
-### Raven package API
-
-By default, the FastAPI backend exposes this API under `/raven/api/*`, with optional legacy compatibility under `/api/*`.
-
-Its main responsibilities are:
-
-- package list, filters, detail, delete
-- single download, batch download, type-based download
-- single and batch upload
-- semantic search, suggestions, vector index status, index rebuild
-
-## Data and Persistence
-
-Main data locations in this repository:
-
-| Path | Content |
-| --- | --- |
-| `data/logs.db` | main SQLite database |
-| `logs/` | FastAPI / Celery logs |
-| `temp/` | temporary processing workspace |
-| `data/releases/` | client release files |
-| `data/releases.json` | release metadata |
-| `data/device_links.json` | last persisted device snapshots |
-| `data/raven/package-metadata.json` | rebuild package metadata |
-| `data/raven/vector-store*` | RAG vector index |
-
-In Docker deployment, these are persisted through volumes, especially:
-
-- `app_logs`
-- `app_temp`
-- `app_data`
-- `raven_data`
-- `redis_data`
-
-## Development and Testing
-
-### Python
-
-```bash
-pytest
-```
-
-Or run the bundled helper:
-
-```bash
-python tests/run_tests.py
-```
-
-### Frontend
-
-```bash
-cd frontend
-npm run type-check
-npm run build
-```
-
-## Operational Notes
-
-- Protocol-stack processing depends on `tool_log_decompress`. The Docker image installs it automatically into `/usr/local/bin`; for native development you must make sure it is executable and available in `PATH`.
-- Development defaults to SQLite. For production, PostgreSQL is the safer choice, configured through `DATABASE_URL` or the PG-specific variables.
-- The Raven package API is now part of the FastAPI backend; rebuild `frontend/dist` or the frontend image after frontend changes.
-- Admin accounts are defined in `app/admin_auth.yaml`. Replace default credentials and use hashed passwords before any real deployment.
-- Example configuration files are for development reference only. Do not reuse exposed API keys, default passwords, or permissive CORS settings in production.
 
 ## Related Documents
 
+- [QUICKSTART.md](QUICKSTART.md) — release, packaging, and Docker workflow
 - [PROJECT_SETUP.md](PROJECT_SETUP.md)
 - [DEPLOY_USAGE.md](DEPLOY_USAGE.md)
 - [docs/DATABASE_USAGE.md](docs/DATABASE_USAGE.md)
