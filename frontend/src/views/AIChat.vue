@@ -17,6 +17,7 @@ import type {
 import { renderMarkdown, processMermaidBlocks } from '@/utils/markdownRenderer'
 import { loadMermaid } from '@/utils/mermaidLoader'
 import { ElMessage } from 'element-plus'
+import { Copy, FileDown } from 'lucide-vue-next'
 import { useUserStore } from '@/stores/user'
 import { useAppStore } from '@/stores/app'
 import { useChatSessionStore } from '@/stores/chatSession'
@@ -28,7 +29,7 @@ import {
 } from '@/stores/conversationRuns'
 import AgentTraceStream from '@/components/AgentTraceStream.vue'
 import { projectRepoApi, type ProjectRepoOption } from '@/api'
-import { downloadFile } from '@/utils'
+import { copyToClipboard, downloadFile } from '@/utils'
 
 type AgentOption = {
   id: string
@@ -429,6 +430,14 @@ const formatExportDateTime = (date: Date) => {
 const formatExportFileStamp = (date: Date) =>
   formatExportDateTime(date).replace(/[-:]/g, '').replace(' ', '-')
 
+const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+
 const sanitizeMarkdownFilename = (name: string) => {
   const cleaned = name
     .replace(/[\\/:*?"<>|]+/g, '-')
@@ -482,6 +491,219 @@ const exportCurrentConversationMarkdown = () => {
   const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
   downloadFile(blob, filename)
   appStore.showNotification({ title: t('aiChat.notifications.markdownExported'), type: 'success' })
+}
+
+const copyAiMessageMarkdown = async (message: ChatEntry) => {
+  const content = (message.content || '').trim()
+  if (!content || content === THINKING_PLACEHOLDER) return
+  const ok = await copyToClipboard(content)
+  if (ok) {
+    ElMessage.success(t('aiChat.export.markdownCopied'))
+  } else {
+    ElMessage.error(t('aiChat.export.markdownCopyFailed'))
+  }
+}
+
+const AI_MESSAGE_PDF_STYLES = `
+@page { margin: 16mm 14mm; }
+html, body { margin: 0; padding: 0; background: #fff; color: #171717; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-size: 13px;
+  line-height: 1.62;
+}
+.ai-pdf-root, .ai-pdf-root * { box-sizing: border-box; }
+.ai-pdf-root { width: 100%; max-width: 176mm; margin: 0 auto; padding: 0; }
+.ai-pdf-title {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.25;
+  color: #111827;
+}
+.ai-pdf-meta {
+  margin: 0 0 18px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e5e7eb;
+  color: #8a8f98;
+  font-size: 11.5px;
+}
+.ai-pdf-content h1,
+.ai-pdf-content h2,
+.ai-pdf-content h3,
+.ai-pdf-content h4 {
+  margin: 18px 0 8px;
+  color: #111827;
+  font-weight: 650;
+  line-height: 1.35;
+  page-break-after: avoid;
+}
+.ai-pdf-content h1 { font-size: 18px; }
+.ai-pdf-content h2 { font-size: 16px; }
+.ai-pdf-content h3 { font-size: 14.5px; }
+.ai-pdf-content h4 { font-size: 13.5px; }
+.ai-pdf-content p { margin: 0 0 10px; }
+.ai-pdf-content ul,
+.ai-pdf-content ol { margin: 8px 0 10px; padding-left: 1.6em; }
+.ai-pdf-content li { margin: 4px 0; }
+.ai-pdf-content a { color: #0d74ce; text-decoration: none; }
+.ai-pdf-content blockquote {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-left: 3px solid #d1d5db;
+  background: #f9fafb;
+  color: #4b5563;
+}
+.ai-pdf-content code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12px;
+  background: #f3f4f6;
+  color: #111827;
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.ai-pdf-content pre {
+  margin: 10px 0;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 8px;
+  background: #111827;
+  color: #f9fafb;
+  page-break-inside: avoid;
+}
+.ai-pdf-content pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 11.5px;
+}
+.ai-pdf-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  page-break-inside: avoid;
+}
+.ai-pdf-content th,
+.ai-pdf-content td {
+  border: 1px solid #e5e7eb;
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+.ai-pdf-content th { background: #f9fafb; font-weight: 650; }
+.ai-pdf-content img,
+.ai-pdf-content svg { max-width: 100%; height: auto; }
+.ai-pdf-content .mermaid-container {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  page-break-inside: avoid;
+}
+.ai-pdf-content .mermaid-loading,
+.ai-pdf-content .mermaid-copy-btn { display: none; }
+`
+
+const buildAiMessagePdfFilename = (exportedAt: Date) => {
+  const title = currentChatTitle.value || t('aiChat.export.defaultFilename')
+  return `${sanitizeMarkdownFilename(title)}-${formatExportFileStamp(exportedAt)}.pdf`
+}
+
+const exportAiMessagePdf = async (message: ChatEntry) => {
+  const content = (message.content || '').trim()
+  if (!content || content === THINKING_PLACEHOLDER) return
+
+  let iframe: HTMLIFrameElement | null = null
+  let cleanupTimer: number | null = null
+  let deferCleanup = false
+
+  const cleanupIframe = () => {
+    if (cleanupTimer !== null) {
+      window.clearTimeout(cleanupTimer)
+      cleanupTimer = null
+    }
+    if (iframe && iframe.parentNode) {
+      iframe.parentNode.removeChild(iframe)
+    }
+    iframe = null
+  }
+
+  try {
+    const exportedAt = new Date()
+    const title = t('aiChat.export.singlePdfTitle', { title: currentChatTitle.value || t('aiChat.export.defaultTitle') })
+    const contentHtml = renderMarkdown(content, { wrapperClass: 'ai-pdf-content', cleanXml: true })
+
+    iframe = document.createElement('iframe')
+    iframe.setAttribute('aria-hidden', 'true')
+    iframe.style.cssText = [
+      'position: fixed',
+      'left: -10000px',
+      'top: 0',
+      'width: 210mm',
+      'height: 297mm',
+      'border: 0',
+      'pointer-events: none',
+      'z-index: -1',
+    ].join('; ')
+    document.body.appendChild(iframe)
+
+    const iframeDoc = iframe.contentDocument
+    const iframeWin = iframe.contentWindow
+    if (!iframeDoc || !iframeWin) {
+      throw new Error(t('aiChat.export.pdfSandboxInitFail'))
+    }
+
+    iframeDoc.open()
+    iframeDoc.write(`<!DOCTYPE html>
+<html lang="${escapeHtml(userStore.profile?.language || 'zh-CN')}">
+<head>
+<meta charset="UTF-8" />
+<title>${escapeHtml(buildAiMessagePdfFilename(exportedAt).replace(/\.pdf$/i, ''))}</title>
+<style>
+${AI_MESSAGE_PDF_STYLES}
+</style>
+</head>
+<body>
+<div class="ai-pdf-root" id="ai-pdf-root">
+  <h1 class="ai-pdf-title">${escapeHtml(title)}</h1>
+  <div class="ai-pdf-meta">${escapeHtml(t('aiChat.export.singlePdfMeta', { time: formatExportDateTime(exportedAt) }))}</div>
+  ${contentHtml}
+</div>
+</body>
+</html>`)
+    iframeDoc.close()
+
+    await new Promise<void>((resolve) => {
+      if (iframeDoc.readyState === 'complete') {
+        resolve()
+      } else {
+        iframe!.addEventListener('load', () => resolve(), { once: true })
+      }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    if ((iframeDoc as any).fonts?.ready) {
+      try { await (iframeDoc as any).fonts.ready } catch { /* noop */ }
+    }
+
+    const root = iframeDoc.getElementById('ai-pdf-root') as HTMLElement | null
+    if (!root) throw new Error(t('aiChat.export.pdfContainerFail'))
+    await processMermaidBlocks(root)
+
+    iframeWin.addEventListener('afterprint', cleanupIframe, { once: true })
+    cleanupTimer = window.setTimeout(cleanupIframe, 60_000)
+    iframeWin.focus()
+    iframeWin.print()
+    deferCleanup = true
+    ElMessage.success(t('aiChat.export.pdfPrintStarted'))
+  } catch (error: any) {
+    console.error('Failed to export AI message PDF:', error)
+    ElMessage.error(error?.message || t('aiChat.export.pdfExportFailed'))
+  } finally {
+    if (!deferCleanup) cleanupIframe()
+  }
 }
 
 const sortedDevices = computed<DeviceInfo[]>(() =>
@@ -1520,10 +1742,6 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             <div class="rw-menu-divider"/>
             <div class="rw-top-menu-group">{{ t('aiChat.menu.export') }}</div>
             <button class="rw-menu-item" @click="showTopMoreMenu = false">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 14h2M9 17h6"/></svg>
-              {{ t('aiChat.menu.generateReport') }} <span class="rw-kbd-right">PDF</span>
-            </button>
-            <button class="rw-menu-item" @click="showTopMoreMenu = false">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M16 6l-4-4-4 4M12 2v14"/></svg>
               {{ t('aiChat.menu.share') }}
             </button>
@@ -1618,6 +1836,29 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
               </template>
               <template v-else>
                 <div class="rw-ai-text" v-html="renderAiMessage(msg.content)"></div>
+                <div
+                  v-if="msg.content && msg.content.trim()"
+                  class="rw-ai-actions"
+                >
+                  <button
+                    class="rw-ai-action-btn"
+                    type="button"
+                    :aria-label="t('aiChat.export.copyMarkdownAction')"
+                    :data-tooltip="t('aiChat.export.copyMarkdownAction')"
+                    @click="copyAiMessageMarkdown(msg)"
+                  >
+                    <Copy :size="17" :stroke-width="1.8" aria-hidden="true" />
+                  </button>
+                  <button
+                    class="rw-ai-action-btn"
+                    type="button"
+                    :aria-label="t('aiChat.export.singlePdfAction')"
+                    :data-tooltip="t('aiChat.export.singlePdfAction')"
+                    @click="exportAiMessagePdf(msg)"
+                  >
+                    <FileDown :size="17" :stroke-width="1.8" aria-hidden="true" />
+                  </button>
+                </div>
               </template>
             </div>
           </template>
@@ -2122,6 +2363,75 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
 }
 .rw-ai-trace { margin-bottom: 12px; }
 .rw-ai-text { font-size: 14.5px; color: var(--rw-ink); line-height: 1.62; }
+.rw-ai-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+}
+.rw-ai-action-btn {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #6f737a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.rw-ai-action-btn:hover,
+.rw-ai-action-btn:focus-visible {
+  background: #f1f1f1;
+  color: #111827;
+}
+.rw-ai-action-btn:focus-visible { outline: none; }
+.rw-ai-action-btn::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%) translateY(2px);
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: #111;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: 0 8px 18px rgba(0,0,0,.18);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity .12s, transform .12s, visibility .12s;
+  z-index: 20;
+}
+.rw-ai-action-btn::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 3px);
+  transform: translateX(-50%) translateY(2px);
+  border: 5px solid transparent;
+  border-top-color: #111;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity .12s, transform .12s, visibility .12s;
+  z-index: 20;
+}
+.rw-ai-action-btn:hover::after,
+.rw-ai-action-btn:hover::before,
+.rw-ai-action-btn:focus-visible::after,
+.rw-ai-action-btn:focus-visible::before {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
 .rw-thinking {
   display: inline-block;
   background: linear-gradient(90deg, #9ca3af 0%, #e5e7eb 50%, #9ca3af 100%);
