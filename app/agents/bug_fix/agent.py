@@ -146,12 +146,19 @@ class BugFixCodingAgent:
                 "claude-agent-sdk is required. Install with: pip install claude-agent-sdk>=0.1"
             ) from exc
 
-        system_prompt, user_prompt_template = get_prompts()
-        system_prompt += (
+        system_prompt_text, user_prompt_template = get_prompts()
+        system_prompt_text += (
             "\n\n## 当前运行工作区\n"
             f"当前工作目录是 `{ctx.temp_dir}`。源码克隆在 `repo/`，"
             f"任务详情在 `task.json`。git 操作前先 `cd repo/`。\n"
         )
+        # 改代码能力对齐原生 Claude Code：使用 claude_code preset，
+        # 把 Bug 修复约束与最终 merge_requests JSON 输出契约作为 append 叠加。
+        system_prompt = {
+            "type": "preset",
+            "preset": "claude_code",
+            "append": system_prompt_text,
+        }
         user_prompt = render_user_prompt(
             user_prompt_template,
             task_id=ctx.task_id,

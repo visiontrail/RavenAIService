@@ -8,6 +8,8 @@ RavenAIService 是 Raven 智能测试平台的核心服务仓库。平台正在�
 
 日志、AI、设备、代码资产和发布物不再是孤立的功能模块——它们以”项目”为单元串联，由多个专业 Agent 协同驱动，形成测试、研发、交付与运维之间的闭环协作。
 
+![RavenAIService 多 Agent 与项目上下文关系示意图](docs/diagrams/raven-ai-context-zh.png)
+
 ## 项目定位
 
 Raven 平台聚焦测试流程中的几类典型痛点，并正在向平台化方向持续演进：

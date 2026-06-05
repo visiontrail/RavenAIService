@@ -135,7 +135,7 @@ def assert_anthropic_configured() -> None:
 
 def build_options(
     *,
-    system_prompt: str,
+    system_prompt: "str | Dict[str, Any]",
     allowed_tools: List[str],
     cwd: str,
     disallowed_tools: Optional[List[str]] = None,

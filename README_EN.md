@@ -8,6 +8,8 @@ RavenAIService is the core service repository of the Raven intelligent testing p
 
 Logs, AI, devices, code assets, and releases are no longer isolated modules — they are organized by “project” and driven by specialized agents, forming a closed-loop collaboration across testing, R&D, delivery, and operations.
 
+![RavenAIService Multi-Agent and Project Context Diagram](docs/diagrams/raven-ai-context-en.png)
+
 ## Product Positioning
 
 Raven focuses on recurring pain points in testing workflows and is evolving toward a true platform:
