@@ -4,28 +4,28 @@
 
 > 发布、打包、Docker 启停流程已经统一到 [QUICKSTART.md](QUICKSTART.md)。请优先使用 `scripts/docker-start.sh`、`scripts/docker-stop.sh`、`scripts/docker-publish.sh`，根目录旧脚本已移除。
 
-RavenAIService 是 Raven 智能测试平台的核心服务仓库。平台正在从单一日志工具向多项目、多 Agent 的通用测试平台演进，围绕**项目化管理、多 Agent 协同、设备联动、版本资产治理**，为通信行业复杂测试场景提供一体化能力。
+RavenAIService 是 Raven 智能测试平台的核心服务仓库。平台正在从单一日志工具向多项目、多 Agent 的通用测试平台演进，围绕**项目化管理、多 Agent 协同、设备联动、版本资产治理**，为复杂测试场景提供一体化能力。
 
 日志、AI、设备、代码资产和发布物不再是孤立的功能模块——它们以”项目”为单元串联，由多个专业 Agent 协同驱动，形成测试、研发、交付与运维之间的闭环协作。
 
 ## 项目定位
 
-Raven 平台聚焦通信行业测试流程中的几类典型痛点，并正在向平台化方向持续演进：
+Raven 平台聚焦测试流程中的几类典型痛点，并正在向平台化方向持续演进：
 
 - 日志来源多、格式杂，测试资产难沉淀
-- 协议栈日志处理门槛高，问题定位周期长
+- 复杂日志处理门槛高，问题定位周期长
 - 人工排查依赖经验，知识难复用、难规模化
 - 平台与设备割裂，测试执行和问题验证难闭环
-- 包、补丁、版本与发布物分散，管理和追溯成本高
+- 包、版本与发布物分散，管理和追溯成本高
 - 不同项目、不同团队的测试流程缺乏统一承载
 
 围绕这些问题，RavenAIService 正在交付一条更完整的智能测试链路：
 
 - 以**项目**为核心单元，将日志、代码仓库、Agent 技能和分析结论统一组织
 - 通过**多 Agent 架构**（通用对话、日志分析、设备操作、代码专家、Bug 修复、包检索），让不同测试场景由最合适的 Agent 驱动
-- 自动处理协议栈等复杂日志，缩短从上传到分析的等待时间
+- 自动处理复杂日志，缩短从上传到分析的等待时间
 - 打通平台与设备能力，实现”提问、执行、回传”的闭环联动
-- 统一管理重构包、补丁包和客户端发布物，支撑版本运营与交付
+- 统一管理软件包和客户端发布物，支撑版本运营与交付
 - 支持中英文多语言界面，服务全球化团队
 
 ## 平台价值
@@ -40,12 +40,12 @@ Raven 平台聚焦通信行业测试流程中的几类典型痛点，并正在�
 ## 典型场景
 
 - 管理员为不同产品/团队创建项目，关联代码仓库并配置专属 Agent 技能
-- 测试团队批量接入现场或实验室日志，按项目归档，快速筛选和分析
-- 平台自动识别协议栈、天线、全量等日志类型，进入对应处理流程
+- 测试团队批量接入日志，按项目归档，快速筛选和分析
+- 平台自动识别不同日志类型，进入对应处理流程
 - 测试或研发人员在 AI Chat 中发起问答——通用 Agent 负责路由，日志分析、代码专家、设备操作等 Agent 各司其职
 - Bug 修复 Agent 基于日志分析结论自动定位代码、生成修复建议
 - 平台将 AI 指令转发到目标设备，完成能力调用、结果回传与联动验证
-- 围绕产品版本、补丁包和交付包形成统一资产中心，支撑发布与回溯
+- 围绕产品版本和交付包形成统一资产中心，支撑发布与回溯
 
 ## 平台组成概览
 
@@ -54,7 +54,7 @@ Raven 平台聚焦通信行业测试流程中的几类典型痛点，并正在�
 - `FastAPI` 主服务：承接日志、AI、用户、设备、项目、发布等核心业务
 - `Vue 3 + Vite` 控制台：提供统一的多语言 Web 工作台与运营界面
 - `多 Agent 引擎`：GeneralAgent（路由）、LogAnalysisAgent、DeviceAgent、ProjectExpertAgent、BugFixAgent、PackageSearchAgent
-- `Celery + Redis` 异步任务：支撑协议栈日志处理、AI 分析和定时维护
+- `Celery + Redis` 异步任务：支撑日志处理、AI 分析和定时维护
 - `Nginx` 网关：对外提供统一入口，降低部署和访问复杂度
 
 ```text
@@ -89,10 +89,10 @@ Agent 引擎
   |-- DeviceAgent           设备操作联动
   |-- ProjectExpertAgent    代码仓库问答
   |-- BugFixAgent           Bug 定位与修复建议
-  |-- PackageSearchAgent    重构包语义检索
+  |-- PackageSearchAgent    软件包语义检索
 
 Celery + Redis
-  |-- 协议栈日志处理
+  |-- 异步日志处理
   |-- AI 分析任务
   |-- 定时清理任务
 ```
@@ -113,33 +113,33 @@ Celery + Redis
 | Agent | 职责 |
 | --- | --- |
 | **GeneralAgent** | 通用对话入口，根据用户意图自动路由到专业 Agent |
-| **LogAnalysisAgent** | 日志智能分析，结合协议栈解析、元数据与项目上下文 |
+| **LogAnalysisAgent** | 日志智能分析，结合日志解析、元数据与项目上下文 |
 | **DeviceAgent** | 通过 WebSocket 连接设备，执行远程操作并回传结果 |
 | **ProjectExpertAgent** | 基于项目关联的代码仓库回答源码级问题 |
 | **BugFixAgent** | 从日志分析结论出发，定位代码问题并生成修复建议 |
-| **PackageSearchAgent** | 在重构包资产中做语义检索，辅助包选型与版本回溯 |
+| **PackageSearchAgent** | 在软件包资产中做语义检索，辅助包选型与版本回溯 |
 
 - 所有 Agent 均支持流式响应，前端实时渲染 Markdown 与 Mermaid 图表
 - AI 对话会话支持置顶、导出 Markdown、拖拽上传日志文件等交互能力
 
 ### 3. 测试日志资产化
 
-- 支持 `upload-simple`、`upload`、`upload-t04` 等多种日志接入入口
-- 自动识别协议栈、天线、全量等日志类型，日志按项目归档
+- 支持多种日志接入入口
+- 自动识别不同日志类型，日志按项目归档
 - 从压缩包中提取 `metadata.json`，自动补齐问题描述、环境信息与版本信息
-- 协议栈日志通过 Celery 异步处理，服务启动时自动重试失败任务
+- 复杂日志通过 Celery 异步处理，服务启动时自动重试失败任务
 - 提供分页查询、筛选、排序、单文件下载、批量下载和批量删除
 
 ### 4. 平台与设备协同
 
 - 设备通过 `WebSocket /ws/device-link` 注册到平台，形成统一连接入口
-- 服务端维护设备在线状态、MCP 能力描述与最近心跳
+- 服务端维护设备在线状态、能力描述与最近心跳
 - DeviceAgent 可将指令转发到指定设备，并等待设备结果回传
-- 支持设备 MCP 能力上报，帮助平台生成更匹配设备能力的动作链路
+- 支持设备能力上报，帮助平台生成更匹配设备能力的动作链路
 
 ### 5. 版本资产中心
 
-- FastAPI 后端负责重构包的上传、删除、详情、下载和批量下载
+- FastAPI 后端负责软件包的上传、删除、详情、下载和批量下载
 - 通过语义检索接口提供包搜索、建议词与向量索引管理
 - 后台可统一上传 Linux / macOS / Windows 客户端发布包
 
@@ -161,7 +161,7 @@ RavenAIService/
 │   │   ├── device_agent/        #   设备操作联动
 │   │   ├── project_expert/      #   代码仓库问答
 │   │   ├── bug_fix/             #   Bug 修复建议
-│   │   └── package_search/      #   重构包语义检索
+│   │   └── package_search/      #   软件包语义检索
 │   ├── middleware/              # 请求日志、文件大小限制等中间件
 │   ├── models/                  # SQLAlchemy 与 Pydantic 模型
 │   ├── services/                # 业务服务层
@@ -193,7 +193,7 @@ RavenAIService/
 
 - 主入口: `http://localhost:8085`
 - 日志平台首页: `http://localhost:8085/`
-- 重构包管理: `http://localhost:8085/raven`
+- 软件包管理: `http://localhost:8085/raven`
 - AI Chat: `http://localhost:8085/ai-chat`
 - 管理后台: `http://localhost:8085/admin/prompts`
 - 健康检查: `http://localhost:8085/health`
@@ -258,8 +258,8 @@ RavenAIService/
 | `/upload` | 日志上传 |
 | `/devices` | 设备列表与状态 |
 | `/bug-fixes` | Bug 修复工单列表 |
-| `/raven-manager` | 重构包管理 |
-| `/raven/package/:id` | 重构包详情 |
+| `/raven-manager` | 软件包管理 |
+| `/raven/package/:id` | 软件包详情 |
 | `/download` | 客户端下载页 |
 | `/admin/project-repos` | 项目仓库管理 |
 | `/admin/agent-skills` | Agent 技能配置 |
