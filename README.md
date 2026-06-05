@@ -2,7 +2,7 @@
 
 中文 | [English](README_EN.md)
 
-> 发布、打包、Docker 启停流程已经统一到 [QUICKSTART.md](QUICKSTART.md)。请优先使用 `scripts/docker-start.sh`、`scripts/docker-stop.sh`、`scripts/docker-publish.sh`，根目录旧脚本已移除。
+> 发布、打包、Docker 启停流程已经统一到 [QUICKSTART.md](QUICKSTART.md)。请优先使用 `scripts/docker-start.sh`、`scripts/docker-stop.sh`、`scripts/docker-publish.sh`
 
 RavenAIService 是 Raven 智能测试平台的核心服务仓库。平台正在从单一日志工具向多项目、多 Agent 的通用测试平台演进，围绕**项目化管理、多 Agent 协同、设备联动、版本资产治理**，为复杂测试场景提供一体化能力。
 
@@ -89,7 +89,7 @@ Agent 引擎
   |-- DeviceAgent           设备操作联动
   |-- ProjectExpertAgent    代码仓库问答
   |-- BugFixAgent           Bug 定位与修复建议
-  |-- PackageSearchAgent    软件包语义检索
+  |-- PackageSearchAgent    软件包检索
 
 Celery + Redis
   |-- 异步日志处理
@@ -117,7 +117,7 @@ Celery + Redis
 | **DeviceAgent** | 通过 WebSocket 连接设备，执行远程操作并回传结果 |
 | **ProjectExpertAgent** | 基于项目关联的代码仓库回答源码级问题 |
 | **BugFixAgent** | 从日志分析结论出发，定位代码问题并生成修复建议 |
-| **PackageSearchAgent** | 在软件包资产中做语义检索，辅助包选型与版本回溯 |
+| **PackageSearchAgent** | 在软件包资产中做检索，辅助包选型与版本回溯 |
 
 - 所有 Agent 均支持流式响应，前端实时渲染 Markdown 与 Mermaid 图表
 - AI 对话会话支持置顶、导出 Markdown、拖拽上传日志文件等交互能力
@@ -140,7 +140,7 @@ Celery + Redis
 ### 5. 版本资产中心
 
 - FastAPI 后端负责软件包的上传、删除、详情、下载和批量下载
-- 通过语义检索接口提供包搜索、建议词与向量索引管理
+- 提供包搜索与筛选接口
 - 后台可统一上传 Linux / macOS / Windows 客户端发布包
 
 ### 6. 平台运营与监控
@@ -161,7 +161,7 @@ RavenAIService/
 │   │   ├── device_agent/        #   设备操作联动
 │   │   ├── project_expert/      #   代码仓库问答
 │   │   ├── bug_fix/             #   Bug 修复建议
-│   │   └── package_search/      #   软件包语义检索
+│   │   └── package_search/      #   软件包检索
 │   ├── middleware/              # 请求日志、文件大小限制等中间件
 │   ├── models/                  # SQLAlchemy 与 Pydantic 模型
 │   ├── services/                # 业务服务层
@@ -212,7 +212,7 @@ RavenAIService/
 
 ### 主配置文件
 
-- `.env`: FastAPI、数据库、Redis、Celery、LLM、包管理服务与 RAG 检索等主配置
+- `.env`: FastAPI、数据库、Redis、Celery、LLM、包管理服务等主配置
 - `app/prompts/prompts_config.yaml`: AI Prompt 配置
 - `app/admin_auth.yaml`: 管理员账户与 Token TTL 配置
 
@@ -238,15 +238,10 @@ RavenAIService/
 - `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`: 自定义 provider 或覆盖默认 profile 时配置
 - `PROMPTS_CONFIG_PATH`
 
-#### Raven 包管理 / RAG
+#### Raven 包管理
 
 - `RAVEN_BASE_PATH`: 默认 `/raven`
 - `RAVEN_DATA_DIR`: 默认 `data/raven`
-- `RAG_EMBEDDING_PROVIDER`: `local | tongyi | openai_compatible`
-- `RAG_EMBEDDING_MODEL`
-- `ALIBABA_API_KEY`
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL`
 
 ## 主要产品入口
 

@@ -2,7 +2,7 @@
 
 [中文](README.md) | English
 
-> Release, packaging, and Docker workflows are now centralized in [QUICKSTART.md](QUICKSTART.md). Use `scripts/docker-start.sh`, `scripts/docker-stop.sh`, and `scripts/docker-publish.sh`; the old root-level scripts have been removed.
+> Release, packaging, and Docker workflows are now centralized in [QUICKSTART.md](QUICKSTART.md). Use `scripts/docker-start.sh`, `scripts/docker-stop.sh`, and `scripts/docker-publish.sh`;
 
 RavenAIService is the core service repository of the Raven intelligent testing platform. The platform is evolving from a single-purpose log tool into a multi-project, multi-agent general testing platform, built around **project-based management, multi-agent collaboration, device integration, and version asset governance** for complex testing scenarios.
 
@@ -91,7 +91,7 @@ Agent Engine
   |-- DeviceAgent           device operation integration
   |-- ProjectExpertAgent    code repository Q&A
   |-- BugFixAgent           bug location & fix suggestions
-  |-- PackageSearchAgent    software package semantic search
+  |-- PackageSearchAgent    software package search
 
 Celery + Redis
   |-- async log processing
@@ -119,7 +119,7 @@ The platform includes six specialized agents, unified by GeneralAgent routing:
 | **DeviceAgent** | Connects to devices via WebSocket to execute remote operations and relay results |
 | **ProjectExpertAgent** | Answers source-code-level questions based on the project's linked repositories |
 | **BugFixAgent** | Starts from log analysis conclusions, locates code issues, and generates fix suggestions |
-| **PackageSearchAgent** | Semantic search across software package assets for package selection and version tracing |
+| **PackageSearchAgent** | Search across software package assets for package selection and version tracing |
 
 - All agents support streaming responses; the frontend renders Markdown and Mermaid diagrams in real time
 - AI chat sessions support pinning, Markdown export, drag-and-drop log file upload, and more
@@ -142,7 +142,7 @@ The platform includes six specialized agents, unified by GeneralAgent routing:
 ### 5. Version Asset Center
 
 - The FastAPI backend handles software package upload, delete, detail, download, and batch download
-- Semantic search API provides package search, suggestions, and vector index management
+- Provides package search and filtering API
 - Admin UI can upload Linux / macOS / Windows client release artifacts
 
 ### 6. Platform Operations and Monitoring
@@ -163,7 +163,7 @@ RavenAIService/
 │   │   ├── device_agent/        #   device operation integration
 │   │   ├── project_expert/      #   code repository Q&A
 │   │   ├── bug_fix/             #   bug fix suggestions
-│   │   └── package_search/      #   software package semantic search
+│   │   └── package_search/      #   software package search
 │   ├── middleware/              # request logging, file size limits, etc.
 │   ├── models/                  # SQLAlchemy and Pydantic models
 │   ├── services/                # service layer
@@ -214,7 +214,7 @@ Common scripts:
 
 ### Main config files
 
-- `.env`: FastAPI, database, Redis, Celery, LLM, package management, and RAG config
+- `.env`: FastAPI, database, Redis, Celery, LLM, and package management config
 - `app/prompts/prompts_config.yaml`: AI prompt configuration
 - `app/admin_auth.yaml`: admin accounts and token TTL settings
 
@@ -240,15 +240,10 @@ Common scripts:
 - `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`: configure for a custom provider or to override provider defaults
 - `PROMPTS_CONFIG_PATH`
 
-#### Raven package management / RAG
+#### Raven package management
 
 - `RAVEN_BASE_PATH`: default `/raven`
 - `RAVEN_DATA_DIR`: default `data/raven`
-- `RAG_EMBEDDING_PROVIDER`: `local | tongyi | openai_compatible`
-- `RAG_EMBEDDING_MODEL`
-- `ALIBABA_API_KEY`
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL`
 
 ## Main Product Entrypoints
 
