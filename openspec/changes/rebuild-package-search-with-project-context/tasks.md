@@ -33,10 +33,10 @@
 
 ## 5. 聊天服务与端点
 
-- [ ] 5.1 新增 `app/services/package_search_chat_service.py`（镜像 `project_expert_chat_service`）：新会话必填 `project_repo_id` + `_resolve_project_repo` 校验（存在且启用）、会话级工作区复用与项目绑定不漂移、后台线程 + cancel_event、SSE 透传 trace、`final` 事件含 recommended/relevant ID、登录态会话持久化、`get_status` 轮询、owner 鉴权（非所有者 cancel/result 抛 PermissionError）、`session_has_workspace()`
-- [ ] 5.2 `app/api/ai_chat.py`：注册 `POST /package-search/stream`（新会话缺 `project_repo_id` 返回 400 `reason="project_repo_required"`）、`POST /package-search/cancel`、`GET /package-search/result`，结构对齐项目专家三端点
+- [x] 5.1 新增 `app/services/package_search_chat_service.py`（镜像 `project_expert_chat_service`）：新会话必填 `project_repo_id` + `_resolve_project_repo` 校验（存在且启用）、会话级工作区复用与项目绑定不漂移、后台线程 + cancel_event、SSE 透传 trace、`final` 事件含 recommended/relevant ID、登录态会话持久化、`get_status` 轮询、owner 鉴权（非所有者 cancel/result 抛 PermissionError）、`session_has_workspace()`
+- [x] 5.2 `app/api/ai_chat.py`：注册 `POST /package-search/stream`（新会话缺 `project_repo_id` 返回 400 `reason="project_repo_required"`）、`POST /package-search/cancel`、`GET /package-search/result`，结构对齐项目专家三端点
 - [x] 5.3 `app/api/packages.py` 的 `POST /packages/agent-search`：请求体新增必填 `project_repo_id`（缺失/无效项目返回 400），内部走重建后的 Agent（每请求独立工作区，结束即清理）；保留 `stream` 双模式与既有响应契约；ai_usage 指标记录保留
-- [ ] 5.4 集成测试：三端点流（mock agent）、缺项目 400、项目绑定不漂移、取消鉴权、agent-search 必填校验
+- [x] 5.4 集成测试：三端点流（mock agent）、缺项目 400、项目绑定不漂移、取消鉴权、agent-search 必填校验
 
 ## 6. 前端：对话框（AIChat.vue + runs store）
 

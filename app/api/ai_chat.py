@@ -20,6 +20,7 @@ from app.services.chat_run_service import chat_run_service
 from app.services.owner_scope import resolve_owner_scope
 from app.services.title_generator_service import summarize_user_message
 from app.services.log_analysis_chat_service import log_analysis_chat_service
+from app.services.package_search_chat_service import package_search_chat_service
 from app.services.project_expert_chat_service import project_expert_chat_service
 
 
@@ -28,6 +29,10 @@ class LogAnalysisCancelRequest(BaseModel):
 
 
 class ProjectExpertCancelRequest(BaseModel):
+    session_id: str
+
+
+class PackageSearchCancelRequest(BaseModel):
     session_id: str
 
 
@@ -678,5 +683,112 @@ async def project_expert_result_endpoint(
 ):
     try:
         return project_expert_chat_service.get_status(session_id, user=current_user)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.post("/package-search/stream", summary="主对话重构包检索（流式）")
+async def package_search_stream_endpoint(
+    http_request: Request,
+    message: str = Form("", description="用户问题"),
+    session_id: Optional[str] = Form(None, description="对话会话ID"),
+    history: Optional[str] = Form(None, description="前端传入的历史消息 JSON"),
+    remember: bool = Form(True, description="是否保存到会话历史"),
+    project_repo_id: Optional[int] = Form(
+        None,
+        description="项目仓库注册表 ID。新会话必填，用作权威项目身份来源。",
+    ),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    logger.info("=" * 80)
+    logger.info("接收到主对话重构包检索请求")
+    logger.info("message: %s...", message[:100])
+    logger.info("session_id: %s, project_repo_id=%s", session_id, project_repo_id)
+    logger.info("=" * 80)
+
+    from app.i18n.deps import LOCALE_HEADER, resolve_locale
+
+    locale = resolve_locale(
+        header_locale=http_request.headers.get(LOCALE_HEADER),
+        accept_language=http_request.headers.get("Accept-Language"),
+        user=current_user,
+    )
+
+    # New session requires an explicit project: package metadata tools and the
+    # repository workspace are both project-scoped. Fail fast with 4xx before
+    # streaming.
+    if project_repo_id is None and not package_search_chat_service.session_has_workspace(
+        session_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "reason": "project_repo_required",
+                "message": t("package.project_repo_required", locale),
+            },
+        )
+
+    cookie_carrier = Response()
+    owner_scope = resolve_owner_scope(http_request, cookie_carrier, current_user)
+    try:
+        generator = package_search_chat_service.stream(
+            message=message,
+            session_id=session_id,
+            history_json=history,
+            remember=remember,
+            project_repo_id=project_repo_id,
+            db=db,
+            user=current_user,
+            owner_scope=owner_scope,
+            locale=locale,
+        )
+        sr = StreamingResponse(
+            generator,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+        for raw in cookie_carrier.raw_headers:
+            name = raw[0].decode("latin-1") if isinstance(raw[0], bytes) else raw[0]
+            value = raw[1].decode("latin-1") if isinstance(raw[1], bytes) else raw[1]
+            if name.lower() == "set-cookie":
+                sr.raw_headers.append((b"set-cookie", value.encode("latin-1")))
+        return sr
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Package search chat stream request failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/package-search/cancel", summary="取消进行中的重构包检索任务")
+async def package_search_cancel_endpoint(
+    payload: PackageSearchCancelRequest,
+    current_user=Depends(get_optional_user),
+    locale: str = Depends(get_request_locale),
+):
+    try:
+        ok = package_search_chat_service.cancel(payload.session_id, user=current_user)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if not ok:
+        return {
+            "session_id": payload.session_id,
+            "cancelled": False,
+            "message": t("chat.no_running_task", locale),
+        }
+    return {"session_id": payload.session_id, "cancelled": True}
+
+
+@router.get("/package-search/result", summary="查询重构包检索任务状态/结果（轮询兜底）")
+async def package_search_result_endpoint(
+    session_id: str = Query(..., description="对话会话 ID"),
+    current_user=Depends(get_optional_user),
+):
+    try:
+        return package_search_chat_service.get_status(session_id, user=current_user)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
