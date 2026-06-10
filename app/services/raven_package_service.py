@@ -29,19 +29,27 @@ except ImportError:  # pragma: no cover - packaging is a hard dep of project
     _parse_version = None  # type: ignore[assignment]
 
 from app.config import settings
+from app.i18n.messages import t
 from app.utils.storage_utils import get_free_bytes
 
 logger = logging.getLogger(__name__)
 
+# Special filter value selecting packages without a project association.
+UNASSOCIATED_PROJECT = "__unassociated__"
 
-PACKAGE_TYPES = {
-    "LINGXI_10": "lingxi-10",
-    "LINGXI_07A": "lingxi-07a",
-    "KA_TX": "ka-tx",
-    "KA_RX": "ka-rx",
-    "CONFIG": "config",
-    "LINGXI_06TRD": "lingxi-06-thrid",
-}
+
+def _normalize_project_code(package: dict[str, Any]) -> dict[str, Any]:
+    """Idempotent lazy migration: ensure ``projectCode`` on a package record.
+
+    Legacy records carry a hardcoded ``packageType``; its value becomes the
+    ``projectCode``. The original ``packageType`` key is kept untouched so a
+    rolled-back deployment can still read the same metadata file. The read
+    path never writes the file just for this normalization — the result is
+    persisted along with the next regular write.
+    """
+    if "projectCode" not in package:
+        package["projectCode"] = str(package.get("packageType") or "")
+    return package
 
 
 def _abs_path(value: str) -> Path:
@@ -88,6 +96,31 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+async def validate_project_code(db: Any, project_code: Any, locale: str = "zh") -> Any:
+    """Validate that ``project_code`` maps to a registered, enabled project.
+
+    Returns the matching ``ProjectRepo`` record. Raises HTTPException 400 when
+    the code is missing, unregistered, or the project is disabled. Shared by
+    the upload APIs so the package-project association is always backed by the
+    project registry.
+    """
+    code = str(project_code or "").strip()
+    if not code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=t("package.project_code_required", locale),
+        )
+    from app.services import project_repo_service
+
+    repo = await project_repo_service.get_by_project_code(db, code)
+    if repo is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=t("package.project_invalid", locale, code=code),
+        )
+    return repo
+
+
 class RavenPackageService:
     def __init__(self) -> None:
         self.data_dir = _abs_path(settings.raven_data_dir)
@@ -105,7 +138,9 @@ class RavenPackageService:
         except Exception as exc:
             logger.warning("读取 Raven 包元数据失败: %s", exc)
             return []
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            return []
+        return [_normalize_project_code(pkg) for pkg in data if isinstance(pkg, dict)]
 
     def save_packages(self, packages: list[dict[str, Any]]) -> None:
         self.metadata_file.parent.mkdir(parents=True, exist_ok=True)
@@ -227,8 +262,8 @@ class RavenPackageService:
             base.setdefault("name", file_path.name)
             base.setdefault("createdAt", _now_iso())
             base.setdefault("version", self.parse_version(file_path.name) or "0.0.0")
-            base.setdefault("packageType", self.determine_package_type(file_path.name))
             base.setdefault("metadata", {})
+        base.setdefault("projectCode", "")
 
         metadata = dict(base.get("metadata") or {})
         if "description" in metadata_fields:
@@ -244,8 +279,8 @@ class RavenPackageService:
 
         if metadata_fields.get("version"):
             base["version"] = str(metadata_fields["version"])
-        if metadata_fields.get("packageType"):
-            base["packageType"] = str(metadata_fields["packageType"])
+        if metadata_fields.get("projectCode"):
+            base["projectCode"] = str(metadata_fields["projectCode"])
 
         base["metadata"] = metadata
         return base
@@ -259,7 +294,9 @@ class RavenPackageService:
             "path": str(file_path),
             "size": size if size is not None else stat.st_size,
             "createdAt": datetime.fromtimestamp(stat.st_ctime, timezone.utc).isoformat(),
-            "packageType": self.determine_package_type(file_path.name),
+            # Scanned orphan files stay unassociated; the project must be
+            # assigned explicitly (no filename guessing).
+            "projectCode": "",
             "version": version,
             "metadata": {
                 "isPatch": "patch" in file_path.name.lower(),
@@ -294,7 +331,7 @@ class RavenPackageService:
     def filter_packages(self, params: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, int]]:
         packages = self.get_all_packages()
         search = str(params.get("search") or "").lower()
-        package_type = str(params.get("type") or "")
+        project_code = str(params.get("projectCode") or "")
         version = str(params.get("version") or "")
         tags = str(params.get("tags") or "").lower()
         is_patch = params.get("isPatch")
@@ -306,8 +343,10 @@ class RavenPackageService:
                 or search in str(pkg.get("version", "")).lower()
                 or search in str(pkg.get("metadata", {}).get("description", "")).lower()
             ]
-        if package_type:
-            packages = [pkg for pkg in packages if pkg.get("packageType") == package_type]
+        if project_code == UNASSOCIATED_PROJECT:
+            packages = [pkg for pkg in packages if not pkg.get("projectCode")]
+        elif project_code:
+            packages = [pkg for pkg in packages if pkg.get("projectCode") == project_code]
         if version:
             packages = [pkg for pkg in packages if str(pkg.get("version", "")) == version]
         if tags:
@@ -352,22 +391,6 @@ class RavenPackageService:
             for chunk in iter(lambda: file.read(1024 * 1024), b""):
                 digest.update(chunk)
         return digest.hexdigest()
-
-    def determine_package_type(self, filename: str) -> str:
-        lower = filename.lower()
-        if "lingxi-10" in lower or "lx10" in lower:
-            return PACKAGE_TYPES["LINGXI_10"]
-        if "lingxi-07a" in lower or "lx07a" in lower:
-            return PACKAGE_TYPES["LINGXI_07A"]
-        if "ka-tx" in lower or "katx" in lower:
-            return PACKAGE_TYPES["KA_TX"]
-        if "ka-rx" in lower or "karx" in lower:
-            return PACKAGE_TYPES["KA_RX"]
-        if "config" in lower:
-            return PACKAGE_TYPES["CONFIG"]
-        if "lingxi-06-thrid" in lower or "trd" in lower:
-            return PACKAGE_TYPES["LINGXI_06TRD"]
-        return PACKAGE_TYPES["LINGXI_10"]
 
     def parse_version(self, filename: str) -> Optional[str]:
         match = re.search(r"[Vv]?(\d+(?:\.\d+)*)", filename)
@@ -474,7 +497,7 @@ class RavenPackageService:
     def iter_brief(self, packages: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         """Project an iterable of packages to PackageBrief shape.
 
-        Brief = {id, name, version, packageType, isPatch, createdAt,
+        Brief = {id, name, version, projectCode, isPatch, createdAt,
         components, tags, size}. Excludes sha256 and disk path.
         """
         out: list[dict[str, Any]] = []
@@ -484,7 +507,7 @@ class RavenPackageService:
                 "id": pkg.get("id"),
                 "name": pkg.get("name"),
                 "version": pkg.get("version"),
-                "packageType": pkg.get("packageType"),
+                "projectCode": str(pkg.get("projectCode") or ""),
                 "isPatch": bool(meta.get("isPatch")),
                 "createdAt": pkg.get("createdAt"),
                 "components": self._component_names(pkg),
@@ -506,6 +529,19 @@ class RavenPackageService:
             value = 1
         return min(value, hard_cap)
 
+    def _scoped_packages(self, project_code: Optional[str]) -> list[dict[str, Any]]:
+        """All packages, optionally narrowed to one project.
+
+        ``None`` means no scoping; ``UNASSOCIATED_PROJECT`` selects packages
+        without a project association.
+        """
+        packages = self.get_all_packages()
+        if project_code is None:
+            return packages
+        if project_code == UNASSOCIATED_PROJECT:
+            return [p for p in packages if not p.get("projectCode")]
+        return [p for p in packages if p.get("projectCode") == project_code]
+
     def query_packages(
         self,
         filters: Optional[dict[str, Any]] = None,
@@ -513,19 +549,17 @@ class RavenPackageService:
         limit: Optional[int] = None,
         offset: int = 0,
         max_limit: Optional[int] = None,
+        project_code: Optional[str] = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Generic structured query against the package metadata store.
 
         Returns ``(brief_items, total_before_paging)``. Filters supported:
-        ``type``, ``is_patch``, ``tags`` (list), ``component`` (single name).
+        ``is_patch``, ``tags`` (list), ``component`` (single name).
         Sort accepts ``{"by": "createdAt"|"version"|"name", "order": "asc"|"desc"}``.
+        ``project_code`` scopes the query to a single project.
         """
-        packages = self.get_all_packages()
+        packages = self._scoped_packages(project_code)
         filters = filters or {}
-
-        pkg_type = filters.get("type")
-        if pkg_type:
-            packages = [p for p in packages if p.get("packageType") == pkg_type]
 
         is_patch = filters.get("is_patch")
         if is_patch is not None:
@@ -574,11 +608,13 @@ class RavenPackageService:
         fields: Optional[list[str]] = None,
         limit: Optional[int] = None,
         max_limit: Optional[int] = None,
+        project_code: Optional[str] = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Literal substring match across the requested fields.
 
         Returns ``(items_with_matched_fields, total_before_paging)``.
         Each item is a PackageBrief plus ``matched_fields: list[str]``.
+        ``project_code`` scopes the search to a single project.
         """
         needle = str(text or "").strip().lower()
         if not needle:
@@ -589,7 +625,7 @@ class RavenPackageService:
             targets = list(allowed)
 
         matches: list[tuple[dict[str, Any], list[str]]] = []
-        for pkg in self.get_all_packages():
+        for pkg in self._scoped_packages(project_code):
             meta = pkg.get("metadata") or {}
             hit_fields: list[str] = []
             if "name" in targets and needle in str(pkg.get("name") or "").lower():
@@ -618,22 +654,20 @@ class RavenPackageService:
 
     def version_filter(
         self,
-        package_type: Optional[str] = None,
         version_min: Optional[str] = None,
         version_max: Optional[str] = None,
         include_prerelease: bool = False,
         limit: Optional[int] = None,
         max_limit: Optional[int] = None,
+        project_code: Optional[str] = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """SemVer-aware version range filter.
 
         ``version_min`` is inclusive lower bound, ``version_max`` is inclusive
         upper bound. Both fall back to string comparison if a value is not
-        parseable as a Version.
+        parseable as a Version. ``project_code`` scopes to a single project.
         """
-        candidates = self.get_all_packages()
-        if package_type:
-            candidates = [p for p in candidates if p.get("packageType") == package_type]
+        candidates = self._scoped_packages(project_code)
 
         if not include_prerelease:
             candidates = [p for p in candidates if not self._is_prerelease(p.get("version", ""))]
@@ -653,27 +687,25 @@ class RavenPackageService:
         effective_limit = self._clamp_limit(limit, max_limit)
         return self.iter_brief(candidates[:effective_limit]), total
 
-    def list_components(self, package_type: Optional[str] = None) -> list[dict[str, Any]]:
+    def list_components(self, project_code: Optional[str] = None) -> list[dict[str, Any]]:
         """Aggregate distinct components with usage counts.
 
-        Returns list of ``{name, count, package_types: [str]}`` sorted by
-        count descending.
+        Returns list of ``{name, count, project_codes: [str]}`` sorted by
+        count descending. ``project_code`` scopes to a single project.
         """
-        packages = self.get_all_packages()
-        if package_type:
-            packages = [p for p in packages if p.get("packageType") == package_type]
+        packages = self._scoped_packages(project_code)
 
         agg: dict[str, dict[str, Any]] = {}
         for pkg in packages:
-            ptype = str(pkg.get("packageType") or "")
+            code = str(pkg.get("projectCode") or "")
             for name in self._component_names(pkg):
-                entry = agg.setdefault(name, {"name": name, "count": 0, "package_types": set()})
+                entry = agg.setdefault(name, {"name": name, "count": 0, "project_codes": set()})
                 entry["count"] += 1
-                if ptype:
-                    entry["package_types"].add(ptype)
+                if code:
+                    entry["project_codes"].add(code)
 
         out = [
-            {"name": v["name"], "count": v["count"], "package_types": sorted(v["package_types"])}
+            {"name": v["name"], "count": v["count"], "project_codes": sorted(v["project_codes"])}
             for v in agg.values()
         ]
         out.sort(key=lambda r: (-r["count"], r["name"]))
@@ -685,11 +717,13 @@ class RavenPackageService:
         version: Optional[str] = None,
         limit: Optional[int] = None,
         max_limit: Optional[int] = None,
+        project_code: Optional[str] = None,
     ) -> tuple[list[dict[str, Any]], int]:
         """Find packages whose components include ``component_name``.
 
         Optional ``version`` matches against the component's own version
         (since components are recorded as ``{name, version}`` dicts).
+        ``project_code`` scopes the lookup to a single project.
         """
         needle = str(component_name or "").lower()
         if not needle:
@@ -697,7 +731,7 @@ class RavenPackageService:
         target_version = str(version).strip() if version else None
 
         matched: list[dict[str, Any]] = []
-        for pkg in self.get_all_packages():
+        for pkg in self._scoped_packages(project_code):
             meta = pkg.get("metadata") or {}
             for comp in meta.get("components") or []:
                 if isinstance(comp, dict):
@@ -717,20 +751,19 @@ class RavenPackageService:
         effective_limit = self._clamp_limit(limit, max_limit)
         return self.iter_brief(matched[:effective_limit]), total
 
-    def stats_by(self, group_by: str) -> list[dict[str, Any]]:
-        """Aggregate counts by one of ``type | version_major | tag | isPatch``."""
-        valid = {"type", "version_major", "tag", "isPatch"}
+    def stats_by(self, group_by: str, project_code: Optional[str] = None) -> list[dict[str, Any]]:
+        """Aggregate counts by one of ``version_major | tag | isPatch``.
+
+        ``project_code`` scopes the aggregation to a single project.
+        """
+        valid = {"version_major", "tag", "isPatch"}
         if group_by not in valid:
             raise ValueError(f"group_by must be one of {sorted(valid)}, got {group_by!r}")
 
-        packages = self.get_all_packages()
+        packages = self._scoped_packages(project_code)
         counts: dict[str, int] = {}
 
-        if group_by == "type":
-            for pkg in packages:
-                key = str(pkg.get("packageType") or "unknown")
-                counts[key] = counts.get(key, 0) + 1
-        elif group_by == "version_major":
+        if group_by == "version_major":
             for pkg in packages:
                 ver = str(pkg.get("version") or "")
                 major = ver.split(".", 1)[0] if ver else "unknown"

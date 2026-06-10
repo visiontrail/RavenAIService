@@ -265,18 +265,18 @@ def test_query_category_component(seeded_service, stub_options):
 
 
 def test_query_category_stats(seeded_service, stub_options):
-    """Stats: group_by=type → counts per package type."""
+    """Stats: group_by=isPatch → patch/full counts (type dimension removed)."""
     messages, payload = _scripted_loop(
         "package_stats",
-        {"group_by": "type"},
+        {"group_by": "isPatch"},
         fenced_ids=[],  # stats query yields no recommendation, just a summary
     )
     groups = {g["key"]: g["count"] for g in payload["groups"]}
-    assert groups["ka-tx"] == 2
-    # lingxi-10 has 5 entries (lx-1, lx-2, lx-3, lx-rc, patch-1)
-    assert groups["lingxi-10"] == 5
+    assert groups["patch"] == 1  # patch-1
+    # full = ka-1, ka-2, lx-1, lx-2, lx-3, lx-rc
+    assert groups["full"] == 6
 
-    result = _run(_build_agent(messages), "按 type 分组统计包数量")
+    result = _run(_build_agent(messages), "按补丁类型分组统计包数量")
 
     # No recommendations expected for a pure-stats answer.
     assert result["recommended_package_ids"] == []

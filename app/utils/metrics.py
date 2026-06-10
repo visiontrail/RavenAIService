@@ -125,8 +125,8 @@ if _HAS_PROMETHEUS:
     )
     raven_package_activity_total = Counter(
         "raven_package_activity_total",
-        "Total package activity (upload/download/etc), by action/package_type/status.",
-        labelnames=("action", "package_type", "status"),
+        "Total package activity (upload/download/etc), by action/status.",
+        labelnames=("action", "status"),
     )
     raven_device_connections = Gauge(
         "raven_device_connections",
@@ -273,12 +273,15 @@ def record_log_upload(*, log_type: Any, status: Any, uploaded_bytes: int = 0) ->
         logger.debug("metrics: log upload prometheus update failed: %s", exc)
 
 
-def record_package_activity(*, action: Any, package_type: Any, status: Any) -> None:
-    """Record one package activity business event in Prometheus."""
+def record_package_activity(*, action: Any, status: Any) -> None:
+    """Record one package activity business event in Prometheus.
+
+    Deliberately carries no project label: project identifiers are
+    high-cardinality and live only in the persisted business event metadata.
+    """
     try:
         raven_package_activity_total.labels(
             action=_label(action),
-            package_type=_label(package_type),
             status=_label(status),
         ).inc()
     except Exception as exc:  # noqa: BLE001

@@ -2,25 +2,25 @@
 
 ## 1. 包-项目关联数据层（package-project-association）
 
-- [ ] 1.1 `raven_package_service.py`：移除 `PACKAGE_TYPES` 常量与 `determine_package_type()` 文件名启发式；新增 `projectCode` 字段语义与 `load_packages()` 中的幂等惰性规范化（`projectCode` ← 旧 `packageType` 值，保留原键；读路径不主动落盘）
-- [ ] 1.2 `raven_package_service.py`：`iter_brief()` 投影 `packageType` → `projectCode`；`filter_packages()` 支持 `projectCode` 筛选与 `__unassociated__` 特殊值；`query_packages` / `text_search` / `version_filter` / `list_components` / `find_by_component` / `stats_by` 全部改为项目维度（`stats_by` 移除 `type` 维度）
-- [ ] 1.3 `raven_package_service.py`：`build_package_info()` / `extract_package_metadata()` / `scan_uploads_directory()` 适配——上传走显式 `projectCode`，扫描入库 `projectCode=""`（未关联）
-- [ ] 1.4 新增项目校验 helper：`projectCode` 必须对应 `project_repo` 中存在且 `enabled=true` 的记录（供上传 API 复用，校验失败抛 400 语义错误）
-- [ ] 1.5 后端单元测试：惰性迁移幂等性、回滚兼容（旧键保留）、未关联筛选、各查询方法的项目过滤
+- [x] 1.1 `raven_package_service.py`：移除 `PACKAGE_TYPES` 常量与 `determine_package_type()` 文件名启发式；新增 `projectCode` 字段语义与 `load_packages()` 中的幂等惰性规范化（`projectCode` ← 旧 `packageType` 值，保留原键；读路径不主动落盘）
+- [x] 1.2 `raven_package_service.py`：`iter_brief()` 投影 `packageType` → `projectCode`；`filter_packages()` 支持 `projectCode` 筛选与 `__unassociated__` 特殊值；`query_packages` / `text_search` / `version_filter` / `list_components` / `find_by_component` / `stats_by` 全部改为项目维度（`stats_by` 移除 `type` 维度）
+- [x] 1.3 `raven_package_service.py`：`build_package_info()` / `extract_package_metadata()` / `scan_uploads_directory()` 适配——上传走显式 `projectCode`，扫描入库 `projectCode=""`（未关联）
+- [x] 1.4 新增项目校验 helper：`projectCode` 必须对应 `project_repo` 中存在且 `enabled=true` 的记录（供上传 API 复用，校验失败抛 400 语义错误）
+- [x] 1.5 后端单元测试：惰性迁移幂等性、回滚兼容（旧键保留）、未关联筛选、各查询方法的项目过滤
 
 ## 2. 包管理对外 API 适配（BREAKING）
 
-- [ ] 2.1 `app/api/packages.py`：`GET /packages` 新增 `projectCode` 查询参数，旧 `type` 参数作为 deprecated 别名按 `projectCode` 解释；`GET /packages/stats/overview` 返回 `packagesByProject`（含 `unassociated` 桶）并移除 `packagesByType`
-- [ ] 2.2 `POST /upload`、`POST /upload/batch`：表单字段 `packageType` → `projectCode`（必填），接入 1.4 的项目校验，校验失败清理已落盘文件
-- [ ] 2.3 移除 `GET /download/type/{package_type}` 路由，新增 `GET /download/project/{project_code}`（单包直发文件、多包打 zip）
-- [ ] 2.4 `_record_package_activity()`：metadata `package_type` → `project_code`（空值记 `unassociated`）；`app/utils/metrics.py` 的 `raven_package_activity_total` 移除 `package_type` label，仅保留 `action` + `status`
-- [ ] 2.5 `app/i18n/messages`：新增上传项目校验失败、`project_repo_required` 等文案（zh/en）
-- [ ] 2.6 API 集成测试：项目筛选、旧 `type` 别名、上传必填校验与失败清理、scan 未关联入库、按项目下载、stats 新结构、Prometheus label 断言
+- [x] 2.1 `app/api/packages.py`：`GET /packages` 新增 `projectCode` 查询参数，旧 `type` 参数作为 deprecated 别名按 `projectCode` 解释；`GET /packages/stats/overview` 返回 `packagesByProject`（含 `unassociated` 桶）并移除 `packagesByType`
+- [x] 2.2 `POST /upload`、`POST /upload/batch`：表单字段 `packageType` → `projectCode`（必填），接入 1.4 的项目校验，校验失败清理已落盘文件
+- [x] 2.3 移除 `GET /download/type/{package_type}` 路由，新增 `GET /download/project/{project_code}`（单包直发文件、多包打 zip）
+- [x] 2.4 `_record_package_activity()`：metadata `package_type` → `project_code`（空值记 `unassociated`）；`app/utils/metrics.py` 的 `raven_package_activity_total` 移除 `package_type` label，仅保留 `action` + `status`
+- [x] 2.5 `app/i18n/messages`：新增上传项目校验失败、`project_repo_required` 等文案（zh/en）
+- [x] 2.6 API 集成测试：项目筛选、旧 `type` 别名、上传必填校验与失败清理、scan 未关联入库、按项目下载、stats 新结构、Prometheus label 断言
 
 ## 3. Agent 重建：工作区与项目绑定
 
 - [ ] 3.1 新增 `app/agents/package_search/workspace.py`（同构 `project_expert/workspace.py`）：`prepare(project_repo, question, hints, session_id)` 创建 `repo/` + `task.json`（`repo_info` 含 project_code/repo_url/default_branch，`source="user_selected_project_repo"`，不落 token）、`cleanup()` 幂等清理、`MissingProjectRepoError`
-- [ ] 3.2 `app/agents/package_search/mcp_tools.py`：`get_mcp_server(project_code)` 按运行构建，7 个工具服务端强制 `projectCode` 过滤；移除 `list_packages.filters.type`、`filter_packages_by_version.package_type`、`list_components.package_type` 参数；`package_stats.group_by` 合法值改为 `version_major|tag|isPatch`；`get_package_by_id` 对非本项目 ID 返回 `not_found`
+- [x] 3.2 `app/agents/package_search/mcp_tools.py`：`get_mcp_server(project_code)` 按运行构建，7 个工具服务端强制 `projectCode` 过滤；移除 `list_packages.filters.type`、`filter_packages_by_version.package_type`、`list_components.package_type` 参数；`package_stats.group_by` 合法值改为 `version_major|tag|isPatch`；`get_package_by_id` 对非本项目 ID 返回 `not_found`
 - [ ] 3.3 重写 `app/agents/package_search/agent.py`：复用 `log_analysis` trace 层与 `_RunState` 状态机（对齐 `project_expert/agent.py`），ALLOWED_TOOLS = `Bash/Read/Grep/Glob` + `mcp__project_repo__lookup_project_repo` + 7 个包工具（`mcp_servers` 同时挂 `project_repo` 与 `package_search` 两个 server）；保留包检索自有的最终结果契约（fenced JSON → recommended/relevant ID 校验过滤，校验范围限定所选项目）；支持 `cancel_event` 与 `trace_emitter`；删除 `app/agents/package_search/trace.py` 及其引用
 - [ ] 3.4 Agent 单元测试（monkeypatch SDK loop）：项目限定工具过滤、跨项目 ID 拦截、取消路径、降级（无 fenced JSON）路径
 
@@ -55,7 +55,7 @@
 
 ## 8. 指标与管理端
 
-- [ ] 8.1 `metrics_service.py` / 总览 API：包分布从类型改为项目（`packagesByProject` 含 `unassociated`）
+- [x] 8.1 `metrics_service.py` / 总览 API：包分布从类型改为项目（`packagesByProject` 含 `unassociated`）
 - [ ] 8.2 `AdminMetrics.vue`：包分布图表字段与文案改为项目维度
 - [ ] 8.3 指标测试：overview 新结构、`package_activity` 事件 metadata 含 `project_code`
 

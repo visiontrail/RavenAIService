@@ -27,9 +27,15 @@ from fastapi import (
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.api.users import get_optional_user, get_request_locale
 from app.i18n.messages import t
-from app.services.raven_package_service import raven_package_service
+from app.models.database import get_db
+from app.services.raven_package_service import (
+    raven_package_service,
+    validate_project_code,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,32 +80,32 @@ async def _record_package_search_metrics(result: Any, user: Any) -> None:
 async def _record_package_activity(
     *,
     action: str,
-    package_type: Optional[str],
+    project_code: Optional[str],
     status_value: str = "success",
     count: int = 1,
 ) -> None:
     """Best-effort package activity recording (upload/download/etc). Never raises.
 
-    Persists a low-sensitivity ``package_activity`` event (action + package_type)
-    and bumps the Prometheus ``raven_package_activity_total`` counter. No file
+    Persists a low-sensitivity ``package_activity`` event (action + project_code)
+    and bumps the Prometheus ``raven_package_activity_total`` counter. The
+    Prometheus counter carries no project label (low-cardinality constraint);
+    the project association lives only in the persisted event metadata. No file
     contents, paths, or package ids are stored.
     """
     try:
         from app.services import metrics_service
         from app.utils import metrics as prom
 
-        ptype = str(package_type or "unknown")
+        code = str(project_code or "") or "unassociated"
         await metrics_service.record_business_event(
             event_type="package_activity",
             source=f"package_{action}",
             idempotency_key=f"package_activity:{action}:{uuid.uuid4().hex}",
             status=status_value,
-            metadata={"package_type": ptype, "result_count": count},
+            metadata={"project_code": code, "result_count": count},
         )
         for _ in range(max(1, count)):
-            prom.record_package_activity(
-                action=action, package_type=ptype, status=status_value
-            )
+            prom.record_package_activity(action=action, status=status_value)
     except Exception as exc:  # noqa: BLE001
         logger.debug("packages: activity metrics record skipped: %s", exc)
 
@@ -114,7 +120,7 @@ def _ok(data: Any = None, message: str = "ok", **extra: Any) -> dict[str, Any]:
 
 def _metadata_fields(
     version: Optional[str] = None,
-    packageType: Optional[str] = None,
+    projectCode: Optional[str] = None,
     description: Optional[str] = None,
     isPatch: Optional[str] = None,
     tags: Optional[str] = None,
@@ -123,7 +129,7 @@ def _metadata_fields(
     fields: dict[str, Any] = {}
     for key, value in {
         "version": version,
-        "packageType": packageType,
+        "projectCode": projectCode,
         "description": description,
         "isPatch": isPatch,
         "tags": tags,
@@ -159,6 +165,7 @@ async def list_packages(
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1),
     search: str = "",
+    projectCode: str = "",
     type: str = "",
     tags: str = "",
     version: str = "",
@@ -166,12 +173,14 @@ async def list_packages(
     sortBy: str = "createdAt",
     sortOrder: str = "desc",
 ) -> dict[str, Any]:
+    # ``type`` is a deprecated alias kept for old clients; it is interpreted
+    # as a projectCode filter and loses to an explicit ``projectCode``.
     packages, pagination = raven_package_service.filter_packages(
         {
             "page": page,
             "limit": limit,
             "search": search,
-            "type": type,
+            "projectCode": projectCode or type,
             "tags": tags,
             "version": version,
             "isPatch": isPatch,
@@ -185,15 +194,15 @@ async def list_packages(
 @router.get("/packages/stats/overview")
 async def package_stats() -> dict[str, Any]:
     packages = raven_package_service.get_all_packages()
-    by_type: dict[str, int] = {}
+    by_project: dict[str, int] = {}
     for package in packages:
-        package_type = str(package.get("packageType") or "unknown")
-        by_type[package_type] = by_type.get(package_type, 0) + 1
+        project_code = str(package.get("projectCode") or "") or "unassociated"
+        by_project[project_code] = by_project.get(project_code, 0) + 1
     recent = sorted(packages, key=lambda pkg: str(pkg.get("createdAt") or ""), reverse=True)[:5]
     return _ok(
         {
             "totalPackages": len(packages),
-            "packagesByType": by_type,
+            "packagesByProject": by_project,
             "recentPackages": [
                 {
                     "id": pkg.get("id"),
@@ -247,25 +256,29 @@ async def upload_package(
     file: UploadFile = File(...),
     packageInfo: Optional[str] = Form(None),
     version: Optional[str] = Form(None),
-    packageType: Optional[str] = Form(None),
+    projectCode: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
     isPatch: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
     components: Optional[str] = Form(None),
     locale: str = Depends(get_request_locale),
+    db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
+    # Validate the project before touching the disk so an invalid project
+    # never leaves a stored file behind.
+    await validate_project_code(db, projectCode, locale)
     file_path, size, sha256 = await raven_package_service.store_upload(file)
     try:
         package = raven_package_service.build_package_info(
             file_path=file_path,
             size=size,
             sha256=sha256,
-            metadata_fields=_metadata_fields(version, packageType, description, isPatch, tags, components),
+            metadata_fields=_metadata_fields(version, projectCode, description, isPatch, tags, components),
             package_info=_parse_package_info(packageInfo, locale),
         )
         saved = raven_package_service.add_or_update_package(package)
         await _record_package_activity(
-            action="upload", package_type=saved.get("packageType")
+            action="upload", project_code=saved.get("projectCode")
         )
         return _ok(message=t("package.upload_success", locale), package=saved)
     except Exception:
@@ -277,6 +290,7 @@ async def upload_package(
 async def upload_package_batch(
     request: Request,
     locale: str = Depends(get_request_locale),
+    db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     form = await request.form()
     files = list(form.getlist("file")) or list(form.getlist("files"))
@@ -286,9 +300,10 @@ async def upload_package_batch(
             detail=t("package.no_files_uploaded", locale),
         )
 
+    await validate_project_code(db, form.get("projectCode"), locale)
     fields = _metadata_fields(
         version=form.get("version"),
-        packageType=form.get("packageType"),
+        projectCode=form.get("projectCode"),
         description=form.get("description"),
         isPatch=form.get("isPatch"),
         tags=form.get("tags"),
@@ -305,7 +320,7 @@ async def upload_package_batch(
             saved = raven_package_service.add_or_update_package(package)
             results.append(saved)
             await _record_package_activity(
-                action="upload", package_type=saved.get("packageType")
+                action="upload", project_code=saved.get("projectCode")
             )
         except Exception as exc:
             errors.append({"filename": getattr(upload, "filename", ""), "error": str(exc)})
@@ -325,11 +340,11 @@ async def upload_progress(upload_id: str) -> dict[str, Any]:
 @router.get("/download/stats")
 async def download_stats() -> dict[str, Any]:
     packages = raven_package_service.get_all_packages()
-    by_type: dict[str, int] = {}
+    by_project: dict[str, int] = {}
     for package in packages:
-        package_type = str(package.get("packageType") or package.get("type") or "unknown")
-        by_type[package_type] = by_type.get(package_type, 0) + 1
-    return _ok({"totalDownloads": 0, "popularPackages": packages[:5], "downloadsByType": by_type})
+        project_code = str(package.get("projectCode") or "") or "unassociated"
+        by_project[project_code] = by_project.get(project_code, 0) + 1
+    return _ok({"totalDownloads": 0, "popularPackages": packages[:5], "downloadsByProject": by_project})
 
 
 @router.post("/download/batch")
@@ -353,7 +368,7 @@ async def download_batch(
     zip_path = raven_package_service.build_zip(packages)
     filename = f"packages-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
     await _record_package_activity(
-        action="download_batch", package_type=None, count=len(packages)
+        action="download_batch", project_code=None, count=len(packages)
     )
     return FileResponse(
         str(zip_path),
@@ -363,15 +378,15 @@ async def download_batch(
     )
 
 
-@router.get("/download/type/{package_type}")
-async def download_by_type(
-    package_type: str,
+@router.get("/download/project/{project_code}")
+async def download_by_project(
+    project_code: str,
     version: Optional[str] = None,
     locale: str = Depends(get_request_locale),
 ) -> FileResponse:
     packages = [
         pkg for pkg in raven_package_service.get_all_packages()
-        if pkg.get("packageType") == package_type and (not version or pkg.get("version") == version)
+        if pkg.get("projectCode") == project_code and (not version or pkg.get("version") == version)
     ]
     if not packages:
         raise HTTPException(
@@ -379,12 +394,12 @@ async def download_by_type(
             detail=t("package.none_for_criteria", locale),
         )
     await _record_package_activity(
-        action="download_type", package_type=package_type, count=len(packages)
+        action="download_project", project_code=project_code, count=len(packages)
     )
     if len(packages) == 1:
         return _package_file_response(packages[0], locale)
-    zip_path = raven_package_service.build_zip(packages, prefix=f"{package_type}-packages")
-    filename = f"{package_type}-packages-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+    zip_path = raven_package_service.build_zip(packages, prefix=f"{project_code}-packages")
+    filename = f"{project_code}-packages-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
     return FileResponse(
         str(zip_path),
         filename=filename,
@@ -406,7 +421,7 @@ async def download_package(
         )
     response = _package_file_response(package, locale)
     await _record_package_activity(
-        action="download", package_type=package.get("packageType")
+        action="download", project_code=package.get("projectCode")
     )
     return response
 

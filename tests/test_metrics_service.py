@@ -107,7 +107,6 @@ def test_sanitize_metadata_keeps_only_allowlisted_keys():
         "tool_call_count": 3,
         "trace_event_count": 42,
         "log_type": "syslog",
-        "package_type": "firmware",
         "result_count": 7,
         "project_code": "abc",
         "error_kind": "timeout",
@@ -356,6 +355,6 @@ def test_prometheus_helpers_never_raise_on_bad_input():
     )
     prom.record_http_request(method=None, route=None, status_code=None, duration_seconds=-1)
     prom.record_log_upload(log_type=None, status=None, uploaded_bytes=-3)
-    prom.record_package_activity(action=None, package_type=None, status=None)
+    prom.record_package_activity(action=None, status=None)
     prom.set_device_connections({"online": 2, "offline": None})
     prom.record_metrics_failure(None)

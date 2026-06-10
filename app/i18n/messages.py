@@ -102,6 +102,9 @@ MESSAGES: Dict[str, Dict[str, str]] = {
         "package.query_too_long": "query 超过 {max} 个字符的上限",
         "package.body_not_object": "请求体必须是 JSON object",
         "package.session_id_not_string": "session_id 必须是字符串",
+        "package.project_code_required": "projectCode 为必填项，请选择包所属的项目",
+        "package.project_invalid": "项目不存在或已停用: {code}",
+        "package.project_repo_required": "请先选择项目后再使用重构包检索",
         # ----- logs (app/api/logs.py) -----
         "log.project_not_found_id": "项目不存在或未启用: project_id={project_id}",
         "log.project_not_found_code": "项目不存在或未启用: project_code={project_code}",
@@ -223,6 +226,9 @@ MESSAGES: Dict[str, Dict[str, str]] = {
         "package.query_too_long": "query exceeds {max}-character limit",
         "package.body_not_object": "request body must be a JSON object",
         "package.session_id_not_string": "session_id must be a string",
+        "package.project_code_required": "projectCode is required; choose the project this package belongs to",
+        "package.project_invalid": "Project not found or disabled: {code}",
+        "package.project_repo_required": "Select a project before using the package search agent",
         # ----- logs (app/api/logs.py) -----
         "log.project_not_found_id": "Project not found or disabled: project_id={project_id}",
         "log.project_not_found_code": "Project not found or disabled: project_code={project_code}",

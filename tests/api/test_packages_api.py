@@ -1,0 +1,243 @@
+"""Integration tests for the project-dimension package management API.
+
+Covers the BREAKING surface from the package-project-association spec:
+``projectCode`` filtering (incl. the deprecated ``type`` alias and the
+``__unassociated__`` special value), upload project validation with no
+residual files on failure, scan registering orphans as unassociated,
+project-scoped download, the new stats shape, and the Prometheus
+``raven_package_activity_total`` label set.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.api import packages as packages_api
+from app.models.database import get_db
+from app.services.raven_package_service import raven_package_service
+
+
+class _FakeRepo:
+    def __init__(self, project_code: str, enabled: bool = True) -> None:
+        self.id = 1
+        self.project_code = project_code
+        self.project_name = project_code.upper()
+        self.enabled = enabled
+
+
+@pytest.fixture
+def app() -> FastAPI:
+    application = FastAPI()
+    application.include_router(packages_api.router)
+    application.dependency_overrides[get_db] = lambda: None
+    return application
+
+
+@pytest.fixture
+def client(app: FastAPI) -> TestClient:
+    return TestClient(app)
+
+
+@pytest.fixture
+def isolated_store(tmp_path, monkeypatch):
+    """Point the shared service singleton at an isolated tmp data dir."""
+    monkeypatch.setattr(raven_package_service, "data_dir", tmp_path / "raven")
+    monkeypatch.setattr(raven_package_service, "uploads_dir", tmp_path / "raven" / "uploads")
+    monkeypatch.setattr(
+        raven_package_service, "metadata_file", tmp_path / "raven" / "package-metadata.json"
+    )
+    return raven_package_service
+
+
+@pytest.fixture
+def registry(monkeypatch):
+    """Fake project_repo registry: only ``demo-proj`` exists and is enabled."""
+
+    async def fake_get_by_project_code(db: Any, code: str) -> Optional[_FakeRepo]:
+        if str(code).strip().lower() == "demo-proj":
+            return _FakeRepo("demo-proj")
+        return None
+
+    from app.services import project_repo_service
+
+    monkeypatch.setattr(project_repo_service, "get_by_project_code", fake_get_by_project_code)
+    return fake_get_by_project_code
+
+
+def _seed(store, tmp_path, entries):
+    """Seed package metadata with real (dummy) files so pruning keeps them."""
+    files_dir = tmp_path / "raven" / "uploads"
+    files_dir.mkdir(parents=True, exist_ok=True)
+    packages = []
+    for pid, name, project in entries:
+        file_path = files_dir / name
+        file_path.write_bytes(b"dummy-bytes")
+        packages.append({
+            "id": pid,
+            "name": name,
+            "version": "1.0.0",
+            "projectCode": project,
+            "path": str(file_path),
+            "size": 11,
+            "createdAt": "2025-01-01T00:00:00Z",
+            "metadata": {"isPatch": False, "components": [], "tags": [],
+                         "description": "", "sha256": "deadbeef", "customFields": {}},
+        })
+    store.save_packages(packages)
+
+
+# ────────────────────── GET /packages filtering ──────────────────────
+
+
+def test_list_packages_filters_by_project_code(client, isolated_store, tmp_path):
+    _seed(isolated_store, tmp_path, [
+        ("a", "a.tgz", "demo-proj"),
+        ("b", "b.tgz", "other-proj"),
+        ("c", "c.tgz", ""),
+    ])
+    body = client.get("/packages", params={"projectCode": "demo-proj"}).json()
+    items = body["data"]["packages"]
+    assert [p["id"] for p in items] == ["a"]
+
+
+def test_list_packages_legacy_type_alias(client, isolated_store, tmp_path):
+    _seed(isolated_store, tmp_path, [
+        ("a", "a.tgz", "lingxi-10"),
+        ("b", "b.tgz", "ka-tx"),
+    ])
+    body = client.get("/packages", params={"type": "lingxi-10"}).json()
+    items = body["data"]["packages"]
+    assert [p["id"] for p in items] == ["a"]
+
+
+def test_list_packages_unassociated_filter(client, isolated_store, tmp_path):
+    _seed(isolated_store, tmp_path, [
+        ("a", "a.tgz", "demo-proj"),
+        ("b", "b.tgz", ""),
+    ])
+    body = client.get("/packages", params={"projectCode": "__unassociated__"}).json()
+    items = body["data"]["packages"]
+    assert [p["id"] for p in items] == ["b"]
+
+
+# ────────────────────── stats overview ──────────────────────
+
+
+def test_stats_overview_returns_packages_by_project(client, isolated_store, tmp_path):
+    _seed(isolated_store, tmp_path, [
+        ("a", "a.tgz", "demo-proj"),
+        ("b", "b.tgz", "demo-proj"),
+        ("c", "c.tgz", ""),
+    ])
+    data = client.get("/packages/stats/overview").json()["data"]
+    assert data["packagesByProject"] == {"demo-proj": 2, "unassociated": 1}
+    assert "packagesByType" not in data
+
+
+# ────────────────────── upload validation ──────────────────────
+
+
+def _upload(client, project_code: Optional[str]):
+    data = {} if project_code is None else {"projectCode": project_code}
+    return client.post(
+        "/upload",
+        files={"file": ("demo-1.0.0.tgz", b"dummy-tgz-bytes", "application/gzip")},
+        data=data,
+    )
+
+
+def test_upload_requires_project_code(client, isolated_store, registry):
+    resp = _upload(client, None)
+    assert resp.status_code == 400
+    assert not list(isolated_store.uploads_dir.glob("*")) if isolated_store.uploads_dir.exists() else True
+
+
+def test_upload_rejects_unknown_project_and_leaves_no_file(client, isolated_store, registry):
+    resp = _upload(client, "ghost-proj")
+    assert resp.status_code == 400
+    uploads = isolated_store.uploads_dir
+    assert not uploads.exists() or not list(uploads.glob("*"))
+
+
+def test_upload_accepts_registered_project(client, isolated_store, registry):
+    resp = _upload(client, "demo-proj")
+    assert resp.status_code == 200
+    saved = resp.json()["package"]
+    assert saved["projectCode"] == "demo-proj"
+    assert "packageType" not in saved
+    stored = isolated_store.load_packages()
+    assert stored and stored[0]["projectCode"] == "demo-proj"
+
+
+def test_upload_batch_requires_valid_project(client, isolated_store, registry):
+    resp = client.post(
+        "/upload/batch",
+        files=[("file", ("x-1.0.0.tgz", b"dummy", "application/gzip"))],
+        data={"projectCode": "ghost-proj"},
+    )
+    assert resp.status_code == 400
+    uploads = isolated_store.uploads_dir
+    assert not uploads.exists() or not list(uploads.glob("*"))
+
+
+# ────────────────────── scan ──────────────────────
+
+
+def test_scan_registers_orphans_as_unassociated(client, isolated_store):
+    isolated_store.uploads_dir.mkdir(parents=True, exist_ok=True)
+    (isolated_store.uploads_dir / "orphan-2.0.0.tgz").write_bytes(b"dummy")
+    resp = client.post("/packages/scan")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["added"] == 1
+    pkg = isolated_store.load_packages()[0]
+    assert pkg["projectCode"] == ""
+
+
+# ────────────────────── download by project ──────────────────────
+
+
+def test_download_by_project_single_file(client, isolated_store, tmp_path):
+    _seed(isolated_store, tmp_path, [
+        ("a", "a.tgz", "demo-proj"),
+        ("b", "b.tgz", "other-proj"),
+    ])
+    resp = client.get("/download/project/demo-proj")
+    assert resp.status_code == 200
+    assert resp.content == b"dummy-bytes"
+
+
+def test_download_by_project_multiple_returns_zip(client, isolated_store, tmp_path):
+    _seed(isolated_store, tmp_path, [
+        ("a", "a.tgz", "demo-proj"),
+        ("b", "b.tgz", "demo-proj"),
+    ])
+    resp = client.get("/download/project/demo-proj")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+
+
+def test_download_by_project_unknown_is_404(client, isolated_store, tmp_path):
+    _seed(isolated_store, tmp_path, [("a", "a.tgz", "demo-proj")])
+    assert client.get("/download/project/ghost").status_code == 404
+
+
+def test_download_by_type_route_removed(client, isolated_store, tmp_path):
+    _seed(isolated_store, tmp_path, [("a", "a.tgz", "demo-proj")])
+    assert client.get("/download/type/demo-proj").status_code == 404
+
+
+# ────────────────────── Prometheus labels ──────────────────────
+
+
+def test_package_activity_metric_has_no_project_label():
+    from app.utils import metrics as prom
+
+    labelnames = getattr(prom.raven_package_activity_total, "_labelnames", None)
+    if labelnames is not None:  # real prometheus_client Counter
+        assert tuple(labelnames) == ("action", "status")
+    # the helper accepts exactly action+status and never raises
+    prom.record_package_activity(action="upload", status="success")

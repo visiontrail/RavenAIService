@@ -48,7 +48,6 @@ METADATA_ALLOWLIST = frozenset(
         "tool_call_count",
         "trace_event_count",
         "log_type",
-        "package_type",
         "result_count",
         "project_code",
         "error_kind",
@@ -1462,7 +1461,7 @@ async def aggregate_package_metrics(
     summary: Dict[str, Any] = {
         "package_count": 0,
         "total_bytes": 0,
-        "counts_by_type": {},
+        "counts_by_project": {},
         "activity_counts": {},
         "search_count": 0,
     }
@@ -1470,18 +1469,18 @@ async def aggregate_package_metrics(
         from app.services.raven_package_service import raven_package_service
 
         packages = raven_package_service.get_all_packages()
-        counts_by_type: Dict[str, int] = {}
+        counts_by_project: Dict[str, int] = {}
         total_bytes = 0
         for pkg in packages:
-            ptype = _enum_key(pkg.get("packageType"))
-            counts_by_type[ptype] = counts_by_type.get(ptype, 0) + 1
+            code = str(pkg.get("projectCode") or "") or "unassociated"
+            counts_by_project[code] = counts_by_project.get(code, 0) + 1
             try:
                 total_bytes += int(pkg.get("size") or 0)
             except (TypeError, ValueError):
                 continue
         summary["package_count"] = len(packages)
         summary["total_bytes"] = total_bytes
-        summary["counts_by_type"] = counts_by_type
+        summary["counts_by_project"] = counts_by_project
     except Exception as exc:  # noqa: BLE001
         logger.warning("metrics: package inventory aggregation failed: %s", exc)
 

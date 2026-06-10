@@ -217,7 +217,7 @@ class PackageActivitySummary(BaseModel):
 
     package_count: int = 0
     total_bytes: int = 0
-    counts_by_type: Dict[str, int] = Field(default_factory=dict)
+    counts_by_project: Dict[str, int] = Field(default_factory=dict)
     activity_counts: Dict[str, int] = Field(default_factory=dict)
     search_count: int = 0
 
