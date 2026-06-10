@@ -154,9 +154,16 @@ def test_device_loader_selects_locale_and_keeps_risk_rules():
         p._PROMPTS_CACHE.clear()
 
 
-def test_package_search_get_system_prompt_falls_back_to_zh():
+def test_package_search_get_prompts_falls_back_to_zh():
     from app.agents.package_search import prompts as p
 
-    en = p.get_system_prompt("en")  # only zh authored -> falls back
-    zh = p.get_system_prompt("zh")
-    assert en == zh == p.SYSTEM_PROMPT.strip()
+    p._PROMPTS_CACHE.clear()
+    try:
+        sys_en, user_en = p.get_prompts("en")  # only zh authored -> falls back
+        sys_zh, user_zh = p.get_prompts("zh")
+        assert sys_en == sys_zh
+        assert user_en == user_zh
+        assert "recommended_package_ids" in sys_zh
+        assert "{question}" in user_zh
+    finally:
+        p._PROMPTS_CACHE.clear()

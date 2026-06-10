@@ -31,6 +31,7 @@ import pytest
 
 from app.agents.package_search.agent import PackageSearchAgent
 from app.agents.package_search.mcp_tools import TOOL_CALLS
+from app.agents.package_search.workspace import WorkspaceContext
 from app.services.raven_package_service import RavenPackageService
 
 
@@ -59,6 +60,14 @@ class _TextBlock:
 class _Message:
     def __init__(self, blocks: list) -> None:
         self.content = blocks
+
+
+class _ResultMessage:
+    """Fake terminal ResultMessage: carries the final answer text."""
+
+    def __init__(self, result: str) -> None:
+        self.content = None
+        self.result = result
 
 
 # ──────────────── fixture: isolated service + bound singletons ────────────────
@@ -148,7 +157,7 @@ def seeded_service(tmp_path, monkeypatch):
 @pytest.fixture
 def stub_options(monkeypatch):
     """Skip ClaudeAgentOptions construction so we don't touch real config."""
-    def fake_build(self, *, system_prompt, max_turns=None):
+    def fake_build(self, *, system_prompt, project_code, cwd):
         return (object(), "fake-model", "fake-provider")
     monkeypatch.setattr(PackageSearchAgent, "_build_options", fake_build)
 
@@ -156,9 +165,18 @@ def stub_options(monkeypatch):
 # ──────────────── helper: drive agent with one tool round-trip ────────────────
 
 
-def _scripted_loop(tool_name: str, tool_input: dict, fenced_ids: List[str]):
-    """Build the messages for a single tool_use → tool_result → final answer."""
-    tool_payload = TOOL_CALLS[tool_name](tool_input)
+def _scripted_loop(
+    tool_name: str,
+    tool_input: dict,
+    fenced_ids: List[str],
+    project_code: str,
+):
+    """Build the messages for a single tool_use → tool_result → final answer.
+
+    The MCP tool is invoked with the run's ``project_code`` — same
+    server-side scoping the rebuilt agent applies via ``get_mcp_server``.
+    """
+    tool_payload = TOOL_CALLS[tool_name](tool_input, project_code=project_code)
     fenced = (
         "Here are the matches.\n"
         "```json\n"
@@ -182,7 +200,7 @@ def _scripted_loop(tool_name: str, tool_input: dict, fenced_ids: List[str]):
                 text=json.dumps(tool_payload),
             ),
         ]),
-        _Message([_TextBlock(fenced)]),
+        _ResultMessage(fenced),
     ], tool_payload
 
 
@@ -197,25 +215,37 @@ def _build_agent(messages):
     return agent
 
 
-def _run(agent: PackageSearchAgent, query: str) -> dict:
-    return asyncio.run(agent.run(query))
+def _run(agent: PackageSearchAgent, query: str, project_code: str) -> dict:
+    import tempfile
+
+    tmp = tempfile.mkdtemp(prefix="pkgsearch-test-")
+    ctx = WorkspaceContext(
+        task_id="task-e2e",
+        temp_dir=tmp,
+        repo_dir=f"{tmp}/repo",
+        task_json_path=f"{tmp}/task.json",
+        project_code=project_code,
+        metadata={"question": query, "hints": ""},
+    )
+    return asyncio.run(agent.run(ctx))
 
 
 # ──────────────── the four scenarios from task 8.1 ────────────────
 
 
 def test_query_category_name_substring(seeded_service, stub_options):
-    """Name substring: 'katx' → both ka-tx packages."""
+    """Name substring: 'katx' → both ka-tx packages (run bound to ka-tx)."""
     messages, payload = _scripted_loop(
         "search_packages_by_text",
         {"text": "katx"},
         fenced_ids=["ka-1", "ka-2"],
+        project_code="ka-tx",
     )
     # Sanity: the MCP tool actually returned both ka-tx packages.
     returned_ids = {item["id"] for item in payload["items"]}
     assert returned_ids == {"ka-1", "ka-2"}
 
-    result = _run(_build_agent(messages), "找一下名字带 katx 的包")
+    result = _run(_build_agent(messages), "找一下名字带 katx 的包", "ka-tx")
 
     assert result["recommended_package_ids"] == ["ka-1", "ka-2"]
     assert result["relevant_package_ids"] == ["ka-1", "ka-2"]
@@ -224,23 +254,25 @@ def test_query_category_name_substring(seeded_service, stub_options):
 
 
 def test_query_category_version_range(seeded_service, stub_options):
-    """Version range: lingxi-10 ≥ 1.10.0 — must include 1.10.0 (not 1.9.0)."""
+    """Version range within project lingxi-10: ≥ 1.10.0 — SemVer comparison."""
     messages, payload = _scripted_loop(
         "filter_packages_by_version",
-        {"package_type": "lingxi-10", "version_min": "1.10.0"},
+        {"version_min": "1.10.0"},
         fenced_ids=["lx-2", "lx-3"],
+        project_code="lingxi-10",
     )
     returned_ids = {item["id"] for item in payload["items"]}
     # SemVer: 1.10.0 must be there, 1.9.0 must NOT (string compare would fail),
     # prerelease rc1 must NOT (default include_prerelease=false), patch IS counted
-    # since 2.0.1 ≥ 1.10.0.
+    # since 2.0.1 ≥ 1.10.0. Project scoping excludes the ka-tx packages.
     assert "lx-2" in returned_ids
     assert "lx-3" in returned_ids
     assert "lx-1" not in returned_ids
     assert "lx-rc" not in returned_ids
+    assert "ka-2" not in returned_ids  # other project — scoped out server-side
 
     result = _run(_build_agent(messages),
-                  "我要 lingxi-10 v1.10.0 以上的非预发布版本")
+                  "我要 v1.10.0 以上的非预发布版本", "lingxi-10")
 
     assert result["recommended_package_ids"] == ["lx-2", "lx-3"]
     assert result["relevant_package_ids"] == ["lx-2", "lx-3"]
@@ -252,6 +284,7 @@ def test_query_category_component(seeded_service, stub_options):
         "find_packages_by_component",
         {"component_name": "du"},
         fenced_ids=["lx-2", "lx-3"],
+        project_code="lingxi-10",
     )
     returned_ids = {item["id"] for item in payload["items"]}
     assert "lx-2" in returned_ids
@@ -259,24 +292,25 @@ def test_query_category_component(seeded_service, stub_options):
     # The fixture for lx-1 doesn't include "du", so it must not match.
     assert "lx-1" not in returned_ids
 
-    result = _run(_build_agent(messages), "哪些包含 du 组件")
+    result = _run(_build_agent(messages), "哪些包含 du 组件", "lingxi-10")
 
     assert result["recommended_package_ids"] == ["lx-2", "lx-3"]
 
 
 def test_query_category_stats(seeded_service, stub_options):
-    """Stats: group_by=isPatch → patch/full counts (type dimension removed)."""
+    """Stats: group_by=isPatch within project lingxi-10 (type dimension removed)."""
     messages, payload = _scripted_loop(
         "package_stats",
         {"group_by": "isPatch"},
         fenced_ids=[],  # stats query yields no recommendation, just a summary
+        project_code="lingxi-10",
     )
     groups = {g["key"]: g["count"] for g in payload["groups"]}
     assert groups["patch"] == 1  # patch-1
-    # full = ka-1, ka-2, lx-1, lx-2, lx-3, lx-rc
-    assert groups["full"] == 6
+    # full (project-scoped) = lx-1, lx-2, lx-3, lx-rc
+    assert groups["full"] == 4
 
-    result = _run(_build_agent(messages), "按补丁类型分组统计包数量")
+    result = _run(_build_agent(messages), "按补丁类型分组统计包数量", "lingxi-10")
 
     # No recommendations expected for a pure-stats answer.
     assert result["recommended_package_ids"] == []

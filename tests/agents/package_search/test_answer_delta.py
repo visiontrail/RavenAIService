@@ -19,6 +19,7 @@ from typing import Any, List
 import pytest
 
 from app.agents.package_search.agent import PackageSearchAgent
+from app.agents.package_search.workspace import WorkspaceContext
 
 
 class _TextBlock:
@@ -31,6 +32,14 @@ class _Message:
 
     def __init__(self, blocks: list) -> None:
         self.content = blocks
+
+
+class _ResultMessage:
+    """Fake terminal ResultMessage: carries the final answer text."""
+
+    def __init__(self, result: str) -> None:
+        self.content = None
+        self.result = result
 
 
 class _StreamEvent:
@@ -57,10 +66,21 @@ def _input_json_delta(partial: str) -> _StreamEvent:
 
 @pytest.fixture
 def stub_options(monkeypatch):
-    def fake_build(self, *, system_prompt, max_turns=None):
+    def fake_build(self, *, system_prompt, project_code, cwd):
         return (object(), "fake-model", "fake-provider")
 
     monkeypatch.setattr(PackageSearchAgent, "_build_options", fake_build)
+
+
+def _make_ctx(tmp_path) -> WorkspaceContext:
+    return WorkspaceContext(
+        task_id="task-1",
+        temp_dir=str(tmp_path),
+        repo_dir=str(tmp_path / "repo"),
+        task_json_path=str(tmp_path / "task.json"),
+        project_code="proj-a",
+        metadata={"question": "q", "hints": ""},
+    )
 
 
 def _make_agent(messages: List[Any]) -> PackageSearchAgent:
@@ -80,17 +100,17 @@ def _answer_deltas(trace_events: List[dict]) -> List[dict]:
     return sorted(deltas, key=lambda e: e["seq"])
 
 
-def test_stream_events_become_answer_delta_equal_to_final(stub_options):
+def test_stream_events_become_answer_delta_equal_to_final(stub_options, tmp_path):
     full = "根据日志分析，根因是失锁。"
     messages = [
         _text_delta("根据"),
         _text_delta("日志分析，"),
         _input_json_delta('{"q":'),  # non-text delta — must be ignored
         _text_delta("根因是失锁。"),
-        _Message([_TextBlock(full)]),  # complete TextBlock → state.final_text
+        _ResultMessage(full),  # terminal ResultMessage → state.final_text
     ]
     agent = _make_agent(messages)
-    result = asyncio.run(agent.run("q"))
+    result = asyncio.run(agent.run(_make_ctx(tmp_path)))
 
     deltas = _answer_deltas(result["trace_events"])
     assert [d["text_chunk"] for d in deltas] == ["根据", "日志分析，", "根因是失锁。"]
@@ -102,25 +122,25 @@ def test_stream_events_become_answer_delta_equal_to_final(stub_options):
     assert run_complete["final_text"].strip() == full
 
 
-def test_no_stream_events_emits_no_answer_delta(stub_options):
+def test_no_stream_events_emits_no_answer_delta(stub_options, tmp_path):
     """Provider-downgrade equivalent: only complete messages, no StreamEvents."""
     full = "整段返回的答复。"
-    agent = _make_agent([_Message([_TextBlock(full)])])
-    result = asyncio.run(agent.run("q"))
+    agent = _make_agent([_Message([_TextBlock(full)]), _ResultMessage(full)])
+    result = asyncio.run(agent.run(_make_ctx(tmp_path)))
 
     assert _answer_deltas(result["trace_events"]) == []
     # The authoritative answer is still available for whole-segment render.
     assert result["answer"] == full
 
 
-def test_text_delta_extraction_ignores_non_text(stub_options):
+def test_text_delta_extraction_ignores_non_text(stub_options, tmp_path):
     """Only text_delta increments translate; other deltas yield nothing."""
     agent = _make_agent(
         [
             _input_json_delta('{"a":1}'),
             _StreamEvent({"type": "content_block_start", "index": 0}),
-            _Message([_TextBlock("done")]),
+            _ResultMessage("done"),
         ]
     )
-    result = asyncio.run(agent.run("q"))
+    result = asyncio.run(agent.run(_make_ctx(tmp_path)))
     assert _answer_deltas(result["trace_events"]) == []

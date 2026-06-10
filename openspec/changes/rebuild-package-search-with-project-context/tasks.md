@@ -19,23 +19,23 @@
 
 ## 3. Agent 重建：工作区与项目绑定
 
-- [ ] 3.1 新增 `app/agents/package_search/workspace.py`（同构 `project_expert/workspace.py`）：`prepare(project_repo, question, hints, session_id)` 创建 `repo/` + `task.json`（`repo_info` 含 project_code/repo_url/default_branch，`source="user_selected_project_repo"`，不落 token）、`cleanup()` 幂等清理、`MissingProjectRepoError`
+- [x] 3.1 新增 `app/agents/package_search/workspace.py`（同构 `project_expert/workspace.py`）：`prepare(project_repo, question, hints, session_id)` 创建 `repo/` + `task.json`（`repo_info` 含 project_code/repo_url/default_branch，`source="user_selected_project_repo"`，不落 token）、`cleanup()` 幂等清理、`MissingProjectRepoError`
 - [x] 3.2 `app/agents/package_search/mcp_tools.py`：`get_mcp_server(project_code)` 按运行构建，7 个工具服务端强制 `projectCode` 过滤；移除 `list_packages.filters.type`、`filter_packages_by_version.package_type`、`list_components.package_type` 参数；`package_stats.group_by` 合法值改为 `version_major|tag|isPatch`；`get_package_by_id` 对非本项目 ID 返回 `not_found`
-- [ ] 3.3 重写 `app/agents/package_search/agent.py`：复用 `log_analysis` trace 层与 `_RunState` 状态机（对齐 `project_expert/agent.py`），ALLOWED_TOOLS = `Bash/Read/Grep/Glob` + `mcp__project_repo__lookup_project_repo` + 7 个包工具（`mcp_servers` 同时挂 `project_repo` 与 `package_search` 两个 server）；保留包检索自有的最终结果契约（fenced JSON → recommended/relevant ID 校验过滤，校验范围限定所选项目）；支持 `cancel_event` 与 `trace_emitter`；删除 `app/agents/package_search/trace.py` 及其引用
-- [ ] 3.4 Agent 单元测试（monkeypatch SDK loop）：项目限定工具过滤、跨项目 ID 拦截、取消路径、降级（无 fenced JSON）路径
+- [x] 3.3 重写 `app/agents/package_search/agent.py`：复用 `log_analysis` trace 层与 `_RunState` 状态机（对齐 `project_expert/agent.py`），ALLOWED_TOOLS = `Bash/Read/Grep/Glob` + `mcp__project_repo__lookup_project_repo` + 7 个包工具（`mcp_servers` 同时挂 `project_repo` 与 `package_search` 两个 server）；保留包检索自有的最终结果契约（fenced JSON → recommended/relevant ID 校验过滤，校验范围限定所选项目）；支持 `cancel_event` 与 `trace_emitter`；删除 `app/agents/package_search/trace.py` 及其引用
+- [x] 3.4 Agent 单元测试（monkeypatch SDK loop）：项目限定工具过滤、跨项目 ID 拦截、取消路径、降级（无 fenced JSON）路径
 
 ## 4. 提示词后台化
 
-- [ ] 4.1 `app/prompts/prompts_config.yaml`：新增 `claude_agent_package_search.generic` 区块（`system_prompt.zh` + `user_prompt_template.zh`），内容从现 `prompts.py` 迁移并补充：项目绑定上下文、工作区路径说明、Git 提交记录优先三级契约（元数据 → git log/show → 必要时才读代码并说明理由）、partial clone 建议、fenced JSON 输出契约
-- [ ] 4.2 重写 `app/agents/package_search/prompts.py` 为 YAML 加载器（同构 `project_expert/prompts.py`：`_PROMPTS_CACHE` + `get_prompts(locale)` + `render_user_prompt`），删除硬编码 `SYSTEM_PROMPT` 与 `PACKAGE_TYPES` 元组
-- [ ] 4.3 `prompts_config_service.py`：`PROMPT_FUNCTION_META` 增加 `claude_agent_package_search`（"重构包检索"）、`PROMPT_AGENT_META` 增加 `(claude_agent_package_search, generic)`（"重构包配置管理员"）、`_invalidate_prompt_caches()` 清理 package_search 缓存
-- [ ] 4.4 测试：后台保存后缓存失效即时生效、AdminPrompts 条目列表包含新区块（service 层断言）
+- [x] 4.1 `app/prompts/prompts_config.yaml`：新增 `claude_agent_package_search.generic` 区块（`system_prompt.zh` + `user_prompt_template.zh`），内容从现 `prompts.py` 迁移并补充：项目绑定上下文、工作区路径说明、Git 提交记录优先三级契约（元数据 → git log/show → 必要时才读代码并说明理由）、partial clone 建议、fenced JSON 输出契约
+- [x] 4.2 重写 `app/agents/package_search/prompts.py` 为 YAML 加载器（同构 `project_expert/prompts.py`：`_PROMPTS_CACHE` + `get_prompts(locale)` + `render_user_prompt`），删除硬编码 `SYSTEM_PROMPT` 与 `PACKAGE_TYPES` 元组
+- [x] 4.3 `prompts_config_service.py`：`PROMPT_FUNCTION_META` 增加 `claude_agent_package_search`（"重构包检索"）、`PROMPT_AGENT_META` 增加 `(claude_agent_package_search, generic)`（"重构包配置管理员"）、`_invalidate_prompt_caches()` 清理 package_search 缓存
+- [x] 4.4 测试：后台保存后缓存失效即时生效、AdminPrompts 条目列表包含新区块（service 层断言）
 
 ## 5. 聊天服务与端点
 
 - [ ] 5.1 新增 `app/services/package_search_chat_service.py`（镜像 `project_expert_chat_service`）：新会话必填 `project_repo_id` + `_resolve_project_repo` 校验（存在且启用）、会话级工作区复用与项目绑定不漂移、后台线程 + cancel_event、SSE 透传 trace、`final` 事件含 recommended/relevant ID、登录态会话持久化、`get_status` 轮询、owner 鉴权（非所有者 cancel/result 抛 PermissionError）、`session_has_workspace()`
 - [ ] 5.2 `app/api/ai_chat.py`：注册 `POST /package-search/stream`（新会话缺 `project_repo_id` 返回 400 `reason="project_repo_required"`）、`POST /package-search/cancel`、`GET /package-search/result`，结构对齐项目专家三端点
-- [ ] 5.3 `app/api/packages.py` 的 `POST /packages/agent-search`：请求体新增必填 `project_repo_id`（缺失/无效项目返回 400），内部走重建后的 Agent（每请求独立工作区，结束即清理）；保留 `stream` 双模式与既有响应契约；ai_usage 指标记录保留
+- [x] 5.3 `app/api/packages.py` 的 `POST /packages/agent-search`：请求体新增必填 `project_repo_id`（缺失/无效项目返回 400），内部走重建后的 Agent（每请求独立工作区，结束即清理）；保留 `stream` 双模式与既有响应契约；ai_usage 指标记录保留
 - [ ] 5.4 集成测试：三端点流（mock agent）、缺项目 400、项目绑定不漂移、取消鉴权、agent-search 必填校验
 
 ## 6. 前端：对话框（AIChat.vue + runs store）

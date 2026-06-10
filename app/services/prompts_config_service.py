@@ -44,6 +44,10 @@ PROMPT_FUNCTION_META: Dict[str, Dict[str, str]] = {
         "name": "项目专家",
         "description": "Claude Agent SDK 驱动的项目源码问答提示词",
     },
+    "claude_agent_package_search": {
+        "name": "重构包检索",
+        "description": "Claude Agent SDK 驱动的项目绑定重构包检索提示词",
+    },
     "chat": {
         "name": "AI 对话",
         "description": "AI 对话相关提示词",
@@ -62,6 +66,10 @@ PROMPT_AGENT_META: Dict[Tuple[str, str], Dict[str, str]] = {
     ("claude_agent_project_expert", "generic"): {
         "name": "通用项目专家 Agent",
         "description": "面向已登记项目的源码答疑场景，按用户选择的项目仓库克隆代码并回答问题",
+    },
+    ("claude_agent_package_search", "generic"): {
+        "name": "重构包配置管理员",
+        "description": "面向所选项目的重构包检索场景，包元数据工具优先、必要时结合 Git 提交记录分析",
     },
 }
 
@@ -258,6 +266,14 @@ def _invalidate_prompt_caches() -> None:
 
         if hasattr(project_expert_prompts, "_PROMPTS_CACHE"):
             project_expert_prompts._PROMPTS_CACHE.clear()  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    # Same for the package search agent prompt cache.
+    try:
+        from app.agents.package_search import prompts as package_search_prompts
+
+        if hasattr(package_search_prompts, "_PROMPTS_CACHE"):
+            package_search_prompts._PROMPTS_CACHE.clear()  # type: ignore[attr-defined]
     except Exception:
         pass
 

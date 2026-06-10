@@ -468,10 +468,19 @@ def _validate_search_query(raw: Any, locale: str = "zh") -> str:
 
 
 @router.post("/packages/agent-search")
-async def agent_search_packages(request: Request, current_user=Depends(get_optional_user)):
-    """Claude Agent SDK driven Raven package search.
+async def agent_search_packages(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_optional_user),
+):
+    """Claude Agent SDK driven Raven package search (project-bound).
 
-    Body: ``{query: string, session_id?: string, stream?: bool}``.
+    Body: ``{query: string, project_repo_id: int, session_id?: string, stream?: bool}``.
+
+    ``project_repo_id`` is mandatory — the run is bound to that project: the
+    package metadata MCP tools are server-side scoped to it and the agent may
+    clone its repository. Each request prepares an isolated workspace and
+    cleans it up afterwards (no session-level reuse on this endpoint).
 
     - ``stream=false`` (default): blocking JSON response with the structured
       recommendation, tool trace, model & usage.
@@ -480,6 +489,7 @@ async def agent_search_packages(request: Request, current_user=Depends(get_optio
       terminated by a synthetic ``final`` event whose ``data`` is the same
       payload as the non-stream response.
     """
+    from app.agents.package_search import workspace as pkg_workspace
     from app.agents.package_search.agent import PackageSearchAgent
     from app.i18n.deps import LOCALE_HEADER, resolve_locale
 
@@ -504,10 +514,41 @@ async def agent_search_packages(request: Request, current_user=Depends(get_optio
         )
     use_stream = bool(body.get("stream") or False)
 
+    project_repo_id = body.get("project_repo_id")
+    if not isinstance(project_repo_id, int) or isinstance(project_repo_id, bool):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "reason": "project_repo_required",
+                "message": t("package.project_repo_required", locale),
+            },
+        )
+
+    from app.services import project_repo_service
+
+    repo = await project_repo_service.get_by_id(db, project_repo_id)
+    if repo is None or not getattr(repo, "enabled", True):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "reason": "project_repo_required",
+                "message": t(
+                    "package.project_invalid", locale, code=str(project_repo_id)
+                ),
+            },
+        )
+
+    ctx = pkg_workspace.prepare(
+        project_repo=repo, question=query, session_id=session_id
+    )
+    ctx.locale = locale
     agent = PackageSearchAgent()
 
     if not use_stream:
-        result = await agent.run(query, session_id=session_id, locale=locale)
+        try:
+            result = await agent.run(ctx)
+        finally:
+            pkg_workspace.cleanup(ctx)
         await _record_package_search_metrics(result, current_user)
         return {
             "answer": result["answer"],
@@ -522,7 +563,7 @@ async def agent_search_packages(request: Request, current_user=Depends(get_optio
     async def _sse():
         final_event: Optional[dict] = None
         try:
-            async for event in agent.stream(query, session_id=session_id, locale=locale):
+            async for event in agent.stream(ctx):
                 if isinstance(event, dict) and event.get("type") == "final":
                     final_event = event
                 yield f"event: {event.get('type', 'message')}\n"
@@ -536,6 +577,7 @@ async def agent_search_packages(request: Request, current_user=Depends(get_optio
             yield f"event: error\n"
             yield f"data: {json.dumps(err, ensure_ascii=False, default=str)}\n\n"
         finally:
+            pkg_workspace.cleanup(ctx)
             # Record metrics once the stream terminates. The synthetic ``final``
             # event carries the same model/usage payload as the non-stream result.
             if isinstance(final_event, dict):

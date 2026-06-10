@@ -1,21 +1,23 @@
-"""Claude Agent SDK driven Raven package search agent.
+"""
+Claude Agent SDK 重构包检索 Agent（项目绑定形态）。
 
-Drives one ``query()`` loop with the 7 in-process MCP tools defined in
-``app.agents.package_search.mcp_tools``. Returns a structured response
-with the recommended package IDs (validated against the metadata store),
-along with the tool-call trace for the UI.
+与 ``ProjectExpertAgent`` 同构：工作区只含 ``repo/`` + ``task.json``，
+项目身份来自用户显式选择的项目仓库（写入 ``task.json.repo_info``）。
+trace 层与 ``_RunState`` 状态机 **复用** log_analysis 的实现；包元数据
+MCP 工具按本次运行绑定的 ``project_code`` 构建，服务端强制限定项目范围。
 
-The agent has two entry points:
+与项目专家的差异在最终结果契约：保留包检索自有的 fenced JSON schema
+（``recommended_package_ids`` / ``relevant_package_ids`` / ``notes``），
+并对返回 ID 做"所选项目范围内真实存在"的服务端校验过滤。
 
-- ``run(query, session_id=None) -> dict`` — runs the SDK loop to
-  completion and returns the structured result;
-- ``stream(query, session_id=None)`` — async generator that yields
-  ``AgentTraceEvent`` dicts in order, ending with a ``final`` event
-  whose ``data`` is the same dict that ``run`` would return.
+主入口：
+  PackageSearchAgent().run(ctx)       — async, returns dict
+  PackageSearchAgent().run_sync(ctx)  — sync wrapper (供后台线程调用)
+  PackageSearchAgent().stream(ctx)    — async generator，逐条 yield
+      ``AgentTraceEvent``，结尾追加 ``final`` 事件（供一次性 SSE 端点）
 
-Both entry points share the same event-collection machinery so the
-non-stream branch can simply consume the generator and discard the
-intermediate events.
+``run`` / ``run_sync`` 均可注入 ``cancel_event`` 与 ``trace_emitter``，
+行为与项目专家一致。
 """
 
 from __future__ import annotations
@@ -24,60 +26,70 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import time
-import uuid
+from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
-from app.agents.package_search.trace import (
+# 复用 log_analysis 的 trace 层（纯 SDK 消息 → AgentTraceEvent 转换，无日志语义）。
+from app.agents.log_analysis.trace import (
     AgentTraceEvent,
-    ANSWER_DELTA,
-    DEFAULT_CHUNK_MAX_BYTES,
+    CANCELLED,
     DEFAULT_EXCERPT_MAX_BYTES,
     ERROR,
     RUN_COMPLETE,
     RUN_START,
-    STEP_DELTA,
     STEP_END,
-    STEP_START,
-    SYSTEM_NOTICE,
-    THINKING_DELTA,
-    THINKING_END,
-    THINKING_START,
-    SeqCounter,
     build_event,
-    coerce_chunk,
     coerce_excerpt,
     derive_tool_trace,
-    extract_text_delta,
-    mask_input,
     mask_tokens,
-    new_step_id,
-    safe_emit,
     summarize,
 )
-from app.agents.usage import accumulate_usage, new_token_usage
+# 复用 log_analysis agent 的 trace 状态机与取消机制。
+from app.agents.log_analysis.agent import (
+    AgentCancelled,
+    _RunState,
+    _close_any_active_steps,
+    _emit_cancel_requested,
+    _emit_for_message,
+    _log_workflow,
+)
+from app.agents.package_search.workspace import WorkspaceContext
 
 logger = logging.getLogger(__name__)
 
 
-# All MCP tool names are prefixed with ``mcp__package_search__`` by the SDK.
-_MCP_PREFIX = "mcp__package_search__"
+PROJECT_REPO_MCP_TOOL = "mcp__project_repo__lookup_project_repo"
+
+# All package-metadata MCP tool names are prefixed with
+# ``mcp__package_search__`` by the SDK.
+_PKG_MCP_PREFIX = "mcp__package_search__"
+
+PACKAGE_MCP_TOOLS = [
+    f"{_PKG_MCP_PREFIX}list_packages",
+    f"{_PKG_MCP_PREFIX}get_package_by_id",
+    f"{_PKG_MCP_PREFIX}search_packages_by_text",
+    f"{_PKG_MCP_PREFIX}filter_packages_by_version",
+    f"{_PKG_MCP_PREFIX}list_components",
+    f"{_PKG_MCP_PREFIX}find_packages_by_component",
+    f"{_PKG_MCP_PREFIX}package_stats",
+]
 
 ALLOWED_TOOLS = [
-    f"{_MCP_PREFIX}list_packages",
-    f"{_MCP_PREFIX}get_package_by_id",
-    f"{_MCP_PREFIX}search_packages_by_text",
-    f"{_MCP_PREFIX}filter_packages_by_version",
-    f"{_MCP_PREFIX}list_components",
-    f"{_MCP_PREFIX}find_packages_by_component",
-    f"{_MCP_PREFIX}package_stats",
+    "Bash",
+    "Read",
+    "Grep",
+    "Glob",
+    PROJECT_REPO_MCP_TOOL,
+    *PACKAGE_MCP_TOOLS,
 ]
 
 
 TraceEmitter = Callable[[AgentTraceEvent], None]
 
 
-# ──────────────────────── helpers ─────────────────────────
+# ──────────────────────── 结果契约 helpers ─────────────────────────
 
 _FENCED_JSON_RE = re.compile(r"```json\s*(.*?)\s*```", re.DOTALL)
 
@@ -116,291 +128,50 @@ def _coerce_id_list(value: Any) -> List[str]:
     return out
 
 
-def _tool_result_to_text(content: Any) -> str:
-    if isinstance(content, list):
-        parts: List[str] = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                parts.append(str(item.get("text", "")))
-            elif hasattr(item, "text"):
-                parts.append(str(getattr(item, "text", "")))
-        return "".join(parts)
-    if content is None:
-        return ""
-    return str(content)
-
-
-def _accumulate_token_usage(usage: Any, token_usage: Dict[str, int]) -> None:
-    accumulate_usage(usage, token_usage)
-
-
-# ──────────────────────── run state ─────────────────────────
-
-
-class _RunState:
-    """Per-run state shared across the SDK message handlers."""
-
-    __slots__ = (
-        "task_id",
-        "emitter",
-        "seq_counter",
-        "trace_events",
-        "active_step_ids",
-        "tool_use_id_to_step",
-        "step_started_at",
-        "token_usage",
-        "final_text",
-    )
-
-    def __init__(self, task_id: str, emitter: Optional[TraceEmitter]) -> None:
-        self.task_id = task_id
-        self.emitter = emitter
-        self.seq_counter = SeqCounter()
-        self.trace_events: List[AgentTraceEvent] = []
-        self.active_step_ids: List[str] = []
-        self.tool_use_id_to_step: Dict[str, str] = {}
-        self.step_started_at: Dict[str, float] = {}
-        self.token_usage: Dict[str, int] = new_token_usage()
-        self.final_text: str = ""
-
-    def emit(self, event: AgentTraceEvent) -> None:
-        self.trace_events.append(event)
-        safe_emit(self.emitter, event)
-
-
-def _emit_step_start(
-    state: _RunState,
-    *,
-    tool_name: str,
-    tool_input: Any,
-    tool_use_id: Optional[str] = None,
-) -> str:
-    step_id = new_step_id()
-    state.active_step_ids.append(step_id)
-    state.step_started_at[step_id] = time.monotonic()
-    if isinstance(tool_use_id, str) and tool_use_id:
-        state.tool_use_id_to_step[tool_use_id] = step_id
-
-    if isinstance(tool_input, dict):
-        masked_input = mask_input(tool_input)
-    elif tool_input is None:
-        masked_input = {}
-    else:
-        masked_input = {"value": mask_input(tool_input)}
-
-    state.emit(
-        build_event(
-            STEP_START,
-            task_id=state.task_id,
-            seq_counter=state.seq_counter,
-            step_id=step_id,
-            tool_name=str(tool_name or ""),
-            tool_input=masked_input,
-        )
-    )
-    return step_id
-
-
-def _emit_step_end(
-    state: _RunState,
-    *,
-    step_id: str,
-    output_text: str,
-    is_error: bool,
-) -> None:
-    started = state.step_started_at.pop(step_id, None)
-    duration = max(0.0, time.monotonic() - started) if started is not None else 0.0
-    masked = mask_tokens(output_text or "")
-
-    for chunk in coerce_chunk(masked, DEFAULT_CHUNK_MAX_BYTES):
-        state.emit(
-            build_event(
-                STEP_DELTA,
-                task_id=state.task_id,
-                seq_counter=state.seq_counter,
-                step_id=step_id,
-                output_chunk=chunk,
-            )
-        )
-
-    state.emit(
-        build_event(
-            STEP_END,
-            task_id=state.task_id,
-            seq_counter=state.seq_counter,
-            step_id=step_id,
-            status="error" if is_error else "ok",
-            output_excerpt=coerce_excerpt(masked, DEFAULT_EXCERPT_MAX_BYTES),
-            duration_seconds=round(duration, 3),
-        )
-    )
-    try:
-        state.active_step_ids.remove(step_id)
-    except ValueError:
-        pass
-
-
-def _emit_thinking_or_text(state: _RunState, text: str) -> None:
-    if not text:
-        return
-    masked = mask_tokens(str(text))
-    step_id = new_step_id()
-    state.emit(
-        build_event(
-            THINKING_START,
-            task_id=state.task_id,
-            seq_counter=state.seq_counter,
-            step_id=step_id,
-        )
-    )
-    for chunk in coerce_chunk(masked, DEFAULT_CHUNK_MAX_BYTES):
-        state.emit(
-            build_event(
-                THINKING_DELTA,
-                task_id=state.task_id,
-                seq_counter=state.seq_counter,
-                step_id=step_id,
-                text_chunk=chunk,
-            )
-        )
-    state.emit(
-        build_event(
-            THINKING_END,
-            task_id=state.task_id,
-            seq_counter=state.seq_counter,
-            step_id=step_id,
-            text=coerce_excerpt(masked, DEFAULT_EXCERPT_MAX_BYTES * 4),
-        )
-    )
-
-
-def _resolve_step_id_for_result(
-    state: _RunState,
-    tool_use_id: Optional[str],
-) -> Optional[str]:
-    if isinstance(tool_use_id, str) and tool_use_id in state.tool_use_id_to_step:
-        return state.tool_use_id_to_step.pop(tool_use_id)
-    if state.active_step_ids:
-        return state.active_step_ids[0]
-    return None
-
-
-def _emit_for_content_block(state: _RunState, block: Any) -> None:
-    thinking = getattr(block, "thinking", None)
-    if thinking:
-        _emit_thinking_or_text(state, str(thinking))
-        return
-
-    tool_use_id = getattr(block, "tool_use_id", None)
-    if tool_use_id is not None:
-        content = getattr(block, "content", None)
-        is_error = bool(getattr(block, "is_error", False))
-        output_text = _tool_result_to_text(content)
-        step_id = _resolve_step_id_for_result(state, tool_use_id)
-        if step_id is None:
-            state.emit(
-                build_event(
-                    SYSTEM_NOTICE,
-                    task_id=state.task_id,
-                    seq_counter=state.seq_counter,
-                    kind="orphan_tool_result",
-                    detail=coerce_excerpt(mask_tokens(output_text), 256),
-                )
-            )
-            return
-        _emit_step_end(state, step_id=step_id, output_text=output_text, is_error=is_error)
-        return
-
-    name = getattr(block, "name", None)
-    tool_input = getattr(block, "input", None)
-    if name and tool_input is not None:
-        block_id = getattr(block, "id", None)
-        _emit_step_start(
-            state,
-            tool_name=str(name),
-            tool_input=tool_input,
-            tool_use_id=block_id if isinstance(block_id, str) else None,
-        )
-        return
-
-    text = getattr(block, "text", None)
-    if text:
-        # Capture the latest assistant text as the candidate final answer.
-        state.final_text = str(text)
-        _emit_thinking_or_text(state, str(text))
-
-
-def _emit_answer_delta_from_stream(state: _RunState, message: Any) -> bool:
-    """Translate a partial-streaming ``StreamEvent`` into ``answer_delta``.
-
-    Returns ``True`` when ``message`` was a ``StreamEvent`` (handled here).
-    Only ``content_block_delta`` text increments produce output.
-    """
-    event = getattr(message, "event", None)
-    if not isinstance(event, dict):
-        return False
-    text = extract_text_delta(event)
-    if text is None:
-        return True
-    masked = mask_tokens(text)
-    for chunk in coerce_chunk(masked, DEFAULT_CHUNK_MAX_BYTES):
-        state.emit(
-            build_event(
-                ANSWER_DELTA,
-                task_id=state.task_id,
-                seq_counter=state.seq_counter,
-                text_chunk=chunk,
-            )
-        )
-    return True
-
-
-def _emit_for_message(message: Any, *, state: _RunState) -> None:
-    # StreamEvent (include_partial_messages): has an ``event`` dict and no
-    # ``content`` list — translate answer text increments into answer_delta.
-    if getattr(message, "content", None) is None and isinstance(
-        getattr(message, "event", None), dict
-    ):
-        _emit_answer_delta_from_stream(state, message)
-        return
-
-    content = getattr(message, "content", None)
-    if isinstance(content, list) and content:
-        for block in content:
-            _emit_for_content_block(state, block)
-        _accumulate_token_usage(getattr(message, "usage", None), state.token_usage)
-        return
-
-    if hasattr(message, "usage"):
-        _accumulate_token_usage(message.usage, state.token_usage)
-
-    raw_result = getattr(message, "result", None)
-    if isinstance(raw_result, str) and raw_result:
-        state.final_text = raw_result
-
-
-def _close_any_active_steps(state: _RunState, *, reason: str) -> None:
-    for step_id in list(state.active_step_ids):
-        _emit_step_end(
-            state,
-            step_id=step_id,
-            output_text=f"[interrupted: {reason}]",
-            is_error=True,
-        )
-
-
-# ──────────────────────── tool_trace warnings ─────────────────────────
-
-
 def _append_warning(tool_trace: List[Dict[str, Any]], message: str) -> None:
     tool_trace.append({"type": "warning", "message": message})
 
 
-# ──────────────────────── PackageSearchAgent ─────────────────────────
+def _validate_ids_in_project(
+    ids: List[str], project_code: str
+) -> Tuple[List[str], int]:
+    """Keep only IDs that exist in the metadata store *and* belong to the
+    run's project; dedupe and count dropped entries."""
+    from app.services.raven_package_service import raven_package_service
+
+    keep: List[str] = []
+    seen: set[str] = set()
+    dropped = 0
+    for pid in ids:
+        if pid in seen:
+            continue
+        seen.add(pid)
+        pkg = raven_package_service.get_package(pid)
+        if pkg is not None and (
+            not project_code or pkg.get("projectCode") == project_code
+        ):
+            keep.append(pid)
+        else:
+            dropped += 1
+    return keep, dropped
+
+
+def _base_result(model: str, *, status: str, **extra: Any) -> Dict[str, Any]:
+    base = {
+        "engine": "claude-agent-sdk",
+        "model": model,
+        "status": status,
+        "answer": "",
+        "recommended_package_ids": [],
+        "relevant_package_ids": [],
+        "notes": None,
+    }
+    base.update(extra)
+    return base
 
 
 class PackageSearchAgent:
-    """Run the Claude Agent SDK loop for one user query.
+    """Wraps the Claude Agent SDK query() loop for project-bound package search.
 
     Tests that need to bypass the real SDK loop can monkeypatch
     ``self._run_sdk_loop`` to yield a curated sequence of messages.
@@ -422,10 +193,11 @@ class PackageSearchAgent:
         async for message in query(prompt=prompt, options=options):
             yield message
 
-    def _build_options(self, *, system_prompt: str, max_turns: Optional[int] = None) -> Tuple[Any, str, str]:
+    def _build_options(
+        self, *, system_prompt: str, project_code: str, cwd: str
+    ) -> Tuple[Any, str, str]:
         """Build ClaudeAgentOptions; return ``(options, model, provider)``."""
         from app.agents.anthropic_client import PROVIDER_PROFILES, build_options
-        from app.agents.package_search.mcp_tools import get_mcp_server
         from app.config import settings
 
         provider = settings.anthropic_provider
@@ -438,78 +210,157 @@ class PackageSearchAgent:
         allowed_tools = list(ALLOWED_TOOLS)
         mcp_servers: Optional[Dict[str, Any]] = None
         if supports_mcp:
-            mcp_servers = {"package_search": get_mcp_server()}
-        else:
-            # Provider has no MCP tool support — clear the allow-list so the
-            # SDK doesn't complain about unknown tools. The agent can still
-            # answer in degraded mode using its own knowledge, but the fenced
-            # JSON will most likely come back empty.
-            allowed_tools = []
-            logger.warning(
-                "PackageSearchAgent: provider=%s does not support MCP tools; "
-                "running in degraded (no-tool) mode",
-                provider,
+            from app.agents.log_analysis.mcp_tools import (
+                get_mcp_server as get_project_repo_server,
+            )
+            from app.agents.package_search.mcp_tools import (
+                get_mcp_server as get_package_server,
             )
 
-        effective_max_turns = max_turns if max_turns is not None else int(
-            settings.package_search_max_turns
-        )
+            mcp_servers = {
+                "project_repo": get_project_repo_server(),
+                "package_search": get_package_server(project_code),
+            }
+        else:
+            allowed_tools = [
+                name for name in allowed_tools if not name.startswith("mcp__")
+            ]
+            logger.warning(
+                "PackageSearchAgent: provider=%s does not support MCP tools; "
+                "package metadata tools unavailable this run",
+                provider,
+            )
 
         options = build_options(
             system_prompt=system_prompt,
             allowed_tools=allowed_tools,
-            cwd=str(settings.base_dir),
-            max_turns=effective_max_turns,
+            cwd=cwd,
             permission_mode="bypassPermissions",
             mcp_servers=mcp_servers,
         )
         return options, effective_model, str(provider)
 
-    async def _drive(
+    async def run(
         self,
-        query_text: str,
-        *,
-        session_id: Optional[str],
-        emitter: Optional[TraceEmitter] = None,
-        locale: Optional[str] = None,
+        ctx: WorkspaceContext,
+        cancel_event: Optional[threading.Event] = None,
+        trace_emitter: Optional[TraceEmitter] = None,
     ) -> Dict[str, Any]:
-        """Inner loop shared by ``run`` and ``stream``."""
-        from app.agents.package_search.prompts import get_system_prompt
+        """Run the agent loop and return the structured result dict.
+
+        Args:
+            ctx: package-search workspace context (paths + project binding).
+            cancel_event: optional ``threading.Event`` checked between SDK
+                messages; when set the agent emits ``cancel_requested`` then
+                terminates with a ``cancelled`` result.
+            trace_emitter: optional synchronous callback invoked once per
+                ``AgentTraceEvent`` (used by the chat service for SSE).
+        """
+        from app.agents.package_search.prompts import get_prompts, render_user_prompt
         from app.i18n.prompts import response_language_directive
-        from app.services.raven_package_service import raven_package_service
 
-        task_id = session_id or f"pkgsearch-{uuid.uuid4()}"
-        state = _RunState(task_id=task_id, emitter=emitter)
+        system_prompt, user_prompt_template = get_prompts(locale=ctx.locale)
+        system_prompt += (
+            "\n\n## 当前运行工作区\n"
+            f"本次运行的当前工作目录是 `{ctx.temp_dir}`。"
+            f"`task.json` 的真实路径是 `{ctx.task_json_path}`，"
+            f"源码目录是 `{ctx.repo_dir}`。"
+            "读取文件和搜索时只使用这些路径或它们的相对路径 "
+            "(`task.json`、`repo/...`)。"
+            "本工作区没有 `logs/` 目录，也没有 metadata.json，不要去搜索它们。"
+            "如果路径不确定，先用 `pwd` / `ls -la` 确认当前目录。\n"
+            "\n## 本次运行绑定的项目\n"
+            f"本次运行绑定项目 `{ctx.project_code}`。"
+            "所有 mcp__package_search__* 工具已在服务端限定为该项目的包。\n"
+        )
 
-        # Select the per-language system prompt (``zh`` fallback) and append the
-        # blunt response-language directive last so the answer language is
-        # decoupled from the package metadata (which is largely Chinese).
-        system_prompt = get_system_prompt(locale)
-        system_prompt += "\n\n" + response_language_directive(locale)
+        task_data: Dict[str, Any] = {}
+        try:
+            task_data = json.loads(Path(ctx.task_json_path).read_text(encoding="utf-8"))
+        except Exception:
+            pass
 
-        options, effective_model, provider = self._build_options(system_prompt=system_prompt)
+        user_prompt = render_user_prompt(
+            user_prompt_template,
+            task_id=ctx.task_id,
+            workspace_dir=ctx.temp_dir,
+            question=ctx.metadata.get("question") or task_data.get("question", ""),
+            hints=ctx.metadata.get("hints") or task_data.get("hints", ""),
+        )
 
+        # Append the blunt response-language directive last so the answer
+        # language is decoupled from the (largely Chinese) package metadata.
+        system_prompt += "\n\n" + response_language_directive(ctx.locale)
+
+        options, effective_model, provider = self._build_options(
+            system_prompt=system_prompt,
+            project_code=ctx.project_code,
+            cwd=ctx.temp_dir,
+        )
+
+        state = _RunState(task_id=ctx.task_id, emitter=trace_emitter)
+        start = time.monotonic()
+
+        _log_workflow(ctx.task_id, "run_start", model=effective_model)
         state.emit(
             build_event(
                 RUN_START,
-                task_id=task_id,
+                task_id=ctx.task_id,
                 seq_counter=state.seq_counter,
                 model=effective_model,
                 provider=provider,
             )
         )
 
-        start = time.monotonic()
         try:
-            async for message in self._run_sdk_loop(prompt=query_text, options=options):
+            async for message in self._run_sdk_loop(prompt=user_prompt, options=options):
+                if cancel_event is not None and cancel_event.is_set():
+                    _log_workflow(ctx.task_id, "cancelled", reason="cancel_event_set")
+                    _emit_cancel_requested(state)
+                    raise AgentCancelled()
                 _emit_for_message(message, state=state)
+
+        except AgentCancelled:
+            duration = time.monotonic() - start
+            _log_workflow(
+                ctx.task_id,
+                "run_complete",
+                status="cancelled",
+                duration_s=round(duration, 2),
+                tokens_in=state.token_usage["input_tokens"],
+                tokens_out=state.token_usage["output_tokens"],
+            )
+            _close_any_active_steps(state, reason="cancelled")
+            trace_summary = summarize(state.trace_events)
+            state.emit(
+                build_event(
+                    CANCELLED,
+                    task_id=ctx.task_id,
+                    seq_counter=state.seq_counter,
+                    trace_summary=trace_summary,
+                )
+            )
+            return _base_result(
+                effective_model,
+                status="cancelled",
+                provider=provider,
+                tool_trace=derive_tool_trace(state.trace_events),
+                trace_events=list(state.trace_events),
+                trace_summary=trace_summary,
+                usage=dict(state.token_usage),
+                duration_seconds=round(duration, 2),
+                session_id=ctx.task_id,
+            )
+        except asyncio.TimeoutError:
+            raise
         except Exception as exc:  # noqa: BLE001
+            duration = time.monotonic() - start
             _close_any_active_steps(state, reason="error")
             trace_summary = summarize(state.trace_events)
             state.emit(
                 build_event(
                     ERROR,
-                    task_id=task_id,
+                    task_id=ctx.task_id,
                     seq_counter=state.seq_counter,
                     error_kind=type(exc).__name__,
                     message=str(exc),
@@ -519,12 +370,34 @@ class PackageSearchAgent:
             logger.exception("PackageSearchAgent: run failed: %s", exc)
             raise
 
+        final_text = state.final_text
         duration = time.monotonic() - start
-        trace_summary = summarize(state.trace_events)
+        _log_workflow(
+            ctx.task_id,
+            "run_complete",
+            status="finished",
+            tool_calls=sum(1 for ev in state.trace_events if ev.get("type") == STEP_END),
+            duration_s=round(duration, 2),
+            tokens_in=state.token_usage["input_tokens"],
+            tokens_out=state.token_usage["output_tokens"],
+        )
 
-        # ---- Structured-answer parsing & ID validation ----
+        trace_summary = summarize(state.trace_events)
+        state.emit(
+            build_event(
+                RUN_COMPLETE,
+                task_id=ctx.task_id,
+                seq_counter=state.seq_counter,
+                trace_summary=trace_summary,
+                final_text=coerce_excerpt(
+                    mask_tokens(final_text), DEFAULT_EXCERPT_MAX_BYTES * 4
+                ),
+            )
+        )
+
+        # ---- 包检索结果契约：fenced JSON 解析 + 项目范围内 ID 校验 ----
         tool_trace = derive_tool_trace(state.trace_events)
-        parsed, parse_error = _extract_fenced_json(state.final_text)
+        parsed, parse_error = _extract_fenced_json(final_text)
         recommended: List[str] = []
         relevant: List[str] = []
         notes: Optional[str] = None
@@ -542,23 +415,12 @@ class PackageSearchAgent:
             ):
                 _append_warning(tool_trace, "unparsable structured answer")
             else:
-                # Validate IDs against the metadata store; filter unknown ones.
-                def _validate(ids: List[str]) -> Tuple[List[str], int]:
-                    keep: List[str] = []
-                    seen: set[str] = set()
-                    dropped = 0
-                    for pid in ids:
-                        if pid in seen:
-                            continue
-                        seen.add(pid)
-                        if raven_package_service.get_package(pid) is not None:
-                            keep.append(pid)
-                        else:
-                            dropped += 1
-                    return keep, dropped
-
-                recommended, dropped_r = _validate(raw_recommended)
-                relevant, dropped_v = _validate(raw_relevant)
+                recommended, dropped_r = _validate_ids_in_project(
+                    raw_recommended, ctx.project_code
+                )
+                relevant, dropped_v = _validate_ids_in_project(
+                    raw_relevant, ctx.project_code
+                )
                 total_dropped = dropped_r + dropped_v
                 if total_dropped:
                     _append_warning(
@@ -569,54 +431,68 @@ class PackageSearchAgent:
                 if isinstance(raw_notes, str) and raw_notes.strip():
                     notes = raw_notes.strip()
 
-        state.emit(
-            build_event(
-                RUN_COMPLETE,
-                task_id=task_id,
-                seq_counter=state.seq_counter,
-                trace_summary=trace_summary,
-                final_text=coerce_excerpt(
-                    mask_tokens(state.final_text), DEFAULT_EXCERPT_MAX_BYTES * 4
-                ),
-            )
+        return _base_result(
+            effective_model,
+            status="ok",
+            provider=provider,
+            answer=final_text or "",
+            recommended_package_ids=recommended,
+            relevant_package_ids=relevant,
+            notes=notes,
+            tool_trace=tool_trace,
+            trace_events=list(state.trace_events),
+            trace_summary=trace_summary,
+            usage=dict(state.token_usage),
+            duration_seconds=round(duration, 2),
+            session_id=ctx.task_id,
         )
 
-        return {
-            "answer": state.final_text or "",
-            "recommended_package_ids": recommended,
-            "relevant_package_ids": relevant,
-            "notes": notes,
-            "tool_trace": tool_trace,
-            "trace_events": list(state.trace_events),
-            "trace_summary": trace_summary,
-            "model": effective_model,
-            "provider": provider,
-            "usage": dict(state.token_usage),
-            "duration_seconds": round(duration, 2),
-            "session_id": task_id,
-        }
-
-    async def run(
+    def run_sync(
         self,
-        query: str,
-        session_id: Optional[str] = None,
-        locale: Optional[str] = None,
+        ctx: WorkspaceContext,
+        cancel_event: Optional[threading.Event] = None,
+        trace_emitter: Optional[TraceEmitter] = None,
     ) -> Dict[str, Any]:
-        """Run the agent loop to completion. Returns the structured result."""
-        return await self._drive(query, session_id=session_id, emitter=None, locale=locale)
+        """Synchronous wrapper (for background threads). Applies request timeout."""
+        from app.config import settings
+
+        timeout = settings.anthropic_request_timeout_seconds
+        try:
+            return asyncio.run(
+                asyncio.wait_for(
+                    self.run(ctx, cancel_event=cancel_event, trace_emitter=trace_emitter),
+                    timeout=float(timeout),
+                )
+            )
+        except asyncio.TimeoutError:
+            logger.error("PackageSearchAgent: timed out after %ds", timeout)
+            return _base_result(
+                "unknown",
+                status="error",
+                error_kind="timeout",
+                tool_trace=[],
+                trace_events=[],
+                trace_summary={
+                    "thought_duration_seconds": float(timeout),
+                    "tool_call_count": 0,
+                    "thinking_chars": 0,
+                },
+                usage={"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0},
+                duration_seconds=float(timeout),
+                session_id=ctx.task_id,
+            )
 
     async def stream(
         self,
-        query: str,
-        session_id: Optional[str] = None,
-        locale: Optional[str] = None,
+        ctx: WorkspaceContext,
+        cancel_event: Optional[threading.Event] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Yield trace events for SSE.
+        """Yield trace events for a one-shot SSE response.
 
         Each yielded value is an ``AgentTraceEvent`` dict — pass them
         through ``json.dumps`` to put on the wire. After the SDK loop
         ends, a synthetic ``final`` event is appended whose ``data``
-        field carries the same dict as ``run`` returns.
+        field carries the same payload as the non-stream response body.
         """
         queue: asyncio.Queue[AgentTraceEvent] = asyncio.Queue()
         DONE = object()
@@ -629,10 +505,9 @@ class PackageSearchAgent:
 
         async def _runner() -> Dict[str, Any]:
             try:
-                result = await self._drive(
-                    query, session_id=session_id, emitter=emitter, locale=locale
+                return await self.run(
+                    ctx, cancel_event=cancel_event, trace_emitter=emitter
                 )
-                return result
             finally:
                 queue.put_nowait(DONE)  # type: ignore[arg-type]
 
@@ -654,7 +529,7 @@ class PackageSearchAgent:
 
         yield {
             "type": "final",
-            "task_id": result.get("session_id", session_id or ""),
+            "task_id": result.get("session_id", ctx.task_id),
             "seq": result.get("trace_summary", {}).get("tool_call_count", 0) + 9999,
             "timestamp": round(time.time(), 6),
             "data": {

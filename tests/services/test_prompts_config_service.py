@@ -64,3 +64,66 @@ def test_path_set_can_author_new_language_variant():
     _path_set(root, ["a", "b", "system_prompt", "zh"], "中文-改")
     _path_set(root, ["a", "b", "system_prompt", "en"], "English-new")
     assert root["a"]["b"]["system_prompt"] == {"zh": "中文-改", "en": "English-new"}
+
+
+def test_extract_prompt_entries_uses_package_search_display_names():
+    from app.services.prompts_config_service import _extract_prompt_entries
+
+    entries = _extract_prompt_entries(
+        {
+            "claude_agent_package_search": {
+                "generic": {
+                    "system_prompt": {"zh": "包检索系统提示词"},
+                }
+            }
+        }
+    )
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["function_key"] == "claude_agent_package_search"
+    assert entry["function_name"] == "重构包检索"
+    assert entry["agent_key"] == "generic"
+    assert entry["agent_name"] == "重构包配置管理员"
+    assert entry["prompt_label"] == "系统提示词 (zh)"
+    assert entry["locale"] == "zh"
+
+
+def test_admin_prompt_entries_include_package_search_block():
+    """The shipped prompts_config.yaml exposes the package-search block to AdminPrompts."""
+    from app.services.prompts_config_service import load_prompts_config
+
+    data = load_prompts_config()
+    function_keys = {e["function_key"] for e in data["prompts"]}
+    assert "claude_agent_package_search" in function_keys
+
+
+def test_invalidate_prompt_caches_clears_package_search_cache():
+    """Saving prompts in the admin panel must take effect on the next run."""
+    from app.agents.package_search import prompts as pkg_prompts
+    from app.services.prompts_config_service import _invalidate_prompt_caches
+
+    pkg_prompts._PROMPTS_CACHE.clear()
+    pkg_prompts.get_prompts("zh")  # populate the cache from the real config
+    assert pkg_prompts._PROMPTS_CACHE
+
+    _invalidate_prompt_caches()
+    assert not pkg_prompts._PROMPTS_CACHE
+
+    # Next load re-reads the file — simulated here by priming a fake body.
+    pkg_prompts._PROMPTS_CACHE.update(
+        {
+            "claude_agent_package_search": {
+                "generic": {
+                    "system_prompt": {"zh": "新版系统提示词"},
+                    "user_prompt_template": {"zh": "新版模板 {question}"},
+                }
+            }
+        }
+    )
+    try:
+        system_prompt, user_prompt_template = pkg_prompts.get_prompts("zh")
+        assert system_prompt == "新版系统提示词"
+        assert user_prompt_template == "新版模板 {question}"
+    finally:
+        pkg_prompts._PROMPTS_CACHE.clear()
