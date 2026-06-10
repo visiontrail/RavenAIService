@@ -59,3 +59,6 @@ psutil>=5.9.7
 # 其他测试工具
 coverage>=7.3.0  # 代码覆盖率（可选）
 
+# Excel Skill 运行依赖
+pandas>=2.2.0
+openpyxl>=3.1.2

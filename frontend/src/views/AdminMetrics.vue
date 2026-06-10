@@ -144,6 +144,23 @@ const maxSeriesTokens = computed(() => {
   return series.reduce((m, b) => Math.max(m, b.total_tokens), 0) || 1
 })
 
+const maxAgentCalls = computed(() => {
+  const series = overview.value?.time_series || []
+  return series.reduce((m, b) => {
+    const totalCallsInBucket = Object.values(b.counts_by_agent || {}).reduce((sum, v) => sum + (v as number), 0)
+    return Math.max(m, totalCallsInBucket as number)
+  }, 0) || 1
+})
+
+const agentColors = [
+  '#06b6d4', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#3b82f6', '#ef4444',
+]
+const getAgentColor = (agent: string) => {
+  let hash = 0
+  for (let i = 0; i < agent.length; i++) hash = agent.charCodeAt(i) + ((hash << 5) - hash)
+  return agentColors[Math.abs(hash) % agentColors.length]
+}
+
 // ==================== Loaders ====================
 
 const loadOverview = async () => {
@@ -510,6 +527,46 @@ onMounted(() => {
                 ></div>
               </div>
               <span class="metrics-bar-label">{{ formatBucketLabel(b.bucket_start) }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Agent Calls Time Series -->
+        <div class="metrics-card">
+          <h3 class="metrics-card-title">Agent 调用趋势 (按时间序列)</h3>
+          <div v-if="!overview || !overview.time_series.length" class="metrics-empty">{{ t('admin.metrics.emptyData') }}</div>
+          <div v-else class="metrics-chart">
+            <div
+              v-for="(b, i) in overview.time_series"
+              :key="i"
+              class="metrics-bar-col"
+              :title="`${formatBucketLabel(b.bucket_start)}\n${Object.entries(b.counts_by_agent || {}).map(([k, v]) => `${k}: ${formatNumber(v as number)}`).join('\\n')}`"
+            >
+              <div class="metrics-bar-track" style="flex-direction: column-reverse; justify-content: flex-start; align-items: stretch;">
+                <div
+                  v-for="[agent, count] in Object.entries(b.counts_by_agent || {}).sort((a, b) => (b[1] as number) - (a[1] as number))"
+                  :key="agent"
+                  class="metrics-bar-fill-agent"
+                  :style="{
+                    height: `${((count as number) / maxAgentCalls) * 100}%`,
+                    backgroundColor: getAgentColor(agent),
+                    minHeight: '2px',
+                    width: '100%'
+                  }"
+                ></div>
+              </div>
+              <span class="metrics-bar-label">{{ formatBucketLabel(b.bucket_start) }}</span>
+            </div>
+          </div>
+          <!-- Legend -->
+          <div v-if="overview && overview.time_series.length" class="flex flex-wrap gap-3 mt-4 justify-center">
+            <div
+              v-for="agent in Array.from(new Set(overview.time_series.flatMap(b => Object.keys(b.counts_by_agent || {}))))"
+              :key="agent"
+              class="flex items-center text-xs text-slate-600"
+            >
+              <span class="w-3 h-3 rounded-sm mr-1.5" :style="{ backgroundColor: getAgentColor(agent) }"></span>
+              {{ agent }}
             </div>
           </div>
         </div>

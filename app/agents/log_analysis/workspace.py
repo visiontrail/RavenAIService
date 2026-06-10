@@ -25,6 +25,7 @@ from app.config import settings
 from app.i18n import DEFAULT as I18N_DEFAULT
 from app.tools.archive_tool import (  # noqa: F401 – re-exported for callers
     SUPPORTED_ARCHIVE_EXTS,
+    SUPPORTED_SPREADSHEET_EXTS,
     SUPPORTED_TEXT_EXTS,
     detect_upload_kind,
 )
@@ -195,17 +196,17 @@ def _extract_archive(archive_path: Path, dest: Path, max_bytes: int) -> None:
             _extract_zip(archive_path, dest, max_bytes)
 
 
-def _place_text_file(src: Path, dest_dir: Path, max_bytes: int, *, preferred_name: str = "") -> None:
-    """Copy a plain-text log file into ``dest_dir`` under a safe name.
+def _place_single_file(src: Path, dest_dir: Path, max_bytes: int, *, preferred_name: str = "") -> Path:
+    """Copy a single uploaded file into ``dest_dir`` under a safe name.
 
-    No decompression happens — the file is analyzed as-is. The size guard mirrors
-    the archive path so a single oversized text file is rejected the same way an
-    oversized archive is.
+    No decompression happens — the file is analyzed as-is. The size guard
+    mirrors the archive path so a single oversized attachment is rejected the
+    same way an oversized archive is.
     """
     size = src.stat().st_size
     if size > max_bytes:
         raise WorkspaceExtractTooLarge(
-            f"Upload aborted: text file size {size} bytes exceeds limit {max_bytes} bytes"
+            f"Upload aborted: file size {size} bytes exceeds limit {max_bytes} bytes"
         )
     # Strip any directory component a caller-supplied name might carry; fall back
     # to the stored archive_path basename.
@@ -213,6 +214,17 @@ def _place_text_file(src: Path, dest_dir: Path, max_bytes: int, *, preferred_nam
     out = _safe_output_path(dest_dir, name)
     out.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, out)
+    return out
+
+
+def _place_text_file(src: Path, dest_dir: Path, max_bytes: int, *, preferred_name: str = "") -> Path:
+    """Copy a plain-text log file into ``dest_dir`` under a safe name."""
+    return _place_single_file(src, dest_dir, max_bytes, preferred_name=preferred_name)
+
+
+def _place_spreadsheet_file(src: Path, dest_dir: Path, max_bytes: int, *, preferred_name: str = "") -> Path:
+    """Copy a spreadsheet file into ``dest_dir`` without unpacking it."""
+    return _place_single_file(src, dest_dir, max_bytes, preferred_name=preferred_name)
 
 
 # ─────────────────────── Public API ────────────────────────────────
@@ -261,6 +273,7 @@ def prepare(log_record: Any, *, require_metadata: bool = True) -> WorkspaceConte
         # front (before we ever try to extract a binary blob).
         max_bytes = settings.ai_analysis_max_extract_bytes
         upload_kind = detect_upload_kind(str(archive_path))
+        attachment_path: Optional[Path] = None
         try:
             if upload_kind == "archive":
                 _extract_archive(archive_path, logs_dir, max_bytes)
@@ -268,13 +281,20 @@ def prepare(log_record: Any, *, require_metadata: bool = True) -> WorkspaceConte
                 preferred_name = (
                     getattr(log_record, "original_filename", None) or archive_path.name
                 )
-                _place_text_file(
+                attachment_path = _place_text_file(
+                    archive_path, logs_dir, max_bytes, preferred_name=preferred_name
+                )
+            elif upload_kind == "spreadsheet":
+                preferred_name = (
+                    getattr(log_record, "original_filename", None) or archive_path.name
+                )
+                attachment_path = _place_spreadsheet_file(
                     archive_path, logs_dir, max_bytes, preferred_name=preferred_name
                 )
             else:
                 raise UnsupportedUploadFormatError(
                     f"Upload {archive_path.name!r} is neither a supported archive "
-                    f"nor a recognizable plain-text log"
+                    f"nor a recognizable plain-text log or spreadsheet"
                 )
         except WorkspaceExtractTooLarge:
             shutil.rmtree(str(logs_dir), ignore_errors=True)
@@ -294,7 +314,17 @@ def prepare(log_record: Any, *, require_metadata: bool = True) -> WorkspaceConte
             "question": getattr(log_record, "issue_description", None) or getattr(log_record, "question", None) or "",
             "hints": getattr(log_record, "hints", None) or "",
             "project_id": getattr(log_record, "project_id", None),
+            "upload_kind": upload_kind,
         }
+        if attachment_path is not None:
+            attachment_rel = attachment_path.relative_to(temp_dir).as_posix()
+            task_data["attachments"] = [
+                {
+                    "filename": attachment_path.name,
+                    "path": attachment_rel,
+                    "kind": upload_kind,
+                }
+            ]
         task_json_path = temp_dir / "task.json"
         task_json_path.write_text(json.dumps(task_data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -302,13 +332,17 @@ def prepare(log_record: Any, *, require_metadata: bool = True) -> WorkspaceConte
             "Workspace prepared: task_id=%s temp_dir=%s archive=%s",
             task_id, temp_dir, archive_path,
         )
-        return WorkspaceContext(
+        ctx = WorkspaceContext(
             task_id=task_id,
             temp_dir=str(temp_dir),
             logs_dir=str(logs_dir),
             repo_dir=str(repo_dir),
             task_json_path=str(task_json_path),
         )
+        ctx.metadata["upload_kind"] = upload_kind
+        if attachment_path is not None:
+            ctx.metadata["attachments"] = task_data["attachments"]
+        return ctx
 
     except (MissingArchiveError, WorkspaceExtractTooLarge, MissingMetadataJsonError):
         shutil.rmtree(str(temp_dir), ignore_errors=True)

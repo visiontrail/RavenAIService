@@ -852,6 +852,29 @@ async def _time_series(
 ) -> List[Dict[str, Any]]:
     """Per-bucket token sums and invocation/success/failure counts."""
     bucket_col = _bucket_expr(bucket)
+    
+    # Query agent counts per bucket
+    agent_rows = (
+        await session.execute(
+            select(
+                bucket_col.label("bucket_key"),
+                MetricEvent.agent_kind,
+                func.count()
+            )
+            .where(and_(*filters, MetricEvent.agent_kind.is_not(None)))
+            .group_by(bucket_col, MetricEvent.agent_kind)
+        )
+    ).all()
+    
+    agent_counts_by_bucket: Dict[datetime, Dict[str, int]] = {}
+    for row in agent_rows:
+        b_start = _parse_bucket_key(row[0])
+        if b_start is None:
+            continue
+        if b_start not in agent_counts_by_bucket:
+            agent_counts_by_bucket[b_start] = {}
+        agent_counts_by_bucket[b_start][row[1]] = int(row[2])
+    bucket_col = _bucket_expr(bucket)
     success = func.sum(case((MetricEvent.status == "succeeded", 1), else_=0))
     failure = func.sum(case((MetricEvent.status == "failed", 1), else_=0))
     rows = (
@@ -888,6 +911,7 @@ async def _time_series(
                 "invocation_count": int(row[6] or 0),
                 "success_count": int(row[7] or 0),
                 "failure_count": int(row[8] or 0),
+                "counts_by_agent": agent_counts_by_bucket.get(bucket_start, {}),
             }
         )
     return series

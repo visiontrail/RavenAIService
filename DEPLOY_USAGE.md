@@ -68,6 +68,11 @@ DeviceAgent 与 Log Analysis Agent 共用 `app/services/skills_service.py` 的 S
    `<workspace>/.claude/skills/<slug>/SKILL.md`，并将 `setting_sources=["project"]` 写入 `ClaudeAgentOptions`。
 3. workspace 路径在每次会话结束后会被幂等清理（见 `app/agents/device_agent/workspace.py`）。
 
+Excel / spreadsheet 类 Skill 若需要读取或修改 `.xlsx` 文件，应部署包含
+`pandas`、`openpyxl` 与 `LibreOffice Calc`/`soffice` 的运行环境。官方镜像已在
+`requirements.txt` 与 `Dockerfile` 中包含这些依赖；自定义镜像需保持一致，
+否则 Skill 可以被加载，但执行 `scripts/recalc.py` 等公式重算脚本时会失败。
+
 操作步骤、目录布局与故障排查方式参见
 [`docs/log_analysis_agent.md` § 1 工作区布局](docs/log_analysis_agent.md#1-工作区布局)
 — DeviceAgent 完全沿用同一约定。

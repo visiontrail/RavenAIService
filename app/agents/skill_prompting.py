@@ -33,6 +33,7 @@ def build_skill_activation_prompt(
         f"- `Skill` with input `{json.dumps({'skill': name}, ensure_ascii=False)}`"
         for name in names
     )
+    paths = "\n".join(f"- `{name}` files: `.claude/skills/{name}/`" for name in names)
     return (
         "\n\n## 本轮命中的 Skill（必须先加载）\n"
         "下列 Skill 已经由后端相关性选择命中，并已物化到当前工作区：\n"
@@ -42,6 +43,10 @@ def build_skill_activation_prompt(
         f"{calls}\n\n"
         "不要因为问题看起来像常识题、源码题或日志题就跳过 Skill；一旦本节"
         "列出了 Skill，本轮回答必须以这些 Skill 的内容为准。\n\n"
+        "如果 Skill 指令引用了相对路径脚本、模板或资源文件，必须相对下面"
+        "的物化目录解析路径；例如 `<skill-dir>/scripts/...`，不要假设这些"
+        "文件位于当前工作目录根部：\n"
+        f"{paths}\n\n"
         f"最终输出仍必须遵守{final_output_contract}。如果某个 Skill 要求"
         "输出一个特定字符串、或要求“不要解释/不要添加额外文字”，请把该"
         "字符串原样放入最终 JSON 的 `answer` 和 `summary` 字段；不要输出"

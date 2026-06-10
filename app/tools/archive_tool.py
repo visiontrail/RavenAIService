@@ -18,6 +18,11 @@ SUPPORTED_ARCHIVE_EXTS = {".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar", ".zi
 # Plain-text log formats that can be analyzed directly without decompression.
 SUPPORTED_TEXT_EXTS = {".log", ".txt", ".out", ".err", ".trace", ".json", ".xml", ".csv", ".tsv"}
 
+# Binary spreadsheet files that must be copied into the workspace verbatim.
+# .xlsx/.xlsm are ZIP containers internally, so they must be detected before
+# archive probing or they will be decompressed into Office XML internals.
+SUPPORTED_SPREADSHEET_EXTS = {".xlsx", ".xlsm"}
+
 # (magic_bytes, byte_offset) for each supported extension
 ArchiveMagic = Union[Tuple[bytes, int], List[Tuple[bytes, int]]]
 ARCHIVE_MAGIC: Dict[str, ArchiveMagic] = {
@@ -121,13 +126,19 @@ def looks_like_text(path: str, *, sample_size: int = 8192) -> bool:
 
 
 def detect_upload_kind(path: str) -> str:
-    """Pre-classify an uploaded file as ``"archive"``, ``"text"`` or ``"unknown"``.
+    """Pre-classify an uploaded file as ``"archive"``, ``"text"``,
+    ``"spreadsheet"`` or ``"unknown"``.
 
     Archive detection (extension + content inspection) takes precedence so a
-    text-named archive is still decompressed; otherwise a content-based text
-    probe decides. ``"unknown"`` covers binary blobs we can neither extract nor
-    analyze as logs.
+    text-named archive is still decompressed. Spreadsheet extensions are checked
+    before archive probing because .xlsx/.xlsm files are ZIP containers and must
+    remain intact for Excel tooling. ``"unknown"`` covers binary blobs we can
+    neither extract nor analyze as logs.
     """
+    suffix = "".join(Path(path).suffixes).lower()
+    plain_suffix = Path(path).suffix.lower()
+    if suffix in SUPPORTED_SPREADSHEET_EXTS or plain_suffix in SUPPORTED_SPREADSHEET_EXTS:
+        return "spreadsheet"
     if guess_archive_type(path) is not None:
         return "archive"
     if looks_like_text(path):

@@ -533,6 +533,7 @@ export interface MetricsTimeSeriesBucket {
   invocation_count: number
   success_count: number
   failure_count: number
+  counts_by_agent?: Record<string, number>
 }
 
 export interface MetricsGroupCount {

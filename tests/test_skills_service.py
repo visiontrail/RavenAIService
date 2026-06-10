@@ -39,6 +39,18 @@ _PROJECT_SKILL_MD = (
     "Use this for satellite telemetry analysis.\n"
 ).encode("utf-8")
 
+_XLSX_SKILL_MD = (
+    "---\n"
+    "name: xlsx\n"
+    "description: Use this skill any time a spreadsheet file is the primary "
+    "input or output, including Excel .xlsx files, CSV files, formulas, "
+    "formatting, or spreadsheet analysis.\n"
+    "---\n"
+    "# XLSX creation, editing, and analysis\n"
+    "Use pandas to read Excel data and openpyxl for formulas and formatting.\n"
+    "For formula recalculation run the bundled script at scripts/recalc.py.\n"
+).encode("utf-8")
+
 
 @pytest.fixture()
 def isolated_skills_dir(tmp_path, monkeypatch):
@@ -253,6 +265,47 @@ def test_folded_yaml_description_is_indexed_for_relevance(isolated_skills_dir):
         project_code="sat1",
     )
     assert selected == [("project", "skill-verifier")]
+
+
+def test_xlsx_skill_with_runtime_scripts_can_be_selected_and_materialized(
+    isolated_skills_dir, tmp_path
+):
+    from app.services import skills_service
+
+    xlsx_zip = _build_zip(
+        {
+            "SKILL.md": _XLSX_SKILL_MD,
+            "scripts/recalc.py": b"from office.soffice import get_soffice_env\n",
+            "scripts/office/soffice.py": b"def get_soffice_env():\n    return {}\n",
+            "scripts/office/__init__.py": b"",
+        }
+    )
+    entry = skills_service.install_skill(
+        "project_expert",
+        zip_bytes=xlsx_zip,
+        source_filename="xlsx.zip",
+    )
+    assert entry["name"] == "xlsx"
+    assert entry["enabled"] is True
+
+    selected = skills_service.select_relevant_skill_names(
+        "project_expert",
+        query_text="请解析这个 Excel 文件 test.xlsx，并汇总每个 sheet 的数据",
+    )
+    assert selected == [("agent", "xlsx")]
+
+    cwd = tmp_path / "agent_cwd_xlsx"
+    cwd.mkdir()
+    materialized = skills_service.materialize_relevant_enabled_skills(
+        "project_expert",
+        cwd,
+        query_text="请解析这个 Excel 文件 test.xlsx，并汇总每个 sheet 的数据",
+    )
+    assert materialized == ["xlsx"]
+    skill_dir = cwd / ".claude" / "skills" / "xlsx"
+    assert (skill_dir / "SKILL.md").is_file()
+    assert (skill_dir / "scripts" / "recalc.py").is_file()
+    assert (skill_dir / "scripts" / "office" / "soffice.py").is_file()
 
 
 def test_unknown_agent_rejected(isolated_skills_dir):

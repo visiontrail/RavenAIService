@@ -359,9 +359,9 @@ class LogAnalysisChatService:
                     "event": "error",
                     "reason": "unsupported_format",
                     "message": (
-                        "这个附件既不是受支持的日志压缩包，也不是可识别的纯文本日志。"
+                        "这个附件既不是受支持的日志压缩包，也不是可识别的纯文本日志或 Excel 表格。"
                         "请上传 .zip/.tar.gz/.7z/.rar 等压缩包，"
-                        "或 .log/.txt/.json/.xml/.csv 等纯文本日志后再试。"
+                        "或 .log/.txt/.json/.xml/.csv/.xlsx/.xlsm 等文件后再试。"
                     ),
                 }
             )
@@ -878,6 +878,8 @@ class LogAnalysisChatService:
             "task_json_path": ctx.task_json_path,
             "log_id": log_record.id,
             "filename": log_record.original_filename or log_record.filename,
+            "upload_kind": ctx.metadata.get("upload_kind"),
+            "attachments": ctx.metadata.get("attachments", []),
             "project_id": effective_project_id,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),

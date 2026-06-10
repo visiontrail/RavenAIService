@@ -262,6 +262,38 @@ class TestPrepareTextUpload:
 
         assert (Path(ctx.logs_dir) / "service.log").exists()
 
+    def test_spreadsheet_upload_is_copied_verbatim_and_listed_in_task(
+        self, tmp_path, mock_settings
+    ):
+        from app.agents.log_analysis.workspace import prepare
+
+        src = tmp_path / "upload.xlsx"
+        # Minimal ZIP-looking bytes are enough for this unit: spreadsheet
+        # detection is extension-based because real xlsx files are ZIP
+        # containers and must not be decompressed by the log workspace.
+        payload = b"PK\x03\x04spreadsheet payload"
+        src.write_bytes(payload)
+        record = _make_log_record(
+            archive_path=str(src),
+            original_filename="report.xlsx",
+        )
+
+        with patch("app.agents.log_analysis.workspace.settings", mock_settings):
+            ctx = prepare(record, require_metadata=False)
+
+        placed = Path(ctx.logs_dir) / "report.xlsx"
+        assert placed.read_bytes() == payload
+        task_data = json.loads(Path(ctx.task_json_path).read_text())
+        assert task_data["upload_kind"] == "spreadsheet"
+        assert task_data["attachments"] == [
+            {
+                "filename": "report.xlsx",
+                "path": "logs/report.xlsx",
+                "kind": "spreadsheet",
+            }
+        ]
+        assert ctx.metadata["attachments"] == task_data["attachments"]
+
     def test_plain_text_log_requires_metadata_raises(self, tmp_path, mock_settings):
         from app.agents.log_analysis.workspace import MissingMetadataJsonError, prepare
 
@@ -310,6 +342,14 @@ class TestDetectUploadKind:
 
         archive = _create_zip(tmp_path, {"logs/app.log": b"x"})
         assert detect_upload_kind(str(archive)) == "archive"
+
+    def test_detects_xlsx_as_spreadsheet_before_zip_archive(self, tmp_path):
+        from app.tools.archive_tool import detect_upload_kind
+
+        spreadsheet = tmp_path / "report.xlsx"
+        with zipfile.ZipFile(str(spreadsheet), "w") as zf:
+            zf.writestr("xl/workbook.xml", "<workbook/>")
+        assert detect_upload_kind(str(spreadsheet)) == "spreadsheet"
 
     def test_detects_tar_gz_archive(self, tmp_path):
         from app.tools.archive_tool import detect_upload_kind

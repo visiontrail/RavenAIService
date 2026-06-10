@@ -243,6 +243,7 @@ class TestEmitterEventSequence:
         assert skill_events[0]["loaded_skills"] == ["smu-baseband-interfaces"]
         assert "本轮命中的 Skill（必须先加载）" in captured_prompt["prompt"]
         assert '"skill": "smu-baseband-interfaces"' in captured_prompt["prompt"]
+        assert ".claude/skills/smu-baseband-interfaces/" in captured_prompt["prompt"]
         assert "最终输出仍必须遵守第 6 步的围栏 JSON schema" in captured_prompt["prompt"]
 
     def test_seq_strictly_monotonic(self, workspace_ctx):

@@ -170,6 +170,7 @@ class TimeSeriesBucket(BaseModel):
     invocation_count: int = 0
     success_count: int = 0
     failure_count: int = 0
+    counts_by_agent: Dict[str, int] = Field(default_factory=dict)
 
 
 class GroupCount(BaseModel):

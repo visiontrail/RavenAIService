@@ -20,7 +20,8 @@ from app.exceptions import (
 SUPPORTED_LOG_EXTENSIONS = [
     '.log', '.txt', '.out', '.err', '.trace',
     '.json', '.xml', '.csv', '.tsv',
-    '.gz', '.zip', '.tar', '.bz2', '.tgz', '.rar'
+    '.gz', '.zip', '.tar', '.bz2', '.tgz', '.rar',
+    '.xlsx', '.xlsm',
 ]
 
 SUPPORTED_MIME_TYPES = [
@@ -35,6 +36,8 @@ SUPPORTED_MIME_TYPES = [
     'application/x-rar-compressed',
     'application/x-tar',
     'application/x-bzip2',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel.sheet.macroEnabled.12',
     'application/octet-stream'  # 允许二进制文件，但会进一步验证扩展名
 ]
 

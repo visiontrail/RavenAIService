@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     gzip \
     jq \
+    libreoffice-calc \
     python3-dev \
     ripgrep \
     tar \
