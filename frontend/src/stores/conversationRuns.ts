@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, reactive, ref } from 'vue'
 import { API_BASE_URL } from '@/api'
 import { userApi } from '@/api/user'
-import { projectExpertStream, resolveChatPermission } from '@/api/chat'
+import { packageSearchStream, projectExpertStream, resolveChatPermission } from '@/api/chat'
 import { i18n } from '@/i18n'
 import { getActiveLocale, LOCALE_HEADER } from '@/i18n/runtime'
 import type { AgentTraceEvent } from '@/types/agentTrace'
@@ -35,7 +35,7 @@ export type PendingPermission = {
   editingError?: string | null
 }
 
-export type AgentKind = 'device' | 'log_analysis' | 'project_expert' | 'package'
+export type AgentKind = 'device' | 'log_analysis' | 'project_expert' | 'package_search'
 
 export type RunStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'stale'
 
@@ -95,6 +95,8 @@ export type StartProjectExpertPayload = {
   project_repo_id: number
   remember?: boolean
 }
+
+export type StartPackageSearchPayload = StartProjectExpertPayload
 
 const DEVICE_TRACE_TYPES = new Set([
   'run_start',
@@ -1011,13 +1013,19 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
   }
 
   /**
-   * Start a Project Expert Agent run. It uses the same trace/SSE renderer as
-   * log-analysis, but requires an explicit project repo and never sends files.
+   * Shared driver for the project-bound agents (project expert / package
+   * search). Both use the same trace/SSE renderer as log-analysis, but require
+   * an explicit project repo and never send files.
    */
-  const startProjectExpertRun = async (
+  const startProjectBoundRun = async (
     sessionId: string,
     payload: StartProjectExpertPayload,
-    opts: { authToken?: string | null } = {},
+    opts: { authToken?: string | null },
+    cfg: {
+      agentKind: AgentKind
+      stream: typeof projectExpertStream
+      failureMessage: (error: string) => string
+    },
   ) => {
     const state = ensureState(sessionId)
     if (state.isSending) return
@@ -1040,14 +1048,14 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     })
     state.isSending = true
     state.runStatus = 'running'
-    state.runAgentKind = 'project_expert'
+    state.runAgentKind = cfg.agentKind
     localRunningSet.value.add(sessionId)
 
     const ac = new AbortController()
     state.subscription = ac
 
     try {
-      const resp = await projectExpertStream({
+      const resp = await cfg.stream({
         message: payload.message || '',
         sessionId,
         history: payload.history,
@@ -1099,7 +1107,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
               terminal = true
             }
           } catch (err) {
-            console.error('Failed to parse project-expert stream data', err, jsonStr)
+            console.error(`Failed to parse ${cfg.agentKind} stream data`, err, jsonStr)
           }
         }
         buffer = remaining
@@ -1121,10 +1129,10 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       }
     } catch (err: any) {
       if (err?.name === 'AbortError') return
-      console.error('Failed to start project-expert run', err)
+      console.error(`Failed to start ${cfg.agentKind} run`, err)
       const target = state.messages.find((m) => m.id === state.currentAnswerId)
       if (target) {
-        target.content = t('aiChat.runs.projectExpertFailed', { error: err?.message || String(err) })
+        target.content = cfg.failureMessage(err?.message || String(err))
         target.traceRunning = false
       }
       markTerminal(state, 'failed')
@@ -1133,23 +1141,106 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     }
   }
 
-  /** Cancel the currently-running run on this session via the unified endpoint. */
+  /** Start a Project Expert Agent run (project repo mandatory). */
+  const startProjectExpertRun = (
+    sessionId: string,
+    payload: StartProjectExpertPayload,
+    opts: { authToken?: string | null } = {},
+  ) =>
+    startProjectBoundRun(sessionId, payload, opts, {
+      agentKind: 'project_expert',
+      stream: projectExpertStream,
+      failureMessage: (error) => t('aiChat.runs.projectExpertFailed', { error }),
+    })
+
+  /**
+   * Start a Package Search Agent run. Same project-bound contract as the
+   * project expert; the terminal `done` frame additionally carries the
+   * package-search result contract (recommended/relevant package IDs) inside
+   * the backend-formatted answer.
+   */
+  const startPackageSearchRun = (
+    sessionId: string,
+    payload: StartPackageSearchPayload,
+    opts: { authToken?: string | null } = {},
+  ) =>
+    startProjectBoundRun(sessionId, payload, opts, {
+      agentKind: 'package_search',
+      stream: packageSearchStream,
+      failureMessage: (error) => t('aiChat.runs.packageSearchFailed', { error }),
+    })
+
+  /** Drop the local run state when the backend can no longer cancel it. */
+  const finalizeCancelledLocally = (state: ConversationState) => {
+    const answerId = state.currentAnswerId
+    const target = answerId ? state.messages.find((m) => m.id === answerId) : null
+    if (target) {
+      if (target.content === THINKING_PLACEHOLDER) {
+        target.content = t('aiChat.runs.cancelledByUser')
+      }
+      target.traceRunning = false
+    }
+    abortSubscription(state.sessionId)
+    markTerminal(state, 'cancelled')
+  }
+
+  /**
+   * Cancel the currently-running run on this session.
+   *
+   * Prefers the unified ``/chat/runs/{run_id}/cancel`` endpoint when run_id is
+   * known. Before the run_id frame has arrived, fall back to the per-agent
+   * session cancel endpoint.
+   */
   const cancelActiveRun = async (
     sessionId: string,
     opts: { authToken?: string | null } = {},
   ) => {
     const state = ensureState(sessionId)
     const runId = state.activeRunId
-    if (!runId) return
-    try {
-      await fetch(getServiceUrl(`/api/v1/ai-chat/chat/runs/${encodeURIComponent(runId)}/cancel`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...buildAuthHeaders(opts.authToken) },
-        credentials: 'include',
-      })
-    } catch (err) {
-      console.warn('Failed to cancel run', err)
+    const headers = { 'Content-Type': 'application/json', ...buildAuthHeaders(opts.authToken) }
+
+    if (runId) {
+      try {
+        const resp = await fetch(
+          getServiceUrl(`/api/v1/ai-chat/chat/runs/${encodeURIComponent(runId)}/cancel`),
+          { method: 'POST', headers, credentials: 'include' },
+        )
+        const body = await resp.json().catch(() => null)
+        // Backend says the run is unknown/already terminal but we still think
+        // it's running — unstick the panel locally.
+        if (body && body.cancelled === false && state.isSending) {
+          finalizeCancelledLocally(state)
+        }
+      } catch (err) {
+        console.warn('Failed to cancel run', err)
+      }
+      return
     }
+
+    const sessionCancelPath =
+      state.runAgentKind === 'log_analysis'
+        ? '/api/v1/ai-chat/log-analysis/cancel'
+        : state.runAgentKind === 'project_expert'
+          ? '/api/v1/ai-chat/project-expert/cancel'
+          : state.runAgentKind === 'package_search'
+            ? '/api/v1/ai-chat/package-search/cancel'
+            : null
+    if (sessionCancelPath) {
+      try {
+        await fetch(getServiceUrl(sessionCancelPath), {
+          method: 'POST',
+          headers,
+          credentials: 'include',
+          body: JSON.stringify({ session_id: sessionId }),
+        })
+      } catch (err) {
+        console.warn('Failed to cancel run', err)
+      }
+      return
+    }
+
+    // No run id and no per-agent endpoint: nothing the backend can do.
+    if (state.isSending) finalizeCancelledLocally(state)
   }
 
   /** Submit a HITL permission decision. Removes the entry locally on success. */
@@ -1203,6 +1294,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     startDeviceRun,
     startLogAnalysisRun,
     startProjectExpertRun,
+    startPackageSearchRun,
     THINKING_PLACEHOLDER,
     cancelActiveRun,
     submitPermission,

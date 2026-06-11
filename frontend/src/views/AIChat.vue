@@ -2,18 +2,8 @@
 import { computed, onMounted, onUnmounted, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { deviceLinkApi } from '@/api/deviceLink'
-import {
-  streamPackagesAgentSearch,
-  getRavenPackageDetail,
-  ravenBaseUrl,
-} from '@/api/raven'
 import { userApi } from '@/api/user'
-import type {
-  DeviceInfo,
-  PackageAgentSearchResponse,
-  PackageAgentTraceEvent,
-  RavenPackage,
-} from '@/types'
+import type { DeviceInfo } from '@/types'
 import { renderMarkdown, processMermaidBlocks } from '@/utils/markdownRenderer'
 import { loadMermaid } from '@/utils/mermaidLoader'
 import { ElMessage } from 'element-plus'
@@ -76,7 +66,6 @@ const runsStore = useConversationRunsStore()
 const { t } = useI18n()
 
 const agentName = (option: AgentOption) => t(option.nameKey)
-const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 const generateUUID = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -145,12 +134,11 @@ const currentPermission = computed<PendingPermission | null>(() =>
   pendingPermissions.value.length > 0 ? pendingPermissions.value[0] : null,
 )
 const permissionDecisionInFlight = ref(false)
-// Sidebar cancel button only when the current session has an active run.
-const activeTraceAgentSessionId = computed(() => {
+// The composer send button morphs into a stop button whenever the current
+// session has a run in flight, regardless of agent kind.
+const canCancelCurrentRun = computed(() => {
   const s = currentConversation.value
-  return s && s.runStatus === 'running' && (
-    s.runAgentKind === 'log_analysis' || s.runAgentKind === 'project_expert'
-  ) ? s.sessionId : null
+  return !!s && (s.isSending || s.runStatus === 'running')
 })
 
 // 关联项目（用于在日志分析 Agent 中显式指定项目身份；留空则回退到 metadata.json）
@@ -261,7 +249,7 @@ const fetchDevices = async () => {
 
 const agentKindToOption: Record<string, AgentOption> = {
   log_analysis: logAnalysisAgentOption,
-  package: packageAgentOption,
+  package_search: packageAgentOption,
   project_expert: projectExpertAgentOption,
 }
 
@@ -271,7 +259,7 @@ const saveAgentSelectionToState = (sessionId?: string | null) => {
   const state = runsStore.ensureState(sid)
   const kind = targetAgent.value?.agentType === 'log-analysis' ? 'log_analysis'
     : targetAgent.value?.agentType === 'project-expert' ? 'project_expert'
-    : targetAgent.value?.agentType === 'package-manager' ? 'package'
+    : targetAgent.value?.agentType === 'package-manager' ? 'package_search'
     : null
   state.lastAgentKind = kind as import('@/stores/conversationRuns').AgentKind | null
   state.lastProjectRepoId = selectedProjectRepoId.value
@@ -281,7 +269,7 @@ const restoreAgentSelectionFromState = (state: ReturnType<typeof runsStore.ensur
   const agentKind = state.runAgentKind || state.lastAgentKind
   if (agentKind && agentKindToOption[agentKind]) {
     targetAgent.value = agentKindToOption[agentKind]
-    if (agentKind === 'log_analysis' || agentKind === 'project_expert') {
+    if (agentKind === 'log_analysis' || agentKind === 'project_expert' || agentKind === 'package_search') {
       ensureProjectRepoOptions()
     }
   } else {
@@ -721,13 +709,18 @@ const isLogAnalysisAgentSelected = computed(() =>
   targetAgent.value?.agentType === 'log-analysis' || !!selectedLogFile.value
 )
 const isProjectRepoSelectVisible = computed(() =>
-  isLogAnalysisAgentSelected.value || isProjectExpertAgentSelected.value
+  isLogAnalysisAgentSelected.value || isProjectExpertAgentSelected.value || isPackageAgentSelected.value
 )
 const isLogFileUploadDisabled = computed(() =>
   isPackageAgentSelected.value || isProjectExpertAgentSelected.value
 )
+// Project repo is mandatory for the project-bound agents (project expert and
+// package search); log analysis keeps it optional.
+const isProjectRepoRequired = computed(() =>
+  isProjectExpertAgentSelected.value || isPackageAgentSelected.value
+)
 const isProjectRepoRequiredMissing = computed(() =>
-  isProjectExpertAgentSelected.value && selectedProjectRepoId.value === null
+  isProjectRepoRequired.value && selectedProjectRepoId.value === null
 )
 
 // ZIP inspection: read central directory to check if metadata.json is present
@@ -805,7 +798,11 @@ const setTargetAgent = (option: AgentOption) => {
   targetAgent.value = option
   targetDeviceId.value = null
   targetDeviceName.value = null
-  if (option.agentType === 'log-analysis' || option.agentType === 'project-expert') {
+  if (
+    option.agentType === 'log-analysis' ||
+    option.agentType === 'project-expert' ||
+    option.agentType === 'package-manager'
+  ) {
     ensureProjectRepoOptions()
   }
   saveAgentSelectionToState()
@@ -1127,59 +1124,6 @@ const copyMermaidImage = async () => {
   }
 }
 
-const packageTypeText = (type?: string) => {
-  const map: Record<string, string> = {
-    'lingxi-10': 'LingXi-10',
-    'lingxi-07a': 'LingXi-07A',
-    'ka-tx': 'KaTx',
-    'ka-rx': 'KaRx',
-    config: t('aiChat.package.type.config'),
-    'lingxi-06-thrid': 'LingXi-06-TRD',
-  }
-  return map[type || ''] || type || t('aiChat.package.type.unknown')
-}
-
-const buildRebuildPrompt = (downloadLink: string) =>
-  t('aiChat.package.rebuildPrompt', { url: downloadLink })
-
-const buildPackageLinks = (pkg: RavenPackage) => {
-  const detailLink = `${ravenBaseUrl}/package/${encodeURIComponent(pkg.id)}`
-  const downloadLink = `${ravenBaseUrl}/api/download/${encodeURIComponent(pkg.id)}`
-  return { detailLink, downloadLink, prompt: buildRebuildPrompt(downloadLink) }
-}
-
-const formatPackageAgentAnswer = (
-  result: PackageAgentSearchResponse,
-  recommendedPackages: RavenPackage[],
-  rawQuery: string
-) => {
-  const query = rawQuery.trim() || t('aiChat.package.noQuery')
-  const lines: string[] = [`**${t('aiChat.agents.packageManager')}** ${t('aiChat.package.searchSummary', { query })}`]
-
-  const pushPackageLines = (pkg: RavenPackage) => {
-    const links = buildPackageLinks(pkg)
-    lines.push(
-      `## ${pkg.name || pkg.id} ⭐ ${t('aiChat.package.aiRecommended')} (${packageTypeText(pkg.packageType)} · v${pkg.version || t('aiChat.package.unknownVersion')})`
-    )
-    if (pkg.metadata?.description) lines.push(`- ${t('aiChat.package.description')}: ${pkg.metadata.description}`)
-    lines.push(
-      `- ${t('aiChat.package.detailLink')}: [${links.detailLink}](${links.detailLink})`,
-      `- ${t('aiChat.package.downloadLink')}: [${links.downloadLink}](${links.downloadLink})`,
-      `- ${t('aiChat.package.rebuildPromptLabel')}:`,
-      `  \`${links.prompt}\``
-    )
-  }
-
-  if (result.answer) lines.push('', result.answer)
-  if (recommendedPackages.length > 0) {
-    lines.push('', `# ${t('aiChat.package.recommendedHeading', { count: recommendedPackages.length })}`)
-    recommendedPackages.forEach(pushPackageLines)
-  } else {
-    lines.push('', t('aiChat.package.noMatches'))
-  }
-  return lines.join('\n')
-}
-
 const toggleDeviceMenu = () => {
   if (isSending.value) return
   deviceMenuVisible.value = !deviceMenuVisible.value
@@ -1341,97 +1285,7 @@ const handleKeydown = (event: KeyboardEvent) => {
   }
 }
 
-const extractPackageQuery = (content: string) => {
-  const label = agentName(packageAgentOption)
-  return content.replace(new RegExp(`@${escapeRegExp(label)}`, 'g'), '').trim()
-}
-
-const runPackageAgent = async (content: string, sid: string, state: ReturnType<typeof runsStore.ensureState>) => {
-  // Streaming package-agent path. Trace + ``answer_delta`` events flow through
-  // the same ``conversationRuns`` render pipeline as Device / log-analysis so
-  // the bubble updates live instead of stalling on "正在思考...". The terminal
-  // ``final`` event carries the structured result, which we use to render the
-  // recommended-package cards and persist the exchange.
-  const query = extractPackageQuery(content)
-  const answerId = state.currentAnswerId
-  const targetMessage = answerId ? state.messages.find((m) => m.id === answerId) : null
-  if (!targetMessage) return
-  if (!query) {
-    targetMessage.content = t('aiChat.package.queryRequired')
-    return
-  }
-  if (!targetMessage.traceEvents) targetMessage.traceEvents = []
-
-  const ac = new AbortController()
-  state.subscription = ac
-
-  let finalData: PackageAgentSearchResponse | null = null
-
-  const handleFinal = async (data: PackageAgentSearchResponse) => {
-    finalData = data
-    const recommendedIds = data.recommended_package_ids || []
-    const recommendedPackages: RavenPackage[] = []
-    for (const id of recommendedIds) {
-      try {
-        const detail = await getRavenPackageDetail(id)
-        if (detail.data?.success && detail.data.data) recommendedPackages.push(detail.data.data)
-      } catch (err) {
-        console.warn('Failed to fetch recommended package detail', id, err)
-      }
-    }
-    // Authoritative correction: replace the streamed prose with the formatted
-    // answer (recommended-package cards + links).
-    targetMessage.content = formatPackageAgentAnswer(data, recommendedPackages, query)
-    targetMessage.traceRunning = false
-  }
-
-  try {
-    await streamPackagesAgentSearch(query, {
-      sessionId: sid,
-      signal: ac.signal,
-      onEvent: (event: PackageAgentTraceEvent) => {
-        if (event?.type === 'final') {
-          // Handled after the stream resolves so the structured answer wins
-          // over the run_complete final_text. Detail fetches are async, so we
-          // stash the payload and await it once the stream closes.
-          finalData = (event as { data: PackageAgentSearchResponse }).data
-          return
-        }
-        // Forward trace + answer_delta to the unified renderer.
-        runsStore.applyEventToState(state, event)
-      },
-      onError: (err) => {
-        console.warn('Failed to parse package stream event', err)
-      },
-    })
-    if (finalData) {
-      await handleFinal(finalData)
-    } else if (targetMessage.content === THINKING_PLACEHOLDER) {
-      targetMessage.content = t('aiChat.runs.emptyResponse')
-    }
-    targetMessage.traceRunning = false
-    state.runStatus = 'succeeded'
-
-    if (isLoggedIn.value && finalData) {
-      try {
-        await userApi.saveMessages(sid, content, targetMessage.content, content.slice(0, 60))
-        await sessionStore.load()
-      } catch (error: any) {
-        console.warn('Failed to save package-manager conversation', error)
-      }
-    }
-  } catch (error: any) {
-    if (error?.name === 'AbortError') return
-    console.error('Package-manager call failed', error)
-    targetMessage.content = t('aiChat.package.callFailed', { error: error?.message || String(error) })
-    targetMessage.traceRunning = false
-    state.runStatus = 'failed'
-  } finally {
-    if (state.subscription === ac) state.subscription = null
-  }
-}
-
-const cancelActiveTraceAgent = async () => {
+const cancelCurrentRun = async () => {
   const sid = effectiveSessionId.value
   if (!sid || cancelInFlight.value) return
   cancelInFlight.value = true
@@ -1517,7 +1371,9 @@ const sendMessage = async () => {
     setTargetAgent(packageAgentOption)
   }
 
-  if (shouldUseProjectExpertAgent && selectedProjectRepoId.value === null) {
+  // Project-bound agents (project expert / package search) cannot start
+  // without a project repo selection.
+  if ((shouldUseProjectExpertAgent || shouldUsePackageAgent) && selectedProjectRepoId.value === null) {
     ensureProjectRepoOptions()
     appStore.showNotification({ title: t('aiChat.notifications.selectProjectFirst'), type: 'warning' })
     return
@@ -1570,34 +1426,19 @@ const sendMessage = async () => {
         throw err
       }
     } else if (shouldUsePackageAgent) {
-      // Package agent: append local user + placeholder, then open the SSE
-      // stream. Trace + answer_delta render through the unified pipeline.
-      state.messages.push({
-        id: generateUUID(),
-        role: 'user',
-        content: outgoingContent,
-        kind: 'user',
-      })
-      const placeholderId = generateUUID()
-      state.currentAnswerId = placeholderId
-      state.messages.push({
-        id: placeholderId,
-        role: 'ai',
-        content: THINKING_PLACEHOLDER,
-        kind: 'answer',
-        traceEvents: [],
-        traceRunning: true,
-      })
-      state.isSending = true
-      state.runStatus = 'running'
-      state.runAgentKind = 'package'
-      try {
-        await runPackageAgent(outgoingContent, sid, state)
-      } finally {
-        state.isSending = false
-        state.currentAnswerId = null
-        state.runAgentKind = null
-      }
+      // Package search agent — session-scoped run via the unified runs store
+      // pipeline (same start/cancel/resume contract as the project expert).
+      selectedLogFile.value = null
+      await runsStore.startPackageSearchRun(
+        sid,
+        {
+          message: outgoingContent,
+          history: historyPayload,
+          project_repo_id: selectedProjectRepoId.value as number,
+          remember: true,
+        },
+        { authToken },
+      )
     } else {
       // DeviceAgent — fully delegated to the run store.
       await runsStore.startDeviceRun(
@@ -1818,7 +1659,6 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
                 class="rw-ai-trace"
                 :events="msg.traceEvents || []"
                 :running="!!msg.traceRunning"
-                :on-cancel="msg.traceRunning ? cancelActiveTraceAgent : undefined"
               />
               <template v-if="msg.content === THINKING_PLACEHOLDER">
                 <div v-if="!msg.traceRunning" class="rw-thinking">{{ t('aiChat.thinking') }}</div>
@@ -2042,14 +1882,14 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             :disabled="projectRepoOptionsLoading"
             :title="projectRepoOptionsLoading
               ? t('aiChat.project.loadingList')
-              : isProjectExpertAgentSelected
+              : isProjectRepoRequired
                 ? t('aiChat.project.requiredTitle')
                 : t('aiChat.project.optionalTitle')"
           >
             <option :value="null">
               {{ projectRepoOptionsLoading
                 ? t('aiChat.project.loading')
-                : isProjectExpertAgentSelected ? t('aiChat.project.requiredPlaceholder') : t('aiChat.project.optionalPlaceholder') }}
+                : isProjectRepoRequired ? t('aiChat.project.requiredPlaceholder') : t('aiChat.project.optionalPlaceholder') }}
             </option>
             <option
               v-for="repo in projectRepoOptions"
@@ -2061,11 +1901,12 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
           </select>
           <button
             class="rw-send-btn"
-            :disabled="activeTraceAgentSessionId ? cancelInFlight : sendDisabled"
-            :title="activeTraceAgentSessionId ? (cancelInFlight ? t('aiChat.canceling') : t('aiChat.cancelTask')) : ''"
-            @click="activeTraceAgentSessionId ? cancelActiveTraceAgent() : sendMessage()"
+            :class="{ 'is-stop': canCancelCurrentRun }"
+            :disabled="canCancelCurrentRun ? cancelInFlight : sendDisabled"
+            :title="canCancelCurrentRun ? (cancelInFlight ? t('aiChat.canceling') : t('aiChat.cancelTask')) : ''"
+            @click="canCancelCurrentRun ? cancelCurrentRun() : sendMessage()"
           >
-            <svg v-if="isSending" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="spin"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+            <svg v-if="canCancelCurrentRun" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none"/></svg>
             <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 19 5l-3 15-5-7-6-1Z"/></svg>
           </button>
         </div>
@@ -2547,23 +2388,6 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
 .rw-project-select:disabled { opacity: .6; cursor: not-allowed; }
 .rw-project-select.required { border-color: var(--rw-danger, #b91c1c); }
 
-.rw-cancel-btn {
-  height: 32px; padding: 0 10px; border-radius: 8px;
-  background: transparent; color: var(--rw-ink);
-  display: inline-flex; align-items: center; gap: 6px;
-  margin-left: auto;
-  font-size: 12px; font-weight: 500;
-  border: 1px solid var(--rw-hairline-strong, #d4d4d4);
-  cursor: pointer;
-  transition: background .15s, color .15s, border-color .15s;
-}
-.rw-cancel-btn:hover:not(:disabled) {
-  background: var(--rw-surface-strong, #f5f5f5);
-  border-color: var(--rw-ink, #171717);
-}
-.rw-cancel-btn:disabled { color: var(--rw-muted); cursor: not-allowed; }
-.rw-cancel-btn + .rw-send-btn { margin-left: 8px; }
-
 .rw-send-btn {
   width: 36px; height: 32px; border-radius: 8px;
   background: var(--rw-primary); color: var(--rw-on-primary);
@@ -2577,6 +2401,8 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
   background: var(--rw-surface-strong); color: var(--rw-muted);
   cursor: not-allowed;
 }
+.rw-send-btn.is-stop { background: var(--rw-ink, #171717); color: var(--rw-canvas, #fff); }
+.rw-send-btn.is-stop:hover:not(:disabled) { background: var(--rw-danger, #b91c1c); }
 
 .rw-composer-hint {
   max-width: 820px; margin: 8px auto 0;

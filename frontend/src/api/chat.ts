@@ -78,6 +78,12 @@ export interface ProjectExpertResultResponse {
   result?: Record<string, unknown> | null
 }
 
+// Package-search chat shares the project-expert wire contract: multipart
+// stream start (project repo mandatory), session-scoped cancel, result poll.
+export type PackageSearchStreamPayload = ProjectExpertStreamPayload
+export type PackageSearchCancelResponse = ProjectExpertCancelResponse
+export type PackageSearchResultResponse = ProjectExpertResultResponse
+
 const getChatServiceUrl = (path: string) => {
   if (API_BASE_URL && /^https?:\/\//i.test(API_BASE_URL)) {
     return `${API_BASE_URL.replace(/\/$/, '')}${path}`
@@ -169,5 +175,60 @@ export const projectExpertResult = (
   ).then((resp) => {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     return resp.json() as Promise<ProjectExpertResultResponse>
+  })
+}
+
+export const packageSearchStream = (payload: PackageSearchStreamPayload): Promise<Response> => {
+  const formData = new FormData()
+  formData.append('message', payload.message || '')
+  formData.append('session_id', payload.sessionId)
+  formData.append('remember', String(payload.remember ?? true))
+  formData.append('project_repo_id', String(payload.projectRepoId))
+  if (payload.history) formData.append('history', JSON.stringify(payload.history))
+
+  const headers: Record<string, string> = { [LOCALE_HEADER]: getActiveLocale() }
+  if (payload.authToken) headers.Authorization = `Bearer ${payload.authToken}`
+
+  return fetch(getChatServiceUrl('/api/v1/ai-chat/package-search/stream'), {
+    method: 'POST',
+    headers,
+    body: formData,
+    credentials: 'include',
+    signal: payload.signal,
+  })
+}
+
+export const packageSearchCancel = (
+  sessionId: string,
+  authToken?: string | null,
+): Promise<PackageSearchCancelResponse> => {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    [LOCALE_HEADER]: getActiveLocale(),
+  }
+  if (authToken) headers.Authorization = `Bearer ${authToken}`
+  return fetch(getChatServiceUrl('/api/v1/ai-chat/package-search/cancel'), {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ session_id: sessionId }),
+    credentials: 'include',
+  }).then((resp) => {
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    return resp.json() as Promise<PackageSearchCancelResponse>
+  })
+}
+
+export const packageSearchResult = (
+  sessionId: string,
+  authToken?: string | null,
+): Promise<PackageSearchResultResponse> => {
+  const headers: Record<string, string> = { [LOCALE_HEADER]: getActiveLocale() }
+  if (authToken) headers.Authorization = `Bearer ${authToken}`
+  return fetch(
+    getChatServiceUrl(`/api/v1/ai-chat/package-search/result?session_id=${encodeURIComponent(sessionId)}`),
+    { headers, credentials: 'include' },
+  ).then((resp) => {
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    return resp.json() as Promise<PackageSearchResultResponse>
   })
 }

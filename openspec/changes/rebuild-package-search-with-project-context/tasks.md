@@ -40,10 +40,10 @@
 
 ## 6. 前端：对话框（AIChat.vue + runs store）
 
-- [ ] 6.1 runs store（`frontend/src/stores/`）：新增 `startPackageSearchRun`（对齐 `startProjectExpertRun`：FormData 携带 message/history/project_repo_id/remember，订阅 SSE、恢复、取消走 `/package-search/*`）；`frontend/src/api/` 增加对应 API 封装
-- [ ] 6.2 `AIChat.vue`：`isProjectRepoSelectVisible` 与 `isProjectRepoRequiredMissing` 纳入 `isPackageAgentSelected`；`setTargetAgent` 对 `package-manager` 调用 `ensureProjectRepoOptions()`；`sendMessage` 的包 Agent 分支改走 `startPackageSearchRun` 并删除 `runPackageAgent` 旧 SSE 处理；未选项目时阻止发送并提示 `selectProjectFirst`
-- [ ] 6.3 GeneralAgent 建议切换（`chooseSuggestedAgent('package_search')`）验证项目必选链路自然生效；欢迎页能力卡片点击"包"卡片后同样触发项目选项加载
-- [ ] 6.4 `frontend/src/i18n/{zh,en}.ts`：重构包 Agent 项目必选相关文案
+- [x] 6.1 runs store（`frontend/src/stores/`）：新增 `startPackageSearchRun`（对齐 `startProjectExpertRun`：FormData 携带 message/history/project_repo_id/remember，订阅 SSE、恢复、取消走 `/package-search/*`）；`frontend/src/api/` 增加对应 API 封装
+- [x] 6.2 `AIChat.vue`：`isProjectRepoSelectVisible` 与 `isProjectRepoRequiredMissing` 纳入 `isPackageAgentSelected`；`setTargetAgent` 对 `package-manager` 调用 `ensureProjectRepoOptions()`；`sendMessage` 的包 Agent 分支改走 `startPackageSearchRun` 并删除 `runPackageAgent` 旧 SSE 处理；未选项目时阻止发送并提示 `selectProjectFirst`
+- [x] 6.3 GeneralAgent 建议切换（`chooseSuggestedAgent('package_search')`）验证项目必选链路自然生效；欢迎页能力卡片点击"包"卡片后同样触发项目选项加载
+- [x] 6.4 `frontend/src/i18n/{zh,en}.ts`：重构包 Agent 项目必选相关文案
 
 ## 7. 前端：包管理（RavenManager / 详情 / 类型）
 
