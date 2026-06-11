@@ -38,6 +38,12 @@ export interface LogRecord {
   issue_description?: string
   manual_analysis?: string
   manual_analysis_updated_at?: string
+  manual_analysis_author?: {
+    id?: string
+    username?: string
+    display_name?: string
+    email?: string
+  }
   download_count: number
   download_url?: string
   file_size_human?: string

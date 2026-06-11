@@ -265,6 +265,10 @@ class LogFileInfo(BaseModel):
         None,
         description="人工分析更新时间"
     )
+    manual_analysis_author: Optional[Dict[str, Any]] = Field(
+        None,
+        description="人工分析添加人信息（username/display_name/email）"
+    )
     
     @computed_field
     @property

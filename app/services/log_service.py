@@ -426,7 +426,8 @@ class LogService(BaseCRUDService[LogRecord]):
         self,
         db: AsyncSession,
         log_id: str,
-        content: str
+        content: str,
+        author: Optional[Dict[str, Any]] = None
     ) -> LogFileInfo:
         """
         保存人工分析结果到日志元数据中
@@ -450,10 +451,15 @@ class LogService(BaseCRUDService[LogRecord]):
         if not isinstance(extra_fields, dict):
             extra_fields = {}
 
-        extra_fields["manual_analysis"] = {
+        manual_analysis_payload: Dict[str, Any] = {
             "content": content,
             "updated_at": datetime.utcnow().isoformat()
         }
+        if author:
+            manual_analysis_payload["author"] = {
+                k: v for k, v in author.items() if v is not None
+            }
+        extra_fields["manual_analysis"] = manual_analysis_payload
         metadata_dict["extra_fields"] = extra_fields
         log_record.metadata_json = json.dumps(metadata_dict, ensure_ascii=False, default=str)
         log_record.updated_at = datetime.utcnow()
@@ -1228,6 +1234,7 @@ class LogService(BaseCRUDService[LogRecord]):
         ai_analysis_task: Dict[str, Any] = {}
         manual_analysis_content: Optional[str] = None
         manual_analysis_updated_at: Optional[datetime] = None
+        manual_analysis_author: Optional[Dict[str, Any]] = None
         try:
             ef = metadata.extra_fields if metadata else {}
             logger.debug(
@@ -1257,6 +1264,9 @@ class LogService(BaseCRUDService[LogRecord]):
                 manual_analysis = metadata.extra_fields.get("manual_analysis")
                 if isinstance(manual_analysis, dict):
                     manual_analysis_content = manual_analysis.get("content") or manual_analysis.get("text")
+                    author = manual_analysis.get("author")
+                    if isinstance(author, dict) and author:
+                        manual_analysis_author = author
                     updated_at = manual_analysis.get("updated_at")
                     if isinstance(updated_at, str):
                         try:
@@ -1319,6 +1329,7 @@ class LogService(BaseCRUDService[LogRecord]):
             ai_analysis_finished_at=ai_analysis_task.get("finished_at"),
             manual_analysis=manual_analysis_content,
             manual_analysis_updated_at=manual_analysis_updated_at,
+            manual_analysis_author=manual_analysis_author,
         )
 
     async def _enrich_ai_analysis_trigger(

@@ -20,7 +20,7 @@ from fastapi.security import HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import get_db
-from app.api.users import get_request_locale
+from app.api.users import get_request_locale, get_optional_user
 from app.i18n.messages import t
 
 from app.models.log import (
@@ -1667,20 +1667,30 @@ async def save_manual_analysis(
     payload: ManualAnalysisRequest = Body(...),
     db: AsyncSession = Depends(get_db),
     locale: str = Depends(get_request_locale),
+    current_user=Depends(get_optional_user),
 ):
     """
     保存人工分析结果
     """
     try:
         request_validator.validate_log_id(log_id)
-        result = await log_service.save_manual_analysis(db, log_id, payload.content)
+        author = None
+        if current_user is not None:
+            author = {
+                "id": current_user.id,
+                "username": current_user.username,
+                "display_name": current_user.display_name,
+                "email": current_user.email,
+            }
+        result = await log_service.save_manual_analysis(db, log_id, payload.content, author=author)
         return {
             "success": True,
             "message": t("log.manual_analysis_saved", locale),
             "data": {
                 "log_id": log_id,
                 "manual_analysis": result.manual_analysis,
-                "manual_analysis_updated_at": result.manual_analysis_updated_at
+                "manual_analysis_updated_at": result.manual_analysis_updated_at,
+                "manual_analysis_author": result.manual_analysis_author
             }
         }
     except ValidationError as e:

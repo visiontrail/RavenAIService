@@ -169,6 +169,7 @@ export default {
     taskIdLabel: '任务ID: {taskId}',
     manualAnalysisTitle: '人工分析',
     lastUpdated: '最近更新：{time}',
+    manualAnalysisAuthor: '添加人：{name}',
     editManualAnalysis: '编辑人工分析',
     addManualAnalysis: '添加人工分析',
     noManualAnalysis: '暂无人工分析内容',

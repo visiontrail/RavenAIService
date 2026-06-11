@@ -25,6 +25,30 @@ export const localeHeaderInterceptor = <T extends { headers: any }>(config: T): 
   return config
 }
 
+// 读取用户登录 token（与 src/api/user.ts 的 userToken 使用相同存储键；
+// 这里不直接 import 以避免 index.ts <-> user.ts 循环依赖）
+const USER_TOKEN_KEY = 'raven_user_token'
+const readUserToken = (): string => {
+  try {
+    const stored = window.localStorage?.getItem(USER_TOKEN_KEY)
+    if (stored) return stored
+  } catch {
+    // localStorage 不可用时降级到 cookie
+  }
+  if (typeof document === 'undefined') return ''
+  const prefix = `${USER_TOKEN_KEY}=`
+  const item = document.cookie
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix))
+  if (!item) return ''
+  try {
+    return decodeURIComponent(item.slice(prefix.length))
+  } catch {
+    return item.slice(prefix.length)
+  }
+}
+
 // 创建axios实例
 const api = axios.create({
   baseURL: computedBaseURL,
@@ -148,9 +172,12 @@ export const logApi = {
     return api.get(`/api/v1/logs/${id}/analysis/status`)
   },
 
-  // 保存人工分析
+  // 保存人工分析（携带登录态，后端据此记录添加人信息）
   saveManualAnalysis: (id: string, content: string): Promise<ApiResponse<any>> => {
-    return api.post(`/api/v1/logs/${id}/manual-analysis`, { content })
+    const headers: Record<string, string> = {}
+    const token = readUserToken()
+    if (token) headers.Authorization = `Bearer ${token}`
+    return api.post(`/api/v1/logs/${id}/manual-analysis`, { content }, { headers })
   },
 
   // 更新问题描述

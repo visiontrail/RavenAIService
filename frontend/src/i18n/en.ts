@@ -170,6 +170,7 @@ export default {
     taskIdLabel: 'Task ID: {taskId}',
     manualAnalysisTitle: 'Manual analysis',
     lastUpdated: 'Last updated: {time}',
+    manualAnalysisAuthor: 'Added by: {name}',
     editManualAnalysis: 'Edit manual analysis',
     addManualAnalysis: 'Add manual analysis',
     noManualAnalysis: 'No manual analysis yet',

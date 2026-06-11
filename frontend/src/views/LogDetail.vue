@@ -364,6 +364,9 @@
           <div class="card-head">
             <h2 class="card-title">{{ t('logDetail.manualAnalysisTitle') }}</h2>
             <div class="card-head-right">
+              <span v-if="manualAnalysisAuthorLabel" class="card-subtitle">
+                {{ t('logDetail.manualAnalysisAuthor', { name: manualAnalysisAuthorLabel }) }}
+              </span>
               <span v-if="logStore.currentLog?.manual_analysis_updated_at" class="card-subtitle">
                 {{ t('logDetail.lastUpdated', { time: formatDateTime(logStore.currentLog.manual_analysis_updated_at) }) }}
               </span>
@@ -787,6 +790,15 @@ const pageTitle = computed(() => {
   return t('logDetail.crumb')
 })
 
+// 人工分析添加人展示：显示名称（或用户名），有邮箱时附加邮箱
+const manualAnalysisAuthorLabel = computed(() => {
+  const author = logStore.currentLog?.manual_analysis_author
+  if (!author) return ''
+  const name = author.display_name || author.username || ''
+  if (name && author.email) return `${name} (${author.email})`
+  return name || author.email || ''
+})
+
 const renderedManualAnalysis = computed(() => {
   const content = logStore.currentLog?.manual_analysis
   if (!content) return ''
@@ -1112,6 +1124,7 @@ const handleSaveManualAnalysis = async () => {
       logStore.currentLog.manual_analysis = content
       logStore.currentLog.manual_analysis_updated_at =
         response.data?.manual_analysis_updated_at || new Date().toISOString()
+      logStore.currentLog.manual_analysis_author = response.data?.manual_analysis_author || undefined
       ElMessage.success(t('logDetail.manualSaved'))
       manualAnalysisDialogVisible.value = false
     } else {
