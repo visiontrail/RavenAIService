@@ -226,6 +226,8 @@ Common scripts:
 
 - `ENVIRONMENT`: `development` or `production`
 - `PORT`: FastAPI port, default `8085`
+- `SERVE_FRONTEND`: whether FastAPI serves `frontend/dist` directly; keep `false` for the standard Docker setup
+- `FRONTEND_DIST_DIR`: optional frontend build directory override when `SERVE_FRONTEND=true`
 - `MAX_FILE_SIZE`: upload limit, default `1GB`
 - `SQLITE_FILE`: default development database path, default `data/logs.db`
 - `DATABASE_URL`: preferred if explicitly set

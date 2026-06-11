@@ -233,9 +233,13 @@ async def test_agent_uses_expected_tools_materializes_project_skills_and_masks_t
     with _patch_agent_common(fake_query_with_prompt_capture), \
         patch("app.agents.anthropic_client.build_options", build_options), \
         patch(
-            "app.services.skills_service.materialize_relevant_enabled_skills",
+            "app.services.skills_service.materialize_enabled_skills",
             return_value=["repo-reader"],
         ) as materialize, \
+        patch(
+            "app.services.skills_service.enabled_skill_overviews",
+            return_value=[{"name": "repo-reader", "description": "读取仓库源码文件"}],
+        ), \
         patch("app.agents.log_analysis.mcp_tools.get_mcp_server", return_value=MagicMock()):
         result = await ProjectExpertAgent().run(ctx, trace_emitter=trace_events.append)
 
@@ -250,8 +254,9 @@ async def test_agent_uses_expected_tools_materializes_project_skills_and_masks_t
     assert kwargs["allowed_tools"] == ALLOWED_TOOLS
     assert kwargs["cwd"] == ctx.temp_dir
     assert kwargs["setting_sources"] == ["project"]
-    assert "本轮命中的 Skill（必须先加载）" in kwargs["system_prompt"]
-    assert "本轮命中的 Skill（必须先加载）" in captured_prompt["prompt"]
+    assert "可用的 Skill（按需加载）" in kwargs["system_prompt"]
+    assert "可用的 Skill（按需加载）" in captured_prompt["prompt"]
+    assert "`repo-reader`：读取仓库源码文件" in captured_prompt["prompt"]
     assert '"skill": "repo-reader"' in captured_prompt["prompt"]
     assert "最终输出仍必须遵守第 5 步的围栏 JSON schema" in captured_prompt["prompt"]
 
@@ -269,7 +274,7 @@ async def test_agent_followup_reuses_existing_repo_without_clone(tmp_path):
 
     with _patch_agent_common(_fake_query_reuse_existing_repo), \
         patch("app.agents.anthropic_client.build_options", return_value=MagicMock()), \
-        patch("app.services.skills_service.materialize_relevant_enabled_skills", return_value=[]), \
+        patch("app.services.skills_service.materialize_enabled_skills", return_value=[]), \
         patch("app.agents.log_analysis.mcp_tools.get_mcp_server", return_value=MagicMock()):
         result = await ProjectExpertAgent().run(ctx)
 
@@ -287,7 +292,7 @@ async def test_agent_recovers_grounded_answer_with_unescaped_inner_quotes(tmp_pa
 
     with _patch_agent_common(_fake_query_unescaped_answer_quotes), \
         patch("app.agents.anthropic_client.build_options", return_value=MagicMock()), \
-        patch("app.services.skills_service.materialize_relevant_enabled_skills", return_value=[]), \
+        patch("app.services.skills_service.materialize_enabled_skills", return_value=[]), \
         patch("app.agents.log_analysis.mcp_tools.get_mcp_server", return_value=MagicMock()):
         result = await ProjectExpertAgent().run(ctx)
 
@@ -308,8 +313,12 @@ async def test_agent_wraps_plain_text_skill_answer(tmp_path):
     with _patch_agent_common(_fake_query_plain_skill_answer), \
         patch("app.agents.anthropic_client.build_options", return_value=MagicMock()), \
         patch(
-            "app.services.skills_service.materialize_relevant_enabled_skills",
+            "app.services.skills_service.materialize_enabled_skills",
             return_value=["skill-verifier"],
+        ), \
+        patch(
+            "app.services.skills_service.enabled_skill_overviews",
+            return_value=[{"name": "skill-verifier", "description": ""}],
         ), \
         patch("app.agents.log_analysis.mcp_tools.get_mcp_server", return_value=MagicMock()):
         result = await ProjectExpertAgent().run(ctx)

@@ -184,7 +184,7 @@ def _patch_prompts():
 
 
 def _patch_skills():
-    return patch("app.services.skills_service.materialize_relevant_enabled_skills", return_value=[])
+    return patch("app.services.skills_service.materialize_enabled_skills", return_value=[])
 
 
 # ─────────────────────── Tests ─────────────────────────────────────

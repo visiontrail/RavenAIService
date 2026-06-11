@@ -82,10 +82,9 @@ class TestProjectExpertSkillIntegration:
 
         cwd = tmp_path / "expert_cwd"
         cwd.mkdir()
-        materialized = skills_service.materialize_relevant_enabled_skills(
+        materialized = skills_service.materialize_enabled_skills(
             "project_expert",
             cwd,
-            query_text=task_data.get("question", ""),
             project_code=project_code,
         )
         assert "agent-skill" in materialized
@@ -93,15 +92,22 @@ class TestProjectExpertSkillIntegration:
         assert (cwd / ".claude" / "skills" / "agent-skill" / "SKILL.md").is_file()
         assert (cwd / ".claude" / "skills" / "project-skill" / "SKILL.md").is_file()
 
+        overviews = skills_service.enabled_skill_overviews(
+            "project_expert",
+            project_code=project_code,
+            names=materialized,
+        )
+        assert {"name": "agent-skill", "description": "Agent-level skill"} in overviews
+        assert {"name": "project-skill", "description": "Project-level skill"} in overviews
+
     def test_no_project_code_agent_only(self, setup_skills, tmp_path):
         from app.services import skills_service
 
         cwd = tmp_path / "expert_cwd_noproject"
         cwd.mkdir()
-        materialized = skills_service.materialize_relevant_enabled_skills(
+        materialized = skills_service.materialize_enabled_skills(
             "project_expert",
             cwd,
-            query_text="How does the telemetry module work?",
             project_code=None,
         )
         assert "agent-skill" in materialized
@@ -119,10 +125,9 @@ class TestLogAnalysisSkillIntegration:
 
         cwd = tmp_path / "log_cwd"
         cwd.mkdir()
-        materialized = skills_service.materialize_relevant_enabled_skills(
+        materialized = skills_service.materialize_enabled_skills(
             "log_analysis",
             cwd,
-            query_text="SMU panic log analysis",
             project_code=project_code,
         )
         assert "agent-skill" in materialized
@@ -133,10 +138,9 @@ class TestLogAnalysisSkillIntegration:
 
         cwd = tmp_path / "log_cwd_noproject"
         cwd.mkdir()
-        materialized = skills_service.materialize_relevant_enabled_skills(
+        materialized = skills_service.materialize_enabled_skills(
             "log_analysis",
             cwd,
-            query_text="SMU panic log analysis",
             project_code=None,
         )
         assert "agent-skill" in materialized

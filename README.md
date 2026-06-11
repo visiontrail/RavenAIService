@@ -224,6 +224,8 @@ RavenAIService/
 
 - `ENVIRONMENT`: `development` 或 `production`
 - `PORT`: FastAPI 端口，默认 `8085`
+- `SERVE_FRONTEND`: 是否由 FastAPI 直接托管 `frontend/dist`，标准 Docker 编排保持 `false`
+- `FRONTEND_DIST_DIR`: `SERVE_FRONTEND=true` 时可覆盖前端构建目录
 - `MAX_FILE_SIZE`: 上传大小限制，默认 `1GB`
 - `SQLITE_FILE`: 开发环境默认数据库文件，默认 `data/logs.db`
 - `DATABASE_URL`: 如果配置，将优先使用该数据库连接串

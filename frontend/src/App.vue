@@ -173,7 +173,7 @@ onUnmounted(() => {
       </main>
 
       <!-- 全局通知 -->
-      <AppNotifications />
+      <AppNotifications :class="{ 'notifications-container--admin': isAdminRoute }" />
 
       <!-- 全局加载状态 -->
       <AppLoading v-if="appStore.loading" />

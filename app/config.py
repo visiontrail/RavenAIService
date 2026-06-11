@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     # 服务配置
     host: str = "0.0.0.0"
     port: int = 8085
+    serve_frontend: bool = False
+    frontend_dist_dir: Optional[str] = None
     # 设备长链接配置（仅暴露常量，后续实现 WebSocket 心跳与超时逻辑）
     device_link_heartbeat_sec: int = 30  # 环境变量: DEVICE_LINK_HEARTBEAT_SEC
     device_link_timeout_sec: int = 120  # 环境变量: DEVICE_LINK_TIMEOUT_SEC

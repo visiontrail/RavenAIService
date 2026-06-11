@@ -71,11 +71,15 @@ const getNotificationClass = (type: string) => {
   position: fixed;
   top: 1rem;
   right: 1rem;
-  z-index: 50;
+  z-index: 80;
   width: 320px;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+.notifications-container--admin {
+  top: calc(72px + 1rem);
 }
 
 .notification {
@@ -196,7 +200,11 @@ const getNotificationClass = (type: string) => {
     right: 0.5rem;
     left: 0.5rem;
     width: auto;
-    z-index: 70;
+    z-index: 80;
+  }
+
+  .notifications-container--admin {
+    top: calc(72px + 0.75rem);
   }
 }
 </style>

@@ -6,43 +6,55 @@ import json
 from typing import Any, Dict, Iterable, List, Optional
 
 
-def build_skill_activation_prompt(
-    skill_names: Iterable[str],
+def build_skill_availability_prompt(
+    skills: Iterable[Any],
     *,
     final_output_contract: str,
 ) -> str:
-    """Build a high-priority user-prompt addendum for selected skills.
+    """Build a user-prompt addendum advertising the materialized skills.
 
-    Materializing a Skill only makes it discoverable to the SDK. The model must
-    still call the ``Skill`` tool to read the selected Skill's instructions, so
-    agents append this addendum whenever relevance selection has picked skills.
+    Materializing a Skill only makes it discoverable to the SDK. Relevance
+    judgement is left to the model at inference time: it reads the name +
+    description menu below and loads each Skill on demand via the ``Skill``
+    tool — at any point in the run, not just at the start.
+
+    *skills* accepts ``{"name", "description"}`` dicts or bare name strings.
     """
-    names: List[str] = []
+    entries: List[tuple[str, str]] = []
     seen = set()
-    for raw in skill_names:
-        name = str(raw or "").strip()
+    for raw in skills:
+        if isinstance(raw, dict):
+            name = str(raw.get("name") or "").strip()
+            description = str(raw.get("description") or "").strip()
+        else:
+            name = str(raw or "").strip()
+            description = ""
         if not name or name in seen:
             continue
         seen.add(name)
-        names.append(name)
-    if not names:
+        entries.append((name, description))
+    if not entries:
         return ""
 
-    bullets = "\n".join(f"- `{name}`" for name in names)
-    calls = "\n".join(
-        f"- `Skill` with input `{json.dumps({'skill': name}, ensure_ascii=False)}`"
-        for name in names
+    bullets = "\n".join(
+        f"- `{name}`：{description}" if description else f"- `{name}`"
+        for name, description in entries
     )
-    paths = "\n".join(f"- `{name}` files: `.claude/skills/{name}/`" for name in names)
+    example = json.dumps({"skill": entries[0][0]}, ensure_ascii=False)
+    paths = "\n".join(
+        f"- `{name}` 文件：`.claude/skills/{name}/`" for name, _ in entries
+    )
     return (
-        "\n\n## 本轮命中的 Skill（必须先加载）\n"
-        "下列 Skill 已经由后端相关性选择命中，并已物化到当前工作区：\n"
+        "\n\n## 可用的 Skill（按需加载）\n"
+        "下列 Skill 已物化到当前工作区。请根据名称与描述自行判断哪些与"
+        "当前问题或子任务相关：\n"
         f"{bullets}\n\n"
-        "在执行问题分类、读取 `task.json`、克隆仓库或作答之前，你的下一步"
-        "必须先逐个调用 `Skill` 工具加载并阅读这些 Skill：\n"
-        f"{calls}\n\n"
-        "不要因为问题看起来像常识题、源码题或日志题就跳过 Skill；一旦本节"
-        "列出了 Skill，本轮回答必须以这些 Skill 的内容为准。\n\n"
+        "使用规则：\n"
+        "- 决定使用某个 Skill 之前，必须先调用 `Skill` 工具读取它的完整"
+        f"指令（输入形如 `{example}`），再按指令执行；\n"
+        "- 推理中途发现需要某个 Skill 时，可以随时补充加载，不限于开场；\n"
+        "- 与当前请求无关的 Skill 不要加载，避免浪费上下文；\n"
+        "- 一旦加载了某个 Skill，该主题的回答必须以其内容为准。\n\n"
         "如果 Skill 指令引用了相对路径脚本、模板或资源文件，必须相对下面"
         "的物化目录解析路径；例如 `<skill-dir>/scripts/...`，不要假设这些"
         "文件位于当前工作目录根部：\n"

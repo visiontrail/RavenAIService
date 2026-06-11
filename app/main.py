@@ -23,9 +23,11 @@ from app.database import init_database, close_database
 from app.models.database import db_manager
 
 
+logger = logging.getLogger(__name__)
+
+
 def log_critical_routes(app: FastAPI) -> None:
     """在启动日志中打印关键路由，便于线上排查路由是否已生效。"""
-    logger = logging.getLogger(__name__)
     tracked_prefixes = ("/admin/releases", "/api/v1/releases")
     route_lines = []
 
@@ -39,6 +41,58 @@ def log_critical_routes(app: FastAPI) -> None:
         logger.info("关键路由已注册:\n%s", "\n".join(route_lines))
     else:
         logger.warning("未发现关键发布路由，请检查 releases 路由是否成功注册")
+
+
+def mount_frontend_static_site(app: FastAPI) -> None:
+    """按需挂载已构建的前端静态站点。"""
+    if not settings.serve_frontend:
+        logger.info("Backend frontend static serving is disabled")
+        return
+
+    default_static_dir = os.path.join(settings.base_dir, "frontend", "dist")
+    static_dir = settings.frontend_dist_dir or default_static_dir
+    static_dir = os.path.abspath(static_dir)
+
+    if not os.path.isdir(static_dir):
+        logger.warning(
+            "Frontend static serving is enabled but build directory was not found: %s",
+            static_dir,
+        )
+        return
+
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    assets_dir = os.path.join(static_dir, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        # API 与文档路由继续交给 FastAPI 自身处理。
+        if (
+            full_path.startswith("api/")
+            or full_path.startswith("raven/api/")
+            or full_path == "raven/api"
+            or full_path.startswith("docs")
+            or full_path.startswith("redoc")
+            or full_path.startswith("openapi.json")
+            or full_path == "health"
+        ):
+            raise HTTPException(status_code=404, detail="Not found")
+
+        file_path = os.path.join(static_dir, full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.isfile(index_path):
+            return FileResponse(index_path, media_type="text/html")
+
+        raise HTTPException(status_code=404, detail="Frontend not found")
+
+    logger.info("Mounted frontend at %s", static_dir)
 
 
 def setup_logging():
@@ -252,51 +306,12 @@ def create_app() -> FastAPI:
     app.include_router(releases_public_router, tags=["Releases"])
     app.include_router(packages.router, prefix="/api", tags=["软件包管理"])
     app.include_router(packages.router, prefix="/raven/api", tags=["Raven 软件包管理"])
-    
-    # 挂载前端静态站点（若已构建）
+
+    # Docker 默认由 raven-frontend/nginx 服务前端；单进程部署可设置 SERVE_FRONTEND=true。
     try:
-        static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
-        if os.path.isdir(static_dir):
-            from fastapi.staticfiles import StaticFiles
-            from fastapi.responses import FileResponse
-            from fastapi import Request, HTTPException
-            
-            # 挂载静态资源文件
-            assets_dir = os.path.join(static_dir, "assets")
-            if os.path.isdir(assets_dir):
-                app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
-            
-            # 添加SPA路由处理 - 使用更低优先级的路由
-            @app.get("/{full_path:path}", include_in_schema=False)
-            async def serve_spa(request: Request, full_path: str):
-                # 检查是否是API路径，如果是则跳过（让FastAPI的404处理）
-                if (full_path.startswith("api/") or 
-                    full_path.startswith("raven/api/") or
-                    full_path == "raven/api" or
-                    full_path.startswith("docs") or 
-                    full_path.startswith("redoc") or 
-                    full_path.startswith("openapi.json") or
-                    full_path == "health"):
-                    raise HTTPException(status_code=404, detail="Not found")
-                
-                # 尝试返回静态文件
-                file_path = os.path.join(static_dir, full_path)
-                if os.path.isfile(file_path):
-                    return FileResponse(file_path)
-                
-                # 对于前端路由，返回index.html
-                index_path = os.path.join(static_dir, "index.html")
-                if os.path.isfile(index_path):
-                    return FileResponse(index_path, media_type="text/html")
-                
-                # 如果index.html不存在，返回404
-                raise HTTPException(status_code=404, detail="Frontend not found")
-            
-            logging.getLogger(__name__).info(f"Mounted frontend at {static_dir}")
-        else:
-            logging.getLogger(__name__).warning(f"Frontend build directory not found: {static_dir}")
+        mount_frontend_static_site(app)
     except Exception as e:
-        logging.getLogger(__name__).error(f"Failed to mount frontend: {e}")
+        logger.error("Failed to mount frontend: %s", e)
     
     return app
 

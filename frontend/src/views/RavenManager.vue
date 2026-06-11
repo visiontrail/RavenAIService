@@ -171,7 +171,7 @@ const fetchProjectOptions = async () => {
   projectOptionsLoading.value = true
   try {
     const response = await projectRepoApi.listEnabled()
-    projectOptions.value = response.data?.data || []
+    projectOptions.value = Array.isArray(response?.data) ? response.data : []
   } catch (error) {
     console.error(error)
     ElMessage.error(t('raven.loadProjectsFail'))

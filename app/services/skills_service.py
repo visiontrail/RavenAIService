@@ -38,7 +38,7 @@ import shutil
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +71,6 @@ MAX_SKILL_EXTRACTED_BYTES = 200 * 1024 * 1024
 MAX_SKILL_FILE_COUNT = 1000
 
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
-_ASCII_TERM_RE = re.compile(r"[a-z0-9][a-z0-9_-]{1,}", re.IGNORECASE)
-_CJK_TERM_RE = re.compile(r"[一-鿿]{2,}")
 _REGISTRY_FILENAME = "_registry.json"
 _STORE_DIRNAME = "store"
 
@@ -369,57 +367,6 @@ def _internal_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
         "updated_at": entry.get("updated_at"),
         "dir_name": entry.get("dir_name") or entry["name"],
     }
-
-
-# ─────────────────────── Relevance scoring ────────────────────────
-
-def _extract_terms(text: str) -> Set[str]:
-    lowered = (text or "").lower()
-    terms: Set[str] = set()
-    for term in _ASCII_TERM_RE.findall(lowered):
-        cleaned = term.strip("_-")
-        if len(cleaned) >= 2:
-            terms.add(cleaned)
-            for part in re.split(r"[_-]+", cleaned):
-                if len(part) >= 2:
-                    terms.add(part)
-    for term in _CJK_TERM_RE.findall(lowered):
-        terms.add(term)
-        if len(term) > 2:
-            for idx in range(0, len(term) - 1):
-                terms.add(term[idx:idx + 2])
-    return terms
-
-
-def _read_skill_body(skill_dir: Path, max_chars: int = 12000) -> str:
-    try:
-        text = (skill_dir / "SKILL.md").read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-    text = _FRONTMATTER_RE.sub("", text, count=1)
-    return text[:max_chars]
-
-
-def _score_skill_for_query(
-    *,
-    entry: Dict[str, Any],
-    skill_dir: Path,
-    query_terms: Set[str],
-) -> int:
-    if not query_terms:
-        return 0
-    name_terms = _extract_terms(str(entry.get("name") or ""))
-    description_terms = _extract_terms(str(entry.get("description") or ""))
-    body_terms = _extract_terms(_read_skill_body(skill_dir))
-    score = 0
-    for term in query_terms:
-        if term in name_terms:
-            score += 6
-        if term in description_terms:
-            score += 4
-        if term in body_terms:
-            score += 1
-    return score
 
 
 # ─────────────────────── Agent Public API ─────────────────────────
@@ -806,79 +753,38 @@ def _project_enabled_entries(project_code: str) -> List[Dict[str, Any]]:
     return _base_enabled_entries(_project_root(project_code))
 
 
-# ─────────────────────── Selection & Materialization ──────────────
+# ─────────────────────── Overviews & Materialization ──────────────
 
-def select_relevant_skill_names(
+def enabled_skill_overviews(
     agent_key: str,
     *,
-    query_text: str,
-    max_skills: int = 5,
     project_code: Optional[str] = None,
-) -> List[Tuple[str, str]]:
-    """Select the most relevant skills from the combined agent + project pool.
+    names: Optional[Iterable[str]] = None,
+) -> List[Dict[str, str]]:
+    """Return name/description pairs for the combined enabled skill pool.
 
-    Returns list of (source, name) tuples where source is ``"agent"`` or
-    ``"project"``.  When *project_code* is ``None``, only agent skills are
-    considered (backward-compatible).
+    Mirrors the materialization order (agent skills first, project skills
+    override on name conflict) so agents can advertise exactly what was
+    materialized. ``names`` optionally restricts the result to a subset.
     """
-    # Build candidate pool: (source, entry, skill_dir)
-    candidates: List[Tuple[str, Dict[str, Any], Path]] = []
+    wanted = {str(n) for n in names} if names is not None else None
+    order: List[str] = []
+    merged: Dict[str, str] = {}
+
+    def _add(entry: Dict[str, Any]) -> None:
+        name = str(entry["name"])
+        if wanted is not None and name not in wanted:
+            return
+        if name not in merged:
+            order.append(name)
+        merged[name] = str(entry.get("description") or "")
+
     for entry in _enabled_entries(agent_key):
-        candidates.append(("agent", entry, _skill_dir_for_entry(agent_key, entry)))
+        _add(entry)
     if project_code:
         for entry in _project_enabled_entries(project_code):
-            candidates.append(("project", entry, _base_skill_dir_for_entry(_project_root(project_code), entry)))
-
-    if not candidates:
-        return []
-
-    def _dedup_by_name(
-        items: List[Tuple[str, Dict[str, Any]]],
-    ) -> List[Tuple[str, str]]:
-        seen: Dict[str, str] = {}
-        for source, entry in items:
-            name = str(entry["name"])
-            if name not in seen or source == "project":
-                seen[name] = source
-        return [(src, n) for n, src in seen.items()]
-
-    query_terms = _extract_terms(query_text)
-    if not query_terms:
-        return _dedup_by_name([(src, e) for src, e, _ in candidates])
-
-    scored: List[Tuple[int, str, Dict[str, Any]]] = []
-    for source, entry, skill_dir in candidates:
-        score = _score_skill_for_query(
-            entry=entry,
-            skill_dir=skill_dir,
-            query_terms=query_terms,
-        )
-        scored.append((score, source, entry))
-
-    scored.sort(key=lambda item: (-item[0], str(item[2].get("name") or "")))
-    best = scored[0][0]
-    if best <= 0:
-        logger.info(
-            "skill relevance: no match for agent=%s query_terms=%s; loading all enabled skills",
-            agent_key,
-            sorted(query_terms)[:20],
-        )
-        return _dedup_by_name([(src, e) for _, src, e in scored])
-
-    threshold = max(2, int(best * 0.65))
-    above: List[Tuple[str, Dict[str, Any]]] = [
-        (source, entry)
-        for score, source, entry in scored
-        if score >= threshold
-    ]
-    selected = _dedup_by_name(above)[:max_skills]
-    logger.info(
-        "skill relevance selected for agent=%s: %s (best_score=%s)",
-        agent_key,
-        ", ".join(f"{s}:{n}" for s, n in selected) if selected else "-",
-        best,
-    )
-    return selected
+            _add(entry)
+    return [{"name": name, "description": merged[name]} for name in order]
 
 
 def materialize_enabled_skills(
@@ -933,25 +839,3 @@ def materialize_enabled_skills(
             _link_skill(name, _base_skill_dir_for_entry(_project_root(project_code), entry))
 
     return materialized
-
-
-def materialize_relevant_enabled_skills(
-    agent_key: str,
-    target_dir: str | Path,
-    *,
-    query_text: str,
-    max_skills: int = 5,
-    project_code: Optional[str] = None,
-) -> List[str]:
-    selected = select_relevant_skill_names(
-        agent_key,
-        query_text=query_text,
-        max_skills=max_skills,
-        project_code=project_code,
-    )
-    if not selected:
-        return []
-    names = [name for _, name in selected]
-    return materialize_enabled_skills(
-        agent_key, target_dir, skill_names=names, project_code=project_code,
-    )

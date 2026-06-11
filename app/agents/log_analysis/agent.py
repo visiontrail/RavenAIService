@@ -75,29 +75,6 @@ AGENT_KEY = "log_analysis"
 TraceEmitter = Callable[[AgentTraceEvent], None]
 
 
-def _build_skill_relevance_query(
-    ctx: WorkspaceContext,
-    task_data: Dict[str, Any],
-) -> str:
-    """Build the text used to select request-relevant user skills.
-
-    Keep this focused on the user's actual question and hints. Generic fields
-    such as ``log_type=oam_antenna`` are intentionally excluded because they can
-    over-match broad domain skills.
-    """
-    parts = [
-        ctx.metadata.get("question"),
-        task_data.get("question"),
-        task_data.get("hints"),
-    ]
-    issue_info = ctx.metadata.get("issue_info")
-    if isinstance(issue_info, dict):
-        parts.append(issue_info.get("issue_description"))
-        parts.append(issue_info.get("service_name"))
-        parts.append(issue_info.get("environment_info"))
-    return "\n".join(str(part) for part in parts if part)
-
-
 def _parse_partial_array(text: str, start: int, decoder: json.JSONDecoder) -> tuple[List[Any], int]:
     """Parse completed items from a possibly truncated JSON array."""
     items: List[Any] = []
@@ -1083,22 +1060,29 @@ class LogAnalysisAgent:
                 provider,
             )
 
-        # 物化本次请求相关的 Skill 到 cwd/.claude/skills/<name>/，配合
+        # 物化全部启用的 Skill 到 cwd/.claude/skills/<name>/，配合
         # setting_sources=["project"] 让 Claude Agent SDK 按官方约定发现 Skill。
+        # 相关性判定交给模型在推理中完成：提示词只给出 name+description 菜单，
+        # 模型按需调用 Skill 工具加载，后端不再预筛候选集。
         project_code: Optional[str] = None
         if isinstance(repo_info, dict):
             project_code = repo_info.get("project_code") or None
 
         materialized_skills: List[str] = []
+        skill_overviews: List[Dict[str, str]] = []
         try:
             from app.services import skills_service
-            materialized_skills = skills_service.materialize_relevant_enabled_skills(
+            materialized_skills = skills_service.materialize_enabled_skills(
                 AGENT_KEY,
                 ctx.temp_dir,
-                query_text=_build_skill_relevance_query(ctx, task_data),
                 project_code=project_code,
             )
             if materialized_skills:
+                skill_overviews = skills_service.enabled_skill_overviews(
+                    AGENT_KEY,
+                    project_code=project_code,
+                    names=materialized_skills,
+                )
                 logger.info(
                     "LogAnalysisAgent: materialized %d skill(s): %s",
                     len(materialized_skills),
@@ -1108,14 +1092,14 @@ class LogAnalysisAgent:
             logger.warning("LogAnalysisAgent: failed to materialize skills: %s", exc)
 
         if materialized_skills:
-            from app.agents.skill_prompting import build_skill_activation_prompt
+            from app.agents.skill_prompting import build_skill_availability_prompt
 
-            skill_activation_prompt = build_skill_activation_prompt(
-                materialized_skills,
+            skill_availability_prompt = build_skill_availability_prompt(
+                skill_overviews or materialized_skills,
                 final_output_contract="第 6 步的围栏 JSON schema",
             )
-            system_prompt += skill_activation_prompt
-            user_prompt += skill_activation_prompt
+            system_prompt += skill_availability_prompt
+            user_prompt += skill_availability_prompt
 
         user_prompt += "\n\nOutput language requirement:\n" + language_directive
 

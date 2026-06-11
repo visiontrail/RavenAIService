@@ -191,7 +191,9 @@ def test_materialize_enabled_only(isolated_skills_dir, tmp_path):
     assert not (cwd / ".claude" / "skills" / "archived-skill").exists()
 
 
-def test_select_relevant_skills_prefers_request_specific_match(isolated_skills_dir, tmp_path):
+def test_materialize_all_enabled_skills_regardless_of_question(isolated_skills_dir, tmp_path):
+    """Dynamic loading model: every enabled skill is materialized; the model
+    decides at inference time which ones to load via the Skill tool."""
     from app.services import skills_service
 
     smu_md = (
@@ -220,25 +222,28 @@ def test_select_relevant_skills_prefers_request_specific_match(isolated_skills_d
         source_filename="antenna.zip",
     )
 
-    selected = skills_service.select_relevant_skill_names(
-        "log_analysis",
-        query_text="从SMU通过RS422发送文件到基带失败，请帮忙分析原因",
-    )
-    assert selected == [("agent", "smu-baseband-interfaces")]
-
-    cwd = tmp_path / "agent_cwd_relevant"
+    cwd = tmp_path / "agent_cwd_all"
     cwd.mkdir()
-    materialized = skills_service.materialize_relevant_enabled_skills(
-        "log_analysis",
-        cwd,
-        query_text="从SMU通过RS422发送文件到基带失败，请帮忙分析原因",
-    )
-    assert materialized == ["smu-baseband-interfaces"]
+    materialized = skills_service.materialize_enabled_skills("log_analysis", cwd)
+    assert sorted(materialized) == [
+        "ka-phased-array-antenna",
+        "smu-baseband-interfaces",
+    ]
     assert (cwd / ".claude" / "skills" / "smu-baseband-interfaces" / "SKILL.md").is_file()
-    assert not (cwd / ".claude" / "skills" / "ka-phased-array-antenna").exists()
+    assert (cwd / ".claude" / "skills" / "ka-phased-array-antenna" / "SKILL.md").is_file()
+
+    overviews = skills_service.enabled_skill_overviews("log_analysis")
+    assert {
+        "name": "smu-baseband-interfaces",
+        "description": "SMU RS422 baseband file transfer protocol analysis",
+    } in overviews
+    assert {
+        "name": "ka-phased-array-antenna",
+        "description": "KA phased array antenna calibration and beam logs",
+    } in overviews
 
 
-def test_folded_yaml_description_is_indexed_for_relevance(isolated_skills_dir):
+def test_folded_yaml_description_surfaces_in_overviews(isolated_skills_dir):
     from app.services import skills_service
 
     verifier_md = (
@@ -259,15 +264,16 @@ def test_folded_yaml_description_is_indexed_for_relevance(isolated_skills_dir):
     )
     assert "橙子是什么颜色" in entry["description"]
 
-    selected = skills_service.select_relevant_skill_names(
-        "project_expert",
-        query_text="请告诉我橙子是什么颜色，然后 1+1 等于多少？",
-        project_code="sat1",
+    overviews = skills_service.enabled_skill_overviews(
+        "project_expert", project_code="sat1"
     )
-    assert selected == [("project", "skill-verifier")]
+    assert any(
+        o["name"] == "skill-verifier" and "橙子是什么颜色" in o["description"]
+        for o in overviews
+    )
 
 
-def test_xlsx_skill_with_runtime_scripts_can_be_selected_and_materialized(
+def test_xlsx_skill_with_runtime_scripts_is_materialized_with_scripts(
     isolated_skills_dir, tmp_path
 ):
     from app.services import skills_service
@@ -288,19 +294,9 @@ def test_xlsx_skill_with_runtime_scripts_can_be_selected_and_materialized(
     assert entry["name"] == "xlsx"
     assert entry["enabled"] is True
 
-    selected = skills_service.select_relevant_skill_names(
-        "project_expert",
-        query_text="请解析这个 Excel 文件 test.xlsx，并汇总每个 sheet 的数据",
-    )
-    assert selected == [("agent", "xlsx")]
-
     cwd = tmp_path / "agent_cwd_xlsx"
     cwd.mkdir()
-    materialized = skills_service.materialize_relevant_enabled_skills(
-        "project_expert",
-        cwd,
-        query_text="请解析这个 Excel 文件 test.xlsx，并汇总每个 sheet 的数据",
-    )
+    materialized = skills_service.materialize_enabled_skills("project_expert", cwd)
     assert materialized == ["xlsx"]
     skill_dir = cwd / ".claude" / "skills" / "xlsx"
     assert (skill_dir / "SKILL.md").is_file()
@@ -483,18 +479,18 @@ class TestUnifiedMaterialization:
         assert materialized == ["log-grep-helper"]
         assert (cwd / ".claude" / "skills" / "log-grep-helper" / "SKILL.md").is_file()
 
-    def test_select_backward_compat_project_code_none(self, isolated_skills_dir):
+    def test_overviews_backward_compat_project_code_none(self, isolated_skills_dir):
         from app.services import skills_service
         zip_bytes = _build_zip({"SKILL.md": _SKILL_MD})
         skills_service.install_skill(
             "log_analysis", zip_bytes=zip_bytes, source_filename="a.zip"
         )
-        selected = skills_service.select_relevant_skill_names(
-            "log_analysis", query_text="grep panic logs", project_code=None
+        overviews = skills_service.enabled_skill_overviews(
+            "log_analysis", project_code=None
         )
-        assert all(src == "agent" for src, _ in selected)
+        assert [o["name"] for o in overviews] == ["log-grep-helper"]
 
-    def test_merged_pool_includes_project_skills(self, isolated_skills_dir, tmp_path):
+    def test_overviews_merged_pool_includes_project_skills(self, isolated_skills_dir):
         from app.services import skills_service
         agent_zip = _build_zip({"SKILL.md": _SKILL_MD})
         skills_service.install_skill(
@@ -505,12 +501,10 @@ class TestUnifiedMaterialization:
             "sat1", zip_bytes=proj_zip, source_filename="proj.zip"
         )
 
-        selected = skills_service.select_relevant_skill_names(
-            "log_analysis",
-            query_text="satellite telemetry panic logs",
-            project_code="sat1",
+        overviews = skills_service.enabled_skill_overviews(
+            "log_analysis", project_code="sat1"
         )
-        names = [n for _, n in selected]
+        names = [o["name"] for o in overviews]
         assert "log-grep-helper" in names
         assert "proj-helper" in names
 
@@ -574,36 +568,40 @@ class TestUnifiedMaterialization:
         skill_md = (cwd / ".claude" / "skills" / "shared-skill" / "SKILL.md").read_text()
         assert "Project body." in skill_md
 
-    def test_select_name_conflict_project_preferred(self, isolated_skills_dir):
-        """In selection, project skill wins dedup over agent on name conflict."""
+    def test_overviews_name_conflict_project_preferred(self, isolated_skills_dir):
+        """In overviews, the project skill's description wins on name conflict."""
         from app.services import skills_service
-        shared_md = (
+        agent_md = (
             "---\n"
             "name: shared-skill\n"
-            "description: satellite telemetry helper\n"
+            "description: agent version\n"
+            "---\n"
+            "body\n"
+        ).encode("utf-8")
+        proj_md = (
+            "---\n"
+            "name: shared-skill\n"
+            "description: project version\n"
             "---\n"
             "body\n"
         ).encode("utf-8")
 
         skills_service.install_skill(
             "log_analysis",
-            zip_bytes=_build_zip({"SKILL.md": shared_md}),
+            zip_bytes=_build_zip({"SKILL.md": agent_md}),
             source_filename="agent.zip",
         )
         skills_service.install_project_skill(
             "sat1",
-            zip_bytes=_build_zip({"SKILL.md": shared_md}),
+            zip_bytes=_build_zip({"SKILL.md": proj_md}),
             source_filename="proj.zip",
         )
 
-        selected = skills_service.select_relevant_skill_names(
-            "log_analysis",
-            query_text="satellite telemetry",
-            project_code="sat1",
+        overviews = skills_service.enabled_skill_overviews(
+            "log_analysis", project_code="sat1"
         )
-        assert ("project", "shared-skill") in selected
-        names = [n for _, n in selected]
-        assert names.count("shared-skill") == 1
+        matches = [o for o in overviews if o["name"] == "shared-skill"]
+        assert matches == [{"name": "shared-skill", "description": "project version"}]
 
     def test_disabled_project_skill_excluded(self, isolated_skills_dir, tmp_path):
         from app.services import skills_service
@@ -620,20 +618,23 @@ class TestUnifiedMaterialization:
         )
         assert "proj-helper" not in materialized
 
-    def test_materialize_relevant_with_project(self, isolated_skills_dir, tmp_path):
+    def test_overviews_names_filter(self, isolated_skills_dir):
         from app.services import skills_service
+        agent_zip = _build_zip({"SKILL.md": _SKILL_MD})
+        skills_service.install_skill(
+            "log_analysis", zip_bytes=agent_zip, source_filename="agent.zip"
+        )
         proj_zip = _build_zip({"SKILL.md": _PROJECT_SKILL_MD})
         skills_service.install_project_skill(
-            "sat1", zip_bytes=proj_zip, source_filename="a.zip"
+            "sat1", zip_bytes=proj_zip, source_filename="proj.zip"
         )
 
-        cwd = tmp_path / "cwd_relevant"
-        cwd.mkdir()
-        materialized = skills_service.materialize_relevant_enabled_skills(
-            "log_analysis",
-            cwd,
-            query_text="satellite telemetry analysis",
-            project_code="sat1",
+        overviews = skills_service.enabled_skill_overviews(
+            "log_analysis", project_code="sat1", names=["proj-helper"]
         )
-        assert "proj-helper" in materialized
-        assert (cwd / ".claude" / "skills" / "proj-helper" / "SKILL.md").is_file()
+        assert overviews == [
+            {
+                "name": "proj-helper",
+                "description": "Project-level helper for satellite telemetry",
+            }
+        ]

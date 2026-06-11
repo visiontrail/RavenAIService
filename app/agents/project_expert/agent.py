@@ -80,23 +80,6 @@ AGENT_KEY = "project_expert"
 TraceEmitter = Callable[[AgentTraceEvent], None]
 
 
-def _build_skill_relevance_query(ctx: WorkspaceContext, task_data: Dict[str, Any]) -> str:
-    """Build the text used to select request-relevant user skills.
-
-    Focused on the user's actual question / hints / selected project name.
-    """
-    repo_info = task_data.get("repo_info") if isinstance(task_data, dict) else None
-    parts = [
-        ctx.metadata.get("question"),
-        task_data.get("question"),
-        task_data.get("hints"),
-    ]
-    if isinstance(repo_info, dict):
-        parts.append(repo_info.get("project_name"))
-        parts.append(repo_info.get("project_code"))
-    return "\n".join(str(part) for part in parts if part)
-
-
 def _empty_result(model: str, *, status: str, error_kind: Optional[str], **extra: Any) -> Dict[str, Any]:
     base = {
         "engine": "claude-agent-sdk",
@@ -139,7 +122,7 @@ class ProjectExpertAgent:
         from app.agents.project_expert.prompts import get_prompts, render_user_prompt
         from app.agents.skill_prompting import (
             build_plain_text_skill_answer_fields,
-            build_skill_activation_prompt,
+            build_skill_availability_prompt,
         )
         from app.config import settings
 
@@ -201,23 +184,30 @@ class ProjectExpertAgent:
                 provider,
             )
 
-        # 物化本次请求相关的 Skill 到 cwd/.claude/skills/<name>/，配合
+        # 物化全部启用的 Skill 到 cwd/.claude/skills/<name>/，配合
         # setting_sources=["project"] 让 SDK 按官方约定发现 Skill。
+        # 相关性判定交给模型在推理中完成：提示词只给出 name+description 菜单，
+        # 模型按需调用 Skill 工具加载，后端不再预筛候选集。
         repo_info = task_data.get("repo_info") if isinstance(task_data, dict) else None
         project_code: Optional[str] = None
         if isinstance(repo_info, dict):
             project_code = repo_info.get("project_code") or None
 
         materialized_skills: List[str] = []
+        skill_overviews: List[Dict[str, str]] = []
         try:
             from app.services import skills_service
-            materialized_skills = skills_service.materialize_relevant_enabled_skills(
+            materialized_skills = skills_service.materialize_enabled_skills(
                 AGENT_KEY,
                 ctx.temp_dir,
-                query_text=_build_skill_relevance_query(ctx, task_data),
                 project_code=project_code,
             )
             if materialized_skills:
+                skill_overviews = skills_service.enabled_skill_overviews(
+                    AGENT_KEY,
+                    project_code=project_code,
+                    names=materialized_skills,
+                )
                 logger.info(
                     "ProjectExpertAgent: materialized %d skill(s): %s",
                     len(materialized_skills),
@@ -227,12 +217,12 @@ class ProjectExpertAgent:
             logger.warning("ProjectExpertAgent: failed to materialize skills: %s", exc)
 
         if materialized_skills:
-            skill_activation_prompt = build_skill_activation_prompt(
-                materialized_skills,
+            skill_availability_prompt = build_skill_availability_prompt(
+                skill_overviews or materialized_skills,
                 final_output_contract="第 5 步的围栏 JSON schema",
             )
-            system_prompt += skill_activation_prompt
-            user_prompt += skill_activation_prompt
+            system_prompt += skill_availability_prompt
+            user_prompt += skill_availability_prompt
 
         setting_sources = ["project"] if materialized_skills else None
 
