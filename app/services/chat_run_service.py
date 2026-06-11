@@ -21,7 +21,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException, status
 from fastapi.encoders import jsonable_encoder
@@ -92,6 +92,10 @@ class ChatRunJob:
     pending_permissions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     task: Optional[asyncio.Task] = None
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+    # External-driver runs (log_analysis / project_expert / package_search)
+    # have ``task is None``; cancelling them must go through the owning
+    # service's own job (its threading.Event), which this callback triggers.
+    cancel_callback: Optional[Callable[[], None]] = None
     answer: str = ""
     model: str = ""
     error: Optional[str] = None
@@ -1043,6 +1047,7 @@ class ChatRunService:
         request_payload: Dict[str, Any],
         events_ref: List[Dict[str, Any]],
         trace_events_ref: List[Dict[str, Any]],
+        cancel_callback: Optional[Callable[[], None]] = None,
     ) -> ChatRunJob:
         """Register a run whose execution is driven by another service.
 
@@ -1081,6 +1086,7 @@ class ChatRunService:
             user_message=user_message,
             request_payload=request_payload,
         )
+        job.cancel_callback = cancel_callback
         # Share buffer references with the external driver so live subscribers
         # of either side see the same event stream.
         job.events = events_ref
@@ -1130,6 +1136,18 @@ class ChatRunService:
         if job.task is not None and not job.task.done():
             job.task.cancel()
         job.cancel_event.set()
+        # External-driver runs have no asyncio.Task here — propagate the
+        # cancel into the owning service (sets its threading.Event so the
+        # agent loop exits between SDK messages).
+        if job.cancel_callback is not None:
+            try:
+                job.cancel_callback()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "chat_run: external cancel callback failed run_id=%s: %s",
+                    run_id,
+                    exc,
+                )
         return True
 
     def evict_finished_jobs(self) -> None:

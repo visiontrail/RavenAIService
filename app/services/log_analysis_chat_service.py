@@ -284,6 +284,15 @@ class LogAnalysisChatService:
                 locale=effective_locale,
             )
             self._jobs[effective_session_id] = job
+            # Announce run_id to subscribers (replayed by _subscribe) so the
+            # frontend can latch it and target the unified cancel endpoint.
+            job.events.append(
+                {
+                    "event": "session",
+                    "session_id": effective_session_id,
+                    "run_id": run_id,
+                }
+            )
             # Project the job into the unified chat_agent_runs lifecycle so
             # the active-run endpoint and sidebar overlay can show it.
             await self._register_chat_run(job, ctx)
@@ -486,6 +495,7 @@ class LogAnalysisChatService:
                 request_payload=request_payload,
                 events_ref=job.events,
                 trace_events_ref=job.trace_events,
+                cancel_callback=lambda sid=job.session_id: self.cancel(sid),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(

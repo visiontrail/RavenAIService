@@ -301,6 +301,15 @@ class PackageSearchChatService:
                 project_repo_id=context_meta.get("project_repo_id"),
             )
             self._jobs[effective_session_id] = job
+            # Announce run_id to subscribers (replayed by _subscribe) so the
+            # frontend can latch it and target the unified cancel endpoint.
+            job.events.append(
+                {
+                    "event": "session",
+                    "session_id": effective_session_id,
+                    "run_id": run_id,
+                }
+            )
             await self._register_chat_run(job, ctx)
             job.task = asyncio.create_task(self._run_job_async(job, ctx))
 
@@ -414,6 +423,7 @@ class PackageSearchChatService:
                 request_payload=request_payload,
                 events_ref=job.events,
                 trace_events_ref=job.trace_events,
+                cancel_callback=lambda sid=job.session_id: self.cancel(sid),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(

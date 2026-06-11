@@ -6,27 +6,50 @@ import type { ChatSessionSummary } from '@/types'
 export const useChatSessionStore = defineStore('chatSession', () => {
   const sessions = ref<ChatSessionSummary[]>([])
   const selectedSessionId = ref<string | null>(null)
+  /** Blocking load: list is empty and the sidebar shows a placeholder. */
   const loading = ref(false)
+  /** Background refresh: the current list stays rendered while we refetch. */
+  const refreshing = ref(false)
   const newChatToken = ref(0)
   const selectSessionToken = ref(0)
+  /** Monotonic guard so out-of-order responses can't overwrite newer state. */
+  let loadSeq = 0
 
-  const load = async () => {
-    loading.value = true
+  /**
+   * Stale-while-revalidate: once we have a list, subsequent loads (status
+   * polling, post-send refresh, manual refresh) run as background refreshes —
+   * the old list stays on screen instead of flashing the loading placeholder,
+   * and a failed refresh keeps the stale list rather than blanking it.
+   */
+  const load = async (opts: { background?: boolean } = {}) => {
+    const background = opts.background ?? sessions.value.length > 0
+    const seq = ++loadSeq
+    if (background) refreshing.value = true
+    else loading.value = true
     try {
       const resp = await userApi.listSessions()
+      if (seq !== loadSeq) return
       sessions.value = resp?.success && resp.data ? resp.data : []
     } catch (error) {
-      console.error('加载会话失败', error)
-      sessions.value = []
+      console.error('Failed to load chat sessions', error)
+      // Only clear when this was a blocking load — a failed background
+      // refresh keeps showing the stale list.
+      if (seq === loadSeq && !background) sessions.value = []
       throw error
     } finally {
-      loading.value = false
+      if (seq === loadSeq) {
+        loading.value = false
+        refreshing.value = false
+      }
     }
   }
 
   const reset = () => {
+    loadSeq += 1
     sessions.value = []
     selectedSessionId.value = null
+    loading.value = false
+    refreshing.value = false
   }
 
   const selectSession = (id: string) => {
@@ -108,6 +131,7 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     sessions,
     selectedSessionId,
     loading,
+    refreshing,
     newChatToken,
     selectSessionToken,
     currentTitle,

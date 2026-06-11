@@ -48,7 +48,11 @@ const schedulePoll = () => {
     // Only refresh when at least one session is in running state — avoids
     // unnecessary polling for idle users.
     if (runningSessionIds.value.size === 0) return
-    sessionStore.load().catch(() => { /* swallow; overlay still works */ })
+    // Skip when the tab is hidden or a request is still in flight (slow
+    // networks) — prevents request pile-up.
+    if (document.visibilityState === 'hidden') return
+    if (sessionStore.loading || sessionStore.refreshing) return
+    sessionStore.load({ background: true }).catch(() => { /* swallow; overlay still works */ })
   }, 5000)
 }
 const stopPoll = () => {
@@ -473,11 +477,11 @@ const handleUserLogout = () => {
           <button
             v-if="isLoggedIn"
             class="rw-refresh-btn"
-            :disabled="sessionStore.loading"
+            :disabled="sessionStore.loading || sessionStore.refreshing"
             @click="reloadSessions"
             :title="t('common.refresh')"
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" :class="{ spin: sessionStore.loading }"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" :class="{ spin: sessionStore.loading || sessionStore.refreshing }"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
           </button>
         </div>
 
@@ -490,7 +494,9 @@ const handleUserLogout = () => {
             </div>
           </div>
         </template>
-        <template v-else-if="sessionStore.loading">
+        <!-- Placeholder only when we truly have nothing to show; background
+             refreshes keep the existing list rendered (stale-while-revalidate). -->
+        <template v-else-if="sessionStore.loading && !sessionStore.sessions.length">
           <div class="rw-empty">{{ t('workbench.sessionsLoading') }}</div>
         </template>
         <template v-else-if="!sessionStore.sessions.length">
