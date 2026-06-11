@@ -2,7 +2,7 @@
 
 ### Requirement: Project repository registry persists project_code → repo URL mappings in DB
 
-The system SHALL provide a `project_repo` database table (managed via alembic migration) with at minimum the columns: `id` (PK), `project_code` (unique, not null), `project_name` (not null), `repo_url` (not null), `default_branch` (not null, default `"main"`), `git_token` (nullable; per-repo override of the global `code_repo_git_token`), `description` (nullable), `enabled` (boolean, default true), `created_at`, `updated_at`.
+The system SHALL provide a `project_repo` database table (managed via alembic migration) with at minimum the columns: `id` (PK), `project_code` (unique, not null), `project_name` (not null), `repo_url` (not null, but MAY be an empty string for entries used only for log classification with no associated Git repository), `default_branch` (not null, default `"main"`), `git_token` (nullable; per-repo override of the global `code_repo_git_token`), `description` (nullable), `enabled` (boolean, default true), `created_at`, `updated_at`.
 
 #### Scenario: Migration creates the table
 
@@ -15,6 +15,34 @@ The system SHALL provide a `project_repo` database table (managed via alembic mi
 - **WHEN** the alembic migration runs and `settings.code_repo_oam_url` is non-empty
 - **THEN** a row is inserted with `project_code == "oam_antenna"`, `project_name == "OAM Antenna"`, `repo_url == settings.code_repo_oam_url`
 - **AND** the same applies to `code_repo_stack_url` with `project_code == "stack"`
+
+#### Scenario: Migration seeds the "full" project entry
+
+- **WHEN** the log-type-to-project migration runs
+- **THEN** a `project_repo` entry exists with `project_code == "full"`, `project_name == "Full Log"`, `repo_url == ""`
+- **AND** that entry has `enabled == true`
+
+#### Scenario: Project entry without a repo URL
+
+- **WHEN** a project entry has `repo_url == ""`
+- **THEN** the entry is valid and usable for log classification
+- **AND** code-search tools report "no repository configured" if the AI Agent attempts repo-based operations on it
+
+### Requirement: Admin cannot delete project_repo entries with associated logs without confirmation
+
+The admin `DELETE /admin/project-repos/{id}` endpoint SHALL check whether any `LogRecord` rows reference the project. If references exist, the endpoint SHALL return HTTP 409 with the count of affected logs, and SHALL require the `force=true` query parameter to proceed. When force-deleted, the deletion proceeds and affected logs' `project_id` is set to NULL (via the `ON DELETE SET NULL` foreign key).
+
+#### Scenario: Delete a project with associated logs without force
+
+- **WHEN** an admin deletes a `project_repo` entry referenced by 15 `LogRecord` rows
+- **AND** the `force` parameter is unset or `false`
+- **THEN** the API returns HTTP 409 with body `{"affected_logs": 15, "message": "该项目有关联的日志记录。使用 force=true 进行删除。"}`
+
+#### Scenario: Force-delete a project with associated logs
+
+- **WHEN** an admin deletes a `project_repo` entry referenced by 15 `LogRecord` rows with `force=true`
+- **THEN** the `project_repo` entry is deleted
+- **AND** all 15 `LogRecord` rows have `project_id` set to NULL
 
 ### Requirement: Admin endpoints provide CRUD and connectivity testing
 
