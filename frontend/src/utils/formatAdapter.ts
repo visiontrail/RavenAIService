@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 /**
  * AI分析结果格式适配器
  * 支持处理各种可能的输出格式，确保完美呈现表格、列表等复杂内容
@@ -103,7 +104,7 @@ export class FormatAdapter {
         <div class="code-block-container">
           <div class="code-block-header">
             <span class="code-language">${lang}</span>
-            <button class="copy-code-btn" onclick="copyCode(this)">复制</button>
+            <button class="copy-code-btn" onclick="copyCode(this)">${i18n.global.t('adapter.copy')}</button>
           </div>
           <pre class="code-block"><code class="language-${lang}">${this.escapeHtml(token.text)}</code></pre>
         </div>
@@ -174,7 +175,7 @@ export class FormatAdapter {
       return this.adaptFromGenericFormat(rawResult)
       
     } catch (error) {
-      console.error('格式适配失败:', error)
+      console.error('Format adapter failed:', error)
       return this.createErrorResult(rawResult, error as Error)
     }
   }
@@ -235,11 +236,11 @@ export class FormatAdapter {
     
     return {
       id: this.generateId(),
-      query: data.query || '日志分析',
+      query: data.query || i18n.global.t('adapter.analysisQueryFallback'),
       status: 'completed',
       timestamp,
       plan: {
-        content: '执行计划已完成',
+        content: i18n.global.t('adapter.planCompleted'),
         steps: [],
         total_steps: 1,
         completed_steps: 1
@@ -281,13 +282,13 @@ export class FormatAdapter {
     // 构建acts
     const acts: ActResult[] = outputs.map((output: any, index: number) => ({
       step_id: `step_${index + 1}`,
-      title: steps[index]?.title || `步骤 ${index + 1}`,
+      title: steps[index]?.title || i18n.global.t('adapter.stepFallback', { index: index + 1 }),
       status: 'completed',
       timestamp,
       thought: {
-        reasoning: output.reasoning || '执行分析步骤',
-        approach: output.approach || '使用工具进行分析',
-        expected_outcome: output.expected || '获取分析结果'
+        reasoning: output.reasoning || i18n.global.t('adapter.reasoningFallback'),
+        approach: output.approach || i18n.global.t('adapter.approachFallback'),
+        expected_outcome: output.expected || i18n.global.t('adapter.expectedFallback')
       },
       execution: {
         tool_used: output.tool || 'unknown',
@@ -302,14 +303,14 @@ export class FormatAdapter {
     
     return {
       id: this.generateId(),
-      query: data.query || '日志分析',
+      query: data.query || i18n.global.t('adapter.analysisQueryFallback'),
       status: 'completed',
       timestamp,
       plan: {
         content: this.processMarkdown(planContent),
         steps: steps.map((step: any, index: number) => ({
           id: `step_${index + 1}`,
-          title: step.title || step.description || `步骤 ${index + 1}`,
+          title: step.title || step.description || i18n.global.t('adapter.stepFallback', { index: index + 1 }),
           description: step.description || step.title || '',
           status: 'completed'
         })),
@@ -338,11 +339,11 @@ export class FormatAdapter {
     
     return {
       id: this.generateId(),
-      query: '日志分析',
+      query: i18n.global.t('adapter.analysisQueryFallback'),
       status: 'completed',
       timestamp,
       plan: {
-        content: '分析已完成',
+        content: i18n.global.t('adapter.analysisCompleted'),
         steps: [],
         total_steps: 1,
         completed_steps: 1
@@ -369,11 +370,11 @@ export class FormatAdapter {
     
     return {
       id: this.generateId(),
-      query: '数据分析',
+      query: i18n.global.t('adapter.dataAnalysisFallback'),
       status: 'completed',
       timestamp,
       plan: {
-        content: '数据处理完成',
+        content: i18n.global.t('adapter.dataProcessed'),
         steps: [],
         total_steps: 1,
         completed_steps: 1
@@ -381,8 +382,8 @@ export class FormatAdapter {
       acts: [],
       final_result: {
         content: `\`\`\`json\n${content}\n\`\`\``,
-        summary: '已处理原始数据',
-        recommendations: ['请检查数据格式', '考虑使用标准化输出']
+        summary: i18n.global.t('adapter.processedRawData'),
+        recommendations: [i18n.global.t('adapter.checkDataFormat'), i18n.global.t('adapter.useStandardOutput')]
       },
       metadata: {
         execution_time: 0,
@@ -399,20 +400,20 @@ export class FormatAdapter {
     
     return {
       id: this.generateId(),
-      query: '分析失败',
+      query: i18n.global.t('adapter.analysisFailedQuery'),
       status: 'failed',
       timestamp,
       plan: {
-        content: '分析过程中出现错误',
+        content: i18n.global.t('adapter.analysisFailedContent'),
         steps: [],
         total_steps: 0,
         completed_steps: 0
       },
       acts: [],
       final_result: {
-        content: `**错误信息:** ${error.message}\n\n**原始数据:**\n\`\`\`json\n${JSON.stringify(rawData, null, 2)}\n\`\`\``,
-        summary: '分析过程中出现错误',
-        recommendations: ['检查输入数据格式', '联系技术支持']
+        content: i18n.global.t('adapter.errorInfoMsg', { msg: error.message, data: JSON.stringify(rawData, null, 2) }),
+        summary: i18n.global.t('adapter.analysisFailedContent'),
+        recommendations: [i18n.global.t('adapter.checkDataFormat'), i18n.global.t('adapter.contactSupport')]
       },
       metadata: {
         execution_time: 0,
@@ -440,7 +441,7 @@ export class FormatAdapter {
       // 简单的HTML清理
       return this.sanitizeHtml(html)
     } catch (error) {
-      console.error('Markdown处理失败:', error)
+      console.error('Markdown processing failed:', error)
       return this.escapeHtml(content)
     }
   }
@@ -520,7 +521,7 @@ export class FormatAdapter {
    * 提取摘要
    */
   private extractSummary(content: string): string {
-    if (!content) return '无摘要信息'
+    if (!content) return i18n.global.t('adapter.noSummaryInfo')
     
     // 尝试提取第一段或前100个字符
     const firstParagraph = content.split('\n')[0]
@@ -546,8 +547,8 @@ export class FormatAdapter {
     for (const line of lines) {
       const trimmed = line.trim()
       
-      // 检查是否是建议标题
-      if (/^#+\s*(建议|推荐|recommendation)/i.test(trimmed)) {
+      const suggestionTitleRe = new RegExp('^#+\\s*(\\u5efa\\u8bae|\\u63a8\\u8350|recommendation)', 'i')
+      if (suggestionTitleRe.test(trimmed)) {
         inRecommendations = true
         continue
       }
@@ -569,8 +570,9 @@ export class FormatAdapter {
     // 如果没找到专门的建议部分，尝试查找包含建议关键词的句子
     if (recommendations.length === 0) {
       const sentences = content.split(/[.!?。！？]/)
+      const recommendationRe = new RegExp('\\u5efa\\u8bae|\\u63a8\\u8350|\\u5e94\\u8be5|\\u9700\\u8981|\\u53ef\\u4ee5\\u8003\\u8651', 'i')
       for (const sentence of sentences) {
-        if (/建议|推荐|应该|需要|可以考虑/i.test(sentence)) {
+        if (recommendationRe.test(sentence)) {
           const cleaned = sentence.replace(/[#*`_\[\]()]/g, '').trim()
           if (cleaned.length > 10 && cleaned.length < 200) {
             recommendations.push(cleaned)
@@ -624,10 +626,10 @@ export class FormatAdapter {
     const hours = Math.floor(minutes / 60)
     const days = Math.floor(hours / 24)
     
-    if (days > 0) return `${days}天前`
-    if (hours > 0) return `${hours}小时前`
-    if (minutes > 0) return `${minutes}分钟前`
-    return `${seconds}秒前`
+    if (days > 0) return i18n.global.t('time.daysAgo', { days })
+    if (hours > 0) return i18n.global.t('time.hoursAgo', { hours })
+    if (minutes > 0) return i18n.global.t('time.minutesAgo', { minutes })
+    return i18n.global.t('time.secondsAgo', { seconds })
   }
   
   /**
@@ -636,10 +638,10 @@ export class FormatAdapter {
   public validateResult(result: AIAnalysisResult): { valid: boolean; errors: string[] } {
     const errors: string[] = []
     
-    if (!result.id) errors.push('缺少分析ID')
-    if (!result.query) errors.push('缺少查询内容')
-    if (!result.timestamp) errors.push('缺少时间戳')
-    if (!result.final_result?.content) errors.push('缺少分析结果内容')
+    if (!result.id) errors.push(i18n.global.t('adapter.missingId'))
+    if (!result.query) errors.push(i18n.global.t('adapter.missingQuery'))
+    if (!result.timestamp) errors.push(i18n.global.t('adapter.missingTimestamp'))
+    if (!result.final_result?.content) errors.push(i18n.global.t('adapter.missingContent'))
     
     return {
       valid: errors.length === 0,
@@ -662,9 +664,9 @@ window.copyCode = function(button: HTMLElement) {
   const codeBlock = button.parentElement?.nextElementSibling?.querySelector('code')
   if (codeBlock) {
     navigator.clipboard.writeText(codeBlock.textContent || '').then(() => {
-      button.textContent = '已复制'
+      button.textContent = i18n.global.t('adapter.copied')
       setTimeout(() => {
-        button.textContent = '复制'
+        button.textContent = i18n.global.t('adapter.copy')
       }, 2000)
     })
   }

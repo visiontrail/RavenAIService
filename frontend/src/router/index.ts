@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { i18n } from '@/i18n'
 import type { RouteRecordRaw } from 'vue-router'
 
 const routes: RouteRecordRaw[] = [
@@ -15,33 +16,33 @@ const routes: RouteRecordRaw[] = [
         alias: ['/ai-chat'],
         name: 'Workbench',
         component: () => import('../views/AIChat.vue'),
-        meta: { title: 'RavenAI 工作台' },
+        meta: { title: i18n.global.t('router.workbench') },
       },
       {
         path: 'logs',
         name: 'Logs',
         alias: ['/log-list'],
         component: () => import('../views/LogList.vue'),
-        meta: { title: '日志列表' },
+        meta: { title: i18n.global.t('router.logList') },
       },
       {
         path: 'log/:id',
         name: 'LogDetail',
         component: () => import('../views/LogDetail.vue'),
-        meta: { title: '日志详情' },
+        meta: { title: i18n.global.t('router.logDetail') },
         props: true,
       },
       {
         path: 'devices',
         name: 'DeviceList',
         component: () => import('../views/DeviceList.vue'),
-        meta: { title: '设备机柜' },
+        meta: { title: i18n.global.t('router.devices') },
       },
       {
         path: 'devices/:id',
         name: 'DeviceDetail',
         component: () => import('../views/DeviceDetail.vue'),
-        meta: { title: '设备详情' },
+        meta: { title: i18n.global.t('router.deviceDetail') },
         props: true,
       },
       {
@@ -49,64 +50,64 @@ const routes: RouteRecordRaw[] = [
         alias: ['/raven', '/raven/'],
         name: 'RavenManager',
         component: () => import('../views/RavenManager.vue'),
-        meta: { title: '重构包仓库' },
+        meta: { title: i18n.global.t('router.raven') },
       },
       {
         path: 'raven/package/:id',
         alias: ['/package/:id'],
         name: 'RavenPackageDetail',
         component: () => import('../views/RavenPackageDetail.vue'),
-        meta: { title: '包详情' },
+        meta: { title: i18n.global.t('router.ravenDetail') },
         props: true,
       },
       {
         path: 'bug-fixes',
         name: 'BugFixList',
         component: () => import('../views/BugFixList.vue'),
-        meta: { title: 'Bug 修复' },
+        meta: { title: i18n.global.t('router.bugFix') },
       },
       {
         path: 'bug-fixes/:id',
         name: 'BugFixDetail',
         component: () => import('../views/BugFixDetail.vue'),
-        meta: { title: 'Bug 修复详情' },
+        meta: { title: i18n.global.t('router.bugFixDetail') },
         props: true,
       },
       {
         path: 'upload',
         name: 'Upload',
         component: () => import('../views/Upload.vue'),
-        meta: { title: '上传日志' },
+        meta: { title: i18n.global.t('router.upload') },
       },
       {
         path: 'download',
         name: 'Download',
         component: () => import('../views/Download.vue'),
-        meta: { title: '下载客户端' },
+        meta: { title: i18n.global.t('router.download') },
       },
       {
         path: 'about',
         name: 'About',
         component: () => import('../views/NotFound.vue'),
-        meta: { title: '关于 Raven' },
+        meta: { title: i18n.global.t('router.about') },
       },
       {
         path: 'changelog',
         name: 'Changelog',
         component: () => import('../views/NotFound.vue'),
-        meta: { title: '更新日志' },
+        meta: { title: i18n.global.t('router.changelog') },
       },
       {
         path: 'privacy',
         name: 'Privacy',
         component: () => import('../views/NotFound.vue'),
-        meta: { title: '隐私政策' },
+        meta: { title: i18n.global.t('router.privacy') },
       },
       {
         path: 'terms',
         name: 'Terms',
         component: () => import('../views/NotFound.vue'),
-        meta: { title: '服务条款' },
+        meta: { title: i18n.global.t('router.terms') },
       },
     ],
   },
@@ -115,7 +116,7 @@ const routes: RouteRecordRaw[] = [
     name: 'AdminHome',
     component: () => import('../views/AdminPrompts.vue'),
     meta: {
-      title: '后台管理',
+      title: i18n.global.t('router.admin'),
     },
   },
   {
@@ -123,7 +124,7 @@ const routes: RouteRecordRaw[] = [
     name: 'AdminPrompts',
     component: () => import('../views/AdminPrompts.vue'),
     meta: {
-      title: '后台管理',
+      title: i18n.global.t('router.admin'),
     },
   },
   {
@@ -131,7 +132,7 @@ const routes: RouteRecordRaw[] = [
     name: 'AdminUsers',
     component: () => import('../views/AdminUsers.vue'),
     meta: {
-      title: '用户管理',
+      title: i18n.global.t('router.adminUsers'),
     },
   },
   {
@@ -139,7 +140,7 @@ const routes: RouteRecordRaw[] = [
     name: 'AdminReleases',
     component: () => import('../views/AdminRelease.vue'),
     meta: {
-      title: 'App Release 管理',
+      title: i18n.global.t('router.adminRelease'),
     },
   },
   {
@@ -147,7 +148,7 @@ const routes: RouteRecordRaw[] = [
     name: 'AdminProjectRepos',
     component: () => import('../views/AdminProjectRepos.vue'),
     meta: {
-      title: '项目仓库管理',
+      title: i18n.global.t('router.adminRepos'),
     },
   },
   {
@@ -155,7 +156,7 @@ const routes: RouteRecordRaw[] = [
     name: 'AdminAgentSkills',
     component: () => import('../views/AdminAgentSkills.vue'),
     meta: {
-      title: 'Agent Skill 管理',
+      title: i18n.global.t('router.adminAgentSkills'),
     },
   },
   {
@@ -163,7 +164,7 @@ const routes: RouteRecordRaw[] = [
     name: 'AdminProjectSkills',
     component: () => import('../views/AdminProjectSkills.vue'),
     meta: {
-      title: '项目 Skill 管理',
+      title: i18n.global.t('router.adminProjectSkills'),
     },
     props: true,
   },
@@ -172,7 +173,7 @@ const routes: RouteRecordRaw[] = [
     name: 'AdminModelSettings',
     component: () => import('../views/AdminModelSettings.vue'),
     meta: {
-      title: '模型设置',
+      title: i18n.global.t('router.adminModelSettings'),
     },
   },
   {
@@ -180,7 +181,7 @@ const routes: RouteRecordRaw[] = [
     name: 'AdminMetrics',
     component: () => import('../views/AdminMetrics.vue'),
     meta: {
-      title: '数据指标',
+      title: i18n.global.t('router.adminMetrics'),
     },
   },
   {
@@ -191,7 +192,7 @@ const routes: RouteRecordRaw[] = [
         path: '',
         name: 'NotFound',
         component: () => import('../views/NotFound.vue'),
-        meta: { title: '页面未找到' },
+        meta: { title: i18n.global.t('router.notFound') },
       },
     ],
   },
@@ -206,7 +207,7 @@ const router = createRouter({
 router.beforeEach((to, _from, next) => {
   // 设置页面标题
   if (to.meta?.title) {
-    document.title = `${to.meta.title} - Raven智能测试平台`
+    document.title = `${to.meta.title}${i18n.global.t('router.docTitleSuffix')}`
   }
   next()
 })

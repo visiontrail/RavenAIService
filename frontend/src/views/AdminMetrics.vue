@@ -533,7 +533,7 @@ onMounted(() => {
 
         <!-- Agent Calls Time Series -->
         <div class="metrics-card">
-          <h3 class="metrics-card-title">Agent 调用趋势 (按时间序列)</h3>
+          <h3 class="metrics-card-title">{{ $t('admin.metrics.agentTrendTitle') }}</h3>
           <div v-if="!overview || !overview.time_series.length" class="metrics-empty">{{ t('admin.metrics.emptyData') }}</div>
           <div v-else class="metrics-chart">
             <div

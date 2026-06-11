@@ -10,21 +10,22 @@ import type { BugFixTaskStatus, BugFixTaskSummary } from '@/types'
 
 const router = useRouter()
 const bugFixStore = useBugFixStore()
+const { t } = useI18n()
 const userStore = useUserStore()
 
-const totalMeta = computed(() => `共 ${bugFixStore.pagination.total} 个任务`)
+const totalMeta = computed(() => t('bugFix.totalTasks', { count: bugFixStore.pagination.total }))
 
 const statusMeta: Record<string, { text: string; className: string }> = {
-  pending: { text: '等待执行', className: 'rw-pill-neutral' },
-  running: { text: '修复中', className: 'rw-pill-info' },
-  succeeded: { text: '已完成', className: 'rw-pill-success' },
-  partial: { text: '部分完成', className: 'rw-pill-warning' },
-  failed: { text: '失败', className: 'rw-pill-danger' },
-  cancelled: { text: '已取消', className: 'rw-pill-neutral' },
+  pending: { text: t('bugFix.statusText.pending'), className: 'rw-pill-neutral' },
+  running: { text: t('bugFix.statusText.running'), className: 'rw-pill-info' },
+  succeeded: { text: t('bugFix.statusText.succeeded'), className: 'rw-pill-success' },
+  partial: { text: t('bugFix.statusText.partial'), className: 'rw-pill-warning' },
+  failed: { text: t('bugFix.statusText.failed'), className: 'rw-pill-danger' },
+  cancelled: { text: t('bugFix.statusText.cancelled'), className: 'rw-pill-neutral' },
 }
 
 const statusText = (status: BugFixTaskStatus) =>
-  statusMeta[String(status)]?.text || String(status || '未知')
+  statusMeta[String(status)]?.text || String(status || t('bugFix.statusText.unknown'))
 
 const statusClass = (status: BugFixTaskStatus) =>
   statusMeta[String(status)]?.className || 'rw-pill-neutral'
@@ -45,7 +46,7 @@ const formatDateTime = (value?: string | null) => {
 
 const projectText = (task: BugFixTaskSummary) => {
   if (task.project_name && task.project_code) return `${task.project_name} · ${task.project_code}`
-  return task.project_name || task.project_code || '未关联项目'
+  return task.project_name || task.project_code || t('bugFix.noProject')
 }
 
 const sourceLogText = (task: BugFixTaskSummary) =>
@@ -60,7 +61,7 @@ const refreshData = async () => {
   try {
     await bugFixStore.fetchTasks()
   } catch (error: any) {
-    ElMessage.error(bugFixStore.error || error?.message || '加载 Bug 修复任务失败')
+    ElMessage.error(bugFixStore.error || error?.message || t('bugFix.fetchListFail'))
   }
 }
 
@@ -68,7 +69,7 @@ const handlePageChange = async (page: number) => {
   try {
     await bugFixStore.fetchTasks({ page })
   } catch {
-    ElMessage.error(bugFixStore.error || '加载 Bug 修复任务失败')
+    ElMessage.error(bugFixStore.error || t('bugFix.fetchListFail'))
   }
 }
 
@@ -76,7 +77,7 @@ const handleSizeChange = async (pageSize: number) => {
   try {
     await bugFixStore.fetchTasks({ page: 1, page_size: pageSize })
   } catch {
-    ElMessage.error(bugFixStore.error || '加载 Bug 修复任务失败')
+    ElMessage.error(bugFixStore.error || t('bugFix.fetchListFail'))
   }
 }
 
@@ -87,11 +88,11 @@ onMounted(() => {
 
 <template>
   <div class="rw-page bug-fix-list-page">
-    <WorkbenchTopbar title="Bug 修复" :meta="totalMeta">
+    <WorkbenchTopbar :title="$t('bugFix.listTitle')" :meta="totalMeta">
       <template #actions>
         <button class="rw-btn-secondary" :disabled="bugFixStore.loading || !userStore.isAuthenticated" @click="refreshData">
           <RefreshCw :size="14" :class="{ spin: bugFixStore.loading }" />
-          <span>刷新</span>
+          <span>{{ $t('bugFix.refresh') }}</span>
         </button>
       </template>
     </WorkbenchTopbar>
@@ -101,8 +102,8 @@ onMounted(() => {
         <div class="empty-icon">
           <GitPullRequest :size="22" />
         </div>
-        <h2>请先登录</h2>
-        <p>登录后可查看你所属项目的 Bug 修复任务。</p>
+        <h2>{{ $t('bugFix.loginRequired') }}</h2>
+        <p>{{ $t('bugFix.loginRequiredDesc') }}</p>
       </section>
 
       <template v-else>
@@ -114,7 +115,7 @@ onMounted(() => {
             :border="false"
             @row-click="openDetail"
           >
-            <el-table-column prop="title" label="任务标题" min-width="280" :show-overflow-tooltip="true">
+            <el-table-column prop="title" :label="$t('bugFix.taskTitle')" min-width="280" :show-overflow-tooltip="true">
               <template #default="{ row }">
                 <div class="task-title-cell">
                   <span class="task-title">{{ row.title }}</span>
@@ -122,7 +123,7 @@ onMounted(() => {
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="所属项目" min-width="190" :show-overflow-tooltip="true">
+            <el-table-column :label="$t('bugFix.project')" min-width="190" :show-overflow-tooltip="true">
               <template #default="{ row }">
                 <div class="project-cell">
                   <span>{{ row.project_name || row.project_code || '-' }}</span>
@@ -130,17 +131,17 @@ onMounted(() => {
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="状态" width="120">
+            <el-table-column :label="$t('bugFix.status')" width="120">
               <template #default="{ row }">
                 <span :class="['rw-pill', statusClass(row.status)]">{{ statusText(row.status) }}</span>
               </template>
             </el-table-column>
-            <el-table-column prop="merge_request_count" label="MR 数量" width="110" align="center">
+            <el-table-column prop="merge_request_count" :label="$t('bugFix.mrCount')" width="110" align="center">
               <template #default="{ row }">
                 <span class="mono-cell">{{ row.merge_request_count }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="来源日志" width="130">
+            <el-table-column :label="$t('bugFix.sourceLog')" width="130">
               <template #default="{ row }">
                 <router-link
                   v-if="row.source_log_id"
@@ -153,7 +154,7 @@ onMounted(() => {
                 <span v-else class="muted-cell">-</span>
               </template>
             </el-table-column>
-            <el-table-column label="创建时间" width="180">
+            <el-table-column :label="$t('bugFix.createdAt')" width="180">
               <template #default="{ row }">
                 <span class="mono-cell">{{ formatDateTime(row.created_at) }}</span>
               </template>
@@ -195,9 +196,9 @@ onMounted(() => {
                 :to="`/log/${task.source_log_id}`"
                 @click.stop
               >
-                来源 {{ sourceLogText(task) }}
+                {{ $t('bugFix.sourceText', { text: sourceLogText(task) }) }}
               </router-link>
-              <span v-else>无来源日志</span>
+              <span v-else>{{ $t('bugFix.noSourceLog') }}</span>
               <span>{{ formatDateTime(task.created_at) }}</span>
             </div>
           </article>
@@ -206,8 +207,8 @@ onMounted(() => {
             <div class="empty-icon">
               <GitPullRequest :size="22" />
             </div>
-            <h2>暂无 Bug 修复任务</h2>
-            <p>当日志分析确认需要代码修复后，任务会出现在这里。</p>
+            <h2>{{ $t('bugFix.emptyListTitle') }}</h2>
+            <p>{{ $t('bugFix.emptyListDesc') }}</p>
           </div>
         </div>
 
@@ -215,8 +216,8 @@ onMounted(() => {
           <div class="empty-icon">
             <GitPullRequest :size="22" />
           </div>
-          <h2>暂无 Bug 修复任务</h2>
-          <p>当日志分析确认需要代码修复后，任务会出现在这里。</p>
+          <h2>{{ $t('bugFix.emptyListTitle') }}</h2>
+          <p>{{ $t('bugFix.emptyListDesc') }}</p>
         </section>
       </template>
     </div>

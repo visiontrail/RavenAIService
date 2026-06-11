@@ -16,39 +16,40 @@ import type {
 const route = useRoute()
 const router = useRouter()
 const bugFixStore = useBugFixStore()
+const { t } = useI18n()
 
 const taskId = computed(() => String(route.params.id || ''))
 const task = computed(() => bugFixStore.currentTask)
 const topbarMeta = computed(() => {
-  if (!task.value) return '加载中'
-  const project = task.value.project_name || task.value.project_code || '未关联项目'
+  if (!task.value) return t('bugFix.loading')
+  const project = task.value.project_name || task.value.project_code || t('bugFix.noProject')
   return `${project} · ${statusText(task.value.status)}`
 })
 
 const statusMeta: Record<string, { text: string; className: string }> = {
-  pending: { text: '等待执行', className: 'rw-pill-neutral' },
-  running: { text: '修复中', className: 'rw-pill-info' },
-  succeeded: { text: '已完成', className: 'rw-pill-success' },
-  partial: { text: '部分完成', className: 'rw-pill-warning' },
-  failed: { text: '失败', className: 'rw-pill-danger' },
-  cancelled: { text: '已取消', className: 'rw-pill-neutral' },
+  pending: { text: t('bugFix.statusText.pending'), className: 'rw-pill-neutral' },
+  running: { text: t('bugFix.statusText.running'), className: 'rw-pill-info' },
+  succeeded: { text: t('bugFix.statusText.succeeded'), className: 'rw-pill-success' },
+  partial: { text: t('bugFix.statusText.partial'), className: 'rw-pill-warning' },
+  failed: { text: t('bugFix.statusText.failed'), className: 'rw-pill-danger' },
+  cancelled: { text: t('bugFix.statusText.cancelled'), className: 'rw-pill-neutral' },
 }
 
 const mrStatusMeta: Record<string, { text: string; className: string }> = {
-  created: { text: '已创建', className: 'rw-pill-success' },
-  open: { text: '已打开', className: 'rw-pill-success' },
-  push_failed: { text: '推送失败', className: 'rw-pill-danger' },
-  mr_failed: { text: '创建失败', className: 'rw-pill-danger' },
+  created: { text: t('bugFix.statusText.created'), className: 'rw-pill-success' },
+  open: { text: t('bugFix.statusText.open'), className: 'rw-pill-success' },
+  push_failed: { text: t('bugFix.statusText.push_failed'), className: 'rw-pill-danger' },
+  mr_failed: { text: t('bugFix.statusText.mr_failed'), className: 'rw-pill-danger' },
 }
 
 const statusText = (status: BugFixTaskStatus) =>
-  statusMeta[String(status)]?.text || String(status || '未知')
+  statusMeta[String(status)]?.text || String(status || t('bugFix.statusText.unknown'))
 
 const statusClass = (status: BugFixTaskStatus) =>
   statusMeta[String(status)]?.className || 'rw-pill-neutral'
 
 const mrStatusText = (status: BugFixMergeRequestStatus) =>
-  mrStatusMeta[String(status)]?.text || String(status || '未知')
+  mrStatusMeta[String(status)]?.text || String(status || t('bugFix.statusText.unknown'))
 
 const mrStatusClass = (status: BugFixMergeRequestStatus) =>
   mrStatusMeta[String(status)]?.className || 'rw-pill-neutral'
@@ -80,7 +81,7 @@ const normalizeChangedFiles = (value: unknown): BugFixChangedFile[] => {
 }
 
 const fileName = (file: BugFixChangedFile) =>
-  file.path || file.file_path || file.filename || file.name || '未知文件'
+  file.path || file.file_path || file.filename || file.name || t('bugFix.unknownFile')
 
 const additions = (file: BugFixChangedFile) =>
   Number(file.additions ?? file.insertions ?? file.added ?? 0) || 0
@@ -98,7 +99,7 @@ const diffStatText = (mr: BugFixMergeRequest) => {
     Number(stat.additions ?? stat.insertions ?? files.reduce((sum, file) => sum + additions(file), 0)) || 0
   const removed =
     Number(stat.deletions ?? stat.removed ?? files.reduce((sum, file) => sum + deletions(file), 0)) || 0
-  return `${fileCount} 文件 · +${added} / -${removed}`
+  return t('bugFix.fileStats', { count: fileCount, added, removed })
 }
 
 const shortSha = (sha?: string | null) => (sha ? sha.slice(0, 10) : '-')
@@ -108,7 +109,7 @@ const loadDetail = async () => {
   try {
     await bugFixStore.fetchDetail(taskId.value)
   } catch (error: any) {
-    ElMessage.error(bugFixStore.error || error?.message || '加载 Bug 修复详情失败')
+    ElMessage.error(bugFixStore.error || error?.message || t('bugFix.fetchDetailFail'))
   }
 }
 
@@ -124,15 +125,15 @@ onUnmounted(() => {
 
 <template>
   <div class="rw-page bug-fix-detail-page">
-    <WorkbenchTopbar :title="task?.title || 'Bug 修复详情'" :meta="topbarMeta">
+    <WorkbenchTopbar :title="task?.title || $t('bugFix.detailTitle')" :meta="topbarMeta">
       <template #actions>
         <button class="rw-btn-secondary" @click="router.push('/bug-fixes')">
           <ArrowLeft :size="14" />
-          <span>返回列表</span>
+          <span>{{ $t('bugFix.backToList') }}</span>
         </button>
         <button class="rw-btn-secondary" :disabled="bugFixStore.detailLoading" @click="loadDetail">
           <RefreshCw :size="14" :class="{ spin: bugFixStore.detailLoading }" />
-          <span>刷新</span>
+          <span>{{ $t('bugFix.refresh') }}</span>
         </button>
       </template>
     </WorkbenchTopbar>
@@ -143,8 +144,8 @@ onUnmounted(() => {
       </section>
 
       <section v-else-if="!task" class="rw-card empty-card">
-        <h2>未找到 Bug 修复任务</h2>
-        <p>该任务不存在，或你没有所属项目的查看权限。</p>
+        <h2>{{ $t('bugFix.notFound') }}</h2>
+        <p>{{ $t('bugFix.notFoundDesc') }}</p>
       </section>
 
       <template v-else>
@@ -158,22 +159,22 @@ onUnmounted(() => {
           </div>
           <div class="title-meta-grid">
             <div>
-              <span>所属项目</span>
+              <span>{{ $t('bugFix.project') }}</span>
               <strong>{{ task.project_name || task.project_code || '-' }}</strong>
             </div>
             <div>
-              <span>来源日志</span>
+              <span>{{ $t('bugFix.sourceLog') }}</span>
               <router-link v-if="task.source_log_id" :to="`/log/${task.source_log_id}`">
                 {{ task.source_log_id.slice(0, 8) }}
               </router-link>
               <strong v-else>-</strong>
             </div>
             <div>
-              <span>MR 数量</span>
+              <span>{{ $t('bugFix.mrCount') }}</span>
               <strong>{{ task.merge_request_count }}</strong>
             </div>
             <div>
-              <span>创建时间</span>
+              <span>{{ $t('bugFix.createdAt') }}</span>
               <strong>{{ formatDateTime(task.created_at) }}</strong>
             </div>
           </div>
@@ -182,14 +183,14 @@ onUnmounted(() => {
         <div class="detail-grid">
           <section class="rw-card info-card">
             <div class="section-head">
-              <h2>拟修复项</h2>
+              <h2>{{ $t('bugFix.fixItems') }}</h2>
               <span class="rw-pill rw-pill-neutral">{{ task.proposed_fixes.length }}</span>
             </div>
             <div v-if="task.proposed_fixes.length" class="fix-list">
               <article v-for="(fix, index) in task.proposed_fixes" :key="index" class="fix-row">
                 <div class="fix-index">{{ index + 1 }}</div>
                 <div class="fix-body">
-                  <h3>{{ fix.title || `修复项 ${index + 1}` }}</h3>
+                  <h3>{{ fix.title || $t('bugFix.fixItemTitle', { index: index + 1 }) }}</h3>
                   <p v-if="fix.description">{{ fix.description }}</p>
                   <p v-if="fix.rationale" class="fix-rationale">{{ fix.rationale }}</p>
                   <div v-if="fix.suspected_files?.length || fix.suspected_symbols?.length" class="fix-tags">
@@ -199,28 +200,28 @@ onUnmounted(() => {
                 </div>
               </article>
             </div>
-            <p v-else class="muted-text">暂无结构化拟修复项。</p>
+            <p v-else class="muted-text">{{ $t('bugFix.noFixItems') }}</p>
           </section>
 
           <section class="rw-card info-card">
             <div class="section-head">
-              <h2>执行信息</h2>
+              <h2>{{ $t('bugFix.executionInfo') }}</h2>
             </div>
             <dl class="info-list">
               <div>
-                <dt>开始时间</dt>
+                <dt>{{ $t('bugFix.startTime') }}</dt>
                 <dd>{{ formatDateTime(task.started_at) }}</dd>
               </div>
               <div>
-                <dt>完成时间</dt>
+                <dt>{{ $t('bugFix.finishTime') }}</dt>
                 <dd>{{ formatDateTime(task.finished_at) }}</dd>
               </div>
               <div>
-                <dt>分析任务</dt>
+                <dt>{{ $t('bugFix.analysisTask') }}</dt>
                 <dd>{{ task.source_analysis_task_id || '-' }}</dd>
               </div>
               <div v-if="task.error">
-                <dt>错误</dt>
+                <dt>{{ $t('bugFix.error') }}</dt>
                 <dd class="error-text">{{ task.error }}</dd>
               </div>
             </dl>
@@ -234,8 +235,8 @@ onUnmounted(() => {
           </div>
 
           <div v-if="!task.merge_requests.length" class="rw-card empty-card compact">
-            <h2>暂无 MR</h2>
-            <p>Agent 还没有产出可展示的 Merge Request。</p>
+            <h2>{{ $t('bugFix.noMr') }}</h2>
+            <p>{{ $t('bugFix.noMrDesc') }}</p>
           </div>
 
           <article
@@ -276,7 +277,7 @@ onUnmounted(() => {
                 rel="noreferrer"
                 class="mr-link"
               >
-                打开 MR
+                {{ $t('bugFix.openMr') }}
                 <ExternalLink :size="13" />
               </a>
             </div>
@@ -294,7 +295,7 @@ onUnmounted(() => {
                 </span>
               </div>
               <p v-if="!normalizeChangedFiles(mr.changed_files).length" class="muted-text">
-                暂无改动文件统计。
+                {{ $t('bugFix.noStats') }}
               </p>
             </div>
           </article>

@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 /**
  * Professional Markdown Renderer using markdown-it + highlight.js
  * 
@@ -176,7 +177,7 @@ function createMarkdownRenderer(): MarkdownIt {
         return (
           `<div class="mermaid-container" data-mermaid-id="${id}" ` +
           `data-mermaid-source="${escapedSource}" data-mermaid-state="pending">` +
-          `<div class="mermaid-loading">图表渲染中…</div>` +
+          `<div class="mermaid-loading">${i18n.global.t('markdown.mermaidLoading')}</div>` +
           `<pre class="hljs mermaid-source language-mermaid"><code>${escapedSource}</code></pre>` +
           `</div>`
         )
@@ -264,7 +265,7 @@ export function renderMarkdown(
 
   // 安全检查
   if (!content || typeof content !== 'string') {
-    return `<div class="${wrapperClass}"><p class="text-gray-500">暂无内容</p></div>`
+    return `<div class="${wrapperClass}"><p class="text-gray-500">${i18n.global.t('markdown.noContent')}</p></div>`
   }
 
   // 清理XML标签
@@ -272,7 +273,7 @@ export function renderMarkdown(
 
   // 如果清理后为空
   if (!cleaned) {
-    return `<div class="${wrapperClass}"><p class="text-gray-500">暂无内容</p></div>`
+    return `<div class="${wrapperClass}"><p class="text-gray-500">${i18n.global.t('markdown.noContent')}</p></div>`
   }
 
   // 渲染markdown
@@ -315,7 +316,7 @@ export async function processMermaidBlocks(containerEl: HTMLElement | null): Pro
     mermaid = await loadMermaid()
   } catch (err) {
     // 库加载失败：降级为普通源码块（占位容器已内置 <pre> 源码，保留即可）
-    console.warn('Mermaid 库加载失败，降级为源码展示:', err)
+    console.warn(i18n.global.t('markdown.mermaidLoadFail'), err)
     containers.forEach((el) => {
       el.dataset.mermaidState = 'error'
       el.classList.add('is-error')
@@ -333,15 +334,15 @@ export async function processMermaidBlocks(containerEl: HTMLElement | null): Pro
         const { svg } = await mermaid.render(renderId, source)
         el.innerHTML =
           `<div class="mermaid-svg">${svg}</div>` +
-          `<button class="mermaid-copy-btn" type="button" aria-label="复制源码">复制源码</button>`
+          `<button class="mermaid-copy-btn" type="button" aria-label="${i18n.global.t('markdown.copySource')}">${i18n.global.t('markdown.copySource')}</button>`
         el.dataset.mermaidState = 'done'
         el.classList.add('is-rendered')
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         el.innerHTML =
-          `<div class="mermaid-error">⚠ 图表渲染失败：${escapeHtml(message)}</div>` +
+          `<div class="mermaid-error">${i18n.global.t('markdown.mermaidRenderFail', { msg: escapeHtml(message) })}</div>` +
           `<pre class="hljs mermaid-source language-mermaid"><code>${escapeHtml(source)}</code></pre>` +
-          `<button class="mermaid-copy-btn" type="button" aria-label="复制源码">复制源码</button>`
+          `<button class="mermaid-copy-btn" type="button" aria-label="${i18n.global.t('markdown.copySource')}">${i18n.global.t('markdown.copySource')}</button>`
         el.dataset.mermaidState = 'error'
         el.classList.add('is-error')
       }

@@ -4,7 +4,7 @@
       <el-icon class="loading-icon" size="32">
         <Loading />
       </el-icon>
-      <p class="loading-text">加载中...</p>
+      <p class="loading-text">{{ $t('common.loading') }}</p>
     </div>
   </div>
 </template>

@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 // 格式化文件大小
 export const formatFileSize = (bytes: number): string => {
   if (bytes === 0) return '0 B'
@@ -46,10 +47,10 @@ export const formatRelativeTime = (dateString: string): string => {
   const hours = Math.floor(minutes / 60)
   const days = Math.floor(hours / 24)
   
-  if (days > 0) return `${days}天前`
-  if (hours > 0) return `${hours}小时前`
-  if (minutes > 0) return `${minutes}分钟前`
-  return '刚刚'
+  if (days > 0) return i18n.global.t('time.daysAgo', { days })
+  if (hours > 0) return i18n.global.t('time.hoursAgo', { hours })
+  if (minutes > 0) return i18n.global.t('time.minutesAgo', { minutes })
+  return i18n.global.t('time.justNow')
 }
 
 // 获取文件扩展名
@@ -71,10 +72,10 @@ export const getStatusColor = (status: string): string => {
 // 获取状态文本
 export const getStatusText = (status: string): string => {
   const texts: Record<string, string> = {
-    pending: '待处理',
-    processing: '处理中',
-    completed: '已完成',
-    failed: '失败',
+    pending: i18n.global.t('logList.status.pending'),
+    processing: i18n.global.t('logList.status.processing'),
+    completed: i18n.global.t('logList.status.completed'),
+    failed: i18n.global.t('logList.status.failed'),
   }
   return texts[status] || status
 }

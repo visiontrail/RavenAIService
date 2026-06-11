@@ -33,7 +33,7 @@ function collectSourceFiles(dir: string, base: string, results: string[] = []): 
     const relPath = path.relative(base, fullPath)
     if (entry.isDirectory()) {
       // Skip node_modules, dist, .git, etc.
-      if (['node_modules', 'dist', '.git', '__pycache__'].includes(entry.name)) continue
+      if (['node_modules', 'dist', '.git', '__pycache__', '__fixtures__'].includes(entry.name)) continue
       collectSourceFiles(fullPath, base, results)
     } else if (
       /\.(vue|ts)$/.test(entry.name) &&

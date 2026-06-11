@@ -1,3 +1,4 @@
+import { i18n } from '@/i18n'
 import axios from 'axios'
 import { localeHeaderInterceptor } from '@/api'
 import { getActiveLocale, LOCALE_HEADER } from '@/i18n/runtime'
@@ -184,7 +185,7 @@ export const uploadRavenPackages = async (
   signal?: AbortSignal
 ) => {
   if (!files.length) {
-    throw new Error('请先选择要上传的文件')
+    throw new Error(i18n.global.t('raven.uploadSelectFirst'))
   }
 
   const formData = new FormData()

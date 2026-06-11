@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { bugFixApi } from '@/api/bugFixes'
 import type { BugFixTaskDetail, BugFixTaskSummary } from '@/types'
+import { i18n } from '@/i18n'
 
 export const useBugFixStore = defineStore('bugFixes', () => {
   const tasks = ref<BugFixTaskSummary[]>([])
@@ -31,7 +32,7 @@ export const useBugFixStore = defineStore('bugFixes', () => {
         page_size: params.page_size ?? pagination.value.page_size,
       })
       if (!response?.success) {
-        throw new Error(response?.message || '获取 Bug 修复任务失败')
+        throw new Error(response?.message || i18n.global.t('bugFix.fetchListFail'))
       }
       const pageSize = response.page_size || params.page_size || pagination.value.page_size
       tasks.value = response.data || []
@@ -42,7 +43,7 @@ export const useBugFixStore = defineStore('bugFixes', () => {
         pages: pageSize > 0 ? Math.ceil((response.total || 0) / pageSize) : 0,
       }
     } catch (err: any) {
-      error.value = parseError(err, '获取 Bug 修复任务失败')
+      error.value = parseError(err, i18n.global.t('bugFix.fetchListFail'))
       throw err
     } finally {
       loading.value = false
@@ -55,12 +56,12 @@ export const useBugFixStore = defineStore('bugFixes', () => {
     try {
       const response = await bugFixApi.detail(id)
       if (!response?.success || !response.data) {
-        throw new Error(response?.message || '获取 Bug 修复详情失败')
+        throw new Error(response?.message || i18n.global.t('bugFix.fetchDetailFail'))
       }
       currentTask.value = response.data
       return response.data
     } catch (err: any) {
-      error.value = parseError(err, '获取 Bug 修复详情失败')
+      error.value = parseError(err, i18n.global.t('bugFix.fetchDetailFail'))
       throw err
     } finally {
       detailLoading.value = false

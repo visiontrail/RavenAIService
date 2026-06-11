@@ -49,11 +49,11 @@
     <div v-if="!collapsed" class="trace-card__body">
       <div v-if="card.kind === 'tool'" class="trace-card__tool-body">
         <div v-if="card.toolInput" class="trace-card__section">
-          <div class="trace-card__section-label">输入</div>
+          <div class="trace-card__section-label">{{ $t('traceStep.input') }}</div>
           <pre class="trace-card__code">{{ formattedInput }}</pre>
         </div>
         <div v-if="effectiveOutput" class="trace-card__section">
-          <div class="trace-card__section-label">输出</div>
+          <div class="trace-card__section-label">{{ $t('traceStep.output') }}</div>
           <pre class="trace-card__code trace-card__code--output">{{ effectiveOutput }}<span
             v-if="card.status === 'running'"
             class="trace-card__cursor"
@@ -117,7 +117,7 @@ function toggle() {
 
 const headerTitle = computed(() => {
   if (props.card.kind === 'thinking') return 'Thinking'
-  return props.displayName || props.card.toolName || '工具'
+  return props.displayName || props.card.toolName || t('traceStep.tool')
 })
 
 const inputSummary = computed(() => {
@@ -167,7 +167,7 @@ const effectiveOutput = computed(() => {
   return props.card.outputExcerpt || ''
 })
 
-const copyLabel = computed(() => (copied.value ? '已复制' : '复制'))
+const copyLabel = computed(() => (copied.value ? t('traceStep.copied') : t('traceStep.copy')))
 
 const copyText = computed(() => {
   if (props.card.kind === 'thinking') {
@@ -175,8 +175,8 @@ const copyText = computed(() => {
   }
 
   const sections = [headerTitle.value]
-  if (formattedInput.value) sections.push(`输入\n${formattedInput.value}`)
-  if (effectiveOutput.value) sections.push(`输出\n${effectiveOutput.value}`)
+  if (formattedInput.value) sections.push(`${t('traceStep.input')}\n${formattedInput.value}`)
+  if (effectiveOutput.value) sections.push(`${t('traceStep.output')}\n${effectiveOutput.value}`)
   return sections.filter(Boolean).join('\n\n')
 })
 

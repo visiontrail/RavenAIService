@@ -1,45 +1,47 @@
+import { i18n } from '@/i18n'
+
 export const adminNavItems = [
   {
     key: 'prompts',
-    label: 'Prompt 配置',
+    label: i18n.global.t('adminNav.promptConfig'),
     path: '/admin/prompts',
-    description: '按功能和 Agent 编辑系统提示词',
+    description: i18n.global.t('adminNav.promptConfigDesc'),
   },
   {
     key: 'users',
-    label: '用户管理',
+    label: i18n.global.t('adminNav.users'),
     path: '/admin/users',
-    description: '管理对话用户、重置密码',
+    description: i18n.global.t('adminNav.usersDesc'),
   },
   {
     key: 'releases',
     label: 'App Release',
     path: '/admin/releases',
-    description: '上传 Linux / macOS / Windows 发布包',
+    description: i18n.global.t('adminNav.releaseDesc'),
   },
   {
     key: 'project-repos',
-    label: '项目仓库管理',
+    label: i18n.global.t('adminNav.repos'),
     path: '/admin/project-repos',
-    description: '维护 project_code 到 Git 仓库的映射',
+    description: i18n.global.t('adminNav.reposDesc'),
   },
   {
     key: 'agent-skills',
-    label: 'Agent Skill 管理',
+    label: i18n.global.t('adminNav.agentSkills'),
     path: '/admin/agent-skills',
-    description: '为 Claude Agent 上传/启用用户自定义 Skill 包',
+    description: i18n.global.t('adminNav.agentSkillsDesc'),
   },
   {
     key: 'model-settings',
-    label: '模型设置',
+    label: i18n.global.t('adminNav.modelSettings'),
     path: '/admin/model-settings',
-    description: '配置轻量级模型（会话摘要、标题生成等）',
+    description: i18n.global.t('adminNav.modelSettingsDesc'),
   },
   {
     key: 'metrics',
-    label: '数据指标',
+    label: i18n.global.t('adminNav.metrics'),
     path: '/admin/metrics',
-    description: '查看 Token 用量、调用统计与业务活动',
+    description: i18n.global.t('adminNav.metricsDesc'),
   },
 ] as const
 
