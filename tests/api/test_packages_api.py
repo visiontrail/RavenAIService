@@ -241,3 +241,65 @@ def test_package_activity_metric_has_no_project_label():
         assert tuple(labelnames) == ("action", "status")
     # the helper accepts exactly action+status and never raises
     prom.record_package_activity(action="upload", status="success")
+
+
+@pytest.mark.asyncio
+async def test_package_activity_event_metadata_uses_project_code(monkeypatch):
+    from app.services import metrics_service
+    from app.utils import metrics as prom
+
+    recorded_events: list[dict[str, Any]] = []
+    prometheus_calls: list[dict[str, Any]] = []
+
+    async def fake_record_business_event(**kwargs: Any) -> dict[str, Any]:
+        recorded_events.append(kwargs)
+        return {"duplicate": False}
+
+    def fake_record_package_activity(**kwargs: Any) -> None:
+        prometheus_calls.append(kwargs)
+
+    monkeypatch.setattr(metrics_service, "record_business_event", fake_record_business_event)
+    monkeypatch.setattr(prom, "record_package_activity", fake_record_package_activity)
+
+    await packages_api._record_package_activity(
+        action="upload", project_code="demo-proj", count=2
+    )
+
+    assert recorded_events == [
+        {
+            "event_type": "package_activity",
+            "source": "package_upload",
+            "idempotency_key": recorded_events[0]["idempotency_key"],
+            "status": "success",
+            "metadata": {"project_code": "demo-proj", "result_count": 2},
+        }
+    ]
+    assert "package_type" not in recorded_events[0]["metadata"]
+    assert recorded_events[0]["idempotency_key"].startswith("package_activity:upload:")
+    assert prometheus_calls == [
+        {"action": "upload", "status": "success"},
+        {"action": "upload", "status": "success"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_package_activity_event_metadata_uses_unassociated_for_empty_project(monkeypatch):
+    from app.services import metrics_service
+    from app.utils import metrics as prom
+
+    recorded_events: list[dict[str, Any]] = []
+
+    async def fake_record_business_event(**kwargs: Any) -> dict[str, Any]:
+        recorded_events.append(kwargs)
+        return {"duplicate": False}
+
+    monkeypatch.setattr(metrics_service, "record_business_event", fake_record_business_event)
+    monkeypatch.setattr(prom, "record_package_activity", lambda **_kwargs: None)
+
+    await packages_api._record_package_activity(action="download_batch", project_code="")
+
+    assert recorded_events[0]["metadata"] == {
+        "project_code": "unassociated",
+        "result_count": 1,
+    }
+    assert "package_type" not in recorded_events[0]["metadata"]

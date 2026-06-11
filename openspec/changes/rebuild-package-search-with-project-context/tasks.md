@@ -57,7 +57,7 @@
 
 - [x] 8.1 `metrics_service.py` / 总览 API：包分布从类型改为项目（`packagesByProject` 含 `unassociated`）
 - [x] 8.2 `AdminMetrics.vue`：包分布图表字段与文案改为项目维度
-- [ ] 8.3 指标测试：overview 新结构、`package_activity` 事件 metadata 含 `project_code`
+- [x] 8.3 指标测试：overview 新结构、`package_activity` 事件 metadata 含 `project_code`
 
 ## 9. 收尾验证
 
