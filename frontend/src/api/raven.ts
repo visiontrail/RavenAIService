@@ -46,7 +46,7 @@ export const listRavenPackages = (params: {
   page?: number
   limit?: number
   search?: string
-  type?: string
+  projectCode?: string
   tags?: string
   version?: string
   isPatch?: string | boolean
@@ -60,6 +60,7 @@ export const deleteRavenPackage = (id: string) =>
 
 export interface AgentSearchOptions {
   sessionId?: string
+  projectRepoId?: number
   signal?: AbortSignal
 }
 
@@ -74,6 +75,7 @@ export const searchPackagesByAgent = (query: string, opts: AgentSearchOptions = 
     {
       query,
       session_id: opts.sessionId,
+      project_repo_id: opts.projectRepoId,
       stream: false,
     },
     { signal: opts.signal }
@@ -82,6 +84,7 @@ export const searchPackagesByAgent = (query: string, opts: AgentSearchOptions = 
 export interface AgentSearchStreamHandlers {
   onEvent: (event: PackageAgentTraceEvent) => void
   onError?: (err: Error) => void
+  projectRepoId: number
   signal?: AbortSignal
   sessionId?: string
 }
@@ -100,6 +103,7 @@ export const streamPackagesAgentSearch = async (
   const body = JSON.stringify({
     query,
     session_id: handlers.sessionId,
+    project_repo_id: handlers.projectRepoId,
     stream: true,
   })
   const headers: Record<string, string> = {
@@ -193,8 +197,8 @@ export const uploadRavenPackages = async (
     if (metadata.description) {
       formData.append('description', metadata.description)
     }
-    if (metadata.packageType) {
-      formData.append('packageType', metadata.packageType)
+    if (metadata.projectCode) {
+      formData.append('projectCode', metadata.projectCode)
     }
     if (metadata.version) {
       formData.append('version', metadata.version)

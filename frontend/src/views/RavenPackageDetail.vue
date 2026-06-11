@@ -10,6 +10,7 @@ import {
   ravenBaseUrl,
   getRavenPackageDownloadUrl,
 } from '@/api/raven'
+import { projectRepoApi, type ProjectRepoOption } from '@/api'
 import { copyToClipboard, downloadFileByUrl, formatDateTime, formatFileSize } from '@/utils'
 import { renderMarkdown } from '@/utils/markdownRenderer'
 import type { RavenComponent, RavenPackage } from '@/types'
@@ -20,6 +21,7 @@ const router = useRouter()
 const loading = ref(false)
 const pkg = ref<RavenPackage | null>(null)
 const errorMessage = ref('')
+const projectOptions = ref<ProjectRepoOption[]>([])
 
 const packageId = computed(() => String(route.params.id || ''))
 
@@ -84,28 +86,24 @@ const isPatchPackage = (value?: RavenPackage | null) => {
 const humanizePatch = (value?: RavenPackage | null) =>
   isPatchPackage(value) ? t('raven.patch') : t('raven.release')
 
-const packageTypeText = (type?: string) => {
-  const map: Record<string, string> = {
-    'lingxi-10': 'LingXi-10',
-    'lingxi-07a': 'LingXi-07A',
-    'ka-tx': 'KaTx',
-    'ka-rx': 'KaRx',
-    config: t('raven.packageType.config'),
-    'lingxi-06-thrid': 'LingXi-06-TRD',
-  }
-  return map[type || ''] || type || t('raven.unknownType')
+const projectByCode = computed(() => {
+  const map = new Map<string, ProjectRepoOption>()
+  projectOptions.value.forEach((project) => map.set(project.project_code, project))
+  return map
+})
+
+const projectText = (code?: string) => {
+  const normalized = String(code || '')
+  if (!normalized) return t('raven.unassociatedProject')
+  const project = projectByCode.value.get(normalized)
+  if (project) return project.project_name || project.project_code
+  return t('raven.unassociatedProjectWithCode', { code: normalized })
 }
 
-const packageTypePillClass = (type?: string) => {
-  const map: Record<string, string> = {
-    'lingxi-10': 'rw-pill-info',
-    'lingxi-07a': 'rw-pill-success',
-    'ka-tx': 'rw-pill-danger',
-    'ka-rx': 'rw-pill-warning',
-    config: 'rw-pill-neutral',
-    'lingxi-06-thrid': 'rw-pill-warning',
-  }
-  return map[type || ''] || 'rw-pill-neutral'
+const projectPillClass = (code?: string) => {
+  const normalized = String(code || '')
+  if (!normalized) return 'rw-pill-warning'
+  return projectByCode.value.has(normalized) ? 'rw-pill-info' : 'rw-pill-warning'
 }
 
 const renderedDescription = computed(() =>
@@ -136,6 +134,15 @@ const fetchDetail = async () => {
     ElMessage.error(errorMessage.value)
   } finally {
     loading.value = false
+  }
+}
+
+const fetchProjectOptions = async () => {
+  try {
+    const response = await projectRepoApi.listEnabled()
+    projectOptions.value = response.data?.data || []
+  } catch (error) {
+    console.error(error)
   }
 }
 
@@ -179,7 +186,10 @@ const downloadPackage = (value: RavenPackage) => {
   ElMessage.success(t('raven.downloadStart'))
 }
 
-onMounted(fetchDetail)
+onMounted(() => {
+  fetchDetail()
+  fetchProjectOptions()
+})
 
 watch(
   () => route.params.id,
@@ -244,8 +254,8 @@ watch(
               </div>
             </div>
             <div class="title-tags">
-              <span class="rw-pill" :class="packageTypePillClass(pkg.packageType)">
-                {{ packageTypeText(pkg.packageType) }}
+              <span class="rw-pill" :class="projectPillClass(pkg.projectCode)">
+                {{ projectText(pkg.projectCode) }}
               </span>
               <span class="rw-pill rw-pill-neutral rw-pill-mono">v{{ pkg.version || t('raven.unknown') }}</span>
               <span class="rw-pill" :class="isPatchPackage(pkg) ? 'rw-pill-warning' : 'rw-pill-success'">
@@ -274,10 +284,10 @@ watch(
               <div class="info-value strong">{{ formatFileSize(pkg.size) }}</div>
             </div>
             <div class="info-item">
-              <label>{{ t('raven.labelPackageType') }}</label>
+              <label>{{ t('raven.labelProject') }}</label>
               <div>
-                <span class="rw-pill" :class="packageTypePillClass(pkg.packageType)">
-                  {{ packageTypeText(pkg.packageType) }}
+                <span class="rw-pill" :class="projectPillClass(pkg.projectCode)">
+                  {{ projectText(pkg.projectCode) }}
                 </span>
               </div>
             </div>

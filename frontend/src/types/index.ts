@@ -145,7 +145,7 @@ export interface RavenPackage {
   id: string
   name: string
   version?: string
-  packageType?: string
+  projectCode?: string
   size: number
   createdAt: string
   path?: string
@@ -167,7 +167,7 @@ export interface RavenPackageList {
 export interface RavenUploadMetadata {
   isPatch?: boolean
   description?: string
-  packageType?: string
+  projectCode?: string
   version?: string
   tags?: string[]
   components?: RavenComponent[]
@@ -567,7 +567,7 @@ export interface MetricsLogActivitySummary {
 export interface MetricsPackageActivitySummary {
   package_count: number
   total_bytes: number
-  counts_by_type: Record<string, number>
+  counts_by_project: Record<string, number>
   activity_counts: Record<string, number>
   search_count: number
 }

@@ -47,16 +47,16 @@
 
 ## 7. 前端：包管理（RavenManager / 详情 / 类型）
 
-- [ ] 7.1 `RavenManager.vue`：上传表单包类型下拉 → 项目下拉（`projectRepoApi.listEnabled()`，必选，未选阻止提交）；批量上传同理；上传请求体 `packageType` → `projectCode`
-- [ ] 7.2 `RavenManager.vue`：列表筛选下拉改为项目 + "未关联"选项；包列表/检索结果卡片的类型 pill 改为项目名（反查不到显示"未关联"+原始 code）
-- [ ] 7.3 `RavenManager.vue` 智能检索：新增必选项目下拉（未选禁用检索），`agent-search` 请求体带 `project_repo_id`
-- [ ] 7.4 `RavenPackageDetail.vue`：展示项目名称/未关联占位；`frontend/src/types/index.ts` 的 Package 类型 `packageType` → `projectCode`；`frontend/src/api/raven.ts` 参数适配
-- [ ] 7.5 `frontend/src/i18n/{zh,en}.ts`：包管理项目维度文案（移除/替换 `raven.packageType.*` 系列）
+- [x] 7.1 `RavenManager.vue`：上传表单包类型下拉 → 项目下拉（`projectRepoApi.listEnabled()`，必选，未选阻止提交）；批量上传同理；上传请求体 `packageType` → `projectCode`
+- [x] 7.2 `RavenManager.vue`：列表筛选下拉改为项目 + "未关联"选项；包列表/检索结果卡片的类型 pill 改为项目名（反查不到显示"未关联"+原始 code）
+- [x] 7.3 `RavenManager.vue` 智能检索：新增必选项目下拉（未选禁用检索），`agent-search` 请求体带 `project_repo_id`
+- [x] 7.4 `RavenPackageDetail.vue`：展示项目名称/未关联占位；`frontend/src/types/index.ts` 的 Package 类型 `packageType` → `projectCode`；`frontend/src/api/raven.ts` 参数适配
+- [x] 7.5 `frontend/src/i18n/{zh,en}.ts`：包管理项目维度文案（移除/替换 `raven.packageType.*` 系列）
 
 ## 8. 指标与管理端
 
 - [x] 8.1 `metrics_service.py` / 总览 API：包分布从类型改为项目（`packagesByProject` 含 `unassociated`）
-- [ ] 8.2 `AdminMetrics.vue`：包分布图表字段与文案改为项目维度
+- [x] 8.2 `AdminMetrics.vue`：包分布图表字段与文案改为项目维度
 - [ ] 8.3 指标测试：overview 新结构、`package_activity` 事件 metadata 含 `project_code`
 
 ## 9. 收尾验证

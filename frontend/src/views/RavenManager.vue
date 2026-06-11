@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { projectRepoApi, type ProjectRepoOption } from '@/api'
 import {
   listRavenPackages,
   deleteRavenPackage,
@@ -30,7 +31,7 @@ const { t } = useI18n()
 
 const filters = reactive({
   search: '',
-  type: '',
+  projectCode: '',
   version: '',
   tags: '',
   isPatch: '',
@@ -54,7 +55,7 @@ const searchDialogVisible = ref(false)
 const uploadZoneActive = ref(false)
 const uploadFiles = ref<File[]>([])
 const uploadMeta = reactive<RavenUploadMetadata>({
-  packageType: 'lingxi-10',
+  projectCode: '',
   version: '',
   isPatch: false,
   description: '',
@@ -72,6 +73,7 @@ const uploadStatus = ref('')
 const uploadController = ref<AbortController | null>(null)
 
 const searchQuery = ref('')
+const searchProjectRepoId = ref<number | null>(null)
 const searchLoading = ref(false)
 const searchResult = ref<PackageAgentSearchResponse | null>(null)
 const searchTraceEvents = ref<AgentTraceEvent[]>([])
@@ -90,6 +92,9 @@ const searchSuggestions = computed<string[]>(() => [
 const searchDetailVisible = ref(false)
 const searchDetailLoading = ref(false)
 const searchDetailPackage = ref<RavenPackage | null>(null)
+const projectOptions = ref<ProjectRepoOption[]>([])
+const projectOptionsLoading = ref(false)
+const UNASSOCIATED_PROJECT = '__unassociated__'
 
 const normalizeTags = (value?: unknown) => {
   if (!value) return []
@@ -142,28 +147,37 @@ const isPatchPackage = (pkg?: RavenPackage | null) => {
   return value === true || value === 'true'
 }
 
-const packageTypeText = (type?: string) => {
-  const map: Record<string, string> = {
-    'lingxi-10': 'LingXi-10',
-    'lingxi-07a': 'LingXi-07A',
-    'ka-tx': 'KaTx',
-    'ka-rx': 'KaRx',
-    config: t('raven.packageType.config'),
-    'lingxi-06-thrid': 'LingXi-06-TRD',
-  }
-  return map[type || ''] || type || t('raven.unknownType')
+const projectByCode = computed(() => {
+  const map = new Map<string, ProjectRepoOption>()
+  projectOptions.value.forEach((project) => map.set(project.project_code, project))
+  return map
+})
+
+const projectText = (code?: string) => {
+  const normalized = String(code || '')
+  if (!normalized) return t('raven.unassociatedProject')
+  const project = projectByCode.value.get(normalized)
+  if (project) return project.project_name || project.project_code
+  return t('raven.unassociatedProjectWithCode', { code: normalized })
 }
 
-const packageTypePillClass = (type?: string) => {
-  const map: Record<string, string> = {
-    'lingxi-10': 'rw-pill-info',
-    'lingxi-07a': 'rw-pill-success',
-    'ka-tx': 'rw-pill-danger',
-    'ka-rx': 'rw-pill-warning',
-    config: 'rw-pill-neutral',
-    'lingxi-06-thrid': 'rw-pill-warning',
+const projectPillClass = (code?: string) => {
+  const normalized = String(code || '')
+  if (!normalized) return 'rw-pill-warning'
+  return projectByCode.value.has(normalized) ? 'rw-pill-info' : 'rw-pill-warning'
+}
+
+const fetchProjectOptions = async () => {
+  projectOptionsLoading.value = true
+  try {
+    const response = await projectRepoApi.listEnabled()
+    projectOptions.value = response.data?.data || []
+  } catch (error) {
+    console.error(error)
+    ElMessage.error(t('raven.loadProjectsFail'))
+  } finally {
+    projectOptionsLoading.value = false
   }
-  return map[type || ''] || 'rw-pill-neutral'
 }
 
 const fetchPackages = async () => {
@@ -173,7 +187,7 @@ const fetchPackages = async () => {
       page: filters.page,
       limit: filters.limit,
       search: filters.search || undefined,
-      type: filters.type || undefined,
+      projectCode: filters.projectCode || undefined,
       tags: filters.tags || undefined,
       version: filters.version || undefined,
       isPatch: filters.isPatch || undefined,
@@ -203,7 +217,7 @@ const handlePageChange = (page: number) => {
 
 const resetFilters = () => {
   filters.search = ''
-  filters.type = ''
+  filters.projectCode = ''
   filters.version = ''
   filters.tags = ''
   filters.isPatch = ''
@@ -298,7 +312,7 @@ const clearUpload = () => {
   uploadMeta.components = []
   uploadMeta.version = ''
   uploadMeta.isPatch = false
-  uploadMeta.packageType = 'lingxi-10'
+  uploadMeta.projectCode = ''
   uploadProgress.value = 0
   uploadStatus.value = ''
 }
@@ -306,6 +320,10 @@ const clearUpload = () => {
 const startUpload = async () => {
   if (!uploadFiles.value.length) {
     ElMessage.warning(t('raven.uploadSelectFirst'))
+    return
+  }
+  if (!uploadMeta.projectCode) {
+    ElMessage.warning(t('raven.projectRequired'))
     return
   }
 
@@ -483,6 +501,10 @@ const performSearch = async () => {
     ElMessage.warning(t('raven.searchTooLong'))
     return
   }
+  if (searchProjectRepoId.value === null) {
+    ElMessage.warning(t('raven.searchProjectRequired'))
+    return
+  }
 
   cancelSearch()
 
@@ -499,6 +521,7 @@ const performSearch = async () => {
 
   try {
     await streamPackagesAgentSearch(q, {
+      projectRepoId: searchProjectRepoId.value,
       signal: controller.signal,
       onEvent: (event: PackageAgentTraceEvent) => {
         if (event.type === 'final' && (event as any).data) {
@@ -544,10 +567,12 @@ const triggerSuggestion = (item: string) => {
 }
 
 const openUploadDialog = () => {
+  if (!projectOptions.value.length) fetchProjectOptions()
   uploadDialogVisible.value = true
 }
 
 const openSearchDialog = () => {
+  if (!projectOptions.value.length) fetchProjectOptions()
   searchDialogVisible.value = true
 }
 
@@ -562,6 +587,7 @@ const topbarMeta = computed(() =>
 
 onMounted(() => {
   fetchPackages()
+  fetchProjectOptions()
 })
 </script>
 
@@ -596,18 +622,20 @@ onMounted(() => {
             </template>
           </el-input>
           <el-select
-            v-model="filters.type"
-            :placeholder="t('raven.packageTypePlaceholder')"
+            v-model="filters.projectCode"
+            :placeholder="t('raven.projectFilterPlaceholder')"
             clearable
             class="rw-filter-control"
+            :loading="projectOptionsLoading"
             @change="fetchPackages"
           >
-            <el-option label="LingXi-10" value="lingxi-10" />
-            <el-option label="LingXi-07A" value="lingxi-07a" />
-            <el-option label="KaTx" value="ka-tx" />
-            <el-option label="KaRx" value="ka-rx" />
-            <el-option :label="t('raven.packageType.config')" value="config" />
-            <el-option label="LingXi-06-TRD" value="lingxi-06-thrid" />
+            <el-option
+              v-for="project in projectOptions"
+              :key="project.id"
+              :label="project.project_name || project.project_code"
+              :value="project.project_code"
+            />
+            <el-option :label="t('raven.unassociatedProject')" :value="UNASSOCIATED_PROJECT" />
           </el-select>
           <el-input
             v-model="filters.version"
@@ -659,8 +687,8 @@ onMounted(() => {
                 <div class="rw-name-cell">
                   <div class="rw-name-head">
                     <span class="rw-pkg-name" :title="row.name">{{ row.name }}</span>
-                    <span class="rw-pill" :class="packageTypePillClass(row.packageType)">
-                      {{ packageTypeText(row.packageType) }}
+                    <span class="rw-pill" :class="projectPillClass(row.projectCode)">
+                      {{ projectText(row.projectCode) }}
                     </span>
                     <span class="rw-pill rw-pill-neutral rw-pill-mono">v{{ row.version || t('raven.unknown') }}</span>
                     <span class="rw-pill" :class="isPatchPackage(row) ? 'rw-pill-warning' : 'rw-pill-success'">
@@ -797,13 +825,18 @@ onMounted(() => {
           <div class="rw-subcard">
             <h4 class="rw-subcard-title">{{ t('raven.metadata') }}</h4>
             <div class="rw-form-grid">
-              <el-select v-model="uploadMeta.packageType" :placeholder="t('raven.packageTypePlaceholder')">
-                <el-option label="LingXi-10" value="lingxi-10" />
-                <el-option label="LingXi-07A" value="lingxi-07a" />
-                <el-option label="KaTx" value="ka-tx" />
-                <el-option label="KaRx" value="ka-rx" />
-                <el-option :label="t('raven.packageType.config')" value="config" />
-                <el-option label="LingXi-06-TRD" value="lingxi-06-thrid" />
+              <el-select
+                v-model="uploadMeta.projectCode"
+                :placeholder="t('raven.projectPlaceholder')"
+                :loading="projectOptionsLoading"
+                filterable
+              >
+                <el-option
+                  v-for="project in projectOptions"
+                  :key="project.id"
+                  :label="project.project_name || project.project_code"
+                  :value="project.project_code"
+                />
               </el-select>
               <el-input v-model="uploadMeta.version" :placeholder="t('raven.versionPlaceholderInput')" />
               <el-select v-model="uploadMeta.isPatch" :placeholder="t('raven.patchTypeSelect')">
@@ -868,7 +901,7 @@ onMounted(() => {
             <div class="rw-upload-actions">
               <button
                 class="rw-btn-primary"
-                :disabled="!uploadFiles.length || uploading"
+                :disabled="!uploadFiles.length || !uploadMeta.projectCode || uploading"
                 @click="startUpload"
               >
                 <el-icon><UploadFilled /></el-icon>
@@ -902,6 +935,21 @@ onMounted(() => {
     >
       <div class="rw-search-body">
         <div class="rw-search-bar">
+          <el-select
+            v-model="searchProjectRepoId"
+            :placeholder="t('raven.projectPlaceholder')"
+            :loading="projectOptionsLoading"
+            filterable
+            class="rw-search-project"
+            :disabled="searchLoading"
+          >
+            <el-option
+              v-for="project in projectOptions"
+              :key="project.id"
+              :label="project.project_name || project.project_code"
+              :value="project.id"
+            />
+          </el-select>
           <el-input
             v-model="searchQuery"
             :placeholder="t('raven.searchInputPlaceholder')"
@@ -918,7 +966,7 @@ onMounted(() => {
           <button
             v-if="!searchLoading"
             class="rw-btn-primary"
-            :disabled="searchLoading"
+            :disabled="searchLoading || searchProjectRepoId === null"
             @click="performSearch"
           >
             <el-icon><Search /></el-icon>
@@ -995,8 +1043,8 @@ onMounted(() => {
                   <div class="rw-match-item-meta">
                     <div class="rw-match-item-title">
                       <span class="rw-pkg-name">{{ pkg.name }}</span>
-                      <span class="rw-pill" :class="packageTypePillClass(pkg.packageType)">
-                        {{ packageTypeText(pkg.packageType) }}
+                      <span class="rw-pill" :class="projectPillClass(pkg.projectCode)">
+                        {{ projectText(pkg.projectCode) }}
                       </span>
                       <span class="rw-pill rw-pill-neutral rw-pill-mono">v{{ pkg.version || t('raven.unknown') }}</span>
                     </div>
@@ -1068,8 +1116,8 @@ onMounted(() => {
             <span v-if="searchDetailPackage" class="rw-pill rw-pill-neutral rw-pill-mono">
               v{{ searchDetailPackage.version || t('raven.unknown') }}
             </span>
-            <span v-if="searchDetailPackage" class="rw-pill" :class="packageTypePillClass(searchDetailPackage.packageType)">
-              {{ packageTypeText(searchDetailPackage.packageType) }}
+            <span v-if="searchDetailPackage" class="rw-pill" :class="projectPillClass(searchDetailPackage.projectCode)">
+              {{ projectText(searchDetailPackage.projectCode) }}
             </span>
             <span
               v-if="searchDetailPackage"
@@ -1634,6 +1682,7 @@ onMounted(() => {
 .rw-search-body { display: flex; flex-direction: column; gap: 14px; }
 
 .rw-search-bar { display: flex; gap: 8px; align-items: center; }
+.rw-search-project { width: 220px; flex-shrink: 0; }
 .rw-search-input { flex: 1; }
 
 .rw-search-tools {

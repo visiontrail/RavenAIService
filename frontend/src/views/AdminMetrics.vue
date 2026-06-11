@@ -630,6 +630,9 @@ onMounted(() => {
               <li><span>{{ t('admin.metrics.packagesCount') }}</span><b>{{ formatNumber(overview?.packages.package_count) }}</b></li>
               <li><span>{{ t('admin.metrics.packagesTotalSize') }}</span><b>{{ formatBytes(overview?.packages.total_bytes) }}</b></li>
               <li><span>{{ t('admin.metrics.packagesSearchCount') }}</span><b>{{ formatNumber(overview?.packages.search_count) }}</b></li>
+              <li v-for="[k, v] in objToPairs(overview?.packages.counts_by_project)" :key="k">
+                <span>{{ t('admin.metrics.packagesProjectDistribution', { key: k === 'unassociated' ? t('raven.unassociatedProject') : k }) }}</span><b>{{ formatNumber(v) }}</b>
+              </li>
             </ul>
           </div>
           <div class="metrics-card">
