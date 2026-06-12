@@ -1044,7 +1044,7 @@ export default {
     welcomeDeviceSummary: '{online} online / {total} devices',
     welcomeTitle: '{greeting}, {name}.',
     welcomeQuestion: 'What do you want to do today?',
-    welcomeSubtitle: 'RavenAI connects code commits, version packages, device control, and test logs into one workflow. Describe what you need below, or start from a common entry point.',
+    welcomeSubtitle: 'RavenAI connects code commits, project knowledge, version packages, device control, and test logs into one workflow. Describe what you need, or start from a common entry point below.',
     loadingHistory: 'Loading conversation history…',
     thinking: 'Thinking…',
     sentencePeriod: '.',
@@ -1149,6 +1149,13 @@ export default {
         prompt1: 'Please analyze this log package. The symptom is...',
         prompt2: 'Help me inspect this log and find what went wrong. Symptom...',
         prompt3: 'Please diagnose this log snippet. Behavior...',
+      },
+      projectExpert: {
+        label: 'Project expert',
+        desc: 'Choose a project and ask about source code, architecture, or business rules with follow-up support.',
+        prompt1: 'Act as the project expert and explain this part of the project...',
+        prompt2: 'I want to understand how a module works. My question is...',
+        prompt3: 'Analyze this requirement against the project source. Context...',
       },
     },
     loginRequired: {

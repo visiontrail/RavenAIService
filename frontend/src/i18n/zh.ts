@@ -1044,7 +1044,7 @@ export default {
     welcomeDeviceSummary: '{online} 台在线 / {total} 台设备',
     welcomeTitle: '{greeting}，{name}。',
     welcomeQuestion: '今天想做哪件事？',
-    welcomeSubtitle: 'RavenAI 把代码提交、版本包、设备控制和测试日志串成一个闭环。在下方说出你的需求，或选一个常用入口开始。',
+    welcomeSubtitle: 'RavenAI 把代码提交、项目知识、版本包、设备控制和测试日志串成一个闭环。你可以直接说出需求，也可以从下方常用入口开始。',
     loadingHistory: '正在加载历史对话…',
     thinking: '正在思考…',
     sentencePeriod: '。',
@@ -1149,6 +1149,13 @@ export default {
         prompt1: '请分析这个日志包，具体现象是……',
         prompt2: '帮我看看这份日志哪里出了问题，现象是……',
         prompt3: '这段日志麻烦你诊断一下，表现为……',
+      },
+      projectExpert: {
+        label: '项目专家',
+        desc: '选择项目后围绕源码、架构和业务规则提问，支持连续追问。',
+        prompt1: '请作为项目专家，帮我解释这个项目里的……',
+        prompt2: '我想了解某个模块的实现逻辑，问题是……',
+        prompt3: '请基于项目源码帮我分析一个需求，背景是……',
       },
     },
     loginRequired: {

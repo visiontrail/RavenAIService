@@ -1474,7 +1474,7 @@ const welcomeGreeting = computed(() => {
 type CapabilityCard = {
   icon: string
   labelKey: string
-  kind: 'package' | 'device' | 'log'
+  kind: 'package' | 'device' | 'log' | 'projectExpert'
   descKey: string
   promptKeys: string[]
 }
@@ -1501,6 +1501,13 @@ const capabilityCards: CapabilityCard[] = [
       'aiChat.capabilities.log.prompt2',
       'aiChat.capabilities.log.prompt3',
     ] },
+  { icon: 'project', labelKey: 'aiChat.capabilities.projectExpert.label', kind: 'projectExpert',
+    descKey: 'aiChat.capabilities.projectExpert.desc',
+    promptKeys: [
+      'aiChat.capabilities.projectExpert.prompt1',
+      'aiChat.capabilities.projectExpert.prompt2',
+      'aiChat.capabilities.projectExpert.prompt3',
+    ] },
 ]
 
 // 记录每张卡片当前展示到第几条表达，重复点击则推进到下一条
@@ -1511,6 +1518,7 @@ const lastInjectedPrompt = ref('')
 const onPickCapability = (card: CapabilityCard, i: number) => {
   if (card.kind === 'log') setTargetAgent(logAnalysisAgentOption)
   else if (card.kind === 'package') setTargetAgent(packageAgentOption)
+  else if (card.kind === 'projectExpert') setTargetAgent(projectExpertAgentOption)
   // 设备操作走独立下拉，不在 AgentOption 体系内，故清除已选中的任何 Agent
   else clearTargetAgent()
 
@@ -1622,6 +1630,7 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
             <div class="rw-cap-label">
               <svg v-if="c.icon === 'logs'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h16"/><circle cx="18" cy="12" r="1.4"/></svg>
               <svg v-else-if="c.icon === 'device'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="11" rx="1.5"/><path d="M8 21h8M12 17v4"/><circle cx="7" cy="11" r="0.4" fill="currentColor"/></svg>
+              <svg v-else-if="c.icon === 'project'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V6.75A2.75 2.75 0 0 1 6.75 4H20v13H6.75A2.75 2.75 0 0 0 4 19.5Z"/><path d="M8 8h8M8 12h6"/></svg>
               <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>
               {{ t(c.labelKey) }}
             </div>
@@ -2142,8 +2151,8 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
 }
 .rw-cap-grid {
   margin-top: 8px;
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px; width: 100%; max-width: 720px;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px; width: 100%; max-width: 920px;
 }
 .rw-cap-card {
   border: 1px solid var(--rw-hairline-strong);
