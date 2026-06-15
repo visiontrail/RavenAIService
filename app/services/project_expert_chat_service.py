@@ -429,6 +429,13 @@ class ProjectExpertChatService:
         try:
             async with db_manager.session_factory() as db:
                 try:
+                    if job.remember and job.user_id is not None:
+                        await chat_history_service.ensure_session_summary(
+                            db,
+                            user_id=str(job.user_id),
+                            session_id=job.session_id,
+                            title_hint=job.question,
+                        )
                     row = ChatAgentRun(
                         id=job.run_id,
                         session_id=job.session_id,

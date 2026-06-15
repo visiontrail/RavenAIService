@@ -69,6 +69,34 @@ class ChatHistoryService(BaseService):
             session.is_deleted = False
         return session
 
+    async def ensure_session_summary(
+        self,
+        db: AsyncSession,
+        *,
+        user_id: str,
+        session_id: str,
+        title_hint: Optional[str] = None,
+    ) -> ChatSession:
+        """Ensure a session row exists before a long-running agent finishes.
+
+        External chat agents persist the full user/assistant exchange at
+        terminal time. Creating the lightweight session row at run start lets
+        authenticated clients show the user-triggered conversation in history
+        immediately, without duplicating the eventual user message.
+        """
+        session = await self.ensure_session(db, user_id, session_id=session_id)
+        if (
+            (session.message_count or 0) == 0
+            and title_hint
+            and (not session.title or session.title.strip() == "新对话")
+        ):
+            session.title = self._title_from_hint(title_hint, fallback=session.title)
+        if (session.message_count or 0) == 0:
+            session.last_message_at = datetime.utcnow()
+        await db.flush()
+        await db.refresh(session)
+        return session
+
     async def append_message(
         self,
         db: AsyncSession,

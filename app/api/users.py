@@ -375,9 +375,34 @@ async def list_chat_sessions(
 
     sessions = await chat_history_service.list_sessions(db, current_user.id)
     owner_scope = owner_scope_for_user(current_user) or ""
+    latest_runs_by_session: dict[str, ChatAgentRun] = {}
+    session_ids = [session.id for session in sessions]
+    if session_ids:
+        runs_result = await db.execute(
+            select(ChatAgentRun)
+            .where(
+                ChatAgentRun.user_id == current_user.id,
+                ChatAgentRun.session_id.in_(session_ids),
+            )
+            .order_by(
+                ChatAgentRun.session_id.asc(),
+                ChatAgentRun.started_at.desc(),
+                ChatAgentRun.created_at.desc(),
+            )
+        )
+        for run in runs_result.scalars().all():
+            latest_runs_by_session.setdefault(run.session_id, run)
+
     summaries: list[ChatSessionSummary] = []
     for session in sessions:
         summary = ChatSessionSummary.model_validate(session, from_attributes=True)
+        latest_run = latest_runs_by_session.get(session.id)
+        if latest_run is not None:
+            summary.run_status = latest_run.status
+            summary.run_agent_kind = latest_run.agent_kind
+            summary.run_started_at = latest_run.started_at
+            summary.run_updated_at = latest_run.finished_at or latest_run.updated_at
+
         # Overlay the in-memory active run state, scoped strictly to the
         # current user. Anonymous brokers / other users' runs MUST NOT leak
         # into this user's sidebar spinner.

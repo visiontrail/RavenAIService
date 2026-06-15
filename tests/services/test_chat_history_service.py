@@ -92,6 +92,34 @@ async def test_append_first_user_message_preserves_preseeded_summary_title(
 
 
 @pytest.mark.asyncio
+async def test_ensure_session_summary_preseeds_without_messages(
+    session: AsyncSession, user: User
+):
+    sid = str(uuid.uuid4())
+    preseeded = await chat_history_service.ensure_session_summary(
+        session,
+        user_id=user.id,
+        session_id=sid,
+        title_hint="分析这个项目里的鉴权流程",
+    )
+
+    assert preseeded.id == sid
+    assert preseeded.message_count == 0
+    assert preseeded.title == "分析这个项目里的鉴权流程"
+
+    saved = await chat_history_service.save_exchange(
+        session,
+        user_id=user.id,
+        session_id=sid,
+        user_content="分析这个项目里的鉴权流程",
+        ai_content="好的",
+    )
+
+    assert saved.message_count == 2
+    assert saved.title == "分析这个项目里的鉴权流程"
+
+
+@pytest.mark.asyncio
 async def test_append_message_revives_soft_deleted_session(
     session: AsyncSession, user: User
 ):
