@@ -168,11 +168,18 @@ class AIChatService(BaseService):
             return
         try:
             existing = await chat_history_service._get_session(db, user.id, session_id)
-            if existing and existing.title and existing.title.strip() != "新对话":
-                logger.info(
-                    "chat: 跳过标题生成（已存在自定义标题）: %s", existing.title
-                )
-                return
+            # On the first exchange the title is just the auto-derived first user
+            # message (set by append_message at run start), so it must be regenerated
+            # by the lightweight model. Only treat a non-default title as a real
+            # user rename — and therefore skip — once we're past the first exchange.
+            # This mirrors the specialized agent services, which regenerate while
+            # message_count <= 2.
+            if existing and (existing.message_count or 0) > 2:
+                if existing.title and existing.title.strip() != "新对话":
+                    logger.info(
+                        "chat: 跳过标题生成（已存在自定义标题）: %s", existing.title
+                    )
+                    return
         except Exception as exc:  # noqa: BLE001
             logger.debug("chat: 读取会话标题失败，继续尝试生成: %s", exc)
 

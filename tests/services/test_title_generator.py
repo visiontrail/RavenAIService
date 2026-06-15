@@ -96,7 +96,7 @@ async def test_generate_session_title_uses_llm_output_when_available(monkeypatch
     # contents in the test runner.
     monkeypatch.setattr(
         "app.services.prompts_config_service.get_chat_title_prompt_template",
-        lambda: "U:{user_content}\nA:{ai_content}\nN:{max_length}",
+        lambda locale=None: "U:{user_content}\nA:{ai_content}\nN:{max_length}",
     )
 
     out = await tg.generate_session_title("用户问网络", "助手回答", max_length=16)
@@ -114,7 +114,7 @@ async def test_generate_session_title_forwards_usage_context(monkeypatch):
     monkeypatch.setattr(tg, "_run_query", _ok)
     monkeypatch.setattr(
         "app.services.prompts_config_service.get_chat_title_prompt_template",
-        lambda: "U:{user_content}\nA:{ai_content}\nN:{max_length}",
+        lambda locale=None: "U:{user_content}\nA:{ai_content}\nN:{max_length}",
     )
 
     out = await tg.generate_session_title(
