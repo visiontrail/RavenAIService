@@ -49,6 +49,16 @@ const deletingId = ref<string | null>(null)
 
 const skills = ref<AgentSkill[]>([])
 
+// 项目级系统提示词（与 Agent 基础系统提示词分级叠加）
+const MAX_SYSTEM_PROMPT_CHARS = 20000
+const systemPrompt = ref('')
+const systemPromptMeta = ref<{ exists: boolean; updated_at?: string | null }>({
+  exists: false,
+  updated_at: null,
+})
+const systemPromptLoading = ref(false)
+const systemPromptSaving = ref(false)
+
 const overwrite = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const dragOver = ref(false)
@@ -198,6 +208,8 @@ const clearAuth = () => {
   adminToken.clear()
   isAuthenticated.value = false
   skills.value = []
+  systemPrompt.value = ''
+  systemPromptMeta.value = { exists: false, updated_at: null }
   authForm.password = ''
 }
 
@@ -217,7 +229,7 @@ const handleLogin = async () => {
       message: t('admin.loginSuccessMsg', { username: resp.data.username }),
       type: 'success',
     })
-    await fetchSkills()
+    await Promise.all([fetchSkills(), fetchSystemPrompt()])
   } catch (err: any) {
     appStore.showNotification({ title: t('admin.loginFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
@@ -250,9 +262,62 @@ const fetchSkills = async () => {
   }
 }
 
+const fetchSystemPrompt = async () => {
+  if (!isAuthenticated.value || !projectCode.value) return
+  systemPromptLoading.value = true
+  try {
+    const resp = await adminApi.getProjectSystemPrompt(projectCode.value)
+    if (!resp?.success || !resp.data)
+      throw new Error(resp?.message || t('admin.projectSkills.systemPrompt.loadFail'))
+    systemPrompt.value = resp.data.content || ''
+    systemPromptMeta.value = { exists: resp.data.exists, updated_at: resp.data.updated_at }
+  } catch (err: any) {
+    appStore.showNotification({
+      title: t('admin.projectSkills.systemPrompt.loadFail'),
+      message: parseErrorMessage(err),
+      type: 'error',
+    })
+  } finally {
+    systemPromptLoading.value = false
+  }
+}
+
+const saveSystemPrompt = async () => {
+  if (!projectCode.value) return
+  if (systemPrompt.value.length > MAX_SYSTEM_PROMPT_CHARS) return
+  systemPromptSaving.value = true
+  try {
+    const resp = await adminApi.updateProjectSystemPrompt(projectCode.value, systemPrompt.value)
+    if (!resp?.success || !resp.data)
+      throw new Error(resp?.message || t('admin.projectSkills.systemPrompt.saveFail'))
+    systemPrompt.value = resp.data.content || ''
+    systemPromptMeta.value = { exists: resp.data.exists, updated_at: resp.data.updated_at }
+    appStore.showNotification({
+      title: t('admin.projectSkills.systemPrompt.saveSuccess'),
+      message: resp.data.exists
+        ? t('admin.projectSkills.systemPrompt.saveSuccessMsg')
+        : t('admin.projectSkills.systemPrompt.clearedMsg'),
+      type: 'success',
+    })
+  } catch (err: any) {
+    appStore.showNotification({
+      title: t('admin.projectSkills.systemPrompt.saveFail'),
+      message: parseErrorMessage(err),
+      type: 'error',
+    })
+  } finally {
+    systemPromptSaving.value = false
+  }
+}
+
 watch(projectCode, () => {
   skills.value = []
-  if (projectCode.value) fetchSkills()
+  systemPrompt.value = ''
+  systemPromptMeta.value = { exists: false, updated_at: null }
+  if (projectCode.value) {
+    fetchSkills()
+    fetchSystemPrompt()
+  }
 })
 
 const handleNavClick = (item: (typeof navItems)[number]) => {
@@ -443,7 +508,7 @@ const bootstrap = async () => {
     const resp = await adminApi.me()
     if (resp?.success) {
       isAuthenticated.value = true
-      await fetchSkills()
+      await Promise.all([fetchSkills(), fetchSystemPrompt()])
     } else {
       clearAuth()
     }
@@ -582,6 +647,44 @@ onMounted(() => bootstrap())
               >
                 <RefreshCw :size="15" />
                 {{ loadingSkills ? t('admin.refreshing') : t('common.refresh') }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+          <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h3 class="text-sm font-semibold text-slate-900">{{ t('admin.projectSkills.systemPrompt.title') }}</h3>
+              <p class="mt-1 text-xs text-slate-500">{{ t('admin.projectSkills.systemPrompt.desc') }}</p>
+            </div>
+            <div class="text-xs text-slate-400 md:text-right shrink-0">
+              <span v-if="systemPromptMeta.exists && systemPromptMeta.updated_at">
+                {{ t('admin.projectSkills.systemPrompt.lastUpdated', { time: formatTimestamp(systemPromptMeta.updated_at) }) }}
+              </span>
+              <span v-else>{{ t('admin.projectSkills.systemPrompt.neverConfigured') }}</span>
+            </div>
+          </div>
+
+          <div class="mt-4">
+            <textarea
+              v-model="systemPrompt"
+              :maxlength="MAX_SYSTEM_PROMPT_CHARS"
+              :disabled="systemPromptLoading || systemPromptSaving"
+              rows="6"
+              class="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm text-slate-700 font-mono leading-relaxed focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none resize-y disabled:opacity-60"
+              :placeholder="t('admin.projectSkills.systemPrompt.placeholder')"
+            ></textarea>
+            <div class="mt-3 flex items-center justify-between">
+              <span class="text-xs text-slate-400">
+                {{ t('admin.projectSkills.systemPrompt.charCount', { count: systemPrompt.length, max: MAX_SYSTEM_PROMPT_CHARS }) }}
+              </span>
+              <button
+                class="inline-flex items-center gap-1.5 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-700 disabled:opacity-50"
+                :disabled="systemPromptLoading || systemPromptSaving"
+                @click="saveSystemPrompt"
+              >
+                {{ systemPromptSaving ? t('admin.projectSkills.systemPrompt.saving') : t('admin.projectSkills.systemPrompt.save') }}
               </button>
             </div>
           </div>

@@ -15,6 +15,7 @@ from app.models.database import get_db
 from app.security.admin_auth import ADMIN_TOKEN_HEADER, ADMIN_TOKEN_PREFIX, auth_manager
 from app.security.admin_dependency import resolve_admin_identity
 from app.services import (
+    project_prompt_service,
     project_repo_member_service,
     project_repo_service,
     skills_service,
@@ -829,3 +830,68 @@ async def get_project_skill_file(
             detail=str(exc),
         ) from exc
     return SkillFileContentResponse(data=SkillFileContent(**data))
+
+
+# ---------------------------------------------------------------------------
+# Project-level system prompt endpoints
+# ---------------------------------------------------------------------------
+#
+# 让系统提示词像 Skill 一样分级处理：Agent 级基础提示词来自 prompts_config.yaml，
+# 这里维护按 project_code 隔离的「项目级追加提示词」（可为空）。Agent 运行前会
+# 把它叠加到基础系统提示词之后。
+
+
+class ProjectSystemPromptData(BaseModel):
+    project_code: str
+    content: str
+    exists: bool
+    size_bytes: int = 0
+    updated_at: Optional[datetime] = None
+
+
+class ProjectSystemPromptResponse(BaseModel):
+    success: bool = True
+    data: ProjectSystemPromptData
+    message: str = "ok"
+
+
+class UpdateProjectSystemPromptRequest(BaseModel):
+    # 允许空字符串：空内容等价于清除项目级追加提示词。
+    content: str = Field(default="", max_length=project_prompt_service.MAX_PROJECT_PROMPT_CHARS)
+
+
+@router.get(
+    "/project-repos/{project_code}/system-prompt",
+    response_model=ProjectSystemPromptResponse,
+)
+async def get_project_system_prompt(
+    project_code: str,
+    _username: str = Depends(require_admin),
+) -> ProjectSystemPromptResponse:
+    try:
+        data = project_prompt_service.get_project_prompt(project_code)
+    except project_prompt_service.ProjectPromptValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return ProjectSystemPromptResponse(data=ProjectSystemPromptData(**data), message="读取成功")
+
+
+@router.put(
+    "/project-repos/{project_code}/system-prompt",
+    response_model=ProjectSystemPromptResponse,
+)
+async def update_project_system_prompt(
+    project_code: str,
+    payload: UpdateProjectSystemPromptRequest,
+    _username: str = Depends(require_admin),
+) -> ProjectSystemPromptResponse:
+    try:
+        data = project_prompt_service.set_project_prompt(project_code, payload.content)
+    except project_prompt_service.ProjectPromptValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return ProjectSystemPromptResponse(data=ProjectSystemPromptData(**data), message="保存成功")

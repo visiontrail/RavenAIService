@@ -448,6 +448,15 @@ export interface SkillFileContent {
   truncated: boolean
 }
 
+// 项目级追加系统提示词（与 prompts_config.yaml 的 Agent 级基础提示词分级叠加）
+export interface ProjectSystemPrompt {
+  project_code: string
+  content: string
+  exists: boolean
+  size_bytes: number
+  updated_at?: string | null
+}
+
 // 用户与会话
 export type UserRole = 'user' | 'admin'
 

@@ -850,12 +850,13 @@ def _emit_for_message(message: Any, *, state: _RunState) -> None:
     if isinstance(data, dict) and subtype:
         summary_text = data.get("summary") or data.get("description") or data.get("message")
         detail = coerce_excerpt(mask_tokens(str(summary_text or "")), 512) or None
-        _log_workflow(
-            state.task_id,
-            "system",
-            subtype=str(subtype),
-            detail=_truncate_for_log(str(summary_text)) if summary_text else None,
-        )
+        if str(subtype) != "thinking_tokens":
+            _log_workflow(
+                state.task_id,
+                "system",
+                subtype=str(subtype),
+                detail=_truncate_for_log(str(summary_text)) if summary_text else None,
+            )
         state.emit(
             build_event(
                 SYSTEM_NOTICE,
@@ -1065,8 +1066,30 @@ class LogAnalysisAgent:
         # 相关性判定交给模型在推理中完成：提示词只给出 name+description 菜单，
         # 模型按需调用 Skill 工具加载，后端不再预筛候选集。
         project_code: Optional[str] = None
+        project_name: Optional[str] = None
         if isinstance(repo_info, dict):
             project_code = repo_info.get("project_code") or None
+            project_name = repo_info.get("project_name") or None
+
+        # 项目级附加系统提示词：像 Skill 一样分级处理——在通用（Agent 级）系统
+        # 提示词之后叠加该项目的专属约束。无配置时返回空串。无论 project_code 来
+        # 自用户显式选择还是 metadata.json 自动发现，只要它落到 repo_info 即统一生效。
+        try:
+            from app.services import project_prompt_service
+
+            project_prompt_addendum = project_prompt_service.build_project_prompt_addendum(
+                project_code, project_name=project_name
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("LogAnalysisAgent: failed to load project prompt: %s", exc)
+            project_prompt_addendum = ""
+        if project_prompt_addendum:
+            system_prompt += project_prompt_addendum
+            logger.info(
+                "LogAnalysisAgent: applied project-level system prompt project_code=%s chars=%d",
+                project_code,
+                len(project_prompt_addendum),
+            )
 
         materialized_skills: List[str] = []
         skill_overviews: List[Dict[str, str]] = []

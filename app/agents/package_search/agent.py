@@ -274,6 +274,25 @@ class PackageSearchAgent:
             "所有 mcp__package_search__* 工具已在服务端限定为该项目的包。\n"
         )
 
+        # 项目级附加系统提示词：像 Skill 一样分级处理——在通用（Agent 级）系统
+        # 提示词之后叠加该项目的专属约束。无配置时返回空串。
+        try:
+            from app.services import project_prompt_service
+
+            project_prompt_addendum = project_prompt_service.build_project_prompt_addendum(
+                ctx.project_code
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PackageSearchAgent: failed to load project prompt: %s", exc)
+            project_prompt_addendum = ""
+        if project_prompt_addendum:
+            system_prompt += project_prompt_addendum
+            logger.info(
+                "PackageSearchAgent: applied project-level system prompt project_code=%s chars=%d",
+                ctx.project_code,
+                len(project_prompt_addendum),
+            )
+
         task_data: Dict[str, Any] = {}
         try:
             task_data = json.loads(Path(ctx.task_json_path).read_text(encoding="utf-8"))

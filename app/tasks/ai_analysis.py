@@ -311,6 +311,22 @@ def _project_code_candidates_from_metadata(
     return candidates
 
 
+def _match_project_repo_by_candidates(session, candidates: list[str]):
+    """Return ``(repo, matched_code)`` for the first enabled ProjectRepo whose
+    project_code matches a candidate, else ``(None, None)``."""
+    from app.models.project_repo import ProjectRepo
+
+    for code in candidates:
+        repo = (
+            session.query(ProjectRepo)
+            .filter(ProjectRepo.project_code == code, ProjectRepo.enabled.is_(True))
+            .first()
+        )
+        if repo:
+            return repo, code
+    return None, None
+
+
 def _normalize_branch_name(value: Optional[str]) -> Optional[str]:
     if not isinstance(value, str):
         return None
@@ -454,9 +470,20 @@ def _inject_repo_info(session, workspace_ctx) -> None:
         effective_token = settings.code_repo_git_token or ""
         repo_url = explicit_repo_fields["repo_url"]
         clone_url = build_clone_url(repo_url, effective_token or None)
+
+        # The explicit repo URL is authoritative for cloning, but we still want a
+        # project_code so project-level Skills and the project-level system prompt
+        # are scoped correctly. Prefer a registered ProjectRepo match; otherwise
+        # fall back to the first metadata candidate so on-disk project assets keyed
+        # by that code still load.
+        scope_candidates = _project_code_candidates_from_metadata(meta)
+        scoped_repo, scoped_code = _match_project_repo_by_candidates(session, scope_candidates)
+        scoped_project_code = scoped_repo.project_code if scoped_repo else (scope_candidates[0] if scope_candidates else None)
+        scoped_project_name = scoped_repo.project_name if scoped_repo else None
+
         repo_info = {
-            "project_code": None,
-            "project_name": None,
+            "project_code": scoped_project_code,
+            "project_name": scoped_project_name,
             "repo_url": _mask_repo_url(repo_url),
             "clone_url": clone_url,
             "default_branch": explicit_repo_fields.get("default_branch") or "main",
@@ -476,12 +503,13 @@ def _inject_repo_info(session, workspace_ctx) -> None:
         _write_task_json_fields(workspace_ctx, {"repo_info": repo_info})
         logger.info(
             "_inject_repo_info: injected explicit repo_info source=%s repo_url=%s "
-            "branch=%s commit_present=%s auth=%s",
+            "branch=%s commit_present=%s auth=%s project_code=%s",
             explicit_repo_fields.get("repo_source"),
             _mask_repo_url(repo_url),
             repo_info.get("default_branch"),
             bool(repo_info.get("commit_id")),
             bool(effective_token),
+            scoped_project_code or "-",
         )
         return
 
@@ -509,15 +537,7 @@ def _inject_repo_info(session, workspace_ctx) -> None:
             logger.info("_inject_repo_info: no project identity (project_id/metadata)")
             return
 
-        for code in candidates:
-            repo = (
-                session.query(ProjectRepo)
-                .filter(ProjectRepo.project_code == code, ProjectRepo.enabled.is_(True))
-                .first()
-            )
-            if repo:
-                matched_code = code
-                break
+        repo, matched_code = _match_project_repo_by_candidates(session, candidates)
 
     if not repo:
         registered_codes = [

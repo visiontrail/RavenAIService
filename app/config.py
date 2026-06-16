@@ -118,6 +118,10 @@ class Settings(BaseSettings):
     # Project Skills 数据目录（按 project_code 隔离存储，与 Agent Skills 平行）
     project_skills_data_dir: str = "data/project_skills"
 
+    # Project 系统提示词数据目录（按 project_code 隔离存储；项目级追加提示词，
+    # 与 Project Skills 平行，让系统提示词也能像 Skill 一样分级处理）
+    project_prompts_data_dir: str = "data/project_prompts"
+
     # 运行期可由 Admin 调整的轻量级模型设置持久化文件
     runtime_settings_path: str = "data/runtime_settings.json"
 

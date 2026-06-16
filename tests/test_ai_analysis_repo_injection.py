@@ -89,6 +89,100 @@ def test_project_code_candidates_include_log_types_before_service_name():
     assert candidates == ["oam_lx10", "郭亮"]
 
 
+def test_inject_repo_info_explicit_url_without_candidates_keeps_no_project_code(tmp_path, monkeypatch):
+    """An explicit repo URL with no project identity in metadata must not query
+    the registry (backward-compatible) and leaves project_code unset."""
+    ctx = _make_workspace(tmp_path)
+    metadata_path = Path(ctx.logs_dir) / "metadata.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "git_context": {
+                    "repository_url": "https://git.example.com/org/repo.git",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ai_analysis.settings, "code_repo_git_token", None)
+    session = MagicMock()
+
+    ai_analysis._inject_repo_info(session, ctx)
+
+    # No candidates → no registry lookup, project_code stays None.
+    session.query.assert_not_called()
+    repo_info = json.loads(Path(ctx.task_json_path).read_text(encoding="utf-8"))["repo_info"]
+    assert repo_info["project_code"] is None
+
+
+def test_inject_repo_info_explicit_url_scopes_project_code_from_registry(tmp_path, monkeypatch):
+    """When metadata.json carries both an explicit repo URL and a project_code
+    candidate matching a registered repo, the resolved project_code is attached
+    so project-level Skills and the project-level system prompt load correctly."""
+    ctx = _make_workspace(tmp_path)
+    metadata_path = Path(ctx.logs_dir) / "metadata.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "project_info": {"project_code": "oam_lx10"},
+                "git_context": {
+                    "repository_url": "https://git.example.com/org/repo.git",
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ai_analysis.settings, "code_repo_git_token", None)
+
+    repo = MagicMock()
+    repo.project_code = "oam_lx10"
+    repo.project_name = "OAM LX10"
+
+    session = MagicMock()
+    session.query.return_value.filter.return_value.first.return_value = repo
+
+    ai_analysis._inject_repo_info(session, ctx)
+
+    repo_info = json.loads(Path(ctx.task_json_path).read_text(encoding="utf-8"))["repo_info"]
+    # Explicit URL still authoritative for cloning...
+    assert repo_info["repo_url"] == "https://git.example.com/org/repo.git"
+    assert repo_info["source"] == "metadata.json"
+    # ...but project_code/name are now scoped from the registry match.
+    assert repo_info["project_code"] == "oam_lx10"
+    assert repo_info["project_name"] == "OAM LX10"
+
+
+def test_inject_repo_info_explicit_url_falls_back_to_candidate_code(tmp_path, monkeypatch):
+    """No registered repo matches, but metadata has a project_code: fall back to
+    the first candidate so on-disk project assets keyed by that code still load."""
+    ctx = _make_workspace(tmp_path)
+    metadata_path = Path(ctx.logs_dir) / "metadata.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "project_info": {"project_code": "UnregisteredProj"},
+                "git_context": {
+                    "repository_url": "https://git.example.com/org/repo.git",
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ai_analysis.settings, "code_repo_git_token", None)
+
+    session = MagicMock()
+    session.query.return_value.filter.return_value.first.return_value = None
+
+    ai_analysis._inject_repo_info(session, ctx)
+
+    repo_info = json.loads(Path(ctx.task_json_path).read_text(encoding="utf-8"))["repo_info"]
+    # Candidate is normalized to lower-case by _project_code_candidates_from_metadata.
+    assert repo_info["project_code"] == "unregisteredproj"
+    assert repo_info["project_name"] is None
+
+
 def test_inject_repo_info_matches_log_types_project_code(tmp_path, monkeypatch):
     ctx = _make_workspace(tmp_path)
     metadata_path = Path(ctx.logs_dir) / "metadata.json"

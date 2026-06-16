@@ -14,6 +14,7 @@ import type {
   ProjectMember,
   ProjectRepo,
   ProjectRepoPayload,
+  ProjectSystemPrompt,
   SkillFileContent,
   SkillFileTree,
   TestConnectionResult,
@@ -248,6 +249,19 @@ export const adminApi = {
     adminClient.get(`/admin/project-repos/${projectCode}/skills/${skillId}/file`, {
       params: { path },
     }),
+
+  // ==================== 项目级系统提示词 ====================
+
+  getProjectSystemPrompt: (
+    projectCode: string
+  ): Promise<ApiResponse<ProjectSystemPrompt>> =>
+    adminClient.get(`/admin/project-repos/${projectCode}/system-prompt`),
+
+  updateProjectSystemPrompt: (
+    projectCode: string,
+    content: string
+  ): Promise<ApiResponse<ProjectSystemPrompt>> =>
+    adminClient.put(`/admin/project-repos/${projectCode}/system-prompt`, { content }),
 
   // ==================== 系统/用户指标 (Metrics) ====================
 

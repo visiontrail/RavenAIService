@@ -190,8 +190,29 @@ class ProjectExpertAgent:
         # 模型按需调用 Skill 工具加载，后端不再预筛候选集。
         repo_info = task_data.get("repo_info") if isinstance(task_data, dict) else None
         project_code: Optional[str] = None
+        project_name: Optional[str] = None
         if isinstance(repo_info, dict):
             project_code = repo_info.get("project_code") or None
+            project_name = repo_info.get("project_name") or None
+
+        # 项目级附加系统提示词：像 Skill 一样分级处理——在通用（Agent 级）系统
+        # 提示词之后叠加该项目的专属约束。无配置时返回空串。
+        try:
+            from app.services import project_prompt_service
+
+            project_prompt_addendum = project_prompt_service.build_project_prompt_addendum(
+                project_code, project_name=project_name
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ProjectExpertAgent: failed to load project prompt: %s", exc)
+            project_prompt_addendum = ""
+        if project_prompt_addendum:
+            system_prompt += project_prompt_addendum
+            logger.info(
+                "ProjectExpertAgent: applied project-level system prompt project_code=%s chars=%d",
+                project_code,
+                len(project_prompt_addendum),
+            )
 
         materialized_skills: List[str] = []
         skill_overviews: List[Dict[str, str]] = []

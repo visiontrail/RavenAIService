@@ -145,3 +145,50 @@ class TestLogAnalysisSkillIntegration:
         )
         assert "agent-skill" in materialized
         assert "project-skill" not in materialized
+
+
+class TestProjectSystemPromptTier:
+    """The project-level system prompt is the prompt-side analogue of project
+    skills: scoped by project_code, layered on top of the Agent-level base prompt.
+    """
+
+    @pytest.fixture()
+    def isolated_prompts_dir(self, tmp_path, monkeypatch):
+        from app.config import settings
+
+        monkeypatch.setattr(
+            settings, "project_prompts_data_dir", str(tmp_path / "project_prompts")
+        )
+        return tmp_path
+
+    def test_addendum_layers_when_project_code_present(self, isolated_prompts_dir):
+        """Simulates what the agents do: resolve project_code from repo_info and
+        append the project prompt addendum onto the base system prompt."""
+        from app.services import project_prompt_service
+
+        project_prompt_service.set_project_prompt(
+            "testproj", "项目专属约束：只回答与天线相关的问题。"
+        )
+
+        base_system_prompt = "You are a log analysis agent."
+        repo_info = {"project_code": "testproj", "project_name": "Test Project"}
+        project_code = repo_info.get("project_code") or None
+        project_name = repo_info.get("project_name") or None
+
+        addendum = project_prompt_service.build_project_prompt_addendum(
+            project_code, project_name=project_name
+        )
+        system_prompt = base_system_prompt + addendum
+
+        assert "项目专属约束：只回答与天线相关的问题。" in system_prompt
+        assert "Test Project" in system_prompt
+        assert system_prompt.startswith(base_system_prompt)
+
+    def test_no_addendum_when_project_code_absent(self, isolated_prompts_dir):
+        from app.services import project_prompt_service
+
+        project_prompt_service.set_project_prompt("testproj", "irrelevant")
+
+        # No project_code (e.g. unscoped run) → no project-level prompt applied.
+        addendum = project_prompt_service.build_project_prompt_addendum(None)
+        assert addendum == ""
