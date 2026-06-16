@@ -18,6 +18,7 @@ import {
   type PendingPermission,
 } from '@/stores/conversationRuns'
 import AgentTraceStream from '@/components/AgentTraceStream.vue'
+import ShareConversationModal from '@/components/ShareConversationModal.vue'
 import { projectRepoApi, type ProjectRepoOption } from '@/api'
 import { copyToClipboard, downloadFile } from '@/utils'
 
@@ -102,6 +103,7 @@ const isLogFileDragOver = ref(false)
 let logFileDragDepth = 0
 
 const showTopMoreMenu = ref(false)
+const showShareModal = ref(false)
 const showRenameModal = ref(false)
 const renameModalTitle = ref('')
 const renameModalInputRef = ref<HTMLInputElement | null>(null)
@@ -1540,6 +1542,18 @@ const currentChatTitle = computed(() => {
 })
 
 const sessionMessageCount = computed(() => chatHistory.value.length)
+
+// Sharing requires a persisted session with at least one message; brand-new,
+// not-yet-saved local conversations have no backend session_id to share.
+const canShareConversation = computed(
+  () => chatHistory.value.length > 0 && !!sessionStore.selectedSessionId,
+)
+
+const openShareModal = () => {
+  if (!canShareConversation.value) return
+  showTopMoreMenu.value = false
+  showShareModal.value = true
+}
 </script>
 
 <template>
@@ -1583,7 +1597,11 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
 
             <div class="rw-menu-divider"/>
             <div class="rw-top-menu-group">{{ t('aiChat.menu.export') }}</div>
-            <button class="rw-menu-item" @click="showTopMoreMenu = false">
+            <button
+              v-if="canShareConversation"
+              class="rw-menu-item"
+              @click="openShareModal"
+            >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M16 6l-4-4-4 4M12 2v14"/></svg>
               {{ t('aiChat.menu.share') }}
             </button>
@@ -1922,6 +1940,14 @@ const sessionMessageCount = computed(() => chatHistory.value.length)
       </div>
       <div class="rw-composer-hint">{{ t('aiChat.disclaimer') }}</div>
     </div>
+
+    <!-- Share conversation modal -->
+    <ShareConversationModal
+      :visible="showShareModal"
+      :session-id="sessionStore.selectedSessionId"
+      :message-count="sessionMessageCount"
+      @close="showShareModal = false"
+    />
 
     <!-- Rename modal -->
     <div v-if="showRenameModal" class="rw-rename-backdrop" @click.self="showRenameModal = false">

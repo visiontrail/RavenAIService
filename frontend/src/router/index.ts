@@ -112,6 +112,18 @@ const routes: RouteRecordRaw[] = [
     ],
   },
   {
+    // Public, read-only shared conversation page. Top-level (outside
+    // WorkbenchLayout): no sidebar, no nav, no input, no login guard.
+    path: '/share/:token',
+    name: 'SharedConversation',
+    component: () => import('../views/SharedConversation.vue'),
+    meta: {
+      title: i18n.global.t('router.sharedConversation'),
+      public: true,
+    },
+    props: true,
+  },
+  {
     path: '/admin',
     name: 'AdminHome',
     component: () => import('../views/AdminPrompts.vue'),

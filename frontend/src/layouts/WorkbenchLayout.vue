@@ -19,6 +19,37 @@ const sessionStore = useChatSessionStore()
 const runsStore = useConversationRunsStore()
 
 /**
+ * Embedded mode: when the workbench is rendered inside the Raven desktop client
+ * (in an <iframe> on the Files tab), the client already provides its own
+ * left-hand navigation. Rendering the workbench sidebar as well would produce a
+ * duplicate sidebar inside the embedded page, so we hide it and let the routed
+ * content fill the full width.
+ *
+ * The check is evaluated once on load — whether we are framed cannot change for
+ * the lifetime of the page — so it stays stable across in-frame router
+ * navigation (e.g. opening a log/package detail):
+ *   - explicit `?embed=1` query flag (the client passes this; also handy for
+ *     direct browser preview)
+ *   - otherwise any iframe embedding (`window.self !== window.top`)
+ */
+const detectEmbedded = (): boolean => {
+  if (typeof window === 'undefined') return false
+  try {
+    const flag = new URLSearchParams(window.location.search).get('embed')
+    if (flag === '1' || flag === 'true') return true
+  } catch {
+    /* ignore malformed query strings */
+  }
+  try {
+    return window.self !== window.top
+  } catch {
+    // Cross-origin frames throw on access — being unable to reach top means framed.
+    return true
+  }
+}
+const isEmbedded = detectEmbedded()
+
+/**
  * Union of backend-reported running sessions (``run_status === 'running'``)
  * and the local optimistic running overlay maintained by the run store. The
  * overlay covers the gap between sendMessage and the next sessions list
@@ -420,16 +451,17 @@ const handleUserLogout = () => {
 </script>
 
 <template>
-  <div class="raven-workbench" :class="{ 'lang-en': activeLocale === 'en' }">
-    <!-- Sidebar -->
-    <aside class="rw-sidebar">
+  <div class="raven-workbench" :class="{ 'lang-en': activeLocale === 'en', 'is-embedded': isEmbedded }">
+    <!-- Sidebar — hidden when embedded in the Raven desktop client (Files tab),
+         which provides its own navigation. -->
+    <aside v-if="!isEmbedded" class="rw-sidebar">
       <!-- Brand -->
       <div class="rw-brand">
         <div class="rw-brand-left">
           <img :src="brandIcon" alt="" class="rw-brand-mark" aria-hidden="true" />
           <div>
             <div class="rw-brand-name">RavenAI</div>
-            <div class="rw-brand-sub">BASEBAND · WORKBENCH</div>
+            <div class="rw-brand-sub">{{ t('workbench.brandSub') }}</div>
           </div>
         </div>
         <button class="rw-icon-btn" :title="t('workbench.searchConversations')" @click="showSearchBox = !showSearchBox" :aria-label="t('workbench.searchConversations')">
@@ -808,7 +840,7 @@ const handleUserLogout = () => {
 .rw-brand-sub {
   font-size: 10.5px; color: var(--rw-muted);
   font-weight: 500; letter-spacing: 0.4px;
-  text-transform: uppercase; margin-top: 3px;
+  margin-top: 3px;
 }
 
 .rw-icon-btn {

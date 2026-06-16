@@ -73,6 +73,9 @@ MESSAGES: Dict[str, Dict[str, str]] = {
         "session.unpinned": "已取消置顶",
         "session.renamed": "已重命名",
         "session.title_empty": "名称不能为空",
+        # ----- conversation sharing (app/api/users.py, app/api/share.py) -----
+        "share.created": "已生成公开分享链接",
+        "share.revoked": "已取消分享",
         # ----- bug fixes (app/api/bug_fixes.py) -----
         "task.not_found": "任务不存在",
         # ----- app releases (app/api/releases.py) -----
@@ -197,6 +200,9 @@ MESSAGES: Dict[str, Dict[str, str]] = {
         "session.unpinned": "Unpinned",
         "session.renamed": "Renamed",
         "session.title_empty": "Name cannot be empty",
+        # ----- conversation sharing (app/api/users.py, app/api/share.py) -----
+        "share.created": "Public share link generated",
+        "share.revoked": "Sharing revoked",
         # ----- bug fixes (app/api/bug_fixes.py) -----
         "task.not_found": "Task not found",
         # ----- app releases (app/api/releases.py) -----

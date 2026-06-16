@@ -510,6 +510,33 @@ export interface ChatMessageRecord {
   trace_events?: unknown[] | null
 }
 
+// ===== 对话分享（owner 侧分享状态 + 公开只读快照）=====
+
+// Owner-facing share status for a session. The unshared state is represented
+// by `is_active: false` with empty token/url, so the UI can render one shape.
+export interface ShareInfo {
+  is_active: boolean
+  token?: string | null
+  share_url?: string | null
+  shared_at?: string | null
+  message_count?: number | null
+}
+
+// A single message in the public snapshot — only the three public fields.
+export interface PublicShareMessage {
+  role: 'user' | 'ai' | 'system'
+  content: string
+  created_at?: string | null
+}
+
+// Public, unauthenticated snapshot read response (flat, no identity fields).
+export interface PublicShareSnapshot {
+  title: string
+  shared_at: string
+  message_count: number
+  messages: PublicShareMessage[]
+}
+
 // ==================== 系统/用户指标 (Metrics) ====================
 
 export interface MetricsTokenBreakdown {

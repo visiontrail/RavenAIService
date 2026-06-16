@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.i18n.deps import LOCALE_HEADER, resolve_locale
 from app.i18n.messages import t
+from app.models.conversation_share import ShareInfo, ShareInfoResponse
 from app.models.database import get_db
 from app.models.user import (
     ChatAgentRun,
@@ -28,10 +29,12 @@ from app.models.user import (
     UserListResponse,
     UserProfile,
 )
+from app.api.share import build_share_url
 from app.security.admin_auth import auth_manager as admin_auth_manager
 from app.security.user_auth import user_auth_manager
 from app.services.ai_chat_service import ai_chat_service
 from app.services.chat_history_service import chat_history_service
+from app.services.conversation_share_service import conversation_share_service
 from app.services.user_service import user_service
 
 router = APIRouter(prefix="/api/v1/users", tags=["用户与会话"])
@@ -626,3 +629,70 @@ async def save_messages(
         message=t("chat.message_saved", locale),
         session_id=session.id,
     )
+
+
+# ==================== Conversation sharing (owner side) ====================
+
+
+def _share_info(request: Request, share) -> ShareInfo:
+    """Build the owner-facing ShareInfo for an active share record."""
+    return ShareInfo(
+        is_active=share.is_active,
+        token=share.token,
+        share_url=build_share_url(request, share.token),
+        shared_at=share.shared_at,
+        message_count=share.message_count,
+    )
+
+
+@router.post("/chat-sessions/{session_id}/share", response_model=ShareInfoResponse)
+async def create_chat_share(
+    session_id: str,
+    request: Request,
+    current_user=Depends(get_current_user),
+    locale: str = Depends(get_request_locale),
+    db: AsyncSession = Depends(get_db),
+) -> ShareInfoResponse:
+    """Create or refresh a public share for the current user's session.
+
+    Empty sessions are rejected (422); non-owners / unknown sessions get 404.
+    """
+    share = await conversation_share_service.create_or_refresh_share(
+        db, session_id=session_id, user_id=current_user.id
+    )
+    await db.commit()
+    return ShareInfoResponse(
+        message=t("share.created", locale),
+        data=_share_info(request, share),
+    )
+
+
+@router.get("/chat-sessions/{session_id}/share", response_model=ShareInfoResponse)
+async def get_chat_share(
+    session_id: str,
+    request: Request,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ShareInfoResponse:
+    """Return the current share status for the session (unshared state if none)."""
+    share = await conversation_share_service.get_share_for_session(
+        db, session_id=session_id, user_id=current_user.id
+    )
+    if share is None:
+        return ShareInfoResponse(message="ok", data=ShareInfo(is_active=False))
+    return ShareInfoResponse(message="ok", data=_share_info(request, share))
+
+
+@router.delete("/chat-sessions/{session_id}/share", response_model=ShareInfoResponse)
+async def revoke_chat_share(
+    session_id: str,
+    current_user=Depends(get_current_user),
+    locale: str = Depends(get_request_locale),
+    db: AsyncSession = Depends(get_db),
+) -> ShareInfoResponse:
+    """Revoke the session's active share; the public link 404s immediately."""
+    await conversation_share_service.revoke_share(
+        db, session_id=session_id, user_id=current_user.id
+    )
+    await db.commit()
+    return ShareInfoResponse(message=t("share.revoked", locale), data=ShareInfo(is_active=False))

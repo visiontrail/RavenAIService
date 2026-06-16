@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     port: int = 8085
     serve_frontend: bool = False
     frontend_dist_dir: Optional[str] = None
+
+    # 对话分享公开页（系统首个未鉴权读取面）
+    # 公开分享链接 share_url 的站点根地址，如 https://ravenai.example.com。
+    # 留空时由 API 回退请求 Origin / Host 拼接，便于本地与多域名部署。
+    public_base_url: Optional[str] = None
+    # 公开 GET /share/{token} 端点的按 IP 基础限流（抑制 token 空间扫描枚举）。
+    share_public_rate_limit: int = 60  # 时间窗内允许的最大请求数
+    share_public_rate_window_seconds: int = 60  # 限流时间窗（秒）
     # 设备长链接配置（仅暴露常量，后续实现 WebSocket 心跳与超时逻辑）
     device_link_heartbeat_sec: int = 30  # 环境变量: DEVICE_LINK_HEARTBEAT_SEC
     device_link_timeout_sec: int = 120  # 环境变量: DEVICE_LINK_TIMEOUT_SEC

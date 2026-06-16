@@ -125,3 +125,35 @@ Excel / spreadsheet 类 Skill 若需要读取或修改 `.xlsx` 文件，应部�
 ## Log Analysis Agent
 
 完整说明见 [`docs/log_analysis_agent.md`](docs/log_analysis_agent.md)。
+
+---
+
+## 对话分享（公开只读链接）
+
+会话 owner 可在对话面板右上角三点菜单点击「分享对话」，生成一个**公开只读链接**：任何持链接者无需登录即可查看该对话在分享时刻的**快照**。owner 可随时「更新分享」刷新快照或「取消分享」（取消后链接立即失效）。
+
+### 接口
+
+| 方法/路径 | 鉴权 | 说明 |
+| --- | --- | --- |
+| `POST /api/v1/users/chat-sessions/{session_id}/share` | 用户 | 创建或刷新分享，返回 `{ token, share_url, shared_at, message_count, is_active }`；空会话返回 422 |
+| `GET /api/v1/users/chat-sessions/{session_id}/share` | 用户 | 查询分享状态（未分享返回 `is_active=false`） |
+| `DELETE /api/v1/users/chat-sessions/{session_id}/share` | 用户 | 撤销分享 |
+| `GET /api/v1/share/{token}` | **无** | 公开读取快照，仅返回 `title`/`shared_at`/`message_count`/`messages[{role,content,created_at}]`；无效或已撤销 token 返回 404 |
+
+公开页面路由为前端 SPA 的 `/share/:token`（脱离工作台布局，无侧边栏/输入框/鉴权）；`share_url` 即指向该页面。
+
+### 环境变量
+
+| 变量 | 必填 | 说明 |
+| --- | --- | --- |
+| `PUBLIC_BASE_URL` | 否 | 公开分享链接的站点根地址，如 `https://ravenai.example.com`。留空时后端回退请求 `Origin` / `Host` 拼接（本地与多域名部署可不配）。生产建议显式配置，确保复制出的链接可被外部直接打开 |
+| `SHARE_PUBLIC_RATE_LIMIT` | 否 | 公开 `GET /api/v1/share/{token}` 按来源 IP 的窗口内最大请求数，默认 `60`；用于抑制对 token 空间的扫描枚举，超额返回 429 |
+| `SHARE_PUBLIC_RATE_WINDOW_SECONDS` | 否 | 上述限流时间窗（秒），默认 `60` |
+
+### 安全要点
+
+- token 由 `secrets.token_urlsafe(16)`（~128bit 熵）生成，与 `session_id` / `user_id` 解耦，不可枚举。
+- 快照在**写入时**完成脱敏：仅保留 `role` / `content` / `created_at`，丢弃 owner 身份、`session_id` 与 agent trace；公开响应直接回吐快照，单点收口。
+- 撤销即 `is_active=false`，公开端点立即 404（与 ChatGPT 一致，已打开页面的已加载内容不做额外回收）。
+- 公开内容仍来自消息正文，owner 需自行确保不分享含敏感信息的对话；弹窗已显式提示「持链接者均可查看」。

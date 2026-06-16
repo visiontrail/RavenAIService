@@ -13,6 +13,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from app.config import settings
 from app.api import health, logs, tasks, admin, users, packages
 from app.api import ai_chat, device_link, metrics as metrics_api
+from app.api import share as share_api
 from app.api import admin_metrics
 from app.api import project_repos as project_repos_api
 from app.api import bug_fixes as bug_fixes_api
@@ -298,6 +299,8 @@ def create_app() -> FastAPI:
     app.include_router(tasks.router, prefix="/api/v1", tags=["任务管理"])
     app.include_router(ai_chat.router, prefix="/api/v1/ai-chat", tags=["AI Chat"])
     app.include_router(users.router, tags=["用户管理"])
+    # 公开（不鉴权）对话分享读取面：独立 router，不挂任何用户鉴权依赖。
+    app.include_router(share_api.router, tags=["对话分享（公开）"])
     app.include_router(device_link.router, tags=["设备链接"])
     app.include_router(admin.router, tags=["Admin"])
     app.include_router(admin_metrics.admin_router, tags=["Metrics"])
