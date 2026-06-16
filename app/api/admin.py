@@ -7,12 +7,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from app.models.database import get_db
 from app.security.admin_auth import ADMIN_TOKEN_HEADER, ADMIN_TOKEN_PREFIX, auth_manager
+from app.security.admin_dependency import resolve_admin_identity
 from app.services import (
     project_repo_member_service,
     project_repo_service,
@@ -101,21 +102,12 @@ class UpdatePromptsRequest(BaseModel):
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def require_admin(
+async def require_admin(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> str:
     """Validate bearer token from Authorization header."""
-    if not credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Authorization header",
-        )
-    if credentials.scheme.lower() != "bearer":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unsupported auth scheme",
-        )
-    return auth_manager.validate_token(credentials.credentials)
+    return await resolve_admin_identity(credentials, request=request)
 
 
 @router.post("/auth/login", response_model=AdminAuthResponse)

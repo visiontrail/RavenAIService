@@ -18,12 +18,14 @@ class MemoryStorage {
 
 const installBrowserGlobals = () => {
   const storage = new MemoryStorage()
+  const sessionStorage = new MemoryStorage()
   const cookies = new Map<string, string>()
 
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
     value: {
       localStorage: storage,
+      sessionStorage,
       location: { protocol: 'http:', origin: 'http://localhost:3000' },
     },
   })
@@ -47,12 +49,17 @@ const installBrowserGlobals = () => {
     },
   })
 
-  return { storage }
+  return { storage, sessionStorage }
 }
 
 const importUserToken = async () => {
   vi.resetModules()
   return (await import('@/api/user')).userToken
+}
+
+const importAdminToken = async () => {
+  vi.resetModules()
+  return (await import('@/api/admin')).adminToken
 }
 
 describe('userToken persistence', () => {
@@ -99,5 +106,15 @@ describe('userToken persistence', () => {
 
     expect(window.localStorage.getItem('raven_user_token')).toBeNull()
     expect(document.cookie).not.toContain('raven_user_token=')
+  })
+
+  it('lets admin auth fall back to the persisted user token', async () => {
+    const userToken = await importUserToken()
+    userToken.set('admin-user-token')
+
+    const adminToken = await importAdminToken()
+
+    expect(window.sessionStorage.getItem('raven_admin_token')).toBeNull()
+    expect(adminToken.get()).toBe('admin-user-token')
   })
 })

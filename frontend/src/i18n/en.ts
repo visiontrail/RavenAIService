@@ -488,7 +488,7 @@ export default {
     raven: 'Package Repo',
   },
   workbench: {
-    brandSub: 'Galaxy Agent Platform',
+    brandSub: 'GalaxySpace Agent Platform',
     userFallback: 'User',
     loggedIn: 'Signed in',
     notLoggedIn: 'Not signed in',

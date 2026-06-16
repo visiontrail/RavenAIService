@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { API_BASE_URL, localeHeaderInterceptor } from './index'
+import { userToken } from './user'
 import type {
   AdminAuthData,
   AgentSkill,
@@ -35,7 +36,7 @@ const getStorage = () => {
 export const adminToken = {
   get(): string {
     const storage = getStorage()
-    return storage?.getItem(ADMIN_TOKEN_KEY) || ''
+    return storage?.getItem(ADMIN_TOKEN_KEY) || userToken.get()
   },
   set(token: string) {
     const storage = getStorage()

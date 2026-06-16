@@ -487,7 +487,7 @@ export default {
     raven: '重构包仓库',
   },
   workbench: {
-    brandSub: '银河Agent平台',
+    brandSub: '银河航天 Agent平台',
     userFallback: '用户',
     loggedIn: '已登录',
     notLoggedIn: '未登录',

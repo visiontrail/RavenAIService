@@ -31,6 +31,7 @@ from app.models.user import (
 )
 from app.api.share import build_share_url
 from app.security.admin_auth import auth_manager as admin_auth_manager
+from app.security.admin_dependency import resolve_admin_identity
 from app.security.user_auth import user_auth_manager
 from app.services.ai_chat_service import ai_chat_service
 from app.services.chat_history_service import chat_history_service
@@ -103,19 +104,12 @@ async def get_request_locale(
     )
 
 
-def require_admin(credentials: HTTPAuthorizationCredentials = Depends(admin_bearer)) -> str:
+async def require_admin(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(admin_bearer),
+) -> str:
     """Validate admin bearer token."""
-    if not credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Authorization header",
-        )
-    if credentials.scheme.lower() != "bearer":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unsupported auth scheme",
-        )
-    return admin_auth_manager.validate_token(credentials.credentials)
+    return await resolve_admin_identity(credentials, request=request)
 
 
 # ==================== Auth endpoints ====================
