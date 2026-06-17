@@ -102,7 +102,7 @@
 
             <div
               class="info-item col-span-all"
-              v-if="(logStore.currentLog.project_code === 'stack' || logStore.currentLog.project_code === 'full') && logStore.currentLog.status === 'processing'"
+              v-if="logStore.currentLog.status === 'processing'"
             >
               <label>{{ t('logDetail.processProgress') }}</label>
               <el-progress

@@ -732,8 +732,8 @@ const isAIAnalysisCompleted = (log: LogRecord) => {
 }
 
 const getStatusDisplayText = (log: LogRecord) => {
-  const isDecompressedLog = (log.project_code === 'stack' || log.project_code === 'full') && log.status === 'completed'
-  if (isDecompressedLog) return t('logList.status.decompressed')
+  // 日志归属已迁移为按项目（project_code）区分，不再有 stack/full 日志类型，
+  // 原先针对该类型显示“已解压”的特例已废弃，统一按状态展示。
   return getStatusText(log.status)
 }
 
