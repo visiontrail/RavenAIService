@@ -119,12 +119,14 @@ def test_upload_with_invalid_project_id_returns_400(client: TestClient) -> None:
     assert resp.status_code == 400, resp.text
 
 
-def test_upload_infers_project_from_filename(client: TestClient) -> None:
+def test_upload_does_not_infer_project_from_filename(client: TestClient) -> None:
+    # Filename-based auto-classification (stack/oam_antenna/full) was removed:
+    # a "stack"-named file without an explicit project must stay unclassified.
     resp = _upload(client, filename="stack_log_20240101.tar.gz")
     assert resp.status_code == 201, resp.text
     body = resp.json()["data"]
-    assert body["project_id"] == client._seed_state["stack_id"]
-    assert body["project_code"] == "stack"
+    assert body["project_id"] is None
+    assert body["project_code"] is None
 
 
 def test_upload_unrecognized_filename_is_unclassified(client: TestClient) -> None:

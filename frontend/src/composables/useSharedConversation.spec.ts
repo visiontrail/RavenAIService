@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getPublic = vi.fn()
 
@@ -17,6 +17,11 @@ import { renderMarkdown } from '@/utils/markdownRenderer'
 describe('useSharedConversation', () => {
   beforeEach(() => {
     getPublic.mockReset()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('loads a valid snapshot', async () => {

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const get = vi.fn()
 const createOrRefresh = vi.fn()
 const revoke = vi.fn()
+const copyToClipboard = vi.fn()
 
 vi.mock('@/api/share', () => ({
   shareApi: {
@@ -13,6 +14,10 @@ vi.mock('@/api/share', () => ({
     revoke: (...args: unknown[]) => revoke(...args),
     getPublic: vi.fn(),
   },
+}))
+
+vi.mock('@/utils', () => ({
+  copyToClipboard: (...args: unknown[]) => copyToClipboard(...args),
 }))
 
 import { useConversationShare } from '@/composables/useConversationShare'
@@ -24,6 +29,7 @@ describe('useConversationShare', () => {
     get.mockReset()
     createOrRefresh.mockReset()
     revoke.mockReset()
+    copyToClipboard.mockReset()
   })
 
   it('loads the unshared state for a never-shared session', async () => {
@@ -137,6 +143,26 @@ describe('useConversationShare', () => {
 
     expect(ok).toBe(true)
     expect(written).toEqual(['https://ravenai.example.com/share/tok_c'])
+  })
+
+  it('copy uses the default clipboard helper when no writer is injected', async () => {
+    copyToClipboard.mockResolvedValue(true)
+    createOrRefresh.mockResolvedValue({
+      data: {
+        is_active: true,
+        token: 'tok_default',
+        share_url: 'http://10.60.11.3:8085/share/tok_default',
+        shared_at: '2026-06-16T10:00:00Z',
+        message_count: 1,
+      },
+    })
+    const share = useConversationShare()
+    await share.generate(SID)
+
+    const ok = await share.copy()
+
+    expect(ok).toBe(true)
+    expect(copyToClipboard).toHaveBeenCalledWith('http://10.60.11.3:8085/share/tok_default')
   })
 
   it('copy returns false when there is no link yet', async () => {

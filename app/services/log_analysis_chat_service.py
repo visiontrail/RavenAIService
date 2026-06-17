@@ -826,25 +826,17 @@ class LogAnalysisChatService:
         old_context = self._load_context(session_id, user=user)
         old_ctx = old_context[0] if old_context else None
 
-        from app.services import project_repo_service
-
-        inferred_code = self._infer_project_code_from_filename(file.filename or "")
-        inferred_project = (
-            await project_repo_service.get_by_project_code(db, inferred_code)
-            if inferred_code
-            else None
-        )
-        inferred_project_id = inferred_project.id if inferred_project else None
-        # project_repo_id is already a project_repo.id — use it directly when the
-        # user has explicitly selected a project, otherwise fall back to the value
-        # inferred from the filename.
-        effective_project_id = (
-            project_repo_id if project_repo_id is not None else inferred_project_id
-        )
+        # project_repo_id is already a project_repo.id. The log's project is taken
+        # directly from the user's explicit selection; there is no longer any
+        # filename-based auto-classification.
+        effective_project_id = project_repo_id
         upload_request = LogUploadRequest(
-            # Force OAM (project_code) during upload so LogService does not start
-            # the protocol stack processing Celery task; this endpoint owns
-            # analysis itself. The real project is assigned right after.
+            # Legacy processing-control sentinel (NOT a classification): forcing the
+            # "oam_antenna" project_code makes LogService mark the record completed
+            # and skip the protocol-stack processing Celery task, because this
+            # endpoint owns analysis itself via the Claude Agent SDK. The real
+            # project is assigned right after. This control hook is slated to move
+            # to the planned plugin/skill mechanism for protocol-stack handling.
             project_code="oam_antenna",
             project_id=None,
             log_level=LogLevel.INFO,
@@ -1215,19 +1207,6 @@ class LogAnalysisChatService:
         filename = getattr(file, "filename", None)
         if isinstance(filename, str) and filename.strip():
             return filename.strip()
-        return None
-
-    @staticmethod
-    def _infer_project_code_from_filename(filename: str) -> Optional[str]:
-        name = (filename or "").lower()
-        has_stack = "stack" in name
-        has_oam = ("oam" in name) or ("om" in name)
-        if has_stack and has_oam:
-            return "full"
-        if has_stack:
-            return "stack"
-        if has_oam:
-            return "oam_antenna"
         return None
 
     @staticmethod

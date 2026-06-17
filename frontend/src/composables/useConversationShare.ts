@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { shareApi } from '@/api/share'
+import { copyToClipboard } from '@/utils'
 import type { ShareInfo } from '@/types'
 
 /**
@@ -17,11 +18,10 @@ export interface UseConversationShareOptions {
 }
 
 const defaultCopyText = async (text: string): Promise<void> => {
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text)
-    return
+  const copied = await copyToClipboard(text)
+  if (!copied) {
+    throw new Error('clipboard-unavailable')
   }
-  throw new Error('clipboard-unavailable')
 }
 
 export function useConversationShare(options: UseConversationShareOptions = {}) {

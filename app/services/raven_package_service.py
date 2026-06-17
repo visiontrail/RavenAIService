@@ -300,7 +300,9 @@ class RavenPackageService:
             "version": version,
             "metadata": {
                 "isPatch": "patch" in file_path.name.lower(),
-                "components": self.normalize_components(self.extract_components(file_path.name), version),
+                # 组件不再从文件名猜测（卫星协议栈/OAM 等）；扫描到的孤立包组件留空，
+                # 由显式上传的 metadata 或后续编辑补全。
+                "components": [],
                 "description": "",
                 "tags": [],
                 "sha256": sha256 or self.calculate_hash(file_path),
@@ -395,22 +397,6 @@ class RavenPackageService:
     def parse_version(self, filename: str) -> Optional[str]:
         match = re.search(r"[Vv]?(\d+(?:\.\d+)*)", filename)
         return match.group(1) if match else None
-
-    def extract_components(self, filename: str) -> list[str]:
-        lower = filename.lower()
-        components = []
-        checks = {
-            "galaxy_core": "galaxy_core_network",
-            "satellite": "satellite_app_server",
-            "oam": "oam",
-            "cucp": "cucp",
-            "cuup": "cuup",
-            "du": "du",
-        }
-        for key, value in checks.items():
-            if key in lower:
-                components.append(value)
-        return components
 
     def normalize_components(self, components: list[Any], version: Any = None) -> list[Any]:
         normalized = []

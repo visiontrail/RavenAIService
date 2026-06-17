@@ -42,67 +42,9 @@ router = APIRouter()
 security = HTTPBearer(auto_error=False)
 
 
-def _infer_project_code_from_filename(filename: str) -> Optional[str]:
-    """
-    根据文件名推断项目代号：
-    - 同时包含 stack 与 (oam 或 om) -> "full"
-    - 仅包含 stack -> "stack"
-    - 仅包含 oam/om -> "oam_antenna"
-    - 都不包含 -> None（无法识别）
-    """
-    name = (filename or "").lower()
-    has_stack = "stack" in name
-    has_oam = ("oam" in name) or ("om" in name)
-    if has_stack and has_oam:
-        return "full"
-    if has_stack:
-        return "stack"
-    if has_oam:
-        return "oam_antenna"
-    return None
-
-
-async def infer_project_from_filename(filename: str, db: AsyncSession) -> Optional[ProjectRepo]:
-    """
-    应用文件名模式匹配并解析到已启用的 project_repo 条目。
-    无匹配或匹配的 project_code 无已启用条目时返回 None。
-    """
-    code = _infer_project_code_from_filename(filename)
-    if not code:
-        return None
-    return await project_repo_service.get_by_project_code(db, code)
-
-
-def _infer_project_code_from_components(components) -> Optional[str]:
-    """
-    根据 metadata.json 中 log_components 的 component_name 推断项目代号：
-    - 含 STACK 相关组件 + OAM 相关组件 -> "full"
-    - 仅栈 -> "stack"；仅 OAM -> "oam_antenna"；都无 -> None
-    """
-    try:
-        if not isinstance(components, list):
-            return None
-        has_stack_component = False
-        has_oam_component = False
-        for item in components:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("component_name", "")).upper()
-            if not name:
-                continue
-            if "STACK" in name or name == "CUCP" or name.startswith("STACK_"):
-                has_stack_component = True
-            if "OAM" in name:
-                has_oam_component = True
-        if has_stack_component and has_oam_component:
-            return "full"
-        if has_stack_component:
-            return "stack"
-        if has_oam_component:
-            return "oam_antenna"
-        return None
-    except Exception:
-        return None
+# 注意：日志的项目归属完全依赖显式 project_id / project_code（前端或调用方按项目选择）。
+# 历史上曾根据卫星协议栈/OAM 的文件名或 metadata.json 组件名自动分类为
+# stack / oam_antenna / full，该自动分类机制已移除——日志类型现在由项目区分。
 
 
 async def resolve_project(
@@ -110,11 +52,10 @@ async def resolve_project(
     *,
     project_id: Optional[int] = None,
     project_code: Optional[str] = None,
-    filename: Optional[str] = None,
     locale: str = "zh",
 ) -> Optional[ProjectRepo]:
     """
-    统一的项目解析：显式 project_id → 显式 project_code → 文件名推断 → None。
+    统一的项目解析：显式 project_id → 显式 project_code → None。
     显式 project_id/project_code 无效时抛出 HTTP 400。
     """
     if project_id is not None:
@@ -127,8 +68,6 @@ async def resolve_project(
         if not repo:
             raise HTTPException(status_code=400, detail=t("log.project_not_found_code", locale, project_code=project_code))
         return repo
-    if filename:
-        return await infer_project_from_filename(filename, db)
     return None
 
 
@@ -246,18 +185,6 @@ async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
         except Exception:
             pass
 
-        # 先尝试基于 log_components 细化项目归属
-        refined_project: Optional[ProjectRepo] = None
-        try:
-            components = None
-            if isinstance(metadata_dict, dict):
-                components = metadata_dict.get("log_components")
-            refined_code = _infer_project_code_from_components(components)
-            if refined_code:
-                refined_project = await project_repo_service.get_by_project_code(db, refined_code)
-        except Exception:
-            refined_project = None
-
         # 组装需要更新的数据
         update_data = {
             "metadata_json": json.dumps(log_metadata_dict, ensure_ascii=False)
@@ -267,9 +194,7 @@ async def _try_extract_and_update_metadata(db: AsyncSession, log_info):
         if issue_desc and is_empty(getattr(record, "issue_description", None)):
             update_data["issue_description"] = issue_desc
 
-        # 如能根据组件细化项目，则一并更新 project_id
-        if refined_project is not None and getattr(record, "project_id", None) != refined_project.id:
-            update_data["project_id"] = refined_project.id
+        # 项目归属不再根据 metadata.json 中的组件名自动推断；保持上传时显式指定的 project_id。
 
         # 执行更新并提交
         await log_service.update(db, log_info.id, **update_data)
@@ -287,12 +212,11 @@ async def upload_log_simple(
     """
     简化的日志文件上传接口
     """
-    # 使用文件名推断关联项目（无法识别时为未分类）
-    inferred = await infer_project_from_filename(file.filename, db)
+    # 不再根据文件名推断项目；该接口未显式指定项目，统一为未分类（NULL）。
     metadata = LogMetadata()
     upload_request = LogUploadRequest(
-        project_code=inferred.project_code if inferred else None,
-        project_id=inferred.id if inferred else None,
+        project_code=None,
+        project_id=None,
         log_level=LogLevel.INFO,
         metadata=metadata,
         expires_in_days=None
@@ -346,7 +270,7 @@ async def upload_log(
     - **expires_in_days**: 文件过期天数 (1-365天)
     - **issue_description**: 问题描述，用于描述日志所对应的问题
 
-    项目解析顺序：显式 project_id → 显式 project_code → 文件名推断 → 未分类(NULL)
+    项目解析顺序：显式 project_id → 显式 project_code → 未分类(NULL)
     """
 
     # 构建元数据
@@ -357,12 +281,11 @@ async def upload_log(
         version=version
     )
 
-    # 解析关联项目（显式优先，否则按文件名推断）
+    # 解析关联项目（仅按显式 project_id / project_code，不再按文件名推断）
     project = await resolve_project(
         db,
         project_id=project_id,
         project_code=project_code,
-        filename=file.filename,
         locale=locale,
     )
 
@@ -399,7 +322,7 @@ async def upload_log(
 async def upload_t04_logs(
     request: Request,
     files: List[UploadFile] = File(..., description="要上传的日志归档文件列表"),
-    project_code: Optional[str] = Form(None, description="可选：无法从文件名推断时使用的默认项目代号"),
+    project_code: Optional[str] = Form(None, description="可选：关联项目代号；未提供时为未分类"),
 ):
     """
     T04任务：上传日志归档文件
@@ -409,7 +332,6 @@ async def upload_t04_logs(
     - 允许系统支持的日志归档格式
     - 文件大小限制1GB
     - 文件完整性验证（magic number检查）
-    - 根据文件名自动判断日志类型（包含"stack"为协议栈日志）
     - 文件名安全化处理
     - 路径遍历攻击防护
     
@@ -552,10 +474,12 @@ async def upload_t04_logs(
                     file_id = str(uuid.uuid4())
                     logger.info(f"T04上传 - 生成文件ID: {file_id}")
                     
-                    # 解析关联项目：按文件名推断，无法识别时回退到默认 project_code
-                    inferred_project = await infer_project_from_filename(file.filename, db)
-                    if inferred_project is None and project_code:
-                        inferred_project = await project_repo_service.get_by_project_code(db, project_code)
+                    # 解析关联项目：仅使用显式传入的 project_code，不再按文件名推断
+                    inferred_project = (
+                        await project_repo_service.get_by_project_code(db, project_code)
+                        if project_code
+                        else None
+                    )
                     resolved_project_id = inferred_project.id if inferred_project else None
                     resolved_project_code = inferred_project.project_code if inferred_project else None
                     logger.info(f"T04上传 - 解析项目: code={resolved_project_code} id={resolved_project_id}")

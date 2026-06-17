@@ -26,7 +26,8 @@ export function useSharedConversation() {
     }
     try {
       snapshot.value = await shareApi.getPublic(token)
-    } catch {
+    } catch (err) {
+      console.warn('Failed to load public share snapshot:', err)
       notFound.value = true
       snapshot.value = null
     } finally {
