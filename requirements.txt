@@ -25,9 +25,6 @@ openpyxl>=3.1.2
 
 # Agent framework and LLM clients
 claude-agent-sdk>=0.2  # >=0.2.82 provides include_partial_messages / StreamEvent for answer_delta streaming
-# langchain-core / langgraph kept for app/agents/code_analysis_graph.py (independent code-analysis flow).
-langchain-core>=0.2.15
-langgraph>=0.1.18
 
 # YAML parser for prompts_config.yaml
 PyYAML>=6.0.1

@@ -16,11 +16,6 @@ pytest>=7.4.0
 pytest-asyncio>=0.21.0
 pytest-mock>=3.11.0
 
-# LangChain 相关（用于 test_chat_agent_react.py）
-langchain-core>=0.2.0
-langchain-openai>=0.1.7
-langgraph>=0.1.18
-
 # Pydantic（用于数据验证）
 pydantic>=2.6.0
 pydantic-settings>=2.2.0
@@ -38,10 +33,6 @@ python-dotenv>=1.0.1
 fastapi>=0.108.0
 uvicorn[standard]>=0.25.0
 python-multipart>=0.0.6
-
-# LangChain 完整支持（app 模块需要）
-langchain>=0.2.15
-langchain-community>=0.2.15
 
 # LLM 客户端
 openai>=1.40.0
