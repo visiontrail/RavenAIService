@@ -147,7 +147,9 @@ const maxSeriesTokens = computed(() => {
 const maxAgentCalls = computed(() => {
   const series = overview.value?.time_series || []
   return series.reduce((m, b) => {
-    const totalCallsInBucket = Object.values(b.counts_by_agent || {}).reduce((sum, v) => sum + (v as number), 0)
+    const totalCallsInBucket = Object.entries(b.counts_by_agent || {})
+      .filter(([k]) => k !== 'title_generator')
+      .reduce((sum, [, v]) => sum + (v as number), 0)
     return Math.max(m, totalCallsInBucket as number)
   }, 0) || 1
 })
@@ -540,11 +542,11 @@ onMounted(() => {
               v-for="(b, i) in overview.time_series"
               :key="i"
               class="metrics-bar-col"
-              :title="`${formatBucketLabel(b.bucket_start)}\n${Object.entries(b.counts_by_agent || {}).map(([k, v]) => `${k}: ${formatNumber(v as number)}`).join('\\n')}`"
+              :title="`${formatBucketLabel(b.bucket_start)}\n${Object.entries(b.counts_by_agent || {}).filter(([k]) => k !== 'title_generator').map(([k, v]) => `${k}: ${formatNumber(v as number)}`).join('\\n')}`"
             >
               <div class="metrics-bar-track" style="flex-direction: column-reverse; justify-content: flex-start; align-items: stretch;">
                 <div
-                  v-for="[agent, count] in Object.entries(b.counts_by_agent || {}).sort((a, b) => (b[1] as number) - (a[1] as number))"
+                  v-for="[agent, count] in Object.entries(b.counts_by_agent || {}).filter(([k]) => k !== 'title_generator').sort((a, b) => (b[1] as number) - (a[1] as number))"
                   :key="agent"
                   class="metrics-bar-fill-agent"
                   :style="{
@@ -561,7 +563,7 @@ onMounted(() => {
           <!-- Legend -->
           <div v-if="overview && overview.time_series.length" class="flex flex-wrap gap-3 mt-4 justify-center">
             <div
-              v-for="agent in Array.from(new Set(overview.time_series.flatMap(b => Object.keys(b.counts_by_agent || {}))))"
+              v-for="agent in Array.from(new Set(overview.time_series.flatMap(b => Object.keys(b.counts_by_agent || {}).filter(k => k !== 'title_generator'))))"
               :key="agent"
               class="flex items-center text-xs text-slate-600"
             >

@@ -836,6 +836,7 @@ export default {
       kpiDuration: '耗时 (ms)',
       kpiDurationDetail: 'P95 {p95} · 错误 {errors}',
       tsTitle: 'Token 时间序列',
+      agentTrendTitle: 'Agent 调用时间序列',
       emptyData: '暂无数据',
       bySourceTitle: '按来源 (Source)',
       byModelTitle: '按模型 (Model)',

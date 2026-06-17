@@ -836,6 +836,7 @@ export default {
       kpiDuration: 'Duration (ms)',
       kpiDurationDetail: 'P95 {p95} · Errors {errors}',
       tsTitle: 'Token time series',
+      agentTrendTitle: 'Agent calls time series',
       emptyData: 'No data',
       bySourceTitle: 'By source',
       byModelTitle: 'By model',
