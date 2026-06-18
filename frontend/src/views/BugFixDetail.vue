@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, ExternalLink, GitBranch, RefreshCw } from 'lucide-vue-next'
 import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'

@@ -682,7 +682,10 @@ class LogAnalysisChatService:
             async with db_manager.session_factory() as db:
                 try:
                     await self._save_analysis_result(
-                        db=db, context_meta=job.context_meta, result=result
+                        db=db,
+                        context_meta=job.context_meta,
+                        result=result,
+                        question=job.question,
                     )
                     if job.remember and job.user_id is not None:
                         await self._persist_exchange(
@@ -1094,11 +1097,14 @@ class LogAnalysisChatService:
         db: Optional[AsyncSession],
         context_meta: Dict[str, Any],
         result: Dict[str, Any],
+        question: Optional[str] = None,
     ) -> None:
         if not db or not context_meta.get("log_id"):
             return
         try:
-            await log_service.save_ai_analysis_result(db, context_meta["log_id"], result)
+            await log_service.save_ai_analysis_result(
+                db, context_meta["log_id"], result, query=question
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("log-analysis chat: failed to save result to log record: %s", exc)
 

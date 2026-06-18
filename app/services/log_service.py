@@ -36,6 +36,63 @@ import glob
 
 logger = logging.getLogger(__name__)
 
+# 每条日志最多保留的 AI 分析对话轮数，避免 metadata_json 无限膨胀。
+_MAX_ANALYSIS_TURNS = 50
+
+
+def append_analysis_conversation_turn(
+    extra_fields: Dict[str, Any],
+    analysis_data: Dict[str, Any],
+    *,
+    query: Optional[str] = None,
+) -> None:
+    """将一轮 AI 分析结果追加到 ``extra_fields['ai_analysis_conversation']``。
+
+    日志详情页需要展示完整的多轮问答历史，而不仅是最近一次结果
+    （最近一次结果仍保存在 ``ai_analysis_result`` 中以保持向后兼容）。
+
+    每轮副本会剔除 ``trace_events``（仅最近一次结果的实时 trace 才需要它），
+    避免 ``metadata_json`` 因历史轮次而急剧膨胀。
+    """
+    if not isinstance(extra_fields, dict) or not isinstance(analysis_data, dict):
+        return
+
+    turn = {k: v for k, v in analysis_data.items() if k != "trace_events"}
+    if query and not turn.get("query"):
+        turn["query"] = query
+    turn.setdefault("created_at", datetime.utcnow().isoformat())
+
+    conversation = extra_fields.get("ai_analysis_conversation")
+    if not isinstance(conversation, list):
+        conversation = []
+    conversation.append(turn)
+    if len(conversation) > _MAX_ANALYSIS_TURNS:
+        conversation = conversation[-_MAX_ANALYSIS_TURNS:]
+    extra_fields["ai_analysis_conversation"] = conversation
+
+
+def seed_conversation_from_legacy_result(extra_fields: Dict[str, Any]) -> None:
+    """升级兼容：把已存在但未进入历史的上一轮结果补种为第一轮。
+
+    旧版本只在 ``ai_analysis_result`` 保存最近一次结果，不维护多轮历史。
+    升级到多轮历史后，若某条日志在旧版本下已分析过、本次是升级后的首次
+    再分析，则历史列表为空但 ``ai_analysis_result`` 仍是上一轮结果。此时若
+    直接覆盖并仅追加本轮，上一轮问答会被永久丢失。
+
+    本函数应在覆盖 ``ai_analysis_result`` 之前调用：仅当历史为空且存在旧结果时，
+    把旧结果作为第一轮补入，使升级后的首次再分析得到 ``[上一轮, 本轮]``。
+    对全新日志（无旧结果）或已有历史的日志均为无操作，因此每条日志至多触发一次，
+    不会产生重复。
+    """
+    if not isinstance(extra_fields, dict):
+        return
+    conversation = extra_fields.get("ai_analysis_conversation")
+    if isinstance(conversation, list) and conversation:
+        return  # 已有历史，无需补种
+    legacy = extra_fields.get("ai_analysis_result")
+    if isinstance(legacy, dict) and legacy:
+        append_analysis_conversation_turn(extra_fields, legacy, query=legacy.get("query"))
+
 
 class LogService(BaseCRUDService[LogRecord]):
     """日志服务类"""
@@ -387,10 +444,15 @@ class LogService(BaseCRUDService[LogRecord]):
         self,
         db: AsyncSession,
         log_id: str,
-        analysis_data: Dict[str, Any]
+        analysis_data: Dict[str, Any],
+        query: Optional[str] = None,
     ) -> LogFileInfo:
         """
         保存AI分析结果到日志元数据中，便于后续读取
+
+        除覆盖 ``ai_analysis_result``（最近一次结果）外，还会把本轮结果追加到
+        ``ai_analysis_conversation`` 历史列表，使日志详情页能展示完整的多轮问答。
+        ``query`` 会写入结果，确保详情页在前端切换时仍显示正确的本轮提问。
         """
         log_record = await self.get_by_id(db, log_id)
 
@@ -409,8 +471,15 @@ class LogService(BaseCRUDService[LogRecord]):
         if not isinstance(extra_fields, dict):
             extra_fields = {}
 
-        # 更新并写回元数据
+        # 把本轮提问写入结果，便于详情页直接读取（避免依赖前端临时输入框）
+        if query and isinstance(analysis_data, dict) and not analysis_data.get("query"):
+            analysis_data = {**analysis_data, "query": query}
+
+        # 升级兼容：覆盖前先把旧版本遗留的上一轮结果补种进历史，避免丢失上一轮问答
+        seed_conversation_from_legacy_result(extra_fields)
+        # 更新并写回元数据：覆盖最近一次结果，并追加到多轮对话历史
         extra_fields["ai_analysis_result"] = analysis_data
+        append_analysis_conversation_turn(extra_fields, analysis_data, query=query)
         metadata_dict["extra_fields"] = extra_fields
         log_record.metadata_json = json.dumps(metadata_dict, ensure_ascii=False, default=str)
         log_record.updated_at = datetime.utcnow()
@@ -1231,6 +1300,7 @@ class LogService(BaseCRUDService[LogRecord]):
         if project is None and db is not None and record.project_id:
             project = await self._get_project(db, record.project_id)
         ai_analysis_result = None
+        ai_analysis_conversation: Optional[List[Dict[str, Any]]] = None
         ai_analysis_task: Dict[str, Any] = {}
         manual_analysis_content: Optional[str] = None
         manual_analysis_updated_at: Optional[datetime] = None
@@ -1258,6 +1328,11 @@ class LogService(BaseCRUDService[LogRecord]):
                         record.id,
                         list(metadata.extra_fields.keys()),
                     )
+                raw_conversation = metadata.extra_fields.get("ai_analysis_conversation")
+                if isinstance(raw_conversation, list) and raw_conversation:
+                    ai_analysis_conversation = [
+                        turn for turn in raw_conversation if isinstance(turn, dict)
+                    ]
                 raw_task = metadata.extra_fields.get("ai_analysis_task")
                 if isinstance(raw_task, dict):
                     ai_analysis_task = raw_task
@@ -1293,7 +1368,7 @@ class LogService(BaseCRUDService[LogRecord]):
             if getattr(metadata_payload, "extra_fields", None) and isinstance(metadata_payload.extra_fields, dict):
                 metadata_payload.extra_fields = {
                     k: v for k, v in metadata_payload.extra_fields.items()
-                    if k not in {"ai_analysis_result", "manual_analysis"}
+                    if k not in {"ai_analysis_result", "ai_analysis_conversation", "manual_analysis"}
                 }
         except Exception:
             pass
@@ -1320,6 +1395,7 @@ class LogService(BaseCRUDService[LogRecord]):
             download_count=record.download_count,
             issue_description=record.issue_description,
             ai_analysis_result=ai_analysis_result,
+            ai_analysis_conversation=ai_analysis_conversation,
             ai_analysis_task_id=ai_analysis_task.get("task_id"),
             ai_analysis_status=ai_analysis_task.get("status"),
             ai_analysis_progress=ai_analysis_task.get("progress"),

@@ -48,6 +48,7 @@ export interface LogRecord {
   download_url?: string
   file_size_human?: string
   ai_analysis_result?: any
+  ai_analysis_conversation?: any[]
   ai_analysis_task_id?: string
   ai_analysis_status?: string
   ai_analysis_progress?: number

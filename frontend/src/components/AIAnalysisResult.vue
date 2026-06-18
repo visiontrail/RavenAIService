@@ -46,7 +46,7 @@
         <span v-if="result.metadata.model_used">{{ t('aiAnalysis.modelUsed', { model: result.metadata.model_used }) }}</span>
       </div>
 
-      <div class="actions-section">
+      <div class="actions-section" v-if="!readonly">
         <button @click="copyResult" class="action-btn secondary">
           <Copy class="btn-icon" />
           {{ t('aiAnalysis.copyResult') }}
@@ -107,6 +107,8 @@ interface Props {
   progress?: number
   currentStep?: string
   error?: string
+  // 历史轮次以只读形式展示，隐藏「复制/下载/重新分析」等操作按钮
+  readonly?: boolean
 }
 
 const { t } = useI18n()
@@ -115,7 +117,8 @@ const props = withDefaults(defineProps<Props>(), {
   isLoading: false,
   progress: 0,
   currentStep: '',
-  error: ''
+  error: '',
+  readonly: false
 })
 
 defineEmits<{

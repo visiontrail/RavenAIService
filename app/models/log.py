@@ -229,6 +229,10 @@ class LogFileInfo(BaseModel):
         None,
         description="最近一次AI分析结果（完整数据结构）"
     )
+    ai_analysis_conversation: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="AI分析多轮对话历史（按时间顺序的每轮结果，含本轮提问 query）"
+    )
     ai_analysis_task_id: Optional[str] = Field(
         None,
         description="AI分析任务ID"

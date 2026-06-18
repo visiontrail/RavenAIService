@@ -189,7 +189,18 @@ def _update_ai_task_metadata(
     extra_fields["ai_analysis_task"] = task_info
 
     if result is not None:
+        # 把本轮提问写入结果并追加到多轮对话历史，使详情页能展示完整问答记录
+        turn_query = task_info.get("query") or query
+        if turn_query and isinstance(result, dict) and not result.get("query"):
+            result["query"] = turn_query
+        from app.services.log_service import (
+            append_analysis_conversation_turn,
+            seed_conversation_from_legacy_result,
+        )
+        # 升级兼容：覆盖前先把旧版本遗留的上一轮结果补种进历史，避免丢失上一轮问答
+        seed_conversation_from_legacy_result(extra_fields)
         extra_fields["ai_analysis_result"] = result
+        append_analysis_conversation_turn(extra_fields, result, query=turn_query)
         logger.info(
             "_update_ai_task_metadata: 保存 ai_analysis_result log_id=%s status=%s model=%s duration=%.1fs",
             getattr(log_record, "id", "?"),

@@ -350,8 +350,11 @@
           />
 
           <AIAnalysisResult
-            v-if="aiAnalysisResult"
-            :result="aiAnalysisResult"
+            v-for="(turn, idx) in aiAnalysisConversation"
+            :key="idx"
+            class="analysis-turn"
+            :result="turn"
+            :readonly="idx < aiAnalysisConversation.length - 1"
             @restart="resetAIAnalysis"
             @copy="copyAnalysisResult"
             @download="downloadAnalysisResult"
@@ -471,6 +474,8 @@ import AgentTraceStream from '../components/AgentTraceStream.vue'
 import type { AgentTraceEvent } from '../types/agentTrace'
 import { useUserStore } from '../stores/user'
 import { renderMarkdown, processMermaidBlocks } from '../utils/markdownRenderer'
+import { jsPDF } from 'jspdf'
+import html2canvas from 'html2canvas-pro'
 
 interface Props {
   id: string
@@ -562,35 +567,22 @@ const fetchProjectRepos = async () => {
   }
 }
 
-const normalizeAIAnalysisResult = (raw: any) => {
-  // 临时调试：打印后端返回的原始 ai_analysis_result 结构
-  // 用于核对 V2 扁平 schema 字段（model / duration_seconds / summary / raw / ...）
-  // 是否被前端正确读取。验证完后可删除。
-  try {
-    console.log('[AI-Analysis] normalizeAIAnalysisResult input:', {
-      type: typeof raw,
-      isObject: raw && typeof raw === 'object',
-      keys: raw && typeof raw === 'object' ? Object.keys(raw) : null,
-      schema_version: raw?.schema_version,
-      status: raw?.status,
-      model: raw?.model,
-      duration_seconds: raw?.duration_seconds,
-      has_raw_field: typeof raw?.raw === 'string',
-      raw_length: typeof raw?.raw === 'string' ? raw.raw.length : -1,
-      has_summary: !!raw?.summary,
-      has_final_result: !!raw?.final_result,
-      sample: raw,
-    })
-  } catch (e) {
-    console.warn('[AI-Analysis] debug log failed:', e)
-  }
+// 渲染已保存结果时的提问来源：优先用结果自带的 query（后端已持久化本轮提问），
+// 再回退到当前日志的分析查询 / 问题描述。绝不使用临时输入框 aiAnalysisQuery，
+// 否则在前端切换日志时会显示上一条日志残留的提问。
+const resolveSavedQuery = (raw: any): string =>
+  raw?.query ||
+  logStore.currentLog?.ai_analysis_query ||
+  logStore.currentLog?.issue_description ||
+  ''
 
+const normalizeAIAnalysisResult = (raw: any) => {
   if (!raw) return null
 
   if (typeof raw === 'string') {
     return {
       id: `analysis_${Date.now()}`,
-      query: aiAnalysisQuery.value || logStore.currentLog?.issue_description || '',
+      query: resolveSavedQuery(raw),
       status: 'completed',
       timestamp: new Date().toISOString(),
       final_result: {
@@ -765,7 +757,7 @@ const normalizeAIAnalysisResult = (raw: any) => {
   return {
     ...raw,
     id: raw?.id || `analysis_${Date.now()}`,
-    query: raw?.query || aiAnalysisQuery.value || logStore.currentLog?.issue_description || '',
+    query: resolveSavedQuery(raw),
     status: normalizedStatus,
     timestamp: raw?.timestamp || new Date().toISOString(),
     final_result: {
@@ -788,6 +780,19 @@ const pageTitle = computed(() => {
     return t('logDetail.pageTitle', { filename: logStore.currentLog.filename })
   }
   return t('logDetail.crumb')
+})
+
+// 完整的 AI 分析多轮对话：后端按时间顺序持久化每一轮问答。
+// 后端 conversation 列表已包含最近一轮，因此直接整段渲染；
+// 仅当历史列表缺失（旧数据）时回退到单条 aiAnalysisResult。
+const aiAnalysisConversation = computed(() => {
+  const conversation = logStore.currentLog?.ai_analysis_conversation
+  if (Array.isArray(conversation) && conversation.length) {
+    return conversation
+      .map((turn) => normalizeAIAnalysisResult(turn))
+      .filter((turn): turn is NonNullable<typeof turn> => !!turn)
+  }
+  return aiAnalysisResult.value ? [aiAnalysisResult.value] : []
 })
 
 // 人工分析添加人展示：显示名称（或用户名），有邮箱时附加邮箱
@@ -1148,7 +1153,10 @@ const handleCopyLink = async () => {
   }
 }
 
-// 导出 PDF 报告：交给浏览器原生打印/PDF 引擎渲染，保留可选中文本。
+// 导出 PDF 报告：使用内置渲染（html2canvas-pro 光栅化 + jsPDF 直接生成），
+// 不走浏览器系统打印对话框，点击即直接下载 PDF 文件。
+// 由于内容被光栅化为图片，可彻底规避 macOS 系统打印导出时中文字体缺失（空白）
+// 以及原生分页重复页的问题；分页由我们自行按页高切片并对齐到元素边界完成。
 // 报告内容中刻意剔除 "模型原文" 段落，避免冗余 raw 文本进入正式报告。
 const escapeHtml = (text: string) =>
   text
@@ -1166,19 +1174,9 @@ const stripModelRawSection = (markdown: string): string => {
   return markdown.replace(new RegExp('##\\s*\\u6a21\\u578b\\u539f\\u6587[\\s\\S]*?(?=\\n##\\s|\\n#\\s|$)', 'g'), '').trimEnd()
 }
 
-// 生成在打印 iframe 中渲染的报告容器。
-// 所有样式都用 `.pdf-export-root` 作为前缀作用域，避免污染当前页面。
+// 报告容器的样式。所有规则都用 `.pdf-export-root` 作为前缀作用域，
+// 因此即便以全局 <style> 注入也不会污染当前页面（光栅化离屏容器使用）。
 const PDF_EXPORT_STYLES = `
-@page {
-  size: A4 portrait;
-  margin: 12mm;
-}
-html,
-body {
-  margin: 0;
-  padding: 0;
-  background: #ffffff;
-}
 .pdf-export-root, .pdf-export-root * { box-sizing: border-box; }
 .pdf-export-root {
   width: auto;
@@ -1346,23 +1344,28 @@ const buildPdfFilename = (filename: string, id: string | number): string => {
   return t('logDetail.report.pdfFilename', { base, date })
 }
 
+// A4 纸张与内容区尺寸（mm），以及离屏渲染宽度（px）。
+const PDF_PAGE = {
+  marginMm: 10,
+  widthMm: 210,
+  heightMm: 297,
+  get contentWidthMm() { return this.widthMm - this.marginMm * 2 },
+  get contentHeightMm() { return this.heightMm - this.marginMm * 2 },
+  renderWidthPx: 760,
+  scale: 2,
+}
+
 const handleExportPDF = async () => {
   if (!logStore.currentLog) return
   const log = logStore.currentLog
 
-  let iframe: HTMLIFrameElement | null = null
-  let cleanupTimer: number | null = null
-  let deferCleanup = false
-
-  const cleanupIframe = () => {
-    if (cleanupTimer !== null) {
-      window.clearTimeout(cleanupTimer)
-      cleanupTimer = null
+  // 离屏容器：渲染完整报告 DOM，供 html2canvas 光栅化后切片成 PDF。
+  let container: HTMLDivElement | null = null
+  const cleanupContainer = () => {
+    if (container && container.parentNode) {
+      container.parentNode.removeChild(container)
     }
-    if (iframe && iframe.parentNode) {
-      iframe.parentNode.removeChild(iframe)
-    }
-    iframe = null
+    container = null
   }
 
   try {
@@ -1445,70 +1448,112 @@ ${log.error_message ? `
 </section>
 `
 
-    iframe = document.createElement('iframe')
-    iframe.setAttribute('aria-hidden', 'true')
-    iframe.style.cssText = [
+    // 离屏渲染容器：固定到视口外，宽度固定以保证排版/换行稳定。
+    container = document.createElement('div')
+    container.setAttribute('aria-hidden', 'true')
+    container.style.cssText = [
       'position: fixed',
       'left: -10000px',
       'top: 0',
-      'width: 210mm',
-      'height: 297mm',
-      'border: 0',
+      `width: ${PDF_PAGE.renderWidthPx}px`,
+      'background: #ffffff',
       'pointer-events: none',
       'z-index: -1',
     ].join('; ')
-    document.body.appendChild(iframe)
+    // 样式全部以 `.pdf-export-root` 作用域，随容器一起注入即可，不污染主页面。
+    container.innerHTML = `<style>${PDF_EXPORT_STYLES}</style>` +
+      `<div class="pdf-export-root" id="pdf-root">${innerHtml}</div>`
+    document.body.appendChild(container)
 
-    const iframeDoc = iframe.contentDocument
-    const iframeWin = iframe.contentWindow
-    if (!iframeDoc || !iframeWin) {
-      throw new Error(t('logDetail.exportSandboxInitFail'))
-    }
-
-    iframeDoc.open()
-    iframeDoc.write(`<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8" />
-<title>${escapeHtml(buildPdfFilename(log.filename, log.id).replace(/\.pdf$/i, ''))}</title>
-<style>
-${PDF_EXPORT_STYLES}
-</style>
-</head>
-<body>
-<div class="pdf-export-root" id="pdf-root">${innerHtml}</div>
-</body>
-</html>`)
-    iframeDoc.close()
-
-    // 等待字体/布局就绪
-    await new Promise<void>((resolve) => {
-      if (iframeDoc.readyState === 'complete') {
-        resolve()
-      } else {
-        iframe!.addEventListener('load', () => resolve(), { once: true })
-      }
-    })
-    // 给浏览器一次回流时间，确保子元素尺寸已计算
-    await new Promise((r) => setTimeout(r, 50))
-    if ((iframeDoc as any).fonts?.ready) {
-      try { await (iframeDoc as any).fonts.ready } catch { /* noop */ }
-    }
-
-    const root = iframeDoc.getElementById('pdf-root') as HTMLElement | null
+    const root = container.querySelector('#pdf-root') as HTMLElement | null
     if (!root) throw new Error(t('logDetail.exportContainerFail'))
 
-    iframeWin.addEventListener('afterprint', cleanupIframe, { once: true })
-    cleanupTimer = window.setTimeout(cleanupIframe, 60_000)
-    iframeWin.focus()
-    iframeWin.print()
-    deferCleanup = true
+    // 等待 web 字体就绪，避免中文回退字体导致的度量偏差。
+    if ((document as any).fonts?.ready) {
+      try { await (document as any).fonts.ready } catch { /* noop */ }
+    }
+    // 给浏览器一次回流时间，确保子元素尺寸已计算完成。
+    await new Promise((r) => setTimeout(r, 50))
+
+    const scale = PDF_PAGE.scale
+    const canvas = await html2canvas(root, {
+      scale,
+      backgroundColor: '#ffffff',
+      useCORS: true,
+      logging: false,
+      windowWidth: PDF_PAGE.renderWidthPx,
+    })
+    if (!canvas.width || !canvas.height) {
+      throw new Error(t('logDetail.exportFail'))
+    }
+
+    // 采集"安全分页点"：块级元素底部的 Y 坐标（画布像素），
+    // 分页时把页底对齐到这些边界，避免把一行文字从中间切断。
+    const rootTop = root.getBoundingClientRect().top
+    const breakYs: number[] = []
+    root
+      .querySelectorAll('section, h1, h2, h3, h4, p, li, tr, pre, blockquote, table, ul, ol, .issue-box, .empty-box')
+      .forEach((el) => {
+        const bottom = (el.getBoundingClientRect().bottom - rootTop) * scale
+        if (bottom > 0 && bottom <= canvas.height) breakYs.push(bottom)
+      })
+    breakYs.sort((a, b) => a - b)
+
+    const pxPerMm = canvas.width / PDF_PAGE.contentWidthMm
+    const pageHeightPx = PDF_PAGE.contentHeightMm * pxPerMm
+
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true })
+
+    let startY = 0
+    let firstPage = true
+    while (startY < canvas.height - 1) {
+      let endY = Math.min(startY + pageHeightPx, canvas.height)
+      // 若不是最后一页，尽量把页底对齐到一个安全分页点（至少填满半页，
+      // 否则遇到超高元素会退化为硬切，避免出现大量空白页）。
+      if (endY < canvas.height) {
+        let snapped = -1
+        for (const y of breakYs) {
+          if (y > endY) break
+          if (y > startY + pageHeightPx * 0.5) snapped = y
+        }
+        if (snapped > 0) endY = snapped
+      }
+
+      const sliceHeightPx = Math.max(1, Math.round(endY - startY))
+      const pageCanvas = document.createElement('canvas')
+      pageCanvas.width = canvas.width
+      pageCanvas.height = sliceHeightPx
+      const ctx = pageCanvas.getContext('2d')
+      if (!ctx) throw new Error(t('logDetail.canvasCtxFail'))
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
+      ctx.drawImage(
+        canvas,
+        0, startY, canvas.width, sliceHeightPx,
+        0, 0, canvas.width, sliceHeightPx,
+      )
+
+      const imgData = pageCanvas.toDataURL('image/png')
+      const sliceHeightMm = sliceHeightPx / pxPerMm
+      if (!firstPage) pdf.addPage()
+      pdf.addImage(
+        imgData, 'PNG',
+        PDF_PAGE.marginMm, PDF_PAGE.marginMm,
+        PDF_PAGE.contentWidthMm, sliceHeightMm,
+        undefined, 'FAST',
+      )
+
+      firstPage = false
+      startY = endY
+    }
+
+    pdf.save(buildPdfFilename(log.filename, log.id))
     ElMessage.success(t('logDetail.pdfDownloadStarted'))
   } catch (error: any) {
     console.error('Failed to export report:', error)
     ElMessage.error(error?.message || t('logDetail.exportFail'))
   } finally {
-    if (!deferCleanup) cleanupIframe()
+    cleanupContainer()
     exportPdfLoading.value = false
   }
 }
@@ -1677,6 +1722,15 @@ const fetchAIAnalysisStatus = async () => {
           aiAnalysisResult.value = normalizeAIAnalysisResult(result)
           if (logStore.currentLog) {
             logStore.currentLog.ai_analysis_result = result
+            // 本轮分析刚完成：把新结果追加到本地对话历史，
+            // 使详情页立即展示新一轮问答（后端也已持久化该轮）。
+            // 仅在 completed 状态首次出现时追加，避免轮询重复入列。
+            if (previousStatus !== 'completed') {
+              const conv = Array.isArray(logStore.currentLog.ai_analysis_conversation)
+                ? logStore.currentLog.ai_analysis_conversation
+                : []
+              logStore.currentLog.ai_analysis_conversation = [...conv, result]
+            }
           }
           if (previousStatus !== 'completed') {
             ElMessage.success(t('logDetail.aiCompleted'))
@@ -2056,6 +2110,8 @@ watch(
     aiAnalysisTaskId.value = logStore.currentLog?.ai_analysis_task_id || null
     aiAnalysisError.value = logStore.currentLog?.ai_analysis_error || null
     aiAnalysisLoading.value = false
+    // 切换日志时同步重置分析输入框，避免残留上一条日志的提问
+    aiAnalysisQuery.value = logStore.currentLog?.issue_description || ''
     issueDescriptionEditing.value = false
     issueDescriptionSaving.value = false
     issueDescriptionDraft.value = logStore.currentLog?.issue_description || ''
@@ -2575,6 +2631,9 @@ onUnmounted(() => {
 }
 
 .analysis-trace { margin: 12px 0; }
+
+/* 多轮分析历史：相邻轮次之间留出间距 */
+.analysis-turn + .analysis-turn { margin-top: 16px; }
 
 .analysis-loading {
   display: flex;

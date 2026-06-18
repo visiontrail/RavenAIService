@@ -78,8 +78,11 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Ban, Check, ChevronDown, Copy, Loader2, X } from 'lucide-vue-next'
 import type { TraceCard, TraceCardStatus } from '@/composables/useAgentTraceStream'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   card: TraceCard

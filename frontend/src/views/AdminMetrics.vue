@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { LogOut, Menu, PanelLeftClose, RefreshCw, X } from 'lucide-vue-next'
@@ -12,6 +12,8 @@ import type {
   MetricsUserDetail,
   MetricsUserRow,
 } from '@/types'
+
+declare const __VITE_USD_TO_CNY_RATE__: string | undefined
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -116,11 +118,28 @@ const formatBytes = (value?: number | null) => {
   return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`
 }
 
+const DEFAULT_USD_TO_CNY_RATE = 7.2
+const resolveUsdToCnyRate = () => {
+  const rawRate =
+    (import.meta.env.VITE_USD_TO_CNY_RATE as string | undefined) ||
+    (typeof __VITE_USD_TO_CNY_RATE__ !== 'undefined' ? __VITE_USD_TO_CNY_RATE__ : undefined)
+  const rate = Number(rawRate)
+  return Number.isFinite(rate) && rate > 0 ? rate : DEFAULT_USD_TO_CNY_RATE
+}
+const USD_TO_CNY_RATE = resolveUsdToCnyRate()
+const cnyCostFormatter = new Intl.NumberFormat('zh-CN', {
+  style: 'currency',
+  currency: 'CNY',
+  currencyDisplay: 'narrowSymbol',
+  minimumFractionDigits: 4,
+  maximumFractionDigits: 4,
+})
+
 const formatCost = (overviewOrDetail: { estimated_cost_usd: number | null; cost_estimated: boolean } | null) => {
   if (!overviewOrDetail || !overviewOrDetail.cost_estimated || overviewOrDetail.estimated_cost_usd === null) {
     return t('admin.metrics.noPriceConfig')
   }
-  return `$${overviewOrDetail.estimated_cost_usd.toFixed(4)}`
+  return cnyCostFormatter.format(overviewOrDetail.estimated_cost_usd * USD_TO_CNY_RATE)
 }
 
 const formatBucketLabel = (value: string) => {
@@ -139,19 +158,79 @@ const formatBucketLabel = (value: string) => {
 const objToPairs = (obj?: Record<string, number> | null) =>
   Object.entries(obj || {}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
 
-const maxSeriesTokens = computed(() => {
-  const series = overview.value?.time_series || []
-  return series.reduce((m, b) => Math.max(m, b.total_tokens), 0) || 1
-})
+// Build a "nice" axis scale: a rounded maximum plus evenly spaced ticks
+// (descending, from niceMax down to 0) so bars and Y-axis ticks line up.
+const buildNiceScale = (rawMax: number, tickCount = 4): { niceMax: number; ticks: number[] } => {
+  const safeMax = rawMax > 0 ? rawMax : tickCount
+  const rough = safeMax / tickCount
+  const pow = Math.pow(10, Math.floor(Math.log10(rough)))
+  const normalized = rough / pow
+  const niceStep =
+    normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 2.5 ? 2.5 : normalized <= 5 ? 5 : 10
+  const step = niceStep * pow
+  const ticks: number[] = []
+  for (let i = tickCount; i >= 0; i -= 1) ticks.push(step * i)
+  return { niceMax: step * tickCount, ticks }
+}
 
-const maxAgentCalls = computed(() => {
+const tokenScale = computed(() =>
+  buildNiceScale((overview.value?.time_series || []).reduce((m, b) => Math.max(m, b.total_tokens), 0)),
+)
+
+const agentScale = computed(() =>
+  buildNiceScale(
+    (overview.value?.time_series || []).reduce((m, b) => {
+      const totalCallsInBucket = Object.entries(b.counts_by_agent || {})
+        .filter(([k]) => k !== 'title_generator')
+        .reduce((sum, [, v]) => sum + (v as number), 0)
+      return Math.max(m, totalCallsInBucket as number)
+    }, 0),
+  ),
+)
+
+const axisTickFormatter = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 })
+const formatAxisTick = (value: number) =>
+  value >= 1000 ? axisTickFormatter.format(value) : String(Math.round(value))
+
+// X-axis labels render horizontally by default and only rotate when they would
+// overlap. We measure the widest label against the per-column width (which
+// depends on bucket count and the live chart width) to decide.
+const LABEL_GAP_PX = 5.6 // matches the .metrics-chart column gap (0.35rem)
+let labelMeasureCanvas: HTMLCanvasElement | null = null
+const measureLabelWidth = (text: string): number => {
+  if (typeof document === 'undefined') return text.length * 6
+  if (!labelMeasureCanvas) labelMeasureCanvas = document.createElement('canvas')
+  const ctx = labelMeasureCanvas.getContext('2d')
+  if (!ctx) return text.length * 6
+  ctx.font = `9.9px ${getComputedStyle(document.body).fontFamily || 'sans-serif'}`
+  return ctx.measureText(text).width
+}
+
+const chartInnerWidth = ref(0)
+let chartResizeObserver: ResizeObserver | null = null
+const setChartRef = (el: unknown) => {
+  chartResizeObserver?.disconnect()
+  chartResizeObserver = null
+  if (el instanceof HTMLElement && typeof ResizeObserver !== 'undefined') {
+    chartResizeObserver = new ResizeObserver((entries) => {
+      chartInnerWidth.value = entries[0].contentRect.width
+    })
+    chartResizeObserver.observe(el)
+    chartInnerWidth.value = el.clientWidth
+  }
+}
+onBeforeUnmount(() => chartResizeObserver?.disconnect())
+
+const rotateBucketLabels = computed(() => {
   const series = overview.value?.time_series || []
-  return series.reduce((m, b) => {
-    const totalCallsInBucket = Object.entries(b.counts_by_agent || {})
-      .filter(([k]) => k !== 'title_generator')
-      .reduce((sum, [, v]) => sum + (v as number), 0)
-    return Math.max(m, totalCallsInBucket as number)
-  }, 0) || 1
+  const n = series.length
+  if (n <= 1 || chartInnerWidth.value <= 0) return false
+  const maxLabelWidth = series.reduce(
+    (m, b) => Math.max(m, measureLabelWidth(formatBucketLabel(b.bucket_start))),
+    0,
+  )
+  const colSlot = (chartInnerWidth.value - (n - 1) * LABEL_GAP_PX) / n
+  return maxLabelWidth + 4 > colSlot + LABEL_GAP_PX
 })
 
 const agentColors = [
@@ -515,21 +594,46 @@ onMounted(() => {
         <div class="metrics-card">
           <h3 class="metrics-card-title">{{ t('admin.metrics.tsTitle') }}</h3>
           <div v-if="!overview || !overview.time_series.length" class="metrics-empty">{{ t('admin.metrics.emptyData') }}</div>
-          <div v-else class="metrics-chart">
-            <div
-              v-for="(b, i) in overview.time_series"
-              :key="i"
-              class="metrics-bar-col"
-              :title="`${formatBucketLabel(b.bucket_start)}\nToken: ${formatNumber(b.total_tokens)}\n${t('admin.metrics.colCalls')}: ${formatNumber(b.invocation_count)}`"
-            >
-              <div class="metrics-bar-track">
-                <div
-                  class="metrics-bar-fill"
-                  :style="{ height: `${Math.max(2, (b.total_tokens / maxSeriesTokens) * 100)}%` }"
-                ></div>
+          <div v-else class="metrics-graph" :class="{ 'labels-rotated': rotateBucketLabels }">
+            <div class="metrics-graph-body">
+              <div class="metrics-yaxis-title">{{ t('admin.metrics.axisTokens') }}</div>
+              <div class="metrics-yaxis">
+                <span
+                  v-for="(tick, ti) in tokenScale.ticks"
+                  :key="ti"
+                  class="metrics-yaxis-tick"
+                  :style="{ top: `${(ti / (tokenScale.ticks.length - 1)) * 100}%` }"
+                >{{ formatAxisTick(tick) }}</span>
               </div>
-              <span class="metrics-bar-label">{{ formatBucketLabel(b.bucket_start) }}</span>
+              <div class="metrics-plot">
+                <div class="metrics-gridlines">
+                  <span
+                    v-for="(tick, ti) in tokenScale.ticks"
+                    :key="tick"
+                    class="metrics-gridline"
+                    :class="{ 'is-base': ti === tokenScale.ticks.length - 1 }"
+                    :style="{ top: `${(ti / (tokenScale.ticks.length - 1)) * 100}%` }"
+                  ></span>
+                </div>
+                <div class="metrics-chart" :ref="setChartRef">
+                  <div
+                    v-for="(b, i) in overview.time_series"
+                    :key="i"
+                    class="metrics-bar-col"
+                    :title="`${formatBucketLabel(b.bucket_start)}\nToken: ${formatNumber(b.total_tokens)}\n${t('admin.metrics.colCalls')}: ${formatNumber(b.invocation_count)}`"
+                  >
+                    <div class="metrics-bar-track">
+                      <div
+                        class="metrics-bar-fill"
+                        :style="{ height: `${Math.max(2, (b.total_tokens / tokenScale.niceMax) * 100)}%` }"
+                      ></div>
+                    </div>
+                    <div class="metrics-bar-label"><span>{{ formatBucketLabel(b.bucket_start) }}</span></div>
+                  </div>
+                </div>
+              </div>
             </div>
+            <div class="metrics-xaxis-title">{{ t('admin.metrics.axisTime') }}</div>
           </div>
         </div>
 
@@ -537,28 +641,53 @@ onMounted(() => {
         <div class="metrics-card">
           <h3 class="metrics-card-title">{{ $t('admin.metrics.agentTrendTitle') }}</h3>
           <div v-if="!overview || !overview.time_series.length" class="metrics-empty">{{ t('admin.metrics.emptyData') }}</div>
-          <div v-else class="metrics-chart">
-            <div
-              v-for="(b, i) in overview.time_series"
-              :key="i"
-              class="metrics-bar-col"
-              :title="`${formatBucketLabel(b.bucket_start)}\n${Object.entries(b.counts_by_agent || {}).filter(([k]) => k !== 'title_generator').map(([k, v]) => `${k}: ${formatNumber(v as number)}`).join('\\n')}`"
-            >
-              <div class="metrics-bar-track" style="flex-direction: column-reverse; justify-content: flex-start; align-items: stretch;">
-                <div
-                  v-for="[agent, count] in Object.entries(b.counts_by_agent || {}).filter(([k]) => k !== 'title_generator').sort((a, b) => (b[1] as number) - (a[1] as number))"
-                  :key="agent"
-                  class="metrics-bar-fill-agent"
-                  :style="{
-                    height: `${((count as number) / maxAgentCalls) * 100}%`,
-                    backgroundColor: getAgentColor(agent),
-                    minHeight: '2px',
-                    width: '100%'
-                  }"
-                ></div>
+          <div v-else class="metrics-graph" :class="{ 'labels-rotated': rotateBucketLabels }">
+            <div class="metrics-graph-body">
+              <div class="metrics-yaxis-title">{{ t('admin.metrics.axisCalls') }}</div>
+              <div class="metrics-yaxis">
+                <span
+                  v-for="(tick, ti) in agentScale.ticks"
+                  :key="ti"
+                  class="metrics-yaxis-tick"
+                  :style="{ top: `${(ti / (agentScale.ticks.length - 1)) * 100}%` }"
+                >{{ formatAxisTick(tick) }}</span>
               </div>
-              <span class="metrics-bar-label">{{ formatBucketLabel(b.bucket_start) }}</span>
+              <div class="metrics-plot">
+                <div class="metrics-gridlines">
+                  <span
+                    v-for="(tick, ti) in agentScale.ticks"
+                    :key="tick"
+                    class="metrics-gridline"
+                    :class="{ 'is-base': ti === agentScale.ticks.length - 1 }"
+                    :style="{ top: `${(ti / (agentScale.ticks.length - 1)) * 100}%` }"
+                  ></span>
+                </div>
+                <div class="metrics-chart">
+                  <div
+                    v-for="(b, i) in overview.time_series"
+                    :key="i"
+                    class="metrics-bar-col"
+                    :title="`${formatBucketLabel(b.bucket_start)}\n${Object.entries(b.counts_by_agent || {}).filter(([k]) => k !== 'title_generator').map(([k, v]) => `${k}: ${formatNumber(v as number)}`).join('\\n')}`"
+                  >
+                    <div class="metrics-bar-track" style="flex-direction: column-reverse; justify-content: flex-start; align-items: stretch;">
+                      <div
+                        v-for="[agent, count] in Object.entries(b.counts_by_agent || {}).filter(([k]) => k !== 'title_generator').sort((a, b) => (b[1] as number) - (a[1] as number))"
+                        :key="agent"
+                        class="metrics-bar-fill-agent"
+                        :style="{
+                          height: `${((count as number) / agentScale.niceMax) * 100}%`,
+                          backgroundColor: getAgentColor(agent),
+                          minHeight: '2px',
+                          width: '100%'
+                        }"
+                      ></div>
+                    </div>
+                    <div class="metrics-bar-label"><span>{{ formatBucketLabel(b.bucket_start) }}</span></div>
+                  </div>
+                </div>
+              </div>
             </div>
+            <div class="metrics-xaxis-title">{{ t('admin.metrics.axisTime') }}</div>
           </div>
           <!-- Legend -->
           <div v-if="overview && overview.time_series.length" class="flex flex-wrap gap-3 mt-4 justify-center">
@@ -1090,20 +1219,94 @@ onMounted(() => {
   color: #94a3b8;
 }
 
+.metrics-graph {
+  --chart-track-h: 180px;
+  --chart-label-h: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.metrics-graph.labels-rotated {
+  --chart-label-h: 34px;
+}
+
+.metrics-graph-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.metrics-yaxis-title {
+  flex: none;
+  height: var(--chart-track-h);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.metrics-yaxis {
+  position: relative;
+  flex: none;
+  width: 2.5rem;
+  height: var(--chart-track-h);
+}
+
+.metrics-yaxis-tick {
+  position: absolute;
+  right: 0.3rem;
+  transform: translateY(-50%);
+  font-size: 0.62rem;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+.metrics-plot {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: calc(var(--chart-track-h) + var(--chart-label-h));
+}
+
+.metrics-gridlines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--chart-track-h);
+  border-left: 1px solid #cbd5e1;
+  pointer-events: none;
+}
+
+.metrics-gridline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed #e2e8f0;
+}
+
+.metrics-gridline.is-base {
+  border-top: 1px solid #cbd5e1;
+}
+
 .metrics-chart {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 0.35rem;
-  height: 180px;
+  height: 100%;
   overflow-x: auto;
-  padding-top: 0.5rem;
 }
 
 .metrics-bar-col {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.35rem;
   min-width: 28px;
   flex: 1;
   height: 100%;
@@ -1114,6 +1317,7 @@ onMounted(() => {
   width: 100%;
   display: flex;
   align-items: flex-end;
+  justify-content: center;
   max-width: 36px;
 }
 
@@ -1125,11 +1329,30 @@ onMounted(() => {
 }
 
 .metrics-bar-label {
+  height: var(--chart-label-h);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: visible;
+}
+
+.metrics-bar-label span {
   font-size: 0.62rem;
   color: #94a3b8;
   white-space: nowrap;
+  padding-top: 2px;
+}
+
+.metrics-graph.labels-rotated .metrics-bar-label span {
   transform: rotate(-30deg);
   transform-origin: center;
+}
+
+.metrics-xaxis-title {
+  text-align: center;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #64748b;
 }
 
 .metrics-two-col {
