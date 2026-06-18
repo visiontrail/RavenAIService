@@ -317,7 +317,11 @@ def prepare(log_record: Any, *, require_metadata: bool = True) -> WorkspaceConte
             "upload_kind": upload_kind,
         }
         if attachment_path is not None:
-            attachment_rel = attachment_path.relative_to(temp_dir).as_posix()
+            # ``attachment_path`` comes back resolved (absolute) from
+            # ``_safe_output_path``, while ``temp_dir`` is built from a possibly
+            # relative settings value. Resolve ``temp_dir`` so ``relative_to``
+            # compares two absolute paths instead of raising on the mismatch.
+            attachment_rel = attachment_path.relative_to(temp_dir.resolve()).as_posix()
             task_data["attachments"] = [
                 {
                     "filename": attachment_path.name,

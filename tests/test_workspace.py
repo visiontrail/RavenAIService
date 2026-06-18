@@ -294,6 +294,39 @@ class TestPrepareTextUpload:
         ]
         assert ctx.metadata["attachments"] == task_data["attachments"]
 
+    def test_plain_text_log_with_relative_base_dir_records_attachment(
+        self, tmp_path, mock_settings, monkeypatch
+    ):
+        # Regression: in production ``code_repo_clone_base_dir`` defaults to the
+        # relative "temp/code_repos". The placed attachment path comes back
+        # resolved (absolute) from _safe_output_path, so computing
+        # attachment.relative_to(temp_dir) used to blow up with
+        # "is not in the subpath of ... OR one path is relative and the other
+        # is absolute." prepare() must resolve temp_dir before the comparison.
+        from app.agents.log_analysis.workspace import prepare
+
+        mock_settings.code_repo_clone_base_dir = "rel_clone_dirs"
+        monkeypatch.chdir(tmp_path)
+
+        src = tmp_path / "Irun_oam.log"
+        src.write_text("2026-06-18 base station log\n", encoding="utf-8")
+        record = _make_log_record(archive_path=str(src), original_filename="Irun_oam.log")
+
+        with patch("app.agents.log_analysis.workspace.settings", mock_settings):
+            ctx = prepare(record, require_metadata=False)
+
+        placed = Path(ctx.logs_dir) / "Irun_oam.log"
+        assert placed.exists()
+        task_data = json.loads(Path(ctx.task_json_path).read_text())
+        assert task_data["attachments"] == [
+            {
+                "filename": "Irun_oam.log",
+                "path": "logs/Irun_oam.log",
+                "kind": "text",
+            }
+        ]
+        assert ctx.metadata["attachments"] == task_data["attachments"]
+
     def test_plain_text_log_requires_metadata_raises(self, tmp_path, mock_settings):
         from app.agents.log_analysis.workspace import MissingMetadataJsonError, prepare
 
