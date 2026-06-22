@@ -6,7 +6,6 @@ import { useAppStore } from './stores/app'
 import { getElementLocale } from './i18n'
 import AppNotifications from './components/AppNotifications.vue'
 import AppLoading from './components/AppLoading.vue'
-import AIOrb from './components/AIOrb.vue'
 
 const appStore = useAppStore()
 const route = useRoute()
@@ -58,12 +57,6 @@ const isWorkbenchRoute = computed(() => {
 })
 
 const isAdminRoute = computed(() => route.path.startsWith('/admin'))
-
-// 判断是否应该显示 AI Orb
-const showAIOrb = computed(() => {
-  // 工作台与后台管理页面都不显示 Orb
-  return !isWorkbenchRoute.value && !isAdminRoute.value
-})
 
 const mainClass = computed(() => {
   if (isWorkbenchRoute.value) return 'w-full'
@@ -177,9 +170,6 @@ onUnmounted(() => {
 
       <!-- 全局加载状态 -->
       <AppLoading v-if="appStore.loading" />
-
-      <!-- AI Assistant Orb -->
-      <AIOrb :visible="showAIOrb" />
     </div>
   </el-config-provider>
 </template>

@@ -1138,9 +1138,9 @@ export default {
       singlePdfAction: '导出本次回复 PDF',
       singlePdfTitle: '{title} - AI 回复',
       singlePdfMeta: '导出时间：{time}',
-      pdfSandboxInitFail: '无法初始化 PDF 导出沙箱',
       pdfContainerFail: 'PDF 导出容器未挂载',
-      pdfPrintStarted: '已打开打印窗口，请选择保存为 PDF',
+      canvasCtxFail: 'Canvas 2D 上下文不可用',
+      pdfDownloadStarted: 'PDF 已开始下载',
       pdfExportFailed: '导出 PDF 失败，请稍后重试',
     },
     menu: {

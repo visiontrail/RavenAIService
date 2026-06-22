@@ -6,6 +6,8 @@ import { userApi } from '@/api/user'
 import type { DeviceInfo } from '@/types'
 import { renderMarkdown, processMermaidBlocks } from '@/utils/markdownRenderer'
 import { loadMermaid } from '@/utils/mermaidLoader'
+import { jsPDF } from 'jspdf'
+import html2canvas from 'html2canvas-pro'
 import { ElMessage } from 'element-plus'
 import { Copy, FileDown } from 'lucide-vue-next'
 import { useUserStore } from '@/stores/user'
@@ -487,16 +489,23 @@ const copyAiMessageMarkdown = async (message: ChatEntry) => {
   }
 }
 
+// 回复 PDF 容器样式。所有规则都用 `.ai-pdf-root` 作为前缀作用域，
+// 因此即便以全局 <style> 注入也不会污染当前页面（光栅化离屏容器使用）。
 const AI_MESSAGE_PDF_STYLES = `
-@page { margin: 16mm 14mm; }
-html, body { margin: 0; padding: 0; background: #fff; color: #171717; }
-body {
+.ai-pdf-root, .ai-pdf-root * { box-sizing: border-box; }
+.ai-pdf-root {
+  width: auto;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  background: #fff;
+  color: #171717;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   font-size: 13px;
   line-height: 1.62;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
 }
-.ai-pdf-root, .ai-pdf-root * { box-sizing: border-box; }
-.ai-pdf-root { width: 100%; max-width: 176mm; margin: 0 auto; padding: 0; }
 .ai-pdf-title {
   margin: 0 0 6px;
   font-size: 20px;
@@ -595,23 +604,30 @@ const buildAiMessagePdfFilename = (exportedAt: Date) => {
   return `${sanitizeMarkdownFilename(title)}-${formatExportFileStamp(exportedAt)}.pdf`
 }
 
+// A4 纸张与内容区尺寸（mm），以及离屏渲染宽度（px）。
+const AI_PDF_PAGE = {
+  marginMm: 10,
+  widthMm: 210,
+  heightMm: 297,
+  get contentWidthMm() { return this.widthMm - this.marginMm * 2 },
+  get contentHeightMm() { return this.heightMm - this.marginMm * 2 },
+  renderWidthPx: 760,
+  scale: 2,
+}
+
+// 导出本次回复为 PDF：使用内置渲染（html2canvas-pro 光栅化 + jsPDF 直接生成），
+// 与日志详情的「导出报告（PDF）」一致，不再依赖浏览器打印对话框。
 const exportAiMessagePdf = async (message: ChatEntry) => {
   const content = (message.content || '').trim()
   if (!content || content === THINKING_PLACEHOLDER) return
 
-  let iframe: HTMLIFrameElement | null = null
-  let cleanupTimer: number | null = null
-  let deferCleanup = false
-
-  const cleanupIframe = () => {
-    if (cleanupTimer !== null) {
-      window.clearTimeout(cleanupTimer)
-      cleanupTimer = null
+  // 离屏容器：渲染回复 DOM，供 html2canvas 光栅化后切片成 PDF。
+  let container: HTMLDivElement | null = null
+  const cleanupContainer = () => {
+    if (container && container.parentNode) {
+      container.parentNode.removeChild(container)
     }
-    if (iframe && iframe.parentNode) {
-      iframe.parentNode.removeChild(iframe)
-    }
-    iframe = null
+    container = null
   }
 
   try {
@@ -619,73 +635,119 @@ const exportAiMessagePdf = async (message: ChatEntry) => {
     const title = t('aiChat.export.singlePdfTitle', { title: currentChatTitle.value || t('aiChat.export.defaultTitle') })
     const contentHtml = renderMarkdown(content, { wrapperClass: 'ai-pdf-content', cleanXml: true })
 
-    iframe = document.createElement('iframe')
-    iframe.setAttribute('aria-hidden', 'true')
-    iframe.style.cssText = [
+    const innerHtml = `
+<h1 class="ai-pdf-title">${escapeHtml(title)}</h1>
+<div class="ai-pdf-meta">${escapeHtml(t('aiChat.export.singlePdfMeta', { time: formatExportDateTime(exportedAt) }))}</div>
+${contentHtml}
+`
+
+    // 离屏渲染容器：固定到视口外，宽度固定以保证排版/换行稳定。
+    container = document.createElement('div')
+    container.setAttribute('aria-hidden', 'true')
+    container.style.cssText = [
       'position: fixed',
       'left: -10000px',
       'top: 0',
-      'width: 210mm',
-      'height: 297mm',
-      'border: 0',
+      `width: ${AI_PDF_PAGE.renderWidthPx}px`,
+      'background: #ffffff',
       'pointer-events: none',
       'z-index: -1',
     ].join('; ')
-    document.body.appendChild(iframe)
+    // 样式全部以 `.ai-pdf-root` 作用域，随容器一起注入即可，不污染主页面。
+    container.innerHTML = `<style>${AI_MESSAGE_PDF_STYLES}</style>` +
+      `<div class="ai-pdf-root" id="ai-pdf-root">${innerHtml}</div>`
+    document.body.appendChild(container)
 
-    const iframeDoc = iframe.contentDocument
-    const iframeWin = iframe.contentWindow
-    if (!iframeDoc || !iframeWin) {
-      throw new Error(t('aiChat.export.pdfSandboxInitFail'))
-    }
-
-    iframeDoc.open()
-    iframeDoc.write(`<!DOCTYPE html>
-<html lang="${escapeHtml(userStore.profile?.language || 'zh-CN')}">
-<head>
-<meta charset="UTF-8" />
-<title>${escapeHtml(buildAiMessagePdfFilename(exportedAt).replace(/\.pdf$/i, ''))}</title>
-<style>
-${AI_MESSAGE_PDF_STYLES}
-</style>
-</head>
-<body>
-<div class="ai-pdf-root" id="ai-pdf-root">
-  <h1 class="ai-pdf-title">${escapeHtml(title)}</h1>
-  <div class="ai-pdf-meta">${escapeHtml(t('aiChat.export.singlePdfMeta', { time: formatExportDateTime(exportedAt) }))}</div>
-  ${contentHtml}
-</div>
-</body>
-</html>`)
-    iframeDoc.close()
-
-    await new Promise<void>((resolve) => {
-      if (iframeDoc.readyState === 'complete') {
-        resolve()
-      } else {
-        iframe!.addEventListener('load', () => resolve(), { once: true })
-      }
-    })
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    if ((iframeDoc as any).fonts?.ready) {
-      try { await (iframeDoc as any).fonts.ready } catch { /* noop */ }
-    }
-
-    const root = iframeDoc.getElementById('ai-pdf-root') as HTMLElement | null
+    const root = container.querySelector('#ai-pdf-root') as HTMLElement | null
     if (!root) throw new Error(t('aiChat.export.pdfContainerFail'))
-    await processMermaidBlocks(root)
 
-    iframeWin.addEventListener('afterprint', cleanupIframe, { once: true })
-    cleanupTimer = window.setTimeout(cleanupIframe, 60_000)
-    iframeWin.focus()
-    iframeWin.print()
-    deferCleanup = true
-    ElMessage.success(t('aiChat.export.pdfPrintStarted'))
+    // 先渲染 mermaid 图（异步插入 SVG），再等 web 字体就绪与一次回流，
+    // 避免中文回退字体或未完成布局导致的度量偏差。
+    await processMermaidBlocks(root)
+    if ((document as any).fonts?.ready) {
+      try { await (document as any).fonts.ready } catch { /* noop */ }
+    }
+    await new Promise((r) => setTimeout(r, 50))
+
+    const scale = AI_PDF_PAGE.scale
+    const canvas = await html2canvas(root, {
+      scale,
+      backgroundColor: '#ffffff',
+      useCORS: true,
+      logging: false,
+      windowWidth: AI_PDF_PAGE.renderWidthPx,
+    })
+    if (!canvas.width || !canvas.height) {
+      throw new Error(t('aiChat.export.pdfExportFailed'))
+    }
+
+    // 采集"安全分页点"：块级元素底部的 Y 坐标（画布像素），
+    // 分页时把页底对齐到这些边界，避免把一行文字从中间切断。
+    const rootTop = root.getBoundingClientRect().top
+    const breakYs: number[] = []
+    root
+      .querySelectorAll('h1, h2, h3, h4, p, li, tr, pre, blockquote, table, ul, ol, .mermaid-container')
+      .forEach((el) => {
+        const bottom = (el.getBoundingClientRect().bottom - rootTop) * scale
+        if (bottom > 0 && bottom <= canvas.height) breakYs.push(bottom)
+      })
+    breakYs.sort((a, b) => a - b)
+
+    const pxPerMm = canvas.width / AI_PDF_PAGE.contentWidthMm
+    const pageHeightPx = AI_PDF_PAGE.contentHeightMm * pxPerMm
+
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4', compress: true })
+
+    let startY = 0
+    let firstPage = true
+    while (startY < canvas.height - 1) {
+      let endY = Math.min(startY + pageHeightPx, canvas.height)
+      // 若不是最后一页，尽量把页底对齐到一个安全分页点（至少填满半页，
+      // 否则遇到超高元素会退化为硬切，避免出现大量空白页）。
+      if (endY < canvas.height) {
+        let snapped = -1
+        for (const y of breakYs) {
+          if (y > endY) break
+          if (y > startY + pageHeightPx * 0.5) snapped = y
+        }
+        if (snapped > 0) endY = snapped
+      }
+
+      const sliceHeightPx = Math.max(1, Math.round(endY - startY))
+      const pageCanvas = document.createElement('canvas')
+      pageCanvas.width = canvas.width
+      pageCanvas.height = sliceHeightPx
+      const ctx = pageCanvas.getContext('2d')
+      if (!ctx) throw new Error(t('aiChat.export.canvasCtxFail'))
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
+      ctx.drawImage(
+        canvas,
+        0, startY, canvas.width, sliceHeightPx,
+        0, 0, canvas.width, sliceHeightPx,
+      )
+
+      const imgData = pageCanvas.toDataURL('image/png')
+      const sliceHeightMm = sliceHeightPx / pxPerMm
+      if (!firstPage) pdf.addPage()
+      pdf.addImage(
+        imgData, 'PNG',
+        AI_PDF_PAGE.marginMm, AI_PDF_PAGE.marginMm,
+        AI_PDF_PAGE.contentWidthMm, sliceHeightMm,
+        undefined, 'FAST',
+      )
+
+      firstPage = false
+      startY = endY
+    }
+
+    pdf.save(buildAiMessagePdfFilename(exportedAt))
+    ElMessage.success(t('aiChat.export.pdfDownloadStarted'))
   } catch (error: any) {
     console.error('Failed to export AI message PDF:', error)
     ElMessage.error(error?.message || t('aiChat.export.pdfExportFailed'))
   } finally {
-    if (!deferCleanup) cleanupIframe()
+    cleanupContainer()
   }
 }
 

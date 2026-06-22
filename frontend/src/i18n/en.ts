@@ -1138,9 +1138,9 @@ export default {
       singlePdfAction: 'Export this reply as PDF',
       singlePdfTitle: '{title} - AI reply',
       singlePdfMeta: 'Exported at: {time}',
-      pdfSandboxInitFail: 'Failed to initialize the PDF export sandbox',
       pdfContainerFail: 'PDF export container not mounted',
-      pdfPrintStarted: 'Print dialog opened. Choose Save as PDF',
+      canvasCtxFail: 'Canvas 2D context unavailable',
+      pdfDownloadStarted: 'PDF download started',
       pdfExportFailed: 'Failed to export PDF, please try again',
     },
     menu: {
