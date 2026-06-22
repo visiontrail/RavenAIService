@@ -18,6 +18,13 @@ def build_skill_availability_prompt(
     description menu below and loads each Skill on demand via the ``Skill``
     tool — at any point in the run, not just at the start.
 
+    The addendum frames Skills as an *auxiliary reference*: methodology and
+    domain knowledge are followed, but any concrete claim about the code or
+    system (paths, symbols, field names, enum values, line numbers, flow) must
+    be verified against the real ``repo/`` source and ``logs/`` before it is
+    used as an answer. When a Skill's details conflict with the actual code,
+    the code wins — this prevents stale Skill content from skewing answers.
+
     *skills* accepts ``{"name", "description"}`` dicts or bare name strings.
     """
     entries: List[tuple[str, str]] = []
@@ -46,15 +53,31 @@ def build_skill_availability_prompt(
     )
     return (
         "\n\n## 可用的 Skill（按需加载）\n"
-        "下列 Skill 已物化到当前工作区。请根据名称与描述自行判断哪些与"
-        "当前问题或子任务相关：\n"
+        "下列 Skill 已物化到当前工作区，作为**辅助参考**。请根据名称与"
+        "描述自行判断哪些与当前问题或子任务相关：\n"
         f"{bullets}\n\n"
         "使用规则：\n"
         "- 决定使用某个 Skill 之前，必须先调用 `Skill` 工具读取它的完整"
         f"指令（输入形如 `{example}`），再按指令执行；\n"
         "- 推理中途发现需要某个 Skill 时，可以随时补充加载，不限于开场；\n"
-        "- 与当前请求无关的 Skill 不要加载，避免浪费上下文；\n"
-        "- 一旦加载了某个 Skill，该主题的回答必须以其内容为准。\n\n"
+        "- 与当前请求无关的 Skill 不要加载，避免浪费上下文。\n\n"
+        "### Skill 与真实代码的关系（非常重要）\n"
+        "Skill 是**辅助参考**，不是代码事实的权威来源。它的价值在于提供"
+        "领域知识、排查思路、术语解释与经验规律，帮你判断「该看哪里、"
+        "怎么分析、要注意什么」——而不是替你断定代码里到底是什么。\n"
+        "- **一切关于代码与系统的具体事实，一律以工作区里的真实源代码"
+        "（`repo/`）与真实日志（`logs/`，如有）为准。** Skill 中凡涉及"
+        "文件路径、函数/符号/模块名、字段名、枚举或常量取值、配置项、"
+        "行号、接口签名、流程或调用关系等具体描述，都必须先到真实代码"
+        "/日志中 `Grep`/`Read` 核对，再据此作答，不得直接照搬 Skill 的"
+        "措辞当作结论；\n"
+        "- 当 Skill 的描述与实际代码或日志冲突、或明显已与当前版本脱节时，"
+        "**以实际代码与日志为准**，据此修正结论，丢弃 Skill 里过时或对不上"
+        "的细节；必要时可在 `answer` 中用一句话点明「Skill 的描述与当前"
+        "代码不一致，已以代码为准」；\n"
+        "- 上面「以代码为准」只针对*事实判断*。Skill 给出的分析方法、检查"
+        "清单与下面关于输出格式/措辞的要求仍应遵循（除非与真实代码直接"
+        "矛盾）。\n\n"
         "如果 Skill 指令引用了相对路径脚本、模板或资源文件，必须相对下面"
         "的物化目录解析路径；例如 `<skill-dir>/scripts/...`，不要假设这些"
         "文件位于当前工作目录根部：\n"
