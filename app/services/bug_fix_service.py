@@ -7,7 +7,8 @@ Bug 修复任务服务。
 独立的 async 实现，不在此文件。
 
 派发条件（``should_dispatch``）严格基于结构化信号，可测试、可回放：
-``status == "completed"`` 且 ``requires_code_fix`` 且 ``proposed_fixes`` 非空。
+分析成功完成（``status`` ∈ {``ok``, ``completed``}）且 ``requires_code_fix``
+且 ``proposed_fixes`` 非空。
 """
 
 from __future__ import annotations
@@ -26,6 +27,11 @@ from app.models.bug_fix import (
 
 logger = logging.getLogger(__name__)
 
+# LogAnalysisAgent 成功时在结果里写 ``status="ok"``（见 prompts 的输出 schema 与
+# ``LogAnalysisAgent._build_result``）；标准化/任务封装层历史上也用过 "completed"。
+# 两者都代表“分析成功完成”，其余（error / schema_mismatch / cancelled）一律不派发。
+_SUCCESS_STATUSES = frozenset({"ok", "completed"})
+
 
 def should_dispatch(analysis_result: Dict[str, Any]) -> bool:
     """判定一次分析结果是否应当派发 Bug 修复任务。
@@ -35,7 +41,7 @@ def should_dispatch(analysis_result: Dict[str, Any]) -> bool:
     """
     if not isinstance(analysis_result, dict):
         return False
-    if analysis_result.get("status") != "completed":
+    if analysis_result.get("status") not in _SUCCESS_STATUSES:
         return False
     if not analysis_result.get("requires_code_fix"):
         return False

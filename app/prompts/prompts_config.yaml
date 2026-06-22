@@ -188,7 +188,7 @@ claude_agent_log_analysis:
         ```
 
         ### 代码修复信号（`requires_code_fix` / `proposed_fixes`）
-        仅当证据明确指向**源代码缺陷**、且修复方式是**改动仓库代码**时，才把 `requires_code_fix` 置为 `true` 并填充 `proposed_fixes`。属于配置问题、运维操作、环境/部署问题、数据问题，或纯属答疑/检索/统计类问题时，`requires_code_fix` 必须为 `false` 且 `proposed_fixes`必须为 `[]`。把一次分析中**相互独立**的代码缺陷拆成多个`proposed_fixes` 元素（每个元素后续会成为一个独立的修复分支/MR）；只有当多处改动属于同一根因、必须一起合并才有意义时才合并为一项。如果无法定位到具体的代码缺陷，宁可置为 `false`，也不要为了凑数而臆测修复项。
+        该信号与 `question_type` **相互独立**：判定依据是你在调查中是否定位到了**真实的仓库源代码缺陷**，而不是用户问题被归为哪一类。仅当证据明确指向**源代码缺陷**、且修复方式是**改动仓库代码**时，才把 `requires_code_fix` 置为 `true` 并填充 `proposed_fixes` —— 即使本次是 `qa` / `search` / `stats` / `meta` 类问题，只要你在回答过程中发现了确凿的源代码缺陷（例如某脚本的枚举取值与头文件定义不一致），也应照常填充。若问题本质属于配置、运维操作、环境/部署、数据问题，或者你**并未**发现任何源代码缺陷（包括仅做答疑/检索/统计、无缺陷可报时），`requires_code_fix` 必须为 `false` 且 `proposed_fixes` 必须为 `[]`。把一次分析中**相互独立**的代码缺陷拆成多个`proposed_fixes` 元素（每个元素后续会成为一个独立的修复分支/MR）；只有当多处改动属于同一根因、必须一起合并才有意义时才合并为一项。如果无法定位到具体的代码缺陷，宁可置为 `false`，也不要为了凑数而臆测修复项。
 
         `proposed_fixes` 数组中每个元素的 schema（在使用时）：
         ```json
@@ -363,7 +363,7 @@ claude_agent_log_analysis:
         ```
 
         ### Code fix signals (`requires_code_fix` / `proposed_fixes`)
-        Only set `requires_code_fix` to `true` and populate `proposed_fixes` when evidence clearly points to a **source-code defect** and the fix involves **changing repository code**. For configuration issues, operational tasks, environment/deployment issues, data issues, or pure Q&A/search/stats questions, `requires_code_fix` must be `false` and `proposed_fixes` must be `[]`. Split independent code defects within a single analysis into multiple `proposed_fixes` elements (each will become a separate fix branch/MR); only merge into one item when multiple changes share the same root cause and must be merged together. If you cannot identify a specific code defect, leave it as `false` rather than speculating.
+        This signal is **independent of `question_type`**: the test is whether your investigation identified a real **source-code defect** in the repository, not which category the user's question fell into. Only set `requires_code_fix` to `true` and populate `proposed_fixes` when evidence clearly points to a **source-code defect** and the fix involves **changing repository code** — even when this turn is a `qa` / `search` / `stats` / `meta` question, if you uncover a concrete source-code defect while answering (e.g. a script's enum values disagreeing with the header definition), populate them as usual. When the issue is fundamentally a configuration, operational, environment/deployment, or data problem, or when you did **not** find any source-code defect (including a pure Q&A/search/stats answer with nothing to report), `requires_code_fix` must be `false` and `proposed_fixes` must be `[]`. Split independent code defects within a single analysis into multiple `proposed_fixes` elements (each will become a separate fix branch/MR); only merge into one item when multiple changes share the same root cause and must be merged together. If you cannot identify a specific code defect, leave it as `false` rather than speculating.
 
         Schema for each element of `proposed_fixes` (when used):
         ```json

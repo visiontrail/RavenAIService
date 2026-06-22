@@ -445,3 +445,77 @@ def test_evict_old_jobs_removes_done_jobs_past_retention(monkeypatch):
     service._jobs["stale"] = job
     service._evict_old_jobs()
     assert "stale" not in service._jobs
+
+
+def _bug_fix_job():
+    return AgentJob(
+        session_id="session-bf",
+        task_id="task-bf",
+        context_meta={"log_id": "log-bf", "project_id": 5, "filename": "x.zip"},
+        question="parse this config",
+        user_id="u1",
+        remember=False,
+        filename="x.zip",
+        started_at=0.0,
+        result={
+            "status": "ok",
+            "requires_code_fix": True,
+            "proposed_fixes": [{"title": "fix", "description": "d", "rationale": "r"}],
+        },
+    )
+
+
+def test_dispatch_bug_fix_sync_delegates_with_resolved_inputs(monkeypatch):
+    """The chat path resolves the source log + project_repo and forwards them
+    to the shared dispatch policy (ai_analysis._maybe_dispatch_bug_fix)."""
+    import app.tasks.ai_analysis as ai_analysis
+
+    fake_log_record = object()
+    fake_session = type(
+        "S", (), {"get": lambda self, model, pk: fake_log_record, "close": lambda self: None}
+    )()
+    monkeypatch.setattr(ai_analysis, "SessionLocal", lambda: fake_session)
+
+    calls = {}
+
+    def _fake_dispatch(session, **kwargs):
+        calls["session"] = session
+        calls.update(kwargs)
+
+    monkeypatch.setattr(ai_analysis, "_maybe_dispatch_bug_fix", _fake_dispatch)
+
+    job = _bug_fix_job()
+    LogAnalysisChatService._dispatch_bug_fix_sync(job)
+
+    assert calls["session"] is fake_session
+    assert calls["analysis_result"] is job.result
+    assert calls["log_record"] is fake_log_record
+    assert calls["analysis_task_id"] == "task-bf"
+    assert calls["project_repo_id"] == 5
+
+
+def test_maybe_dispatch_bug_fix_swallows_errors(monkeypatch):
+    service = LogAnalysisChatService()
+    # Flag must be on (and signal present) for the dispatch to reach the thread.
+    monkeypatch.setattr(
+        "app.services.log_analysis_chat_service.settings.bug_fix_auto_dispatch",
+        True,
+    )
+
+    def _boom(_job):
+        raise RuntimeError("broker down")
+
+    monkeypatch.setattr(service, "_dispatch_bug_fix_sync", _boom)
+    # Must not raise — the answer is already persisted.
+    asyncio.run(service._maybe_dispatch_bug_fix(_bug_fix_job()))
+
+
+def test_maybe_dispatch_bug_fix_skips_when_no_result():
+    service = LogAnalysisChatService()
+    job = _bug_fix_job()
+    job.result = None
+    called = {"n": 0}
+    # _dispatch_bug_fix_sync must not be invoked for a missing/invalid result.
+    service._dispatch_bug_fix_sync = lambda _j: called.__setitem__("n", called["n"] + 1)  # type: ignore[assignment]
+    asyncio.run(service._maybe_dispatch_bug_fix(job))
+    assert called["n"] == 0

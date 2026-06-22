@@ -47,8 +47,18 @@ def test_should_dispatch_true_when_all_signals_present():
     assert bug_fix_service.should_dispatch(_analysis()) is True
 
 
+def test_should_dispatch_true_when_status_ok():
+    # LogAnalysisAgent emits status="ok" (not "completed") on success; the
+    # dispatch gate must treat it as a successful analysis.
+    assert bug_fix_service.should_dispatch(_analysis(status="ok")) is True
+
+
 def test_should_dispatch_false_when_not_completed():
     assert bug_fix_service.should_dispatch(_analysis(status="error")) is False
+
+
+def test_should_dispatch_false_on_schema_mismatch():
+    assert bug_fix_service.should_dispatch(_analysis(status="schema_mismatch")) is False
 
 
 def test_should_dispatch_false_when_flag_off():

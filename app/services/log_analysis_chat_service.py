@@ -426,6 +426,10 @@ class LogAnalysisChatService:
             await self._persist_job_result(job, result, answer_text)
             self._touch_context(job.session_id, result=result, answer=answer_text)
 
+            # Best-effort: 分析判定需要代码修复时自动派发 Bug 修复任务。结果已在
+            # 上方持久化；派发完全包在 try/except 中，绝不影响本轮回答与持久化。
+            await self._maybe_dispatch_bug_fix(job)
+
             job.events.append(
                 {
                     "event": "done",
@@ -460,6 +464,63 @@ class LogAnalysisChatService:
             # Project terminal state into chat_agent_runs + chat_run_service so
             # snapshot endpoints and sidebar overlay reflect completion.
             await self._finalize_chat_run(job)
+
+    async def _maybe_dispatch_bug_fix(self, job: AgentJob) -> None:
+        """Dispatch a Bug-fix task when this turn's analysis carries a code-fix signal.
+
+        The main-chat log-analysis path runs the same agent as the Celery
+        analysis task but historically never wired the auto-dispatch hook, so a
+        ``requires_code_fix`` result here was silently dropped. This mirrors the
+        Celery path (``ai_analysis._maybe_dispatch_bug_fix``): gated by the
+        global flag + structured signal + a resolvable ``project_repo``.
+
+        The actual dispatch is synchronous (sync SQLAlchemy session +
+        ``run_bug_fix_task.delay``), so it runs in a worker thread to keep the
+        event loop free. All failures are swallowed — the answer is already
+        persisted and must not be affected.
+        """
+        if not isinstance(job.result, dict):
+            return
+        # Cheap pre-check on the hot path: only touch the DB / Celery broker when
+        # the global flag is on AND the structured signal is present. The
+        # authoritative guard still runs inside ai_analysis._maybe_dispatch_bug_fix.
+        if not settings.bug_fix_auto_dispatch:
+            return
+        from app.services import bug_fix_service
+
+        if not bug_fix_service.should_dispatch(job.result):
+            return
+        try:
+            await asyncio.to_thread(self._dispatch_bug_fix_sync, job)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "log-analysis chat: bug_fix dispatch failed (non-fatal) session_id=%s: %s",
+                job.session_id,
+                exc,
+            )
+
+    @staticmethod
+    def _dispatch_bug_fix_sync(job: AgentJob) -> None:
+        """Resolve the source log + project_repo and delegate to the shared
+        dispatch policy on a synchronous session (runs in a worker thread)."""
+        from app.models.log import LogRecord
+        from app.tasks.ai_analysis import SessionLocal, _maybe_dispatch_bug_fix
+
+        session = SessionLocal()
+        try:
+            log_id = job.context_meta.get("log_id")
+            # context_meta["project_id"] is the user-selected project_repo.id.
+            project_repo_id = job.context_meta.get("project_id")
+            log_record = session.get(LogRecord, log_id) if log_id else None
+            _maybe_dispatch_bug_fix(
+                session,
+                analysis_result=job.result or {},
+                log_record=log_record,
+                analysis_task_id=job.task_id,
+                project_repo_id=project_repo_id,
+            )
+        finally:
+            session.close()
 
     async def _register_chat_run(self, job: AgentJob, ctx: WorkspaceContext) -> None:
         """Create a ``chat_agent_runs`` row and register a ChatRunJob shadow.
