@@ -9,6 +9,7 @@ existence, and per-IP rate limiting kicks in.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 import uuid
 
@@ -21,7 +22,7 @@ from app.api import share as share_api
 from app.api import users as users_api
 from app.config import settings
 from app.models.database import Base, get_db
-from app.models.user import ChatMessage, ChatSession
+from app.models.user import ChatAgentRun, ChatMessage, ChatSession
 
 
 @pytest.fixture
@@ -210,6 +211,59 @@ def test_public_read_without_auth_and_no_identity_leak(client_with_db) -> None:
         assert forbidden not in raw
     for message in body["messages"]:
         assert set(message.keys()) == {"role", "content", "created_at"}
+
+
+def test_public_read_carries_ai_trace_events(client_with_db) -> None:
+    client, factory = client_with_db
+    token, user_id = _register(client, "owner_trace")
+    session_id = _seed_session(factory, user_id=user_id)
+    # The seeded AI message content; the run's answer must equal it to bind.
+    ai_answer = "```mermaid\ngraph TD;A-->B;\n```"
+    events = [
+        {"type": "thinking_end", "task_id": "t", "seq": 1, "timestamp": 1.0, "text": "reasoning"},
+        {
+            "type": "step_start",
+            "task_id": "t",
+            "seq": 2,
+            "timestamp": 2.0,
+            "step_id": "s1",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+        },
+        {"type": "step_end", "task_id": "t", "seq": 3, "timestamp": 3.0, "step_id": "s1", "status": "ok"},
+        {"type": "run_complete", "task_id": "t", "seq": 4, "timestamp": 4.0},
+    ]
+
+    async def _seed_run() -> None:
+        async with factory() as db:
+            db.add(
+                ChatAgentRun(
+                    session_id=session_id,
+                    user_id=user_id,
+                    agent_kind="log_analysis",
+                    status="succeeded",
+                    answer=ai_answer,
+                    trace_events_json=json.dumps(events),
+                )
+            )
+            await db.commit()
+
+    asyncio.run(_seed_run())
+
+    share_token = client.post(
+        f"/api/v1/users/chat-sessions/{session_id}/share", headers=_auth(token)
+    ).json()["data"]["token"]
+
+    body = client.get(f"/api/v1/share/{share_token}").json()
+    user_msg, ai_msg = body["messages"]
+    # Trace is AI-only and carried verbatim onto the public snapshot.
+    assert "trace_events" not in user_msg
+    assert ai_msg["trace_events"] == events
+
+    # Trace is now public, but owner / session / run identity still must not leak.
+    raw = json.dumps(body)
+    for forbidden in ("user_id", "username", "email", "session_id", "run_id", user_id):
+        assert forbidden not in raw
 
 
 def test_public_unknown_token_returns_404(client_with_db) -> None:

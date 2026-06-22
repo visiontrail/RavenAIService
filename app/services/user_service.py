@@ -4,6 +4,7 @@ User management service.
 
 from __future__ import annotations
 
+import re
 import secrets
 from datetime import datetime
 from typing import List, Optional
@@ -21,6 +22,15 @@ from app.services.base import BaseService
 
 
 VALID_ROLES = ("user", "admin")
+DEFAULT_PROFILE_ROLE = "developer"
+PROFILE_ROLE_ALIASES = {
+    "dev": "developer",
+    "develop": "developer",
+    "qa": "tester",
+    "test": "tester",
+    "testing": "tester",
+}
+PROFILE_ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 def _normalize_role(role: Optional[str]) -> str:
@@ -33,6 +43,25 @@ def _normalize_role(role: Optional[str]) -> str:
     if value in ("superuser", "ops", "administrator", "root"):
         return "admin"
     return "user"
+
+
+def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
+    """Trim optional profile text and store blanks as null."""
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _normalize_profile_role(role: Optional[str]) -> str:
+    """Normalize an extensible profile role without tying it to permissions."""
+    if not role:
+        return DEFAULT_PROFILE_ROLE
+    value = str(role).strip().lower().replace("-", "_").replace(" ", "_")
+    value = PROFILE_ROLE_ALIASES.get(value, value)
+    if PROFILE_ROLE_PATTERN.match(value):
+        return value
+    return DEFAULT_PROFILE_ROLE
 
 
 class UserService(BaseService):
@@ -55,6 +84,8 @@ class UserService(BaseService):
         display_name: Optional[str] = None,
         email: Optional[str] = None,
         role: str = "user",
+        profile_role: Optional[str] = None,
+        initialize_last_login: bool = False,
     ) -> User:
         existing = await self.get_by_username(db, username)
         if existing:
@@ -62,12 +93,15 @@ class UserService(BaseService):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="用户名已存在",
             )
+        now = datetime.utcnow() if initialize_last_login else None
         user = User(
             username=username,
             password_hash=hash_password(password),
-            display_name=display_name or username,
-            email=email,
+            display_name=_normalize_optional_text(display_name) or username,
+            email=_normalize_optional_text(email),
             role=_normalize_role(role),
+            profile_role=_normalize_profile_role(profile_role),
+            last_login_at=now,
         )
         db.add(user)
         try:
@@ -136,6 +170,7 @@ class UserService(BaseService):
                 password_hash=password_hash,
                 is_active=expected_is_active,
                 role="admin",
+                profile_role=DEFAULT_PROFILE_ROLE,
             )
             db.add(user)
             dirty = True
@@ -167,6 +202,36 @@ class UserService(BaseService):
         if language is not None:
             # Coerce unsupported codes to a supported one; never store as-is.
             user.language = normalize_locale(language)
+        await db.flush()
+        await db.refresh(user)
+        return user
+
+    async def update_profile(
+        self,
+        db: AsyncSession,
+        user_id: str,
+        *,
+        display_name: Optional[str] = None,
+        email: Optional[str] = None,
+        language: Optional[str] = None,
+        profile_role: Optional[str] = None,
+        update_display_name: bool = False,
+        update_email: bool = False,
+        update_language: bool = False,
+        update_profile_role: bool = False,
+    ) -> Optional[User]:
+        """Update the self-service profile, including explicit null clears."""
+        user = await self.get_by_id(db, user_id)
+        if not user:
+            return None
+        if update_display_name:
+            user.display_name = _normalize_optional_text(display_name)
+        if update_email:
+            user.email = _normalize_optional_text(email)
+        if update_language:
+            user.language = normalize_locale(language)
+        if update_profile_role:
+            user.profile_role = _normalize_profile_role(profile_role)
         await db.flush()
         await db.refresh(user)
         return user

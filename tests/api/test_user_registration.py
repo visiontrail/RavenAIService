@@ -60,6 +60,8 @@ def test_register_creates_user_and_returns_auth_token(client: TestClient) -> Non
     assert body["data"]["user"]["username"] == "alice"
     assert body["data"]["user"]["display_name"] == "Alice"
     assert body["data"]["user"]["role"] == "user"
+    assert body["data"]["user"]["profile_role"] == "developer"
+    assert body["data"]["user"]["last_login_at"]
 
     me_resp = client.get(
         "/api/v1/users/auth/me",

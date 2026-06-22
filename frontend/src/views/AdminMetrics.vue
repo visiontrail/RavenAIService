@@ -11,6 +11,7 @@ import type {
   MetricsSystemOverview,
   MetricsUserDetail,
   MetricsUserRow,
+  ProjectRepo,
 } from '@/types'
 
 declare const __VITE_USD_TO_CNY_RATE__: string | undefined
@@ -37,6 +38,7 @@ type Bucket = 'hour' | 'day'
 
 const rangePreset = ref<RangePreset>('7d')
 const bucket = ref<Bucket>('day')
+const selectedProjectRepoId = ref('system')
 
 const rangePresets = computed<{ key: RangePreset; label: string }[]>(() => [
   { key: '24h', label: t('admin.metrics.timeRange24h') },
@@ -57,6 +59,9 @@ const computeRange = (): { from: string; to: string } => {
 
 const loadingOverview = ref(false)
 const overview = ref<MetricsSystemOverview | null>(null)
+
+const loadingProjects = ref(false)
+const projectRepos = ref<ProjectRepo[]>([])
 
 const loadingUsers = ref(false)
 const users = ref<MetricsUserRow[]>([])
@@ -158,6 +163,26 @@ const formatBucketLabel = (value: string) => {
 const objToPairs = (obj?: Record<string, number> | null) =>
   Object.entries(obj || {}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
 
+const isSystemProjectScope = computed(() => selectedProjectRepoId.value === 'system')
+const selectedProjectParam = computed(() =>
+  isSystemProjectScope.value ? undefined : selectedProjectRepoId.value,
+)
+const projectRepoById = computed(() => {
+  const map = new Map<string, ProjectRepo>()
+  projectRepos.value.forEach((repo) => map.set(String(repo.id), repo))
+  return map
+})
+const formatProjectOption = (repo: ProjectRepo) => {
+  const base = `${repo.project_name || repo.project_code} (${repo.project_code})`
+  return repo.enabled ? base : `${base} ${t('admin.metrics.projectDisabledSuffix')}`
+}
+const formatProjectGroupLabel = (key?: string | null) => {
+  if (!key) return t('admin.metrics.unknownProject')
+  const repo = projectRepoById.value.get(String(key))
+  if (!repo) return t('admin.metrics.unknownProjectWithId', { id: key })
+  return `${repo.project_name || repo.project_code} (${repo.project_code})`
+}
+
 // Build a "nice" axis scale: a rounded maximum plus evenly spaced ticks
 // (descending, from niceMax down to 0) so bars and Y-axis ticks line up.
 const buildNiceScale = (rawMax: number, tickCount = 4): { niceMax: number; ticks: number[] } => {
@@ -244,12 +269,37 @@ const getAgentColor = (agent: string) => {
 
 // ==================== Loaders ====================
 
+const loadProjectRepos = async () => {
+  if (!isAuthenticated.value) return
+  loadingProjects.value = true
+  try {
+    const resp = await adminApi.listProjectRepos({ include_disabled: true, limit: 200 })
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.projectRepos.loadFailFallback'))
+    projectRepos.value = resp.data
+    if (
+      !isSystemProjectScope.value &&
+      !projectRepos.value.some((repo) => String(repo.id) === selectedProjectRepoId.value)
+    ) {
+      selectedProjectRepoId.value = 'system'
+    }
+  } catch (err: any) {
+    appStore.showNotification({ title: t('admin.loadFail'), message: parseErrorMessage(err), type: 'error' })
+  } finally {
+    loadingProjects.value = false
+  }
+}
+
 const loadOverview = async () => {
   if (!isAuthenticated.value) return
   loadingOverview.value = true
   try {
     const { from, to } = computeRange()
-    const resp = await adminApi.metricsOverview({ from, to, bucket: bucket.value })
+    const resp = await adminApi.metricsOverview({
+      from,
+      to,
+      bucket: bucket.value,
+      project_repo_id: selectedProjectParam.value,
+    })
     if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.metrics.loadOverviewFail'))
     overview.value = resp.data
   } catch (err: any) {
@@ -267,6 +317,7 @@ const loadUsers = async () => {
     const resp = await adminApi.metricsUsers({
       from,
       to,
+      project_repo_id: selectedProjectParam.value,
       page: userPage.value,
       per_page: userPerPage,
       sort: userSort.value,
@@ -290,6 +341,7 @@ const loadEvents = async () => {
     const resp = await adminApi.metricsEvents({
       from,
       to,
+      project_repo_id: selectedProjectParam.value,
       source: eventSourceFilter.value || undefined,
       page: eventsPage.value,
       per_page: eventsPerPage,
@@ -311,7 +363,12 @@ const openUserDetail = async (row: MetricsUserRow) => {
   detail.value = null
   try {
     const { from, to } = computeRange()
-    const resp = await adminApi.metricsUserDetail(row.user_id, { from, to, bucket: bucket.value })
+    const resp = await adminApi.metricsUserDetail(row.user_id, {
+      from,
+      to,
+      bucket: bucket.value,
+      project_repo_id: selectedProjectParam.value,
+    })
     if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.metrics.loadUserDetailFail'))
     detail.value = resp.data
   } catch (err: any) {
@@ -341,6 +398,11 @@ const applyRange = async (preset: RangePreset) => {
 const applyBucket = async (value: Bucket) => {
   bucket.value = value
   await loadOverview()
+}
+
+const applyProjectScope = async () => {
+  closeDetail()
+  await refreshAll()
 }
 
 const changeSort = async (sort: string) => {
@@ -395,6 +457,7 @@ const handleLogin = async () => {
     adminToken.set(resp.data.token)
     isAuthenticated.value = true
     appStore.showNotification({ title: t('admin.loginSuccessTitle'), message: t('admin.loginSuccessMsg', { username: resp.data.username }), type: 'success' })
+    await loadProjectRepos()
     await refreshAll()
   } catch (err: any) {
     appStore.showNotification({ title: t('admin.loginFailFallback'), message: parseErrorMessage(err), type: 'error' })
@@ -413,6 +476,8 @@ const handleLogout = async () => {
     overview.value = null
     users.value = []
     events.value = []
+    projectRepos.value = []
+    selectedProjectRepoId.value = 'system'
     appStore.showNotification({ title: t('admin.logoutSuccessTitle'), type: 'info' })
   }
 }
@@ -424,6 +489,7 @@ const bootstrap = async () => {
     const resp = await adminApi.me()
     if (resp?.success) {
       isAuthenticated.value = true
+      await loadProjectRepos()
       await refreshAll()
     } else {
       clearAuth()
@@ -555,6 +621,20 @@ onMounted(() => {
               <button class="metrics-segment-btn" :class="{ 'is-active': bucket === 'hour' }" @click="applyBucket('hour')">{{ t('admin.metrics.bucketHour') }}</button>
               <button class="metrics-segment-btn" :class="{ 'is-active': bucket === 'day' }" @click="applyBucket('day')">{{ t('admin.metrics.bucketDay') }}</button>
             </div>
+          </div>
+          <div class="metrics-control-group">
+            <span class="metrics-control-label">{{ t('admin.metrics.projectFilterLabel') }}</span>
+            <select
+              v-model="selectedProjectRepoId"
+              class="metrics-select"
+              :disabled="loadingProjects"
+              @change="applyProjectScope"
+            >
+              <option value="system">{{ t('admin.metrics.allSystemProject') }}</option>
+              <option v-for="repo in projectRepos" :key="repo.id" :value="String(repo.id)">
+                {{ formatProjectOption(repo) }}
+              </option>
+            </select>
           </div>
           <button class="metrics-refresh-btn" :disabled="loadingOverview" @click="refreshAll">
             <RefreshCw :size="14" :class="{ 'animate-spin': loadingOverview }" />
@@ -703,7 +783,7 @@ onMounted(() => {
         </div>
 
         <!-- Distributions -->
-        <div class="metrics-two-col">
+        <div class="metrics-distribution-grid" :class="{ 'has-projects': isSystemProjectScope }">
           <div class="metrics-card">
             <h3 class="metrics-card-title">{{ t('admin.metrics.bySourceTitle') }}</h3>
             <table class="metrics-mini-table">
@@ -729,6 +809,20 @@ onMounted(() => {
                   <td class="text-right">{{ formatNumber(g.total_tokens) }}</td>
                 </tr>
                 <tr v-if="!overview?.invocations_by_model?.length"><td colspan="3" class="metrics-empty">{{ t('admin.metrics.emptyData') }}</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div v-if="isSystemProjectScope" class="metrics-card">
+            <h3 class="metrics-card-title">{{ t('admin.metrics.byProjectTitle') }}</h3>
+            <table class="metrics-mini-table">
+              <thead><tr><th>{{ t('admin.metrics.colProject') }}</th><th class="text-right">{{ t('admin.metrics.colCalls') }}</th><th class="text-right">Token</th></tr></thead>
+              <tbody>
+                <tr v-for="g in overview?.invocations_by_project || []" :key="g.key || 'unknown'">
+                  <td>{{ formatProjectGroupLabel(g.key) }}</td>
+                  <td class="text-right">{{ formatNumber(g.invocation_count) }}</td>
+                  <td class="text-right">{{ formatNumber(g.total_tokens) }}</td>
+                </tr>
+                <tr v-if="!overview?.invocations_by_project?.length"><td colspan="3" class="metrics-empty">{{ t('admin.metrics.emptyData') }}</td></tr>
               </tbody>
             </table>
           </div>
@@ -853,6 +947,7 @@ onMounted(() => {
                   <th>{{ t('admin.metrics.colTime') }}</th>
                   <th>{{ t('admin.metrics.colType') }}</th>
                   <th>Source</th>
+                  <th>{{ t('admin.metrics.colProject') }}</th>
                   <th>{{ t('admin.metrics.colTriggerUser') }}</th>
                   <th>Model</th>
                   <th>{{ t('admin.metrics.colStatus') }}</th>
@@ -864,6 +959,7 @@ onMounted(() => {
                   <td class="text-xs text-slate-500">{{ formatTimestamp(ev.occurred_at) }}</td>
                   <td class="text-xs">{{ ev.event_type }}</td>
                   <td class="text-xs">{{ ev.source }}</td>
+                  <td class="text-xs">{{ formatProjectGroupLabel(ev.project_repo_id) }}</td>
                   <td class="text-xs">{{ ev.display_name || ev.username || ev.user_id || '--' }}</td>
                   <td class="text-xs">{{ ev.model || '--' }}</td>
                   <td><span class="metrics-status" :class="`is-${ev.status || 'unknown'}`">{{ ev.status || '--' }}</span></td>
@@ -1175,6 +1271,23 @@ onMounted(() => {
   color: #334155;
 }
 
+.metrics-select {
+  min-width: 13rem;
+  max-width: min(22rem, 72vw);
+  border: 1px solid #cbd5e1;
+  border-radius: 0.6rem;
+  background: #ffffff;
+  color: #334155;
+  font-size: 0.8rem;
+  padding: 0.4rem 2rem 0.4rem 0.7rem;
+  outline: none;
+}
+
+.metrics-select:focus {
+  border-color: #0891b2;
+  box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.12);
+}
+
 .metrics-card {
   background: #ffffff;
   border: 1px solid #e2e8f0;
@@ -1355,10 +1468,14 @@ onMounted(() => {
   color: #64748b;
 }
 
-.metrics-two-col {
+.metrics-distribution-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.85rem;
+}
+
+.metrics-distribution-grid.has-projects {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .metrics-biz-grid {
@@ -1508,7 +1625,8 @@ onMounted(() => {
   .metrics-biz-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .metrics-two-col {
+  .metrics-distribution-grid,
+  .metrics-distribution-grid.has-projects {
     grid-template-columns: minmax(0, 1fr);
   }
   .admin-topbar-inner {

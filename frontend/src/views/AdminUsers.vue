@@ -66,6 +66,8 @@ const formatTimestamp = (value?: string | null) => {
   }
 }
 
+const getLastLoginTimestamp = (user: UserProfile) => user.last_login_at || user.created_at
+
 const persistToken = (token: string) => {
   adminToken.set(token)
 }
@@ -537,7 +539,7 @@ onMounted(() => {
                       {{ user.is_active ? t('admin.users.statusEnabled') : t('admin.users.statusDisabled') }}
                     </span>
                   </td>
-                  <td class="py-2 pr-4 text-slate-500">{{ formatTimestamp(user.last_login_at) }}</td>
+                  <td class="py-2 pr-4 text-slate-500">{{ formatTimestamp(getLastLoginTimestamp(user)) }}</td>
                   <td class="py-2 pr-4 space-x-2">
                     <button
                       class="text-xs px-3 py-1 rounded-lg border border-slate-200 hover:bg-slate-50"

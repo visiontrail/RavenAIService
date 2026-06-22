@@ -88,7 +88,11 @@ async def enforce_share_rate_limit(request: Request) -> None:
         )
 
 
-@router.get("/{token}", response_model=PublicShareResponse)
+@router.get(
+    "/{token}",
+    response_model=PublicShareResponse,
+    response_model_exclude_none=True,
+)
 async def get_public_share(
     token: str,
     _rate: None = Depends(enforce_share_rate_limit),
@@ -98,6 +102,10 @@ async def get_public_share(
 
     Unknown and revoked tokens are indistinguishable (both 404) so existence is
     never disclosed. No authentication is required or consulted.
+
+    ``response_model_exclude_none`` keeps non-AI / pre-trace messages minimal:
+    the AI-only ``trace_events`` field is emitted only when actually captured,
+    never as a ``null`` placeholder.
     """
     snapshot = await conversation_share_service.get_public_snapshot(db, token=token)
     if snapshot is None:

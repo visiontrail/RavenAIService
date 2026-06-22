@@ -25,6 +25,7 @@ export interface MetricsTimeRangeParams {
   from?: string
   to?: string
   bucket?: 'hour' | 'day'
+  project_repo_id?: number | string
 }
 
 const ADMIN_TOKEN_KEY = 'raven_admin_token'
@@ -273,6 +274,7 @@ export const adminApi = {
   metricsUsers: (params?: {
     from?: string
     to?: string
+    project_repo_id?: number | string
     page?: number
     per_page?: number
     sort?: string
@@ -291,6 +293,7 @@ export const adminApi = {
     event_type?: string
     source?: string
     user_id?: string
+    project_repo_id?: number | string
     page?: number
     per_page?: number
   }): Promise<ApiResponse<MetricsRawEventsData>> =>

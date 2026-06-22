@@ -10,15 +10,16 @@ Security invariants (see ``conversation_share_service`` and ``app/api/share.py``
 
 * ``token`` is a high-entropy, unguessable id (``secrets.token_urlsafe(16)``);
   ``session_id`` / ``user_id`` are NEVER exposed on the public URL or response.
-* ``snapshot_json`` is redacted at write time to only ``role`` / ``content`` /
-  ``created_at`` — no trace events, run links or owner identity.
+* ``snapshot_json`` is redacted at write time to ``role`` / ``content`` /
+  ``created_at`` plus an AI-only ``trace_events`` capture (thinking + tool
+  calls) — never run links or owner identity.
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
@@ -70,7 +71,7 @@ class ConversationShare(Base, TimestampMixin):
         Text,
         nullable=False,
         default="[]",
-        comment="脱敏后的消息数组 JSON：[{role, content, created_at}]",
+        comment="脱敏后的消息数组 JSON：[{role, content, created_at, trace_events?}]",
     )
     message_count: Mapped[int] = mapped_column(
         Integer,
@@ -122,10 +123,14 @@ class ShareInfoResponse(BaseResponse):
 
 
 class PublicShareMessage(BaseModel):
-    """A single message in the public snapshot — only the three public fields.
+    """A single message in the public snapshot.
 
-    ``created_at`` is an ISO-8601 string carried verbatim from ``snapshot_json``;
-    no identity, trace or session fields exist on this model by construction.
+    ``created_at`` is an ISO-8601 string carried verbatim from ``snapshot_json``.
+    ``trace_events`` is the AI-only agent trace (thinking + tool calls) captured
+    at share time; it is present only on assistant turns that had a recorded run
+    and carries no identity / session / run-id fields by construction. Older
+    snapshots predating trace capture simply omit it. No owner identity or
+    session fields exist on this model.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -133,6 +138,7 @@ class PublicShareMessage(BaseModel):
     role: str
     content: str
     created_at: Optional[str] = None
+    trace_events: Optional[list[dict[str, Any]]] = None
 
 
 class PublicShareResponse(BaseModel):

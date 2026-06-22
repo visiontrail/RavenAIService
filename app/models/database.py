@@ -152,6 +152,10 @@ class DatabaseManager:
                     "sqlite": "VARCHAR(8) NOT NULL DEFAULT 'zh'",
                     "default": "VARCHAR(8) NOT NULL DEFAULT 'zh'",
                 },
+                "profile_role": {
+                    "sqlite": "VARCHAR(64) NOT NULL DEFAULT 'developer'",
+                    "default": "VARCHAR(64) NOT NULL DEFAULT 'developer'",
+                },
             },
             "log_records": {
                 "project_id": {

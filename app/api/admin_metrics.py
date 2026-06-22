@@ -154,23 +154,34 @@ async def get_system_overview(
     from_: Optional[str] = Query(None, alias="from"),
     to: Optional[str] = Query(None),
     bucket: str = Query("day"),
+    project_repo_id: Optional[int] = Query(None, ge=1),
     _admin: str = Depends(require_admin),
 ) -> SystemOverviewResponse:
     """System-wide AI usage rollup + time series for the requested window."""
     from_time, to_time = resolve_time_range(from_, to)
     bucket = metrics_service.normalize_bucket(bucket)
+    project_filter = str(project_repo_id) if project_repo_id is not None else None
     agg = await metrics_service.aggregate_system_metrics(
-        from_time=from_time, to_time=to_time, bucket=bucket
+        from_time=from_time,
+        to_time=to_time,
+        bucket=bucket,
+        project_repo_id=project_filter,
     )
     # Compose the AI-usage fact source with business-table summaries.
     chat = await metrics_service.aggregate_chat_metrics(
-        from_time=from_time, to_time=to_time
+        from_time=from_time,
+        to_time=to_time,
+        project_repo_id=project_filter,
     )
     logs = await metrics_service.aggregate_log_metrics(
-        from_time=from_time, to_time=to_time
+        from_time=from_time,
+        to_time=to_time,
+        project_repo_id=project_filter,
     )
     packages = await metrics_service.aggregate_package_metrics(
-        from_time=from_time, to_time=to_time
+        from_time=from_time,
+        to_time=to_time,
+        project_repo_id=project_filter,
     )
     devices = metrics_service.aggregate_device_metrics()
     overview = SystemOverview(
@@ -190,6 +201,7 @@ async def get_system_overview(
 async def list_user_metrics(
     from_: Optional[str] = Query(None, alias="from"),
     to: Optional[str] = Query(None),
+    project_repo_id: Optional[int] = Query(None, ge=1),
     page: int = Query(1, ge=1),
     per_page: int = Query(_DEFAULT_PER_PAGE_USERS, ge=1),
     sort: str = Query("total_tokens"),
@@ -199,8 +211,14 @@ async def list_user_metrics(
     """Per-user token/activity ranking with sorting and pagination."""
     from_time, to_time = resolve_time_range(from_, to)
     page, per_page = resolve_pagination(page, per_page, _DEFAULT_PER_PAGE_USERS)
+    project_filter = str(project_repo_id) if project_repo_id is not None else None
     agg = await metrics_service.aggregate_user_metrics_list(
-        from_time=from_time, to_time=to_time, page=page, per_page=per_page, sort=sort
+        from_time=from_time,
+        to_time=to_time,
+        page=page,
+        per_page=per_page,
+        sort=sort,
+        project_repo_id=project_filter,
     )
 
     user_ids = [r["user_id"] for r in agg["rows"]]
@@ -238,14 +256,20 @@ async def get_user_metrics_detail(
     from_: Optional[str] = Query(None, alias="from"),
     to: Optional[str] = Query(None),
     bucket: str = Query("day"),
+    project_repo_id: Optional[int] = Query(None, ge=1),
     _admin: str = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> UserMetricsDetailResponse:
     """Single-user detail: token series, distributions, status/error groups, events."""
     from_time, to_time = resolve_time_range(from_, to)
     bucket = metrics_service.normalize_bucket(bucket)
+    project_filter = str(project_repo_id) if project_repo_id is not None else None
     agg = await metrics_service.aggregate_user_detail(
-        user_id=user_id, from_time=from_time, to_time=to_time, bucket=bucket
+        user_id=user_id,
+        from_time=from_time,
+        to_time=to_time,
+        bucket=bucket,
+        project_repo_id=project_filter,
     )
     users = await _fetch_users(db, [user_id])
     user = users.get(user_id)
@@ -272,6 +296,7 @@ async def list_raw_events(
     event_type: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
+    project_repo_id: Optional[int] = Query(None, ge=1),
     page: int = Query(1, ge=1),
     per_page: int = Query(_DEFAULT_PER_PAGE_EVENTS, ge=1),
     _admin: str = Depends(require_admin),
@@ -286,6 +311,7 @@ async def list_raw_events(
         event_type=event_type,
         source=source,
         user_id=user_id,
+        project_repo_id=str(project_repo_id) if project_repo_id is not None else None,
         page=page,
         per_page=per_page,
     )

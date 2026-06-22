@@ -79,6 +79,49 @@ def test_update_profile_language_persists(client: TestClient) -> None:
     assert me.json()["data"]["language"] == "en"
 
 
+def test_update_profile_identity_fields_persist(client: TestClient) -> None:
+    token = _register(client, username="profile_user")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = client.patch(
+        "/api/v1/users/auth/me",
+        json={
+            "display_name": "  Profile User  ",
+            "email": "  profile@example.test  ",
+            "profile_role": "QA",
+        },
+        headers=headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["display_name"] == "Profile User"
+    assert data["email"] == "profile@example.test"
+    assert data["profile_role"] == "tester"
+
+    me = client.get("/api/v1/users/auth/me", headers=headers)
+    assert me.json()["data"]["display_name"] == "Profile User"
+    assert me.json()["data"]["email"] == "profile@example.test"
+    assert me.json()["data"]["profile_role"] == "tester"
+
+
+def test_update_profile_can_clear_optional_identity_fields(client: TestClient) -> None:
+    token = _register(client, username="clear_profile")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = client.patch(
+        "/api/v1/users/auth/me",
+        json={"display_name": "", "email": None, "profile_role": "bad role!"},
+        headers=headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["display_name"] is None
+    assert data["email"] is None
+    assert data["profile_role"] == "developer"
+
+
 def test_update_profile_unsupported_language_is_coerced(client: TestClient) -> None:
     token = _register(client)
     headers = {"Authorization": f"Bearer {token}"}

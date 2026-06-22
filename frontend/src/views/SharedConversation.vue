@@ -4,6 +4,9 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSharedConversation } from '@/composables/useSharedConversation'
 import { renderMarkdown, processMermaidBlocks } from '@/utils/markdownRenderer'
+import AgentTraceStream from '@/components/AgentTraceStream.vue'
+import type { AgentTraceEvent } from '@/types/agentTrace'
+import type { PublicShareMessage } from '@/types'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -15,6 +18,12 @@ const threadRef = ref<HTMLElement | null>(null)
 // rendering (code highlighting, tables, Mermaid diagrams) is identical.
 const renderAi = (content: string) =>
   renderMarkdown(content || '', { wrapperClass: 'markdown-content text-ink' })
+
+// Agent trace (thinking + tool calls) captured into the snapshot at share time.
+// Rendered read-only via the same AgentTraceStream component as the live chat;
+// older snapshots without a trace return an empty list (nothing renders).
+const traceEventsOf = (msg: PublicShareMessage): AgentTraceEvent[] =>
+  Array.isArray(msg.trace_events) ? (msg.trace_events as AgentTraceEvent[]) : []
 
 const sharedAtLabel = computed(() => {
   const raw = snapshot.value?.shared_at
@@ -87,6 +96,12 @@ onMounted(async () => {
             </template>
             <template v-else>
               <div class="sc-ai-name">{{ t('sharedConversation.aiLabel') }}</div>
+              <AgentTraceStream
+                v-if="traceEventsOf(msg).length"
+                class="sc-ai-trace"
+                :events="traceEventsOf(msg)"
+                :running="false"
+              />
               <div class="sc-ai-text" v-html="renderAi(msg.content)"></div>
             </template>
           </div>
@@ -158,6 +173,7 @@ onMounted(async () => {
 .sc-user-label { margin-top: 6px; font-size: 11.5px; color: var(--sc-muted); }
 .sc-msg.is-ai { display: flex; flex-direction: column; gap: 6px; }
 .sc-ai-name { font-size: 11.5px; font-weight: 600; letter-spacing: .4px; color: var(--sc-body); }
+.sc-ai-trace { margin: 2px 0 6px; }
 .sc-ai-text { font-size: 14.5px; line-height: 1.7; }
 .sc-footer {
   margin-top: 48px; padding-top: 20px;

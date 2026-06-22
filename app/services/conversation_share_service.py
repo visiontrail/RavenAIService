@@ -3,11 +3,13 @@ Conversation share lifecycle: snapshot capture, redaction and public read.
 
 This service owns the single point of redaction for the system's first public,
 unauthenticated read surface. Snapshots are built *at write time* from chat
-messages keeping only ``role`` / ``content`` / ``created_at`` — owner identity
-(``user_id`` / ``username`` / ``email``), ``session_id``, agent trace events and
-run links are explicitly dropped and never persisted into ``snapshot_json``.
-The public read path returns the stored snapshot verbatim, so redaction can
-never drift between write and read.
+messages keeping ``role`` / ``content`` / ``created_at``; AI messages also
+carry the agent ``trace_events`` (thinking + tool calls) captured at share time
+so the public page renders the same reasoning trace the owner sees in the live
+chat. Owner identity (``user_id`` / ``username`` / ``email``), ``session_id``
+and run ids/links are still explicitly dropped and never persisted into
+``snapshot_json``. The public read path returns the stored snapshot verbatim,
+so redaction can never drift between write and read.
 """
 
 from __future__ import annotations
@@ -22,11 +24,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.conversation_share import ConversationShare
-from app.models.user import ChatMessage, ChatSession
+from app.models.user import ChatAgentRun, ChatMessage, ChatSession
 from app.services.base import BaseService
 
-# Public-snapshot messages keep only these fields. Anything else (trace events,
-# run ids, owner identity) MUST NOT leak into ``snapshot_json``.
+# Public-snapshot messages keep ``role`` / ``content`` / ``created_at`` plus an
+# AI-only ``trace_events`` capture. Run ids and owner identity MUST NOT leak
+# into ``snapshot_json``.
 _ALLOWED_MESSAGE_ROLES = {"user", "ai", "system"}
 _TOKEN_BYTES = 16  # secrets.token_urlsafe(16) → ~22 chars, ~128 bit entropy
 
@@ -74,31 +77,83 @@ class ConversationShareService(BaseService):
         db: AsyncSession,
         *,
         session_id: str,
+        user_id: str,
     ) -> list[dict]:
-        """Build the redacted message snapshot for a session.
+        """Build the message snapshot for a session.
 
-        Only ``role`` / ``content`` / ``created_at`` survive; ``created_at`` is
-        serialized to an ISO-8601 string so the public read is a pure
-        passthrough of ``snapshot_json``.
+        Each message keeps ``role`` / ``content`` / ``created_at`` (``created_at``
+        serialized to an ISO-8601 string so the public read is a pure passthrough
+        of ``snapshot_json``). AI messages additionally carry the agent
+        ``trace_events`` (thinking + tool calls) captured at share time, matched
+        to runs the same way the owner-side message read does, so the public page
+        renders an identical reasoning trace. Owner identity, ``session_id`` and
+        run ids are never persisted.
         """
         result = await db.execute(
             select(ChatMessage)
             .where(ChatMessage.session_id == session_id)
             .order_by(ChatMessage.created_at.asc())
         )
-        snapshot: list[dict] = []
-        for record in result.scalars().all():
-            role = record.role if record.role in _ALLOWED_MESSAGE_ROLES else "user"
-            snapshot.append(
-                {
-                    "role": role,
-                    "content": record.content or "",
-                    "created_at": (
-                        record.created_at.isoformat() if record.created_at else None
-                    ),
-                }
+        records = list(result.scalars().all())
+
+        # Persisted agent runs hold the trace (thinking + tool steps). Match them
+        # to AI turns by answer text — the same association the owner-side
+        # ``GET /chat-sessions/{id}/messages`` uses — popping on match so repeated
+        # answers can't bind the same run twice.
+        runs_result = await db.execute(
+            select(ChatAgentRun)
+            .where(
+                ChatAgentRun.user_id == user_id,
+                ChatAgentRun.session_id == session_id,
+                ChatAgentRun.trace_events_json.is_not(None),
             )
+            .order_by(ChatAgentRun.finished_at.asc(), ChatAgentRun.started_at.asc())
+        )
+        unmatched_runs = list(runs_result.scalars().all())
+
+        snapshot: list[dict] = []
+        for record in records:
+            role = record.role if record.role in _ALLOWED_MESSAGE_ROLES else "user"
+            message: dict = {
+                "role": role,
+                "content": record.content or "",
+                "created_at": (
+                    record.created_at.isoformat() if record.created_at else None
+                ),
+            }
+            if role == "ai" and record.content:
+                trace_events = self._pop_trace_events(unmatched_runs, record.content)
+                if trace_events:
+                    message["trace_events"] = trace_events
+            snapshot.append(message)
         return snapshot
+
+    @staticmethod
+    def _pop_trace_events(
+        unmatched_runs: list[ChatAgentRun],
+        content: str,
+    ) -> Optional[list[dict]]:
+        """Pop the run whose answer equals ``content`` and return its trace.
+
+        Returns the parsed event list, or ``None`` when no run matches or the
+        stored JSON is unusable / empty. Popping guarantees one run binds to at
+        most one message even when answers repeat across turns.
+        """
+        matched_index: Optional[int] = None
+        for idx, run in enumerate(unmatched_runs):
+            if (run.answer or "") == content:
+                matched_index = idx
+                break
+        if matched_index is None:
+            return None
+        run = unmatched_runs.pop(matched_index)
+        try:
+            parsed = json.loads(run.trace_events_json or "[]")
+        except (ValueError, TypeError):
+            return None
+        if isinstance(parsed, list) and parsed:
+            return parsed
+        return None
 
     async def _generate_unique_token(self, db: AsyncSession) -> str:
         """Generate a high-entropy token, retrying on the rare unique clash."""
@@ -138,7 +193,9 @@ class ConversationShareService(BaseService):
                 detail="会话不存在",
             )
 
-        snapshot = await self._build_snapshot(db, session_id=session_id)
+        snapshot = await self._build_snapshot(
+            db, session_id=session_id, user_id=user_id
+        )
         if not snapshot:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

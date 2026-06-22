@@ -106,6 +106,7 @@ def _ai_event(
     error_kind: Optional[str] = None,
     occurred_at: Optional[datetime] = None,
     metadata_json: Optional[str] = None,
+    project_repo_id: Optional[str] = None,
 ) -> MetricEvent:
     total = input_tokens + output_tokens
     return MetricEvent(
@@ -115,6 +116,7 @@ def _ai_event(
         event_type="ai_usage",
         source=source,
         user_id=user_id,
+        project_repo_id=project_repo_id,
         agent_kind=agent_kind,
         provider=provider,
         model=model,
@@ -209,6 +211,71 @@ def test_overview_hour_bucket(client: TestClient) -> None:
     resp = client.get("/admin/metrics/overview", params={"bucket": "hour"})
     assert resp.status_code == 200
     assert resp.json()["data"]["bucket"] == "hour"
+
+
+def test_project_filter_scopes_admin_metrics(client: TestClient) -> None:
+    alpha_user = _make_user("alpha")
+    beta_user = _make_user("beta")
+    _seed([alpha_user, beta_user])
+    _seed(
+        [
+            _ai_event(
+                user_id=alpha_user.id,
+                input_tokens=100,
+                output_tokens=50,
+                project_repo_id="1",
+            ),
+            _ai_event(
+                user_id=alpha_user.id,
+                input_tokens=10,
+                output_tokens=5,
+                project_repo_id="2",
+            ),
+            _ai_event(
+                user_id=beta_user.id,
+                input_tokens=20,
+                output_tokens=10,
+                project_repo_id="2",
+            ),
+        ]
+    )
+
+    resp = client.get("/admin/metrics/overview")
+    assert resp.status_code == 200
+    overview = resp.json()["data"]
+    by_project = {g["key"]: g for g in overview["invocations_by_project"]}
+    assert by_project["1"]["total_tokens"] == 150
+    assert by_project["2"]["total_tokens"] == 45
+
+    resp = client.get("/admin/metrics/overview", params={"project_repo_id": 1})
+    assert resp.status_code == 200
+    scoped = resp.json()["data"]
+    assert scoped["tokens"]["total_tokens"] == 150
+    assert scoped["invocation_count"] == 1
+
+    resp = client.get(
+        "/admin/metrics/users",
+        params={"project_repo_id": 1, "sort": "total_tokens"},
+    )
+    assert resp.status_code == 200
+    users = resp.json()["data"]["rows"]
+    assert [row["user_id"] for row in users] == [alpha_user.id]
+    assert users[0]["total_tokens"] == 150
+
+    resp = client.get(
+        f"/admin/metrics/users/{alpha_user.id}",
+        params={"project_repo_id": 1},
+    )
+    assert resp.status_code == 200
+    detail = resp.json()["data"]
+    assert detail["tokens"]["total_tokens"] == 150
+    assert len(detail["recent_events"]) == 1
+
+    resp = client.get("/admin/metrics/events", params={"project_repo_id": 1})
+    assert resp.status_code == 200
+    events = resp.json()["data"]["events"]
+    assert len(events) == 1
+    assert events[0]["project_repo_id"] == "1"
 
 
 def test_overview_requires_admin(app: FastAPI) -> None:

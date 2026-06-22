@@ -932,6 +932,7 @@ def run_ai_analysis_task(
         try:
             from app.services import metrics_service
 
+            metrics_project_repo_id = project_repo_id or getattr(log_record, "project_id", None)
             metrics_service.record_agent_run_usage_sync(
                 source="log_analysis_agent",
                 agent_kind="log_analysis",
@@ -939,6 +940,11 @@ def run_ai_analysis_task(
                 provider=settings.anthropic_provider,
                 task_id=str(task_id) if task_id else None,
                 log_id=str(log_id),
+                project_repo_id=(
+                    str(metrics_project_repo_id)
+                    if metrics_project_repo_id is not None
+                    else None
+                ),
                 owner_scope="system:ai_analysis",
                 idempotency_key=f"ai_usage:log_task:{task_id or log_id}",
             )

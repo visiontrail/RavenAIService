@@ -248,6 +248,7 @@ class SystemOverview(BaseModel):
     invocations_by_agent_kind: List[GroupCount] = Field(default_factory=list)
     invocations_by_provider: List[GroupCount] = Field(default_factory=list)
     invocations_by_model: List[GroupCount] = Field(default_factory=list)
+    invocations_by_project: List[GroupCount] = Field(default_factory=list)
     invocations_by_status: List[GroupCount] = Field(default_factory=list)
     time_series: List[TimeSeriesBucket] = Field(default_factory=list)
     chat: ChatActivitySummary = Field(default_factory=ChatActivitySummary)

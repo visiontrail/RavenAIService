@@ -4,9 +4,17 @@ import type {
   ApiResponse,
   UserAuthPayload,
   UserProfile,
+  UserProfileRole,
   ChatSessionSummary,
   ChatMessageRecord,
 } from '@/types'
+
+export interface UserProfileUpdatePayload {
+  display_name?: string | null
+  email?: string | null
+  language?: string
+  profile_role?: UserProfileRole | null
+}
 
 const USER_TOKEN_KEY = 'raven_user_token'
 const USER_TOKEN_FALLBACK_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
@@ -130,7 +138,7 @@ export const userApi = {
 
   me: (): Promise<ApiResponse<UserProfile>> => userClient.get('/api/v1/users/auth/me'),
 
-  updateProfile: (payload: { language?: string }): Promise<ApiResponse<UserProfile>> =>
+  updateProfile: (payload: UserProfileUpdatePayload): Promise<ApiResponse<UserProfile>> =>
     userClient.patch('/api/v1/users/auth/me', payload),
 
   listSessions: (): Promise<ApiResponse<ChatSessionSummary[]>> =>

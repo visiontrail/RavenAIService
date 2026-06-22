@@ -7,6 +7,7 @@ rejection, token reuse on refresh (upsert), and immediate revocation.
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
 from typing import AsyncIterator
@@ -17,7 +18,7 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models.database import Base
-from app.models.user import ChatMessage, ChatSession, User
+from app.models.user import ChatAgentRun, ChatMessage, ChatSession, User
 from app.services.conversation_share_service import conversation_share_service
 
 
@@ -85,13 +86,94 @@ async def test_snapshot_redacts_to_three_fields(session: AsyncSession, user: Use
     messages = snapshot["messages"]
     assert len(messages) == 2
     for message in messages:
-        # Exactly the three public fields — nothing else may leak.
+        # With no agent run recorded, messages stay minimal: exactly the three
+        # public fields — nothing else may leak (trace capture is covered below).
         assert set(message.keys()) == {"role", "content", "created_at"}
         assert "session_id" not in message
         assert "trace_events" not in message
         assert "run_id" not in message
         assert "user_id" not in message
     assert [m["role"] for m in messages] == ["user", "ai"]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_captures_ai_trace_events(session: AsyncSession, user: User):
+    """AI turns carry the agent trace (thinking + tool calls) at share time,
+    matched to the run by answer text, while owner/run identity never leaks."""
+    sid = await _seed_session_with_messages(session, user_id=user.id)
+    events = [
+        {"type": "thinking_end", "task_id": "t", "seq": 1, "timestamp": 1.0, "text": "先看堆栈"},
+        {
+            "type": "step_start",
+            "task_id": "t",
+            "seq": 2,
+            "timestamp": 2.0,
+            "step_id": "s1",
+            "tool_name": "Bash",
+            "tool_input": {"command": "grep -n ERROR app.log"},
+        },
+        {"type": "step_end", "task_id": "t", "seq": 3, "timestamp": 3.0, "step_id": "s1", "status": "ok"},
+        {"type": "run_complete", "task_id": "t", "seq": 4, "timestamp": 4.0},
+    ]
+    session.add(
+        ChatAgentRun(
+            session_id=sid,
+            user_id=user.id,
+            agent_kind="log_analysis",
+            status="succeeded",
+            answer="你好，有什么可以帮你",  # equals the seeded ai message content
+            trace_events_json=json.dumps(events, ensure_ascii=False),
+        )
+    )
+    await session.flush()
+
+    share = await conversation_share_service.create_or_refresh_share(
+        session, session_id=sid, user_id=user.id
+    )
+    snapshot = await conversation_share_service.get_public_snapshot(
+        session, token=share.token
+    )
+    assert snapshot is not None
+    user_msg, ai_msg = snapshot["messages"]
+
+    # Trace is AI-only; the user turn stays minimal.
+    assert "trace_events" not in user_msg
+    # AI turn carries the captured trace verbatim, but no run/session/owner ids.
+    assert ai_msg["trace_events"] == events
+    assert "run_id" not in ai_msg
+    assert "session_id" not in ai_msg
+    assert "user_id" not in ai_msg
+
+
+@pytest.mark.asyncio
+async def test_snapshot_ignores_run_without_matching_answer(
+    session: AsyncSession, user: User
+):
+    """A run whose answer matches no message is never bound to a snapshot turn."""
+    sid = await _seed_session_with_messages(session, user_id=user.id)
+    session.add(
+        ChatAgentRun(
+            session_id=sid,
+            user_id=user.id,
+            agent_kind="device",
+            status="succeeded",
+            answer="一个对不上的答案",
+            trace_events_json=json.dumps(
+                [{"type": "run_complete", "task_id": "t", "seq": 1, "timestamp": 1.0}]
+            ),
+        )
+    )
+    await session.flush()
+
+    share = await conversation_share_service.create_or_refresh_share(
+        session, session_id=sid, user_id=user.id
+    )
+    snapshot = await conversation_share_service.get_public_snapshot(
+        session, token=share.token
+    )
+    assert snapshot is not None
+    for message in snapshot["messages"]:
+        assert "trace_events" not in message
 
 
 @pytest.mark.asyncio

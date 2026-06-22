@@ -2,12 +2,13 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
+import { Save, ShieldCheck } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
 import { useChatSessionStore } from '@/stores/chatSession'
 import { useConversationRunsStore } from '@/stores/conversationRuns'
 import { userApi } from '@/api/user'
-import type { ChatSessionSummary } from '@/types'
+import type { ChatSessionSummary, UserProfileRole } from '@/types'
 import brandIcon from '@/assets/icon.png'
 
 const route = useRoute()
@@ -17,6 +18,8 @@ const appStore = useAppStore()
 const userStore = useUserStore()
 const sessionStore = useChatSessionStore()
 const runsStore = useConversationRunsStore()
+
+const profileRoleValues = ['developer', 'tester', 'product', 'ops', 'other'] as const
 
 /**
  * Embedded mode: when the workbench is rendered inside the Raven desktop client
@@ -121,6 +124,13 @@ const loginForm = reactive({
   confirmPassword: '',
 })
 const isLoggingIn = ref(false)
+const showSettingsModal = ref(false)
+const isSavingProfile = ref(false)
+const profileForm = reactive({
+  displayName: '',
+  email: '',
+  profileRole: 'developer' as UserProfileRole,
+})
 
 const userMenuRef = ref<HTMLElement | null>(null)
 const userButtonRef = ref<HTMLElement | null>(null)
@@ -131,15 +141,82 @@ const currentUserName = computed(() =>
 )
 const currentUserEmail = computed(() => userStore.profile?.email || '')
 const currentUserRole = computed(() => (userStore.profile?.role || 'user').toString().toLowerCase())
+const currentProfileRole = computed(() => (userStore.profile?.profile_role || 'developer').toString())
 const isAdmin = computed(() => isLoggedIn.value && currentUserRole.value === 'admin')
 const userInitial = computed(() => (currentUserName.value || 'U').slice(0, 2).toUpperCase())
 const currentUserStatusText = computed(() =>
   currentUserEmail.value || (isLoggedIn.value ? t('workbench.loggedIn') : t('workbench.notLoggedIn'))
 )
+const profileRoleOptions = computed(() => {
+  const items: { value: UserProfileRole; label: string }[] = profileRoleValues.map((value) => ({
+    value,
+    label: t(`workbench.settingsPanel.roles.${value}`),
+  }))
+  const current = currentProfileRole.value
+  if (current && !items.some((item) => item.value === current)) {
+    items.push({ value: current, label: current })
+  }
+  return items
+})
+const currentProfileRoleLabel = computed(() => {
+  const current = currentProfileRole.value
+  return profileRoleOptions.value.find((item) => item.value === current)?.label || current
+})
 
 const openAuthModal = (mode: 'login' | 'register' = 'login') => {
   authMode.value = mode
   showLoginModal.value = true
+}
+
+const syncProfileForm = () => {
+  profileForm.displayName = userStore.profile?.display_name || ''
+  profileForm.email = userStore.profile?.email || ''
+  profileForm.profileRole = (userStore.profile?.profile_role || 'developer') as UserProfileRole
+}
+
+const openSettingsModal = () => {
+  showUserMenu.value = false
+  if (!isLoggedIn.value) {
+    appStore.showNotification({ title: t('workbench.settingsPanel.loginRequired'), type: 'warning' })
+    openAuthModal('login')
+    return
+  }
+  syncProfileForm()
+  showSettingsModal.value = true
+}
+
+const closeSettingsModal = () => {
+  showSettingsModal.value = false
+}
+
+const handleSaveProfile = async () => {
+  if (!isLoggedIn.value) {
+    appStore.showNotification({ title: t('workbench.settingsPanel.loginRequired'), type: 'warning' })
+    openAuthModal('login')
+    return
+  }
+  isSavingProfile.value = true
+  try {
+    const resp = await userApi.updateProfile({
+      display_name: profileForm.displayName.trim() || null,
+      email: profileForm.email.trim() || null,
+      profile_role: profileForm.profileRole || 'developer',
+    })
+    if (!resp?.success || !resp.data) {
+      throw new Error(resp?.message || t('workbench.settingsPanel.saveFailed'))
+    }
+    userStore.setProfile(resp.data)
+    syncProfileForm()
+    appStore.showNotification({ title: t('workbench.settingsPanel.saved'), type: 'success' })
+  } catch (error: any) {
+    appStore.showNotification({
+      title: t('workbench.settingsPanel.saveFailed'),
+      message: parseAuthError(error, t('workbench.notifications.tryAgainLater')),
+      type: 'error',
+    })
+  } finally {
+    isSavingProfile.value = false
+  }
 }
 
 const goToAdminConsole = () => {
@@ -257,6 +334,7 @@ const handleClickOutside = (event: MouseEvent) => {
 
 const handleKey = (e: KeyboardEvent) => {
   if (e.key === 'Escape') {
+    showSettingsModal.value = false
     showUserMenu.value = false
     openRowMenuId.value = null
   }
@@ -296,6 +374,10 @@ watch(isLoggedIn, async (loggedIn) => {
 
 watch(() => appStore.loginModalRequest, (val) => {
   if (val.seq > 0) openAuthModal(val.mode)
+})
+
+watch(() => userStore.profile, () => {
+  if (showSettingsModal.value) syncProfileForm()
 })
 
 const handleSelectSession = (session: ChatSessionSummary) => {
@@ -657,7 +739,7 @@ const handleUserLogout = () => {
                 <span class="rw-lang-opt" :class="{ active: activeLocale === 'en' }" @click="setLanguage('en')">EN</span>
               </span>
             </div>
-            <button class="rw-user-menu-item" @click="showUserMenu = false">
+            <button class="rw-user-menu-item" @click="openSettingsModal">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33 1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               {{ t('workbench.settings') }}
               <span class="rw-kbd-right">⌘ ,</span>
@@ -701,6 +783,82 @@ const handleUserLogout = () => {
     <main class="rw-main">
       <router-view />
     </main>
+
+    <!-- Settings modal — single-column popup, consistent with the login and
+         share-conversation dialogs. -->
+    <div v-if="showSettingsModal" class="rw-modal-backdrop" @click.self="closeSettingsModal">
+      <div class="rw-modal rw-settings-modal" role="dialog" aria-modal="true" :aria-label="t('workbench.settingsPanel.title')">
+        <div class="rw-modal-head">
+          <div>
+            <h3 class="rw-modal-title">{{ t('workbench.settingsPanel.title') }}</h3>
+            <p class="rw-modal-sub">{{ t('workbench.settingsPanel.subtitle') }}</p>
+          </div>
+          <button class="rw-modal-close" @click="closeSettingsModal" :aria-label="t('workbench.settingsPanel.close')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+
+        <div class="rw-settings-account-strip">
+          <div class="rw-avatar lg">{{ userInitial }}</div>
+          <div class="rw-settings-account-meta">
+            <strong>{{ currentUserName }}</strong>
+            <span>{{ userStore.profile?.username }}</span>
+          </div>
+          <span class="rw-profile-role-chip">{{ currentProfileRoleLabel }}</span>
+        </div>
+
+        <form class="rw-modal-form" @submit.prevent="handleSaveProfile">
+          <label class="rw-form-field">
+            <span class="rw-form-label">{{ t('workbench.settingsPanel.username') }}</span>
+            <input :value="userStore.profile?.username || ''" type="text" class="rw-input" disabled autocomplete="username" />
+          </label>
+          <label class="rw-form-field">
+            <span class="rw-form-label">{{ t('workbench.settingsPanel.displayName') }}</span>
+            <input
+              v-model="profileForm.displayName"
+              type="text"
+              class="rw-input"
+              maxlength="128"
+              :placeholder="t('workbench.settingsPanel.displayNamePlaceholder')"
+              autocomplete="name"
+            />
+          </label>
+          <label class="rw-form-field">
+            <span class="rw-form-label">{{ t('workbench.settingsPanel.email') }}</span>
+            <input
+              v-model="profileForm.email"
+              type="email"
+              class="rw-input"
+              maxlength="255"
+              :placeholder="t('workbench.settingsPanel.emailPlaceholder')"
+              autocomplete="email"
+            />
+          </label>
+          <label class="rw-form-field">
+            <span class="rw-form-label">{{ t('workbench.settingsPanel.profileRole') }}</span>
+            <select v-model="profileForm.profileRole" class="rw-select">
+              <option v-for="item in profileRoleOptions" :key="item.value" :value="item.value">
+                {{ item.label }}
+              </option>
+            </select>
+          </label>
+
+          <div class="rw-settings-permission">
+            <ShieldCheck :size="16" stroke-width="1.8" />
+            <span>{{ t('workbench.settingsPanel.permissionRole') }}</span>
+            <strong>{{ isAdmin ? t('workbench.adminRole') : t('workbench.settingsPanel.permissionUser') }}</strong>
+          </div>
+
+          <div class="rw-modal-actions">
+            <button type="submit" class="rw-btn-primary rw-save-profile-btn" :disabled="isSavingProfile">
+              <Save v-if="!isSavingProfile" :size="14" stroke-width="1.8" />
+              {{ isSavingProfile ? t('workbench.settingsPanel.saving') : t('workbench.settingsPanel.save') }}
+            </button>
+            <button type="button" class="rw-btn-ghost" @click="closeSettingsModal">{{ t('common.cancel') }}</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
     <!-- Login modal -->
     <div v-if="showLoginModal" class="rw-modal-backdrop" @click.self="closeAuthModal">
@@ -1113,6 +1271,92 @@ const handleUserLogout = () => {
   padding: 22px;
   box-shadow: 0 24px 64px rgba(0,0,0,.18);
 }
+.rw-modal.rw-settings-modal {
+  max-width: 420px;
+}
+.rw-settings-account-strip {
+  margin-top: 16px;
+  padding: 12px 0 16px;
+  border-bottom: 1px solid var(--rw-hairline);
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+.rw-settings-account-meta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.rw-settings-account-meta strong {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--rw-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rw-settings-account-meta span {
+  font-size: 11.5px;
+  color: var(--rw-muted);
+  font-family: var(--rw-mono);
+}
+.rw-profile-role-chip {
+  margin-left: auto;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: #e8f7ef;
+  color: #116b3a;
+  border: 1px solid #c8ead6;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.rw-select {
+  width: 100%;
+  height: 38px;
+  border: 1px solid var(--rw-hairline-strong);
+  border-radius: 8px;
+  padding: 0 34px 0 12px;
+  font-size: 13.5px;
+  outline: none;
+  background-color: var(--rw-canvas);
+  color: var(--rw-ink);
+  font-family: inherit;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--rw-muted) 50%), linear-gradient(135deg, var(--rw-muted) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 16px, calc(100% - 12px) 16px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.rw-select:focus {
+  border-color: var(--rw-ink);
+}
+.rw-input:disabled {
+  background: var(--rw-canvas-soft);
+  color: var(--rw-muted);
+  cursor: not-allowed;
+}
+.rw-settings-permission {
+  min-height: 40px;
+  border: 1px solid var(--rw-hairline);
+  border-radius: 8px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--rw-body);
+  font-size: 12.5px;
+}
+.rw-settings-permission strong {
+  margin-left: auto;
+  color: var(--rw-ink);
+  font-size: 12.5px;
+}
+.raven-workbench button.rw-save-profile-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
 .rw-modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .rw-modal-title { font-size: 16px; font-weight: 600; color: var(--rw-ink); margin: 0; }
 .rw-modal-sub { font-size: 12px; color: var(--rw-muted); margin: 4px 0 0; }
@@ -1195,6 +1439,10 @@ const handleUserLogout = () => {
     box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
     transform: translateX(-100%);
     transition: transform .25s ease;
+  }
+  .rw-modal.rw-settings-modal {
+    max-height: calc(100vh - 24px);
+    overflow: auto;
   }
 }
 </style>

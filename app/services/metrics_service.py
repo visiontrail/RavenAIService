@@ -28,7 +28,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, false, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -689,6 +689,28 @@ def _ai_filters(
     return clauses
 
 
+def _project_repo_id_text(project_repo_id: Optional[str]) -> Optional[str]:
+    if project_repo_id is None:
+        return None
+    text = str(project_repo_id).strip()
+    return text or None
+
+
+def _project_repo_id_int(project_repo_id: Optional[str]) -> Optional[int]:
+    text = _project_repo_id_text(project_repo_id)
+    if text is None:
+        return None
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _project_metric_filter(project_repo_id: Optional[str]) -> List[ColumnElement]:
+    text = _project_repo_id_text(project_repo_id)
+    return [MetricEvent.project_repo_id == text] if text is not None else []
+
+
 def _bucket_expr(bucket: str):
     """Dialect-aware SQL expression that truncates ``occurred_at`` to the bucket."""
     column = MetricEvent.occurred_at
@@ -783,19 +805,28 @@ async def _error_count(session, filters: Sequence[ColumnElement]) -> int:
 
 
 async def _group_counts(
-    session, filters: Sequence[ColumnElement], column: ColumnElement
+    session,
+    filters: Sequence[ColumnElement],
+    column: ColumnElement,
+    *,
+    order_by_tokens: bool = False,
 ) -> List[Dict[str, Any]]:
     """GROUP BY a single dimension returning invocation count + token sum per key."""
+    invocation_count_expr = func.count().label("invocation_count")
+    total_tokens_expr = func.coalesce(func.sum(MetricEvent.total_tokens), 0).label(
+        "total_tokens"
+    )
+    order_expr = total_tokens_expr.desc() if order_by_tokens else invocation_count_expr.desc()
     rows = (
         await session.execute(
             select(
                 column,
-                func.count().label("invocation_count"),
-                func.coalesce(func.sum(MetricEvent.total_tokens), 0).label("total_tokens"),
+                invocation_count_expr,
+                total_tokens_expr,
             )
             .where(and_(*filters))
             .group_by(column)
-            .order_by(func.count().desc())
+            .order_by(order_expr)
         )
     ).all()
     return [
@@ -970,7 +1001,11 @@ def _read_session():
 
 
 async def aggregate_system_metrics(
-    *, from_time: datetime, to_time: datetime, bucket: str = "day"
+    *,
+    from_time: datetime,
+    to_time: datetime,
+    bucket: str = "day",
+    project_repo_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Aggregate the AI-usage subset of the system overview.
 
@@ -979,7 +1014,11 @@ async def aggregate_system_metrics(
     (chat/logs/packages/devices) are merged in by the API layer.
     """
     bucket = normalize_bucket(bucket)
-    filters = _ai_filters(from_time, to_time)
+    filters = _ai_filters(
+        from_time,
+        to_time,
+        _project_metric_filter(project_repo_id),
+    )
     async with _read_session() as session:
         tokens = await _sum_tokens(session, filters)
         result: Dict[str, Any] = {
@@ -1009,6 +1048,12 @@ async def aggregate_system_metrics(
             ),
             "invocations_by_model": await _group_counts(
                 session, filters, MetricEvent.model
+            ),
+            "invocations_by_project": await _group_counts(
+                session,
+                filters,
+                MetricEvent.project_repo_id,
+                order_by_tokens=True,
             ),
             "invocations_by_status": await _group_counts(
                 session, filters, MetricEvent.status
@@ -1041,6 +1086,7 @@ async def aggregate_user_metrics_list(
     page: int = 1,
     per_page: int = 20,
     sort: str = "total_tokens",
+    project_repo_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Per-user AI-usage rollup with sorting + pagination over ``metric_events``.
 
@@ -1051,7 +1097,11 @@ async def aggregate_user_metrics_list(
     sort = normalize_user_sort(sort)
     page = max(1, page)
     per_page = max(1, per_page)
-    filters = _ai_filters(from_time, to_time, [MetricEvent.user_id.is_not(None)])
+    filters = _ai_filters(
+        from_time,
+        to_time,
+        [MetricEvent.user_id.is_not(None), *_project_metric_filter(project_repo_id)],
+    )
 
     success = func.sum(case((MetricEvent.status == "succeeded", 1), else_=0))
     failure = func.sum(case((MetricEvent.status == "failed", 1), else_=0))
@@ -1158,10 +1208,15 @@ async def aggregate_user_detail(
     to_time: datetime,
     bucket: str = "day",
     recent_limit: int = 20,
+    project_repo_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Single-user detail: token series, distributions, status/error groups, events."""
     bucket = normalize_bucket(bucket)
-    filters = _ai_filters(from_time, to_time, [MetricEvent.user_id == user_id])
+    filters = _ai_filters(
+        from_time,
+        to_time,
+        [MetricEvent.user_id == user_id, *_project_metric_filter(project_repo_id)],
+    )
     async with _read_session() as session:
         tokens = await _sum_tokens(session, filters)
         detail: Dict[str, Any] = {
@@ -1255,6 +1310,7 @@ async def list_metric_events(
     event_type: Optional[str] = None,
     source: Optional[str] = None,
     user_id: Optional[str] = None,
+    project_repo_id: Optional[str] = None,
     page: int = 1,
     per_page: int = 50,
 ) -> Dict[str, Any]:
@@ -1277,6 +1333,9 @@ async def list_metric_events(
         filters.append(MetricEvent.source == source)
     if user_id:
         filters.append(MetricEvent.user_id == user_id)
+    project_filter = _project_metric_filter(project_repo_id)
+    if project_filter:
+        filters.extend(project_filter)
 
     async with _read_session() as session:
         total = int(
@@ -1333,12 +1392,17 @@ async def _count_group(
 
 
 async def aggregate_chat_metrics(
-    *, from_time: datetime, to_time: datetime
+    *,
+    from_time: datetime,
+    to_time: datetime,
+    project_repo_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Chat/user activity summary from users / chat_sessions / chat_messages / runs.
 
-    ``total_users`` is an all-time system stat; everything else is scoped to the
-    requested window (active users, sessions/messages created, run terminal mix).
+    Without a project filter, ``total_users`` is an all-time system stat and the
+    rest comes from the chat tables. With a project filter, chat tables do not
+    carry project ownership, so the project-scoped summary is derived from
+    ``metric_events`` rows that include ``project_repo_id``.
     """
     from app.models.user import ChatAgentRun, ChatMessage, ChatSession, User
 
@@ -1351,6 +1415,55 @@ async def aggregate_chat_metrics(
     }
     try:
         async with _read_session() as session:
+            project_text = _project_repo_id_text(project_repo_id)
+            if project_text is not None:
+                project_window = _ai_filters(
+                    from_time,
+                    to_time,
+                    [MetricEvent.project_repo_id == project_text],
+                )
+                project_all_time = [
+                    MetricEvent.event_type == "ai_usage",
+                    MetricEvent.project_repo_id == project_text,
+                ]
+                summary["total_users"] = int(
+                    (
+                        await session.execute(
+                            select(func.count(func.distinct(MetricEvent.user_id))).where(
+                                and_(*project_all_time, MetricEvent.user_id.is_not(None))
+                            )
+                        )
+                    ).scalar()
+                    or 0
+                )
+                summary["active_users"] = int(
+                    (
+                        await session.execute(
+                            select(func.count(func.distinct(MetricEvent.user_id))).where(
+                                and_(*project_window, MetricEvent.user_id.is_not(None))
+                            )
+                        )
+                    ).scalar()
+                    or 0
+                )
+                summary["chat_session_count"] = int(
+                    (
+                        await session.execute(
+                            select(func.count(func.distinct(MetricEvent.session_id))).where(
+                                and_(*project_window, MetricEvent.session_id.is_not(None))
+                            )
+                        )
+                    ).scalar()
+                    or 0
+                )
+                summary["chat_message_count"] = await _invocation_count(
+                    session, project_window
+                )
+                summary["run_counts_by_status"] = await _count_group(
+                    session, MetricEvent.status, project_window
+                )
+                return summary
+
             summary["total_users"] = int(
                 (await session.execute(select(func.count(User.id)))).scalar() or 0
             )
@@ -1404,7 +1517,10 @@ async def aggregate_chat_metrics(
 
 
 async def aggregate_log_metrics(
-    *, from_time: datetime, to_time: datetime
+    *,
+    from_time: datetime,
+    to_time: datetime,
+    project_repo_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Log upload + AI-analysis summary from log_records and metric_events."""
     from app.models.log import LogRecord
@@ -1418,11 +1534,14 @@ async def aggregate_log_metrics(
     }
     try:
         async with _read_session() as session:
+            project_id = _project_repo_id_int(project_repo_id)
             log_window = [
                 LogRecord.created_at >= from_time,
                 LogRecord.created_at < to_time,
                 LogRecord.is_deleted.is_(False),
             ]
+            if project_repo_id is not None:
+                log_window.append(LogRecord.project_id == project_id if project_id is not None else false())
             row = (
                 await session.execute(
                     select(
@@ -1444,7 +1563,7 @@ async def aggregate_log_metrics(
             ai_filters = _ai_filters(
                 from_time,
                 to_time,
-                [MetricEvent.agent_kind == "log_analysis"],
+                [MetricEvent.agent_kind == "log_analysis", *_project_metric_filter(project_repo_id)],
             )
             summary["ai_analysis_counts"] = await _count_group(
                 session, MetricEvent.status, ai_filters
@@ -1455,7 +1574,10 @@ async def aggregate_log_metrics(
 
 
 async def aggregate_package_metrics(
-    *, from_time: datetime, to_time: datetime
+    *,
+    from_time: datetime,
+    to_time: datetime,
+    project_repo_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Package inventory (from the package service) + windowed activity/search counts."""
     summary: Dict[str, Any] = {
@@ -1469,6 +1591,29 @@ async def aggregate_package_metrics(
         from app.services.raven_package_service import raven_package_service
 
         packages = raven_package_service.get_all_packages()
+        project_code_filter: Optional[str] = None
+        project_id = _project_repo_id_int(project_repo_id)
+        if project_repo_id is not None:
+            if project_id is None:
+                packages = []
+            else:
+                from app.models.project_repo import ProjectRepo
+
+                async with _read_session() as session:
+                    repo = (
+                        await session.execute(
+                            select(ProjectRepo).where(ProjectRepo.id == project_id)
+                        )
+                    ).scalar_one_or_none()
+                project_code_filter = getattr(repo, "project_code", None) if repo else None
+                if project_code_filter:
+                    packages = [
+                        pkg
+                        for pkg in packages
+                        if str(pkg.get("projectCode") or "") == project_code_filter
+                    ]
+                else:
+                    packages = []
         counts_by_project: Dict[str, int] = {}
         total_bytes = 0
         for pkg in packages:
@@ -1486,14 +1631,16 @@ async def aggregate_package_metrics(
 
     try:
         async with _read_session() as session:
+            activity_filters: List[ColumnElement] = [
+                MetricEvent.event_type == "package_activity",
+                MetricEvent.occurred_at >= from_time,
+                MetricEvent.occurred_at < to_time,
+                *_project_metric_filter(project_repo_id),
+            ]
             summary["activity_counts"] = await _count_group(
                 session,
                 MetricEvent.source,
-                [
-                    MetricEvent.event_type == "package_activity",
-                    MetricEvent.occurred_at >= from_time,
-                    MetricEvent.occurred_at < to_time,
-                ],
+                activity_filters,
             )
             summary["search_count"] = int(
                 (
@@ -1503,7 +1650,10 @@ async def aggregate_package_metrics(
                                 *_ai_filters(
                                     from_time,
                                     to_time,
-                                    [MetricEvent.agent_kind == "package"],
+                                    [
+                                        MetricEvent.agent_kind == "package",
+                                        *_project_metric_filter(project_repo_id),
+                                    ],
                                 )
                             )
                         )

@@ -200,6 +200,7 @@ async def user_register(
         display_name=payload.display_name,
         email=payload.email,
         role="user",
+        initialize_last_login=True,
     )
     token, expires_at = user_auth_manager.issue_token(user.id, user.username)
     return UserAuthResponse(
@@ -226,6 +227,17 @@ class UpdateProfileRequest(BaseModel):
     display_name: Optional[str] = Field(None, max_length=128)
     email: Optional[str] = Field(None, max_length=255)
     language: Optional[str] = Field(None, max_length=8)
+    profile_role: Optional[str] = Field(None, max_length=64)
+
+    @field_validator("display_name", "email", "profile_role", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        return normalized or None
 
 
 @router.patch("/auth/me", response_model=UserDetailResponse)
@@ -240,12 +252,18 @@ async def update_profile(
     Unsupported ``language`` codes are coerced to a supported code by the
     service layer rather than rejected, so the UI never gets stuck.
     """
-    user = await user_service.update_user(
+    fields = payload.model_fields_set
+    user = await user_service.update_profile(
         db,
         current_user.id,
         display_name=payload.display_name,
         email=payload.email,
         language=payload.language,
+        profile_role=payload.profile_role,
+        update_display_name="display_name" in fields,
+        update_email="email" in fields,
+        update_language="language" in fields,
+        update_profile_role="profile_role" in fields,
     )
     if user is None:
         raise HTTPException(

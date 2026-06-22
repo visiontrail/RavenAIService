@@ -71,7 +71,9 @@ const getNotificationClass = (type: string) => {
   position: fixed;
   top: 1rem;
   right: 1rem;
-  z-index: 80;
+  /* Above modal backdrops (z-index: 100, which apply backdrop-filter: blur)
+     so toasts stay sharp and on top while a dialog is open. */
+  z-index: 2000;
   width: 320px;
   display: flex;
   flex-direction: column;
@@ -200,7 +202,7 @@ const getNotificationClass = (type: string) => {
     right: 0.5rem;
     left: 0.5rem;
     width: auto;
-    z-index: 80;
+    z-index: 2000;
   }
 
   .notifications-container--admin {

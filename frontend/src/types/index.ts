@@ -460,6 +460,7 @@ export interface ProjectSystemPrompt {
 
 // 用户与会话
 export type UserRole = 'user' | 'admin'
+export type UserProfileRole = 'developer' | 'tester' | 'product' | 'ops' | 'other' | string
 
 export interface UserProfile {
   id: string
@@ -468,6 +469,7 @@ export interface UserProfile {
   email?: string | null
   is_active: boolean
   role?: UserRole | string
+  profile_role?: UserProfileRole | null
   language?: string | null
   last_login_at?: string | null
   created_at: string
@@ -532,11 +534,14 @@ export interface ShareInfo {
   message_count?: number | null
 }
 
-// A single message in the public snapshot — only the three public fields.
+// A single message in the public snapshot. AI turns may additionally carry the
+// agent trace (thinking + tool calls) captured at share time; older snapshots
+// predating trace capture omit it.
 export interface PublicShareMessage {
   role: 'user' | 'ai' | 'system'
   content: string
   created_at?: string | null
+  trace_events?: unknown[] | null
 }
 
 // Public, unauthenticated snapshot read response (flat, no identity fields).
@@ -629,6 +634,7 @@ export interface MetricsSystemOverview {
   invocations_by_agent_kind: MetricsGroupCount[]
   invocations_by_provider: MetricsGroupCount[]
   invocations_by_model: MetricsGroupCount[]
+  invocations_by_project: MetricsGroupCount[]
   invocations_by_status: MetricsGroupCount[]
   time_series: MetricsTimeSeriesBucket[]
   chat: MetricsChatActivitySummary
