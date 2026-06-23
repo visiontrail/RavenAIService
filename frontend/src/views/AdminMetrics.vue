@@ -8,6 +8,7 @@ import { useAppStore } from '@/stores/app'
 import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
 import type {
   MetricsRawEvent,
+  MetricsServerTimezone,
   MetricsSystemOverview,
   MetricsUserDetail,
   MetricsUserRow,
@@ -59,6 +60,7 @@ const computeRange = (): { from: string; to: string } => {
 
 const loadingOverview = ref(false)
 const overview = ref<MetricsSystemOverview | null>(null)
+const serverTimezone = ref<MetricsServerTimezone | null>(null)
 
 const loadingProjects = ref(false)
 const projectRepos = ref<ProjectRepo[]>([])
@@ -90,10 +92,58 @@ const parseErrorMessage = (err: any) => {
   return t('admin.parseError')
 }
 
+const updateServerTimezone = (timezone?: MetricsServerTimezone | null) => {
+  if (!timezone || !Number.isFinite(timezone.offset_minutes)) return
+  serverTimezone.value = timezone
+}
+
+const parseMetricTimestamp = (value: string) => {
+  const trimmed = value.trim()
+  const hasExplicitTimezone = /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed)
+  return new Date(hasExplicitTimezone ? trimmed : `${trimmed}Z`)
+}
+
+const padDatePart = (value: number) => String(value).padStart(2, '0')
+
 const formatTimestamp = (value?: string | null) => {
   if (!value) return '--'
   try {
-    return new Date(value).toLocaleString('zh-CN', {
+    const date = parseMetricTimestamp(value)
+    if (Number.isNaN(date.getTime())) return value
+
+    if (serverTimezone.value?.name) {
+      try {
+        return new Intl.DateTimeFormat('zh-CN', {
+          timeZone: serverTimezone.value.name,
+          hour12: false,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          timeZoneName: 'shortOffset',
+        }).format(date)
+      } catch {
+        // Fall through to numeric offset formatting below.
+      }
+    }
+
+    if (serverTimezone.value) {
+      const shifted = new Date(date.getTime() + serverTimezone.value.offset_minutes * 60 * 1000)
+      const label = serverTimezone.value.offset_label
+      const dateText = [
+        shifted.getUTCFullYear(),
+        padDatePart(shifted.getUTCMonth() + 1),
+        padDatePart(shifted.getUTCDate()),
+      ].join('/')
+      const timeText = [
+        padDatePart(shifted.getUTCHours()),
+        padDatePart(shifted.getUTCMinutes()),
+      ].join(':')
+      return `${dateText} ${timeText} ${label}`
+    }
+
+    return date.toLocaleString('zh-CN', {
       hour12: false,
       year: 'numeric',
       month: '2-digit',
@@ -301,6 +351,7 @@ const loadOverview = async () => {
       project_repo_id: selectedProjectParam.value,
     })
     if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.metrics.loadOverviewFail'))
+    updateServerTimezone(resp.data.server_timezone)
     overview.value = resp.data
   } catch (err: any) {
     appStore.showNotification({ title: t('admin.loadFail'), message: parseErrorMessage(err), type: 'error' })
@@ -323,6 +374,7 @@ const loadUsers = async () => {
       sort: userSort.value,
     })
     if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.metrics.loadUserListFail'))
+    updateServerTimezone(resp.data.server_timezone)
     users.value = resp.data.rows
     userTotal.value = resp.data.total
     userPage.value = resp.data.page
@@ -347,6 +399,7 @@ const loadEvents = async () => {
       per_page: eventsPerPage,
     })
     if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.metrics.loadEventsFail'))
+    updateServerTimezone(resp.data.server_timezone)
     events.value = resp.data.events
     eventsTotal.value = resp.data.total
     eventsPage.value = resp.data.page
@@ -370,6 +423,7 @@ const openUserDetail = async (row: MetricsUserRow) => {
       project_repo_id: selectedProjectParam.value,
     })
     if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.metrics.loadUserDetailFail'))
+    updateServerTimezone(resp.data.server_timezone)
     detail.value = resp.data
   } catch (err: any) {
     appStore.showNotification({ title: t('admin.loadFail'), message: parseErrorMessage(err), type: 'error' })

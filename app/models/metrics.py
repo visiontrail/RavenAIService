@@ -12,6 +12,7 @@ are persisted (see ``app/services/metrics_service.py``).
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -173,6 +174,57 @@ class TimeSeriesBucket(BaseModel):
     counts_by_agent: Dict[str, int] = Field(default_factory=dict)
 
 
+def _format_utc_offset(offset_minutes: int) -> str:
+    sign = "+" if offset_minutes >= 0 else "-"
+    absolute = abs(offset_minutes)
+    return f"UTC{sign}{absolute // 60:02d}:{absolute % 60:02d}"
+
+
+def _read_server_timezone_name() -> Optional[str]:
+    """Best-effort IANA timezone name from TZ, /etc/timezone, or /etc/localtime."""
+    env_tz = os.environ.get("TZ", "").strip()
+    if env_tz and not env_tz.startswith(":"):
+        return env_tz
+
+    try:
+        with open("/etc/timezone", "r", encoding="utf-8") as f:
+            timezone_name = f.read().strip()
+        if timezone_name:
+            return timezone_name
+    except OSError:
+        pass
+
+    try:
+        localtime_path = os.path.realpath("/etc/localtime")
+    except OSError:
+        return None
+    marker = "/zoneinfo/"
+    if marker in localtime_path:
+        return localtime_path.split(marker, 1)[1]
+    return None
+
+
+class ServerTimezone(BaseModel):
+    """Timezone currently observed by the running server/container."""
+
+    name: Optional[str] = None
+    offset_minutes: int
+    offset_label: str
+    abbreviation: Optional[str] = None
+
+
+def get_server_timezone() -> ServerTimezone:
+    now = datetime.now().astimezone()
+    offset = now.utcoffset()
+    offset_minutes = int(offset.total_seconds() // 60) if offset else 0
+    return ServerTimezone(
+        name=_read_server_timezone_name(),
+        offset_minutes=offset_minutes,
+        offset_label=_format_utc_offset(offset_minutes),
+        abbreviation=now.tzname(),
+    )
+
+
 class GroupCount(BaseModel):
     """按某一维度（source/agent_kind/provider/model/status）的计数与 Token 汇总。"""
 
@@ -233,6 +285,7 @@ class SystemOverview(BaseModel):
 
     from_time: datetime
     to_time: datetime
+    server_timezone: ServerTimezone = Field(default_factory=get_server_timezone)
     bucket: str
     tokens: TokenBreakdown = Field(default_factory=TokenBreakdown)
     estimated_cost_usd: Optional[float] = Field(
@@ -285,6 +338,7 @@ class UserMetricsRow(BaseModel):
 class UserMetricsListData(BaseModel):
     from_time: datetime
     to_time: datetime
+    server_timezone: ServerTimezone = Field(default_factory=get_server_timezone)
     page: int
     per_page: int
     total: int
@@ -340,6 +394,7 @@ class UserMetricsDetail(BaseModel):
     role: Optional[str] = None
     from_time: datetime
     to_time: datetime
+    server_timezone: ServerTimezone = Field(default_factory=get_server_timezone)
     bucket: str
     tokens: TokenBreakdown = Field(default_factory=TokenBreakdown)
     estimated_cost_usd: Optional[float] = None
@@ -367,6 +422,7 @@ class SelfMetricsSummary(BaseModel):
     user_id: str
     from_time: datetime
     to_time: datetime
+    server_timezone: ServerTimezone = Field(default_factory=get_server_timezone)
     bucket: str
     tokens: TokenBreakdown = Field(default_factory=TokenBreakdown)
     estimated_cost_usd: Optional[float] = None
@@ -386,6 +442,7 @@ class SelfMetricsResponse(BaseResponse):
 class RawMetricEventsData(BaseModel):
     from_time: datetime
     to_time: datetime
+    server_timezone: ServerTimezone = Field(default_factory=get_server_timezone)
     page: int
     per_page: int
     total: int

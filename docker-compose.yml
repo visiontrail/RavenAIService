@@ -31,6 +31,7 @@ x-backend-service: &backend_service
     UPLOAD_DIR: /app/data/raven/uploads
     LOG_API_PORT: 8085
   volumes:
+    - /etc/localtime:/etc/localtime:ro
     - app_logs:/app/logs
     - app_temp:/app/temp
     - app_data:/app/data

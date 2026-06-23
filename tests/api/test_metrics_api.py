@@ -201,6 +201,13 @@ def test_overview_aggregates_tokens_and_status(client: TestClient) -> None:
     bucket = data["time_series"][0]
     assert bucket["total_tokens"] >= 1
     assert "bucket_start" in bucket
+    assert isinstance(data["server_timezone"]["offset_minutes"], int)
+    assert data["server_timezone"]["offset_label"].startswith("UTC")
+
+
+def test_parse_datetime_normalizes_aware_values_to_utc() -> None:
+    parsed = admin_metrics._parse_dt("2026-01-01T08:00:00+08:00", "from")
+    assert parsed == datetime(2026, 1, 1, 0, 0, 0)
 
 
 def test_overview_hour_bucket(client: TestClient) -> None:

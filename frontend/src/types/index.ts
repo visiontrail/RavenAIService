@@ -590,6 +590,13 @@ export interface MetricsGroupCount {
   total_tokens: number
 }
 
+export interface MetricsServerTimezone {
+  name: string | null
+  offset_minutes: number
+  offset_label: string
+  abbreviation: string | null
+}
+
 export interface MetricsChatActivitySummary {
   total_users: number
   active_users: number
@@ -621,6 +628,7 @@ export interface MetricsDeviceActivitySummary {
 export interface MetricsSystemOverview {
   from_time: string
   to_time: string
+  server_timezone: MetricsServerTimezone
   bucket: string
   tokens: MetricsTokenBreakdown
   estimated_cost_usd: number | null
@@ -665,6 +673,7 @@ export interface MetricsUserRow {
 export interface MetricsUserListData {
   from_time: string
   to_time: string
+  server_timezone: MetricsServerTimezone
   page: number
   per_page: number
   total: number
@@ -709,6 +718,7 @@ export interface MetricsUserDetail {
   role: string | null
   from_time: string
   to_time: string
+  server_timezone: MetricsServerTimezone
   bucket: string
   tokens: MetricsTokenBreakdown
   estimated_cost_usd: number | null
@@ -729,6 +739,7 @@ export interface MetricsUserDetail {
 export interface MetricsRawEventsData {
   from_time: string
   to_time: string
+  server_timezone: MetricsServerTimezone
   page: number
   per_page: number
   total: number

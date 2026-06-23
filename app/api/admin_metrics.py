@@ -18,7 +18,7 @@ caller cannot trigger an unbounded full-table scan (design Decision 5, task 6.4)
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -76,9 +76,10 @@ def _parse_dt(value: Optional[str], field: str) -> Optional[datetime]:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid datetime for '{field}': {value!r} (use ISO-8601)",
         ) from exc
-    # Persisted ``occurred_at`` is naive UTC; drop tzinfo for a like-for-like compare.
+    # Persisted ``occurred_at`` is naive UTC; normalize aware inputs to UTC before
+    # dropping tzinfo for a like-for-like compare.
     if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(tz=None).replace(tzinfo=None)
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
     return parsed
 
 
