@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSharedConversation } from '@/composables/useSharedConversation'
+import brandIcon from '@/assets/icon.png'
 import { renderMarkdown, processMermaidBlocks } from '@/utils/markdownRenderer'
 import AgentTraceStream from '@/components/AgentTraceStream.vue'
 import type { AgentTraceEvent } from '@/types/agentTrace'
@@ -38,7 +39,7 @@ onMounted(async () => {
   await load(token)
   if (snapshot.value) {
     if (typeof document !== 'undefined') {
-      document.title = `${snapshot.value.title} · RavenAI`
+      document.title = `${snapshot.value.title} · GALAXYSPACE RavenAI`
     }
     await nextTick()
     if (threadRef.value) {
@@ -53,8 +54,8 @@ onMounted(async () => {
   <div class="shared-conversation">
     <header class="sc-header">
       <div class="sc-brand">
-        <span class="sc-brand-dot" aria-hidden="true"></span>
-        <span class="sc-brand-name">RavenAI</span>
+        <img :src="brandIcon" alt="" class="sc-brand-logo" aria-hidden="true" />
+        <span class="sc-brand-name">GALAXYSPACE RavenAI</span>
       </div>
       <span class="sc-brand-tag">{{ t('sharedConversation.subtitle') }}</span>
     </header>
@@ -141,7 +142,7 @@ onMounted(async () => {
   position: sticky; top: 0; z-index: 10;
 }
 .sc-brand { display: flex; align-items: center; gap: 8px; }
-.sc-brand-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--sc-accent); }
+.sc-brand-logo { width: 22px; height: 22px; object-fit: contain; }
 .sc-brand-name { font-weight: 700; font-size: 15px; letter-spacing: .2px; }
 .sc-brand-tag { font-size: 12px; color: var(--sc-muted); }
 .sc-main { flex: 1; width: 100%; max-width: 820px; margin: 0 auto; padding: 28px 20px 64px; }
