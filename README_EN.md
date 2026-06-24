@@ -125,6 +125,10 @@ The platform includes six specialized agents, unified by GeneralAgent routing:
 
 - All agents support streaming responses; the frontend renders Markdown and Mermaid diagrams in real time
 - AI chat sessions support pinning, Markdown export, drag-and-drop log file upload, and more
+- **Agent-driven clarification (AskUserQuestion)**: when a request is ambiguous, the DeviceAgent may decide on its own to ask one or more clarifying questions (each with 2–4 preset options plus free-text input), then continue once answered. It reuses the human-in-the-loop pipeline and the question card survives disconnect/refresh. Users self-manage three preferences in **Settings**:
+  - **Globally disable clarification** (on by default): when off, the agent never pauses to ask and proceeds with its own understanding;
+  - **Max questions per run** (default 5): beyond the cap the agent decides on its own;
+  - **On timeout**: after waiting 5 minutes, either *cancel this run* (default) or *continue with what it knows*.
 
 ### 3. Test Log Asset Management
 

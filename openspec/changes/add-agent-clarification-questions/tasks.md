@@ -77,6 +77,6 @@
 
 ## 12. 收尾
 
-- [ ] 12.1 `openspec validate add-agent-clarification-questions --strict` 通过
-- [ ] 12.2 README/相关 docs 增补澄清机制与 3 项用户设置说明
-- [ ] 12.3 回归确认：不调用 `AskUserQuestion` / 禁用澄清时 run 行为与现状一致（非破坏性）
+- [x] 12.1 `openspec validate add-agent-clarification-questions --strict` 通过
+- [x] 12.2 README / README_EN 增补澄清机制与 3 项用户设置说明
+- [x] 12.3 回归确认：不调用 `AskUserQuestion` / 禁用澄清时 run 行为与现状一致（非破坏性）—— 工具按 `clarification_enabled` gating，未调用即无新事件；新测试全绿，5 个后端 + 2 个前端失败经 stash 验证为既有环境性失败，与本改动无关
