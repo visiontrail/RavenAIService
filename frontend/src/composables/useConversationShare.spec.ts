@@ -165,6 +165,33 @@ describe('useConversationShare', () => {
     expect(copyToClipboard).toHaveBeenCalledWith('http://10.60.11.3:8085/share/tok_default')
   })
 
+  it('rebuilds the link from the live origin, identical for load (GET) and generate (POST)', async () => {
+    // Reproduces the port-dropping regression: the backend builds share_url from
+    // the request Origin (present on the POST) but falls back to a proxy-rewritten
+    // Host on the same-origin GET. Simulate that by returning a port-less URL from
+    // get and a full one from createOrRefresh; the composable must surface the
+    // browser-origin URL for both so the port never disappears on re-open.
+    const origin = 'http://10.60.11.3:8085'
+    vi.stubGlobal('window', { location: { origin } })
+    try {
+      get.mockResolvedValue({
+        data: { is_active: true, token: 'tok_p', share_url: 'http://10.60.11.3/share/tok_p' },
+      })
+      createOrRefresh.mockResolvedValue({
+        data: { is_active: true, token: 'tok_p', share_url: `${origin}/share/tok_p` },
+      })
+      const share = useConversationShare()
+
+      await share.load(SID)
+      expect(share.shareUrl.value).toBe(`${origin}/share/tok_p`)
+
+      await share.generate(SID)
+      expect(share.shareUrl.value).toBe(`${origin}/share/tok_p`)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('copy returns false when there is no link yet', async () => {
     const share = useConversationShare({ copyText: async () => {} })
     expect(await share.copy()).toBe(false)

@@ -24,6 +24,28 @@ const defaultCopyText = async (text: string): Promise<void> => {
   }
 }
 
+// SPA route that renders the public read-only page (see router/index.ts).
+const PUBLIC_SHARE_PAGE_PATH = '/share'
+
+/**
+ * Resolve the public link from the share ``token`` against the *live* browser
+ * origin, falling back to the server-built ``share_url``.
+ *
+ * The backend derives ``share_url`` from the request ``Origin`` header and only
+ * falls back to the (proxy-rewritten) Host when it is absent. Browsers send
+ * ``Origin`` on the create POST but omit it on the same-origin status GET, so a
+ * reverse proxy that drops the external port from Host makes the GET-built URL
+ * lose its port (e.g. ``:8085``) — which is why re-opening an already-shared
+ * conversation showed a port-less link. Rebuilding from ``window.location``
+ * makes the link identical regardless of which call produced the state.
+ */
+const resolveShareUrl = (token?: string | null, fallback?: string | null): string => {
+  if (token && typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}${PUBLIC_SHARE_PAGE_PATH}/${encodeURIComponent(token)}`
+  }
+  return fallback || ''
+}
+
 export function useConversationShare(options: UseConversationShareOptions = {}) {
   const copyText = options.copyText || defaultCopyText
 
@@ -33,7 +55,7 @@ export function useConversationShare(options: UseConversationShareOptions = {}) 
   const info = ref<ShareInfo>({ is_active: false })
 
   const isShared = computed(() => !!info.value.is_active && !!info.value.share_url)
-  const shareUrl = computed(() => info.value.share_url || '')
+  const shareUrl = computed(() => resolveShareUrl(info.value.token, info.value.share_url))
   const sharedAt = computed(() => info.value.shared_at || null)
   const messageCount = computed(() => info.value.message_count ?? 0)
 
