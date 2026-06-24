@@ -128,6 +128,58 @@ Excel / spreadsheet 类 Skill 若需要读取或修改 `.xlsx` 文件，应部�
 
 ---
 
+## 重构包检索 / 包管理项目化迁移
+
+本次重构把重构包从旧 `packageType` 枚举迁移到项目仓库注册表
+`project_repo.project_code`。后端与前端需要一并发布；外部自动化脚本、Grafana
+面板和上传/下载调用方需按下列 BREAKING 变更同步调整。
+
+### 部署前检查
+
+1. 在后台「项目仓库管理」中预创建或确认重构包所属项目，确保目标记录
+   `enabled=true`。
+2. 如需让历史包自动关联到项目，请让项目 `project_code` 与旧 `packageType`
+   值一致（例如旧包里是 `lingxi-10`，就创建 `project_code=lingxi-10`）。
+   不匹配的历史包会被标记为「未关联」，可在包管理页用「未关联」筛选后人工指认；
+   未关联包不会出现在项目绑定的重构包 Agent 检索范围内。
+3. 备份现有 `data/raven/package-metadata.json` 与 `uploads/` 卷。迁移是惰性的：
+   读取旧记录时会补出 `projectCode`，但保留原 `packageType` 键；下一次写入包元数据时才落盘。
+
+### BREAKING API 清单
+
+| 旧契约 | 新契约 | 说明 |
+| --- | --- | --- |
+| 包对象 / `PackageBrief.packageType` | `projectCode` | 新写入不再生成 `packageType`；旧键仅为回滚兼容保留在存量元数据中 |
+| `GET /raven/api/packages?type=<value>` | `GET /raven/api/packages?projectCode=<code>` | `type` 查询参数短期作为 deprecated 别名按 `projectCode` 解释；响应体使用 `projectCode` |
+| 无未关联筛选 | `projectCode=__unassociated__` | 用于筛选未关联历史包或扫描入库的孤儿包 |
+| `POST /raven/api/upload` 表单字段 `packageType` | 表单字段 `projectCode` | 必填，且必须命中已启用项目；校验失败返回 400 并清理已落盘文件 |
+| `POST /raven/api/upload/batch` 表单字段 `packageType` | 表单字段 `projectCode` | 与单包上传相同 |
+| `GET /raven/api/packages/stats/overview.packagesByType` | `packagesByProject` | 包含 `unassociated` 桶；不再返回 `packagesByType` |
+| `GET /raven/api/download/type/{package_type}` | `GET /raven/api/download/project/{project_code}` | 旧路由移除；单包直发，多包打 zip |
+| `POST /raven/api/packages/agent-search` 无项目要求 | body 必填 `project_repo_id` | 缺失返回 400，`reason="project_repo_required"` |
+| 对话框旧包 Agent 流式逻辑 | `POST /api/v1/ai-chat/package-search/stream` | 与项目专家同构，首轮会话必须选择项目；后续同会话复用首轮项目与工作区 |
+
+### 指标与 Grafana
+
+- `package_activity` 业务事件 metadata 从 `package_type` 改为 `project_code`；
+  未关联包记为 `unassociated`。
+- Prometheus 指标 `raven_package_activity_total` 删除 `package_type` label，
+  仅保留 `action` 与 `status`，避免把项目标识作为高基数 label。
+- 旧 Grafana 查询如
+  `sum by (package_type) (rate(raven_package_activity_total[5m]))`
+  会失效。迁移后可改为按动作/状态聚合，例如
+  `sum by (action, status) (rate(raven_package_activity_total[5m]))`；
+  如需按项目看分布，请改用后台总览 API 的 `packages.counts_by_project`
+  或包管理页统计，而不是 Prometheus label。
+
+### 回滚
+
+直接回滚代码即可。新版本读取旧元数据时保留原始 `packageType` 键，不删除存量字段；
+因此旧版本仍可读取同一份包元数据。回滚后，新版本期间写入的 `projectCode`
+不会被旧版本理解为包类型，必要时需用备份或人工字段映射恢复旧展示口径。
+
+---
+
 ## 对话分享（公开只读链接）
 
 会话 owner 可在对话面板右上角三点菜单点击「分享对话」，生成一个**公开只读链接**：任何持链接者无需登录即可查看该对话在分享时刻的**快照**。owner 可随时「更新分享」刷新快照或「取消分享」（取消后链接立即失效）。

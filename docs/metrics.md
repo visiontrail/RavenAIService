@@ -142,7 +142,7 @@ includes prompt text, assistant answers, tool input/output, or secrets.
   `chat_message_count`, `run_counts_by_status`.
 - `logs` — `upload_count`, `uploaded_bytes`, `counts_by_log_type`,
   `counts_by_status`, `ai_analysis_counts`.
-- `packages` — `package_count`, `total_bytes`, `counts_by_type`,
+- `packages` — `package_count`, `total_bytes`, `counts_by_project`,
   `activity_counts`, `search_count`.
 - `devices` — `counts_by_state` (current connection snapshot).
 
@@ -157,10 +157,11 @@ no-op stubs so imports stay safe.
 
 > **Cardinality rule.** New metric labels are restricted to low/medium-cardinality
 > dimensions only. `user_id`, `username`, `owner_scope`, `session_id`, `run_id`,
-> `task_id`, `log_id`, and `project_repo_id` **MUST NEVER** appear as Prometheus
-> labels. Per-user / per-run attribution lives exclusively in the database fact
-> source and its APIs, never in Prometheus. A defensive `_label()` helper also
-> coerces empty/None label values to `unknown`.
+> `task_id`, `log_id`, `project_repo_id`, and `project_code` **MUST NEVER**
+> appear as Prometheus labels. Per-user / per-run / per-project attribution
+> lives exclusively in the database fact source and its APIs, never in
+> Prometheus. A defensive `_label()` helper also coerces empty/None label values
+> to `unknown`.
 
 AI-usage collectors are bumped **only after a `metric_events` insert succeeds**,
 so a duplicate idempotency key never double-counts in Prometheus.
@@ -175,7 +176,7 @@ so a duplicate idempotency key never double-counts in Prometheus.
 | `raven_http_request_duration_seconds` | Histogram | `method`, `route`, `status_code` |
 | `raven_log_uploads_total` | Counter | `log_type`, `status` |
 | `raven_log_uploaded_bytes_total` | Counter | `log_type` |
-| `raven_package_activity_total` | Counter | `action`, `package_type`, `status` |
+| `raven_package_activity_total` | Counter | `action`, `status` |
 | `raven_device_connections` | Gauge | `state` |
 | `raven_metrics_record_failures_total` | Counter | `source` |
 
@@ -186,6 +187,10 @@ Notes:
   path, to keep HTTP cardinality bounded.
 - `raven_metrics_record_failures_total` is incremented whenever best-effort
   metrics recording fails for a `source` (see [§5](#5-failure-isolation)).
+- `raven_package_activity_total` no longer has the historical `package_type`
+  label. Old Grafana queries grouped by `package_type` must be rewritten to
+  group by `action` / `status`, or use `GET /admin/metrics/overview`
+  `packages.counts_by_project` for project distribution.
 - Pre-existing trace collectors `ai_analysis_trace_events_emitted_total{kind}`
   and `ai_analysis_trace_redis_bytes` remain unchanged.
 
@@ -284,8 +289,10 @@ download operation to fail.
 The `metric_events` table and every export honor an **allowlist**:
 `metadata_json` may only ever contain these keys — `tool_call_count`,
 `trace_event_count`, `log_type`, `package_type`, `result_count`, `project_code`,
-`error_kind`, `historical`. Everything else is dropped silently at sanitize
-time. Metrics never persist or export prompts, assistant answers, raw tool
+`error_kind`, `historical`. `package_type` is kept only so historical rows can
+still be read; new package activity events write `project_code` (or
+`unassociated`) instead. Everything else is dropped silently at sanitize time.
+Metrics never persist or export prompts, assistant answers, raw tool
 input/output, log content, credentialed headers, cookies, git tokens, or
 token-bearing URLs. Project attribution is limited to non-sensitive identifiers
 (e.g. `project_code`, `project_repo_id`), never a raw clone URL.

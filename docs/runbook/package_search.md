@@ -8,12 +8,16 @@ Body:
 
 ```json
 {
-  "query": "find latest ka-tx package",
+  "query": "find latest package for this project",
+  "project_repo_id": 3,
   "session_id": "optional-id",
   "stream": false
 }
 ```
 
+- `project_repo_id` is required. It must reference an enabled project in the
+  project repository registry. Missing or invalid project selection returns
+  HTTP 400 before the agent loop starts.
 - `stream=false` (default): blocking JSON response with
   `answer / recommended_package_ids / relevant_package_ids /
   tool_trace / model / usage`.
@@ -22,6 +26,28 @@ Body:
   `data` is the same payload as the non-stream branch.
 
 See `docs/agent_trace_protocol.md` for the SSE event shape.
+
+## Project-scoped migration notes
+
+Package metadata is now scoped by `projectCode`, sourced from
+`project_repo.project_code`, instead of the legacy `packageType` enum.
+Before rollout, create or confirm enabled project repository records whose
+`project_code` values match the legacy package classifications that should
+remain associated. Historical packages whose old `packageType` does not match
+an enabled project are shown as `unassociated`; they remain visible in package
+management but are outside the package-search agent's project-scoped tools.
+
+Breaking API changes for callers:
+
+| Old contract | New contract |
+| --- | --- |
+| Package response field `packageType` | `projectCode` |
+| `GET /raven/api/packages?type=<value>` | `GET /raven/api/packages?projectCode=<code>` (`type` is a deprecated query alias only) |
+| `POST /raven/api/upload` form `packageType` | form `projectCode` (required, enabled project only) |
+| `POST /raven/api/upload/batch` form `packageType` | form `projectCode` (required, enabled project only) |
+| `GET /raven/api/packages/stats/overview.packagesByType` | `packagesByProject` with an `unassociated` bucket |
+| `GET /raven/api/download/type/{package_type}` | `GET /raven/api/download/project/{project_code}` |
+| `POST /raven/api/packages/agent-search` without project context | `project_repo_id` required in the JSON body |
 
 ## Deprecated artifacts
 
