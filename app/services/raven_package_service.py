@@ -112,7 +112,8 @@ async def validate_project_code(db: Any, project_code: Any, locale: str = "zh") 
         )
     from app.services import project_repo_service
 
-    repo = await project_repo_service.get_by_project_code(db, code)
+    # 包检索 Agent 对「未关联代码仓库」的项目不可见。
+    repo = await project_repo_service.get_by_project_code(db, code, require_repo=True)
     if repo is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

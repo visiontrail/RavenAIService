@@ -130,6 +130,9 @@ const profileForm = reactive({
   displayName: '',
   email: '',
   profileRole: 'developer' as UserProfileRole,
+  clarificationEnabled: true,
+  clarificationMaxRounds: 5,
+  clarificationOnTimeout: 'cancel' as 'cancel' | 'continue',
 })
 
 const userMenuRef = ref<HTMLElement | null>(null)
@@ -172,6 +175,10 @@ const syncProfileForm = () => {
   profileForm.displayName = userStore.profile?.display_name || ''
   profileForm.email = userStore.profile?.email || ''
   profileForm.profileRole = (userStore.profile?.profile_role || 'developer') as UserProfileRole
+  profileForm.clarificationEnabled = userStore.profile?.clarification_enabled ?? true
+  profileForm.clarificationMaxRounds = userStore.profile?.clarification_max_rounds ?? 5
+  profileForm.clarificationOnTimeout =
+    (userStore.profile?.clarification_on_timeout === 'continue' ? 'continue' : 'cancel')
 }
 
 const openSettingsModal = () => {
@@ -201,6 +208,9 @@ const handleSaveProfile = async () => {
       display_name: profileForm.displayName.trim() || null,
       email: profileForm.email.trim() || null,
       profile_role: profileForm.profileRole || 'developer',
+      clarification_enabled: profileForm.clarificationEnabled,
+      clarification_max_rounds: Number(profileForm.clarificationMaxRounds) || 5,
+      clarification_on_timeout: profileForm.clarificationOnTimeout,
     })
     if (!resp?.success || !resp.data) {
       throw new Error(resp?.message || t('workbench.settingsPanel.saveFailed'))
@@ -842,6 +852,36 @@ const handleUserLogout = () => {
               </option>
             </select>
           </label>
+
+          <div class="rw-settings-section-title">{{ t('workbench.settingsPanel.clarification.section') }}</div>
+          <label class="rw-form-field rw-form-field--inline">
+            <span class="rw-form-label">{{ t('workbench.settingsPanel.clarification.enabledLabel') }}</span>
+            <input v-model="profileForm.clarificationEnabled" type="checkbox" class="rw-checkbox" />
+          </label>
+          <p class="rw-form-hint">{{ t('workbench.settingsPanel.clarification.enabledHint') }}</p>
+          <label class="rw-form-field">
+            <span class="rw-form-label">{{ t('workbench.settingsPanel.clarification.maxRoundsLabel') }}</span>
+            <input
+              v-model.number="profileForm.clarificationMaxRounds"
+              type="number"
+              min="0"
+              max="20"
+              class="rw-input"
+              :disabled="!profileForm.clarificationEnabled"
+            />
+          </label>
+          <label class="rw-form-field">
+            <span class="rw-form-label">{{ t('workbench.settingsPanel.clarification.onTimeoutLabel') }}</span>
+            <select
+              v-model="profileForm.clarificationOnTimeout"
+              class="rw-select"
+              :disabled="!profileForm.clarificationEnabled"
+            >
+              <option value="cancel">{{ t('workbench.settingsPanel.clarification.onTimeoutCancel') }}</option>
+              <option value="continue">{{ t('workbench.settingsPanel.clarification.onTimeoutContinue') }}</option>
+            </select>
+          </label>
+          <p class="rw-form-hint">{{ t('workbench.settingsPanel.clarification.onTimeoutHint') }}</p>
 
           <div class="rw-settings-permission">
             <ShieldCheck :size="16" stroke-width="1.8" />

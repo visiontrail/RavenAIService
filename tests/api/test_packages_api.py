@@ -27,6 +27,8 @@ class _FakeRepo:
         self.project_code = project_code
         self.project_name = project_code.upper()
         self.enabled = enabled
+        # 包检索要求项目关联了代码仓库（repo_url 非空）。
+        self.repo_url = f"https://git.example/{project_code}.git"
 
 
 @pytest.fixture
@@ -57,7 +59,9 @@ def isolated_store(tmp_path, monkeypatch):
 def registry(monkeypatch):
     """Fake project_repo registry: only ``demo-proj`` exists and is enabled."""
 
-    async def fake_get_by_project_code(db: Any, code: str) -> Optional[_FakeRepo]:
+    async def fake_get_by_project_code(
+        db: Any, code: str, *, require_repo: bool = False
+    ) -> Optional[_FakeRepo]:
         if str(code).strip().lower() == "demo-proj":
             return _FakeRepo("demo-proj")
         return None

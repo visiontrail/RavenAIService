@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     device_agent_result_excerpt_bytes: int = 16 * 1024
     device_agent_result_max_bytes: int = 256 * 1024
     device_agent_max_remote_tools: int = 64
+    # AskUserQuestion 澄清提问等待时长：代码常量、非用户可改，默认 5 分钟。
+    # 超时后的行为（取消本轮 / 基于已知信息继续）由用户偏好决定。
+    device_agent_clarification_timeout_seconds: int = 300
 
     # Agent Skills 数据目录（Claude Agent SDK Skill 包按 agent 隔离存储）
     skills_data_dir: str = "data/agent_skills"

@@ -185,6 +185,7 @@ class ProjectRepoData(BaseModel):
     repo_url: str
     default_branch: str
     git_token_set: bool
+    has_repo: bool = False
     description: Optional[str] = None
     enabled: bool
     member_count: int = 0
@@ -238,6 +239,7 @@ def _repo_to_data(repo, member_count: int = 0) -> ProjectRepoData:
         repo_url=repo.repo_url,
         default_branch=repo.default_branch,
         git_token_set=bool(repo.git_token),
+        has_repo=project_repo_service.has_repo(repo),
         description=repo.description,
         enabled=repo.enabled,
         member_count=member_count,

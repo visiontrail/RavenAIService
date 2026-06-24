@@ -85,7 +85,10 @@ def _get_server():
             }
 
         async with db_manager.session_factory() as db:
-            repo = await project_repo_service.get_by_project_code(db, code)
+            # 日志分析 Agent 对「未关联代码仓库」的项目不可见。
+            repo = await project_repo_service.get_by_project_code(
+                db, code, require_repo=True
+            )
 
         if not repo:
             logger.info("lookup_project_repo: not_found code=%s", code)

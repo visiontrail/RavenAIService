@@ -75,6 +75,28 @@ class User(Base, TimestampMixin):
         nullable=False,
         comment="界面与AI语言偏好（zh/en）",
     )
+    # ---- Agent 澄清提问（AskUserQuestion）用户偏好 ----
+    clarification_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="1",
+        nullable=False,
+        comment="是否允许 Agent 在指令不清晰时向我提问（全局开关）",
+    )
+    clarification_max_rounds: Mapped[int] = mapped_column(
+        Integer,
+        default=5,
+        server_default="5",
+        nullable=False,
+        comment="单轮 run 内 Agent 最多向我提问的次数",
+    )
+    clarification_on_timeout: Mapped[str] = mapped_column(
+        String(16),
+        default="cancel",
+        server_default="cancel",
+        nullable=False,
+        comment="澄清提问超时(5分钟)后的行为：cancel=取消本轮 / continue=基于已知信息继续",
+    )
     last_login_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime,
         nullable=True,
@@ -310,6 +332,9 @@ class UserProfile(BaseModel):
     role: str = "user"
     profile_role: str = "developer"
     language: str = "zh"
+    clarification_enabled: bool = True
+    clarification_max_rounds: int = 5
+    clarification_on_timeout: str = "cancel"
     last_login_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime

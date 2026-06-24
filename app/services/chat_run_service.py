@@ -90,6 +90,9 @@ class ChatRunJob:
     # Pending permission requests by ``request_id``; restored to subscribers
     # via the active-run / run-snapshot endpoints.
     pending_permissions: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Pending AskUserQuestion clarification requests by ``request_id``; restored
+    # to subscribers the same way as ``pending_permissions``.
+    pending_clarifications: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     task: Optional[asyncio.Task] = None
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
     # External-driver runs (log_analysis / project_expert / package_search)
@@ -267,6 +270,7 @@ class ChatRunService:
             "trace_events": list(job.trace_events),
             "events": list(job.events),
             "pending_permissions": list(job.pending_permissions.values()),
+            "pending_clarifications": list(job.pending_clarifications.values()),
             "started_at": job.started_at,
             "updated_at": job.updated_at,
             "finished_at": job.finished_at,
@@ -535,6 +539,10 @@ class ChatRunService:
             "owner_scope": owner_scope,
             "remember": remember,
             "locale": locale,
+            # AskUserQuestion 澄清偏好：来自用户 profile（匿名用户用默认值）。
+            "clarification_enabled": bool(getattr(user, "clarification_enabled", True)),
+            "clarification_max_rounds": int(getattr(user, "clarification_max_rounds", 5)),
+            "clarification_on_timeout": str(getattr(user, "clarification_on_timeout", "cancel")),
         }
         job.task = asyncio.create_task(self._run_device_job(job, ctx_kwargs))
         # Surface a synthetic ``run_start`` SSE frame so subscribers can pick up
@@ -562,10 +570,22 @@ class ChatRunService:
 
         run_id = job.run_id
         session_id = job.session_id
+        owner_scope = job.owner_scope
         remember = bool(ctx_kwargs.pop("remember", True))
+
+        def _cancel_run() -> None:
+            """Run-level cancel used by AskUserQuestion clarification timeout
+            (``on_timeout == "cancel"``). Cancels this run's task so the agent
+            loop finalises as ``cancelled`` via DeviceAgent's CancelledError path."""
+            try:
+                self.cancel(run_id, owner_scope)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("chat_run: clarification cancel_run failed run_id=%s: %s", run_id, exc)
+
         ctx = DeviceAgentContext(
             broker_register=self.register_broker,
             broker_unregister=self.unregister_broker,
+            cancel_run=_cancel_run,
             **ctx_kwargs,
         )
 
@@ -610,6 +630,14 @@ class ChatRunService:
                     rid = str(ev.get("request_id") or "")
                     if rid:
                         job.pending_permissions.pop(rid, None)
+                if ev_type == "clarification_request":
+                    rid = str(ev.get("request_id") or "")
+                    if rid:
+                        job.pending_clarifications[rid] = dict(ev)
+                if ev_type == "clarification_resolved":
+                    rid = str(ev.get("request_id") or "")
+                    if rid:
+                        job.pending_clarifications.pop(rid, None)
 
                 # SSE-shaped frame: drop ``type`` and re-emit as ``event``.
                 payload_out: Dict[str, Any] = {

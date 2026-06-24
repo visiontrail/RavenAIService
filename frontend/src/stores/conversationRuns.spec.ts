@@ -3,13 +3,14 @@ import { createPinia, setActivePinia } from 'pinia'
 
 import { THINKING_PLACEHOLDER, useConversationRunsStore } from '@/stores/conversationRuns'
 import { userApi } from '@/api/user'
-import { resolveChatPermission } from '@/api/chat'
+import { resolveChatPermission, resolveChatClarification } from '@/api/chat'
 import { LOCALE_HEADER, setActiveLocale } from '@/i18n/runtime'
 import type { ChatEntry, PendingPermission } from '@/stores/conversationRuns'
 import type { AgentTraceEvent } from '@/types/agentTrace'
 
 vi.mock('@/api/chat', () => ({
   resolveChatPermission: vi.fn(),
+  resolveChatClarification: vi.fn(),
 }))
 
 const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0))
@@ -596,5 +597,137 @@ describe('conversationRuns store', () => {
       suggested_agent_type: 'log_analysis',
     })
     expect(state.suggestedAgentType).toBe('log_analysis')
+  })
+
+  // ---- AskUserQuestion clarification --------------------------------------
+
+  const clarificationRequest = (
+    runId: string,
+    sessionId: string,
+    seq: number,
+    requestId: string,
+  ): Record<string, unknown> => ({
+    event: 'clarification_request',
+    type: 'clarification_request',
+    task_id: runId,
+    run_id: runId,
+    session_id: sessionId,
+    seq,
+    timestamp: seq,
+    request_id: requestId,
+    questions: [
+      {
+        header: 'svc',
+        question: 'which service?',
+        options: [
+          { label: 'nginx', description: 'web' },
+          { label: 'redis', description: 'cache' },
+        ],
+      },
+    ],
+  })
+
+  it('pushes a pending clarification on clarification_request and clears it on resolved', () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
+    store.applyEventToState(state, clarificationRequest('run-a', 'session-a', 2, 'req-1'))
+    expect(state.pendingClarifications.map((c) => c.request_id)).toEqual(['req-1'])
+    expect(state.pendingClarifications[0].draftSelected).toEqual([[]])
+
+    store.applyEventToState(state, {
+      event: 'clarification_resolved',
+      type: 'clarification_resolved',
+      task_id: 'run-a',
+      run_id: 'run-a',
+      session_id: 'session-a',
+      seq: 3,
+      timestamp: 3,
+      request_id: 'req-1',
+      outcome: 'answered',
+    })
+    expect(state.pendingClarifications).toEqual([])
+  })
+
+  it('keeps one session\'s clarification out of another session', () => {
+    const store = useConversationRunsStore()
+    const sessionA = store.ensureState('session-a')
+    const sessionB = store.ensureState('session-b')
+    store.applyEventToState(sessionA, clarificationRequest('run-a', 'session-a', 1, 'req-a'))
+    expect(sessionA.pendingClarifications).toHaveLength(1)
+    expect(sessionB.pendingClarifications).toHaveLength(0)
+  })
+
+  it('restores pending clarifications from snapshot', () => {
+    const store = useConversationRunsStore()
+    const sessionA = store.ensureState('session-a')
+    store.mergeSnapshot(sessionA, {
+      run_id: 'run-a',
+      session_id: 'session-a',
+      status: 'running',
+      agent_kind: 'device',
+      pending_clarifications: [
+        {
+          request_id: 'req-a',
+          run_id: 'run-a',
+          session_id: 'session-a',
+          questions: [{ question: 'pick?', options: [{ label: 'x' }, { label: 'y' }] }],
+        },
+      ],
+    })
+    expect(sessionA.pendingClarifications.map((c) => c.request_id)).toEqual(['req-a'])
+  })
+
+  it('submits clarification answers and removes the card on success', async () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, clarificationRequest('run-a', 'session-a', 1, 'req-1'))
+    state.pendingClarifications[0].draftSelected[0] = ['nginx']
+    vi.mocked(resolveChatClarification).mockResolvedValue({
+      success: true,
+      message: 'ok',
+      request_id: 'req-1',
+    })
+
+    await store.submitClarification('session-a', 'req-1', { authToken: 'token' })
+
+    expect(resolveChatClarification).toHaveBeenCalledWith(
+      'req-1',
+      {
+        answers: [{ question_index: 0, selected_labels: ['nginx'], custom_text: null }],
+        session_id: 'session-a',
+        run_id: 'run-a',
+      },
+      'token',
+    )
+    expect(state.pendingClarifications).toEqual([])
+  })
+
+  it('blocks submit and records an error when a question is unanswered', async () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, clarificationRequest('run-a', 'session-a', 1, 'req-1'))
+
+    await store.submitClarification('session-a', 'req-1', { authToken: 'token' })
+
+    expect(resolveChatClarification).not.toHaveBeenCalled()
+    expect(state.pendingClarifications[0].error).toBeTruthy()
+  })
+
+  it('drops pending clarifications when the run reaches a terminal state', () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
+    store.applyEventToState(state, clarificationRequest('run-a', 'session-a', 2, 'req-1'))
+    expect(state.pendingClarifications).toHaveLength(1)
+    store.applyEventToState(state, {
+      event: 'cancelled',
+      type: 'cancelled',
+      run_id: 'run-a',
+      session_id: 'session-a',
+      seq: 3,
+      timestamp: 3,
+    })
+    expect(state.pendingClarifications).toEqual([])
   })
 })

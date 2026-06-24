@@ -228,6 +228,9 @@ class UpdateProfileRequest(BaseModel):
     email: Optional[str] = Field(None, max_length=255)
     language: Optional[str] = Field(None, max_length=8)
     profile_role: Optional[str] = Field(None, max_length=64)
+    clarification_enabled: Optional[bool] = None
+    clarification_max_rounds: Optional[int] = Field(None, ge=0, le=20)
+    clarification_on_timeout: Optional[str] = Field(None, max_length=16)
 
     @field_validator("display_name", "email", "profile_role", mode="before")
     @classmethod
@@ -260,10 +263,16 @@ async def update_profile(
         email=payload.email,
         language=payload.language,
         profile_role=payload.profile_role,
+        clarification_enabled=payload.clarification_enabled,
+        clarification_max_rounds=payload.clarification_max_rounds,
+        clarification_on_timeout=payload.clarification_on_timeout,
         update_display_name="display_name" in fields,
         update_email="email" in fields,
         update_language="language" in fields,
         update_profile_role="profile_role" in fields,
+        update_clarification_enabled="clarification_enabled" in fields,
+        update_clarification_max_rounds="clarification_max_rounds" in fields,
+        update_clarification_on_timeout="clarification_on_timeout" in fields,
     )
     if user is None:
         raise HTTPException(

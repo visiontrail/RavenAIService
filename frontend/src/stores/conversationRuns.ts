@@ -2,10 +2,20 @@ import { defineStore } from 'pinia'
 import { computed, reactive, ref } from 'vue'
 import { API_BASE_URL } from '@/api'
 import { userApi } from '@/api/user'
-import { packageSearchStream, projectExpertStream, resolveChatPermission } from '@/api/chat'
+import {
+  packageSearchStream,
+  projectExpertStream,
+  resolveChatPermission,
+  resolveChatClarification,
+} from '@/api/chat'
 import { i18n } from '@/i18n'
 import { getActiveLocale, LOCALE_HEADER } from '@/i18n/runtime'
-import type { AgentTraceEvent } from '@/types/agentTrace'
+import type {
+  AgentTraceEvent,
+  ClarificationAnswer,
+  ClarificationQuestion,
+  PendingClarification,
+} from '@/types/agentTrace'
 import type { ChatMessageRecord } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -59,6 +69,8 @@ export type ConversationState = {
    */
   suggestedAgentType: string | null
   pendingPermissions: PendingPermission[]
+  /** Pending AskUserQuestion clarifications awaiting the user's answer. */
+  pendingClarifications: PendingClarification[]
   /** Map of `${runId}:${seq}` -> 1 so replayed frames are deduped. */
   seenSeq: Record<string, number>
   /** Stable assistant placeholder id for the current run: `run:<run_id>:assistant`. */
@@ -112,7 +124,49 @@ const DEVICE_TRACE_TYPES = new Set([
   'tool_permission_request',
   'tool_permission_resolved',
   'result_validation',
+  'clarification_request',
+  'clarification_resolved',
 ])
+
+/** Coerce a raw `questions` payload into well-formed ClarificationQuestion[]. */
+const normalizeClarificationQuestions = (raw: unknown): ClarificationQuestion[] => {
+  if (!Array.isArray(raw)) return []
+  const out: ClarificationQuestion[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const obj = item as Record<string, unknown>
+    const question = String(obj.question || '').trim()
+    if (!question) continue
+    const optionsRaw = Array.isArray(obj.options) ? obj.options : []
+    const options = optionsRaw
+      .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
+      .map((o) => ({ label: String(o.label || '').trim(), description: String(o.description || '').trim() }))
+      .filter((o) => o.label)
+    out.push({
+      header: String(obj.header || '').trim(),
+      question,
+      multiSelect: Boolean(obj.multiSelect),
+      options,
+    })
+  }
+  return out
+}
+
+/** Build a PendingClarification with empty per-question draft state. */
+const makePendingClarification = (
+  requestId: string,
+  questions: ClarificationQuestion[],
+  meta: { session_id?: string; run_id?: string },
+): PendingClarification => ({
+  request_id: requestId,
+  questions,
+  session_id: meta.session_id,
+  run_id: meta.run_id,
+  draftSelected: questions.map(() => []),
+  draftCustom: questions.map(() => ''),
+  submitting: false,
+  error: null,
+})
 
 const generateUUID = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -181,6 +235,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         runAgentKind: null,
         suggestedAgentType: null,
         pendingPermissions: [],
+        pendingClarifications: [],
         seenSeq: {},
         currentAnswerId: null,
         subscription: null,
@@ -355,9 +410,11 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         applySuggestedAgent(state, (payload as any)?.suggested_agent_type)
         state.runStatus = 'succeeded'
         target.traceRunning = false
+        state.pendingClarifications = []
       } else if (type === 'cancelled') {
         state.runStatus = 'cancelled'
         target.traceRunning = false
+        state.pendingClarifications = []
       }
       if (type === 'tool_permission_request') {
         const requestId = String(payload?.request_id || '')
@@ -380,6 +437,24 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         if (requestId) {
           state.pendingPermissions = state.pendingPermissions.filter(
             (p) => p.request_id !== requestId,
+          )
+        }
+      } else if (type === 'clarification_request') {
+        const requestId = String(payload?.request_id || '')
+        const questions = normalizeClarificationQuestions(payload?.questions)
+        if (requestId && questions.length && !state.pendingClarifications.some((c) => c.request_id === requestId)) {
+          state.pendingClarifications.push(
+            makePendingClarification(requestId, questions, {
+              session_id: payload?.session_id || state.sessionId,
+              run_id: payload?.run_id || state.activeRunId || undefined,
+            }),
+          )
+        }
+      } else if (type === 'clarification_resolved') {
+        const requestId = String(payload?.request_id || '')
+        if (requestId) {
+          state.pendingClarifications = state.pendingClarifications.filter(
+            (c) => c.request_id !== requestId,
           )
         }
       }
@@ -424,6 +499,10 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     state.currentAnswerId = null
     state.runAgentKind = null
     state.subscription = null
+    // A terminal run can never resolve an outstanding clarification, so drop any
+    // pending question cards (e.g. when a cancel-on-timeout aborts the run
+    // before its ``clarification_resolved`` event is delivered).
+    state.pendingClarifications = []
     // Keep seenSeq so a future reconnect to the same run still dedupes; the
     // map is small and cleared on session reload.
   }
@@ -469,6 +548,24 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         editingArgs: toolInput ? JSON.stringify(toolInput, null, 2) : '{}',
         editingError: null,
       })
+    }
+
+    // Pending clarifications from snapshot.
+    const pendingClar = Array.isArray(snapshot.pending_clarifications)
+      ? snapshot.pending_clarifications
+      : []
+    for (const c of pendingClar) {
+      const requestId = String(c?.request_id || '')
+      if (!requestId) continue
+      if (state.pendingClarifications.some((x) => x.request_id === requestId)) continue
+      const questions = normalizeClarificationQuestions(c?.questions)
+      if (!questions.length) continue
+      state.pendingClarifications.push(
+        makePendingClarification(requestId, questions, {
+          session_id: c?.session_id || state.sessionId,
+          run_id: c?.run_id || runId,
+        }),
+      )
     }
 
     // Restore the user message that initiated this run. The backend snapshot
@@ -1281,6 +1378,66 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     }
   }
 
+  /**
+   * Submit the user's answers to a pending AskUserQuestion clarification.
+   * Validates that every question has at least one selected option or non-empty
+   * custom text before calling the backend. Removes the entry on success.
+   */
+  const submitClarification = async (
+    sessionId: string,
+    requestId: string,
+    options: { authToken?: string | null } = {},
+  ) => {
+    const state = ensureState(sessionId)
+    const head = state.pendingClarifications.find((c) => c.request_id === requestId)
+    if (!head) return
+
+    const answers: ClarificationAnswer[] = head.questions.map((_q, i) => ({
+      question_index: i,
+      selected_labels: (head.draftSelected[i] || []).filter((s) => s && s.trim()),
+      custom_text: (head.draftCustom[i] || '').trim() || null,
+    }))
+
+    // Client-side required-answer validation (every question must be answered).
+    const unanswered = answers.findIndex(
+      (a) => a.selected_labels.length === 0 && !a.custom_text,
+    )
+    if (unanswered >= 0) {
+      head.error = t('aiChat.clarification.requiredError')
+      return
+    }
+
+    head.submitting = true
+    head.error = null
+    try {
+      await resolveChatClarification(
+        requestId,
+        {
+          answers,
+          session_id: head.session_id || sessionId,
+          ...(head.run_id ? { run_id: head.run_id } : {}),
+        },
+        options.authToken || null,
+      )
+      state.pendingClarifications = state.pendingClarifications.filter(
+        (c) => c.request_id !== requestId,
+      )
+    } catch (err: any) {
+      const status = err?.response?.status
+      if (status === 404) {
+        state.pendingClarifications = state.pendingClarifications.filter(
+          (c) => c.request_id !== requestId,
+        )
+        return
+      }
+      head.submitting = false
+      head.error = t('aiChat.runs.submitFailed', {
+        error: err?.response?.data?.detail || err?.message || String(err),
+      })
+      throw err
+    }
+  }
+
   const reset = () => {
     for (const id of Object.keys(bySession)) clearSession(id)
   }
@@ -1298,6 +1455,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     THINKING_PLACEHOLDER,
     cancelActiveRun,
     submitPermission,
+    submitClarification,
     abortSubscription,
     clearSession,
     reset,

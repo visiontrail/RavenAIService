@@ -10,13 +10,17 @@
 - 新增 HTTP 端点 `POST /api/v1/ai-chat/chat/clarifications/{request_id}/resolve`，把用户答案写回 `PermissionBroker` 的 Future（沿用工具审批的 run_id/session_id/owner_scope 归属与查找逻辑）。
 - run snapshot 与重连回放 SHALL 额外携带未决澄清请求（`pending_clarifications`），断线/切会话/刷新后仍能恢复待回答的问题卡片。
 - 前端新增「澄清问题卡片」渲染：在 `AgentTraceStream` 中渲染选项按钮 + 自由输入框，支持多问题、必答校验与一次性提交；答案按 `session_id` 隔离存储，与现有 `pendingPermissions` 同构。
-- 新增**超时策略设置项**：用户可在设置中选择「澄清超时后基于已知信息继续」；**默认为「超时后取消本轮」**。
+- 新增**用户级设置项**（属用户自己的偏好，运行期生效）：
+  - 「全局禁用澄清」开关（默认关闭，即允许澄清）；开启后 `AskUserQuestion` 工具 MUST NOT 暴露给 Agent，等同从未引入该能力。
+  - 「每轮 run 最多提问次数」（默认 5）：超过上限后工具返回提示让模型自行决断，不再阻塞用户。
+  - 「澄清超时后行为」：`取消本轮`（默认）/`基于已知信息继续`；该选项文案 MUST 提示等待时长固定为 5 分钟。
+- 超时**等待时长**在代码中以常量明确，**默认 5 分钟（300s）**，不作为用户可改项（仅在上面的「继续」选项处用文字提示）。
 - 范围：本期落地于 **DeviceAgent**，但工具、事件、broker、端点与前端组件均按**可复用**方式设计，后续 log_analysis / project_expert / package_search 等 SDK agent 可低成本接入。
 
 ## Capabilities
 
 ### New Capabilities
-- `agent-clarification`: Agent 主动向用户澄清不清晰指令的端到端能力 —— `AskUserQuestion` 工具契约、`clarification_request`/`clarification_resolved` 事件、resolve 端点与 broker 语义、多问题/预设选项+自由输入的数据契约、未决请求快照回放、前端问题卡片渲染、以及超时策略设置项。
+- `agent-clarification`: Agent 主动向用户澄清不清晰指令的端到端能力 —— `AskUserQuestion` 工具契约、`clarification_request`/`clarification_resolved` 事件、resolve 端点与 broker 语义、多问题/预设选项+自由输入的数据契约、未决请求快照回放、前端问题卡片渲染、以及用户级设置（全局禁用开关、每轮最多提问次数、超时后行为 + 固定 5 分钟超时）。
 
 ### Modified Capabilities
 <!-- 现有 capability 的需求文本不发生改写：澄清流程作为全新 capability 自包含描述其对 run snapshot / 前端 store / trace 通道的扩展要求。复用点见 Impact，属实现细节。 -->
@@ -25,7 +29,7 @@
 
 - **新增后端**：`app/agents/device_agent/clarification.py`（工具 + can-ask 语义 + broker 交互）、`app/agents/device_agent/trace.py`（两个事件常量）、`app/api/ai_chat.py`（resolve 端点）、`app/services/chat_run_service.py`（snapshot 增加 `pending_clarifications`、事件回放）。
 - **复用现有 HITL 管线**：`PermissionBroker`（`open/resolve/cancel/close`）、broker 注册表（`ChatRunService._brokers` / `get_broker_by_run_id`）、owner_scope 归属校验，与工具审批共用。
-- **配置**：新增 `clarification` 超时与默认行为开关（沿用 `device_agent_permission_timeout_seconds` 量级，新增 `device_agent_clarification_on_timeout`：`cancel`(默认) / `continue`）。
+- **配置**：超时等待时长以代码常量明确 `device_agent_clarification_timeout_seconds = 300`（5 分钟），非用户可改。用户级偏好（持久化在用户 profile/settings）：`clarification_enabled`（默认 true）、`clarification_max_rounds`（默认 5）、`clarification_on_timeout`（`cancel`(默认)/`continue`）。
 - **新增前端**：`AgentTraceStream.vue` / 新子组件 `ClarificationCard.vue`、`stores/conversationRuns.ts`（`pendingClarifications` 状态 + `submitClarification`）、`api/chat.ts`（`resolveChatClarification`）、`types/agentTrace.ts`（事件与数据类型）、i18n 文案、设置面板开关。
 - **国际化**：问题/选项文案由模型按 `locale` 生成；前端按钮（提交/自定义输入占位符/必答校验）走 i18n。
 - **非破坏性**：所有新增事件/字段对旧客户端可忽略；不调用 `AskUserQuestion` 时行为与现状完全一致。

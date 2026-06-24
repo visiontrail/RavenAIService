@@ -19,6 +19,24 @@ export interface ChatPermissionResolveResponse {
   decision: ChatPermissionDecision
 }
 
+export interface ChatClarificationAnswerPayload {
+  question_index: number
+  selected_labels: string[]
+  custom_text?: string | null
+}
+
+export interface ChatClarificationResolvePayload {
+  answers: ChatClarificationAnswerPayload[]
+  session_id?: string | null
+  run_id?: string | null
+}
+
+export interface ChatClarificationResolveResponse {
+  success: boolean
+  message: string
+  request_id: string
+}
+
 export interface ToolPermissionRequestEvent {
   event: 'tool_permission_request'
   request_id: string
@@ -121,6 +139,27 @@ export const resolveChatPermission = (
     payload,
     { headers },
   ).then((resp) => resp.data as ChatPermissionResolveResponse)
+}
+
+/**
+ * Submit the user's answers for a DeviceAgent AskUserQuestion clarification.
+ * Backend route: POST /api/v1/ai-chat/chat/clarifications/{request_id}/resolve
+ *
+ * Returns 200 on resolved, 400 if a required question was left blank, 404 if the
+ * request was already resolved / timed out / unknown. Errors propagate.
+ */
+export const resolveChatClarification = (
+  requestId: string,
+  payload: ChatClarificationResolvePayload,
+  authToken?: string | null,
+): Promise<ChatClarificationResolveResponse> => {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (authToken) headers.Authorization = `Bearer ${authToken}`
+  return chatApi.post(
+    `/api/v1/ai-chat/chat/clarifications/${encodeURIComponent(requestId)}/resolve`,
+    payload,
+    { headers },
+  ).then((resp) => resp.data as ChatClarificationResolveResponse)
 }
 
 export const projectExpertStream = (payload: ProjectExpertStreamPayload): Promise<Response> => {

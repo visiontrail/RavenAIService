@@ -191,9 +191,21 @@ class ProjectExpertAgent:
         repo_info = task_data.get("repo_info") if isinstance(task_data, dict) else None
         project_code: Optional[str] = None
         project_name: Optional[str] = None
+        repo_url_value: Optional[str] = None
         if isinstance(repo_info, dict):
             project_code = repo_info.get("project_code") or None
             project_name = repo_info.get("project_name") or None
+            repo_url_value = repo_info.get("repo_url") or None
+
+        # 「未关联代码仓库」的项目：repo_url 为空。此时不要尝试克隆仓库，
+        # 改为依赖项目级系统提示词与已启用的 Skill 来回答。
+        if not (repo_url_value and str(repo_url_value).strip()):
+            system_prompt += (
+                "\n\n## 未关联代码仓库\n"
+                "本项目没有关联的代码仓库（repo_info.repo_url 为空）。"
+                "不要尝试 clone 任何仓库，`repo/` 目录是空的。"
+                "请基于项目级系统提示词、已启用的 Skill 以及用户提供的上下文来回答。\n"
+            )
 
         # 项目级附加系统提示词：像 Skill 一样分级处理——在通用（Agent 级）系统
         # 提示词之后叠加该项目的专属约束。无配置时返回空串。

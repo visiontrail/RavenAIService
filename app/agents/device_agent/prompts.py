@@ -142,6 +142,44 @@ def render_user_prompt(
         return f"{user_prompt_template}\n\n[user] {user_message}".strip()
 
 
+_CLARIFICATION_GUIDANCE = {
+    "zh": (
+        "## 何时向用户提问（AskUserQuestion）\n"
+        "当且仅当满足以下情形时，调用 `AskUserQuestion` 工具向用户澄清：\n"
+        "- 缺少执行所必需的关键参数；\n"
+        "- 指令存在多种合理且后果不同的解读；\n"
+        "- 操作目标对象/范围不明确，猜错代价较高。\n"
+        "能够根据上下文合理推断时，不要打断用户，直接继续。\n"
+        "提问时：把需要澄清的点尽量在一次调用里问全（每个问题给 2–4 个预设选项，"
+        "并配简短说明）；本轮最多可提问 {max_rounds} 次，达上限后请基于已知信息自行决断。"
+    ),
+    "en": (
+        "## When to ask the user (AskUserQuestion)\n"
+        "Call the `AskUserQuestion` tool to clarify only when:\n"
+        "- a required parameter for the action is missing;\n"
+        "- the instruction has multiple reasonable interpretations with different outcomes;\n"
+        "- the target/scope is ambiguous and guessing wrong is costly.\n"
+        "If you can reasonably infer intent from context, do NOT interrupt — just proceed.\n"
+        "When you do ask, batch everything you need into a single call (2–4 preset options "
+        "with short descriptions per question). You may ask at most {max_rounds} time(s) this "
+        "run; once the cap is hit, decide using the information you have."
+    ),
+}
+
+
+def clarification_guidance(locale: Optional[str] = None, *, max_rounds: int = 5) -> str:
+    """返回 AskUserQuestion 使用指引（按 locale），供 system prompt 末尾追加。
+
+    仅在 ``clarification_enabled`` 为真时由调用方拼接；禁用澄清时不应出现。
+    """
+    lang = (locale or "zh").strip().lower()
+    body = _CLARIFICATION_GUIDANCE.get(lang) or _CLARIFICATION_GUIDANCE["zh"]
+    try:
+        return body.format(max_rounds=max_rounds)
+    except (KeyError, IndexError):
+        return body
+
+
 def reset_cache() -> None:
     """清空内存缓存（admin 改完 prompts_config.yaml 后调用）。"""
     _PROMPTS_CACHE.clear()

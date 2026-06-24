@@ -14,6 +14,9 @@ export interface UserProfileUpdatePayload {
   email?: string | null
   language?: string
   profile_role?: UserProfileRole | null
+  clarification_enabled?: boolean
+  clarification_max_rounds?: number
+  clarification_on_timeout?: 'cancel' | 'continue'
 }
 
 const USER_TOKEN_KEY = 'raven_user_token'

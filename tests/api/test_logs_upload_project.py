@@ -31,8 +31,13 @@ def client(tmp_path, monkeypatch) -> TestClient:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         async with factory() as session:
+            # 日志分析域对「未关联代码仓库」的项目不可见，因此用于日志归类的
+            # 项目必须关联了代码仓库（repo_url 非空）。
             stack = ProjectRepo(
-                project_code="stack", project_name="Stack", repo_url="", enabled=True
+                project_code="stack",
+                project_name="Stack",
+                repo_url="https://git.example/stack.git",
+                enabled=True,
             )
             session.add(stack)
             await session.flush()

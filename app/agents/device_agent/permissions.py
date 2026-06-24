@@ -69,16 +69,24 @@ class PermissionBroker:
 
     # ---- request lifecycle -------------------------------------------------
 
-    def open(self, request_id: str, *, tool_name: str, risk: RiskLevel) -> "asyncio.Future[Dict[str, Any]]":
-        """登记一个新的待裁决请求，返回等待方应 await 的 Future。"""
+    def open(self, request_id: str, *, tool_name: str, risk: str) -> "asyncio.Future[Dict[str, Any]]":
+        """登记一个新的待裁决请求，返回等待方应 await 的 Future。
+
+        ``risk`` 通常是 :data:`RiskLevel` 之一；澄清提问（AskUserQuestion）复用同一
+        broker 时传入 ``"clarify"`` 仅作标记，不参与风险分级。
+        """
         if self._closed:
             raise RuntimeError("PermissionBroker has been closed")
         if request_id in self._pending:
             raise ValueError(f"duplicate permission request_id={request_id}")
         loop = asyncio.get_event_loop()
         future: "asyncio.Future[Dict[str, Any]]" = loop.create_future()
-        self._pending[request_id] = _PendingDecision(future=future, tool_name=tool_name, risk=risk)
+        self._pending[request_id] = _PendingDecision(future=future, tool_name=tool_name, risk=risk)  # type: ignore[arg-type]
         return future
+
+    def open_clarification(self, request_id: str, *, tool_name: str = "AskUserQuestion") -> "asyncio.Future[Dict[str, Any]]":
+        """澄清提问专用 open 包装：语义与 :meth:`open` 相同，``risk`` 固定为 ``"clarify"``。"""
+        return self.open(request_id, tool_name=tool_name, risk="clarify")
 
     def resolve(self, request_id: str, decision: Dict[str, Any]) -> bool:
         """HTTP 端点入口：把 ``{decision, updated_args?, message?}`` 塞回 Future。

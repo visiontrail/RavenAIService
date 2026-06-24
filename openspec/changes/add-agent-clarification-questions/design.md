@@ -59,11 +59,20 @@ broker 本质是 `request_id → Future` 的通用协调器，与"决策语义"�
 `AskUserQuestion` 工具拿到答案后，按 SDK 约定返回 `{"content":[{"type":"text","text": <answers_json>}]}`。`text` 为人类可读 + 结构化的答案块（每问：问题、用户所选 label（们）、自定义文本），便于模型直接消费并继续。
 
 ### Decision 6：超时策略可配置，默认取消本轮
-新增设置 `device_agent_clarification_on_timeout ∈ {cancel, continue}`，默认 `cancel`；等待时长复用 `device_agent_permission_timeout_seconds` 量级（可单列 `device_agent_clarification_timeout_seconds`，缺省回退到 permission 超时值）。该开关同时下发为用户可改的设置项（运行期生效，沿用 runtime settings）。
+超时**等待时长在代码中以常量明确**：`device_agent_clarification_timeout_seconds = 300`（5 分钟），**非用户可改**；超时**行为**由用户偏好 `clarification_on_timeout ∈ {cancel, continue}` 决定，默认 `cancel`。`continue` 选项在前端用文字提示"等待 5 分钟后基于已知信息继续"。
 - `continue`：超时后 `broker.cancel` + 工具返回 `{status:"timeout", note:"用户未在限定时间内回答；请基于已知信息给出最合理的处理或最佳猜测"}` → 模型继续。发 `clarification_resolved{outcome:"timeout"}`。
 - `cancel`（默认）：超时后发 `clarification_resolved{outcome:"cancelled", reason:"timeout"}`，并通过注入的 `cancel_run` 回调（由 `ChatRunService` 提供，内部 `self.cancel(run_id, owner_scope)` → `job.task.cancel()`）终止本轮 run；DeviceAgent 既有 `CancelledError` 兜底将本轮 finalize 为 `cancelled`。
   - **为何走 run 级 cancel 而非工具内抛异常**：在 SDK 工具 proxy 内 `raise` 会被当作工具失败回喂模型、无法可靠终止 loop；run 级 cancel 复用既有、确定性的取消路径。
   - 兼容：旧 `ai_chat_service` 非 run 路径无 `cancel_run` 注入时，降级为 `continue` 语义（仅 legacy 端点，可接受）。
+
+### Decision 9：澄清相关偏好存为用户列，经 `DeviceAgentContext` 透传
+三项均为**用户自己的设置**（不是全局 runtime settings），落在 `User` 模型新列（与现有 `language`/`profile_role` 同构），经 `PATCH /api/v1/users/profile` 修改、Alembic 迁移加列：
+- `clarification_enabled: bool = True` —— 「全局禁用澄清」开关。为 `False` 时 DeviceAgent 组装阶段 MUST NOT 把 `AskUserQuestion` 加入 `mcp_servers`/`allowed_tools`，等同从未引入；模型无从调用。
+- `clarification_max_rounds: int = 5` —— 每轮 run 最多发起 `AskUserQuestion` 次数。DeviceAgent 维护 per-run 计数；达上限后工具直接返回提示"已达本轮提问上限，请基于已知信息自行决断"，不发 `clarification_request`、不阻塞用户。
+- `clarification_on_timeout: str = "cancel"` —— 见 Decision 6。
+
+调用方（`ChatRunService` / `AIChatService`）从已认证用户解析这三项填入 `DeviceAgentContext`（新增 `clarification_enabled` / `clarification_max_rounds` / `clarification_on_timeout` 字段）；匿名用户（`anon:<token>` 无 User 行）一律使用默认值。
+- **备选（放 runtime/全局 settings）**：与"用户自己的设置"要求不符，且无法按用户区分。否决。
 
 ### Decision 7：snapshot 回放与 per-session 存储，镜像 pending_permissions
 `ChatRunJob` 增加 `pending_clarifications: Dict[request_id, event]`；`chat_run_service` 在回放循环里对 `clarification_request` 入栈、`clarification_resolved` 出栈；snapshot 增加 `pending_clarifications` 列表。前端 `conversationRuns.ts` 增加 `pendingClarifications`（按 session 隔离）、`submitClarification`，`mergeSnapshot` 恢复未答问题。断线/切会话/刷新后问题卡片可恢复。
@@ -77,18 +86,20 @@ broker 本质是 `request_id → Future` 的通用协调器，与"决策语义"�
 - **[permission 与 clarification 共享 broker 致 request_id 混淆]** → request_id 全 UUID 唯一；两类事件/端点分离；resolve 时按 request_id 精确命中，互不影响。
 - **[cancel 模式下并发 resolve 与 timeout 竞态]** → `broker.resolve/cancel` 已对 `future.done()` 做幂等保护，先到者生效；timeout 与用户回答二选一，事件以先发者为准。
 - **[多问题表单 UX 复杂度]** → 单卡片聚合 + 必答校验 + 一次提交，避免多次往返；自由输入恒在，保证"总能作答"。
-- **[超时 cancel 误伤长思考用户]** → 默认值虽为 cancel，但提供用户级 `continue` 开关；超时时长可配置并取 permission 量级（分钟级）。
+- **[超时 cancel 误伤长思考用户]** → 默认值虽为 cancel，但提供用户级 `continue` 开关；固定 5 分钟等待，前端文字明示。
+- **[模型反复提问耗尽用户耐心]** → 用户级 `clarification_max_rounds`（默认 5）做 per-run 硬上限，达上限后工具不再阻塞、提示模型自行决断。
+- **[新增用户列的迁移与匿名用户]** → Alembic 加列带 `server_default`，向后兼容旧行；匿名用户无 User 行，统一走默认值。
 - **[可推广性 vs 当期范围]** → 工具注册、事件常量、broker、端点、前端组件均与 device 解耦命名（`ask`/`clarification`），但本期仅 wire 到 DeviceAgent，避免一次性改动面过大。
 
 ## Migration Plan
 
-1. 后端：新增工具/事件常量/端点/snapshot 字段/设置项；DeviceAgent 组装时把 `AskUserQuestion` server 加入 `mcp_servers` 与 `allowed_tools`，并注入 `cancel_run` 回调（`ChatRunService` 路径）。
-2. 前端：新增类型、store 状态与 action、`ClarificationCard.vue`、API、i18n、设置开关。
-3. 灰度：默认超时 `cancel`；system prompt 的提问指引可先保守（少提问）再调。
-4. 回滚：从 `allowed_tools`/`mcp_servers` 摘除 `AskUserQuestion` 即可彻底禁用（事件/端点保留不影响旧行为）；属纯增量、无 schema 迁移。
+1. DB：Alembic 迁移给 `users` 加 3 列（`clarification_enabled`/`clarification_max_rounds`/`clarification_on_timeout`，均带 `server_default`）。
+2. 后端：新增工具/事件常量/端点/snapshot 字段/超时常量；扩展 profile 读写与 `DeviceAgentContext`；DeviceAgent 按 `clarification_enabled` 决定是否注册 `AskUserQuestion`，并注入 `cancel_run` 回调。
+3. 前端：新增类型、store 状态与 action、`ClarificationCard.vue`、API、i18n、用户设置 3 项开关。
+4. 灰度：默认超时 `cancel`、`max_rounds=5`、澄清启用；system prompt 的提问指引可先保守（少提问）再调。
+5. 回滚：用户置 `clarification_enabled=false`，或代码层从 `allowed_tools`/`mcp_servers` 摘除 `AskUserQuestion` 即可彻底禁用（事件/端点保留不影响旧行为）；列迁移可保留为惰性默认。
 
 ## Open Questions
 
-- 设置项的粒度：仅"超时行为(cancel/continue)"开关，是否还需要"全局禁用澄清"用户开关？（倾向先只做超时行为，禁用通过移除工具实现。）
-- 是否限制单轮最多澄清次数（防止模型反复提问）？（倾向加一个软上限，如每 run ≤ 2 次 `AskUserQuestion`，超出后工具返回提示让模型自行决断。）
-- `device_agent_clarification_timeout_seconds` 是否单列，还是直接复用 permission 超时值？（倾向单列但缺省回退。）
+- （已定）全局禁用 / 每轮最多次数 / 超时行为 三项均为用户列；超时时长固定 300s 常量。
+- 是否需要管理员侧对全体用户的澄清能力做 kill-switch？（暂不做，必要时再加全局 runtime 开关与用户列做 AND。）

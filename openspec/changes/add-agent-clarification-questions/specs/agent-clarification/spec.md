@@ -84,24 +84,54 @@
 - **WHEN** 用户不选任何预设、在自定义输入框填写"先看日志再决定"
 - **THEN** 工具返回的 `text` MUST 含该自定义文本
 
-### Requirement: 澄清超时策略可配置
+### Requirement: 澄清超时时长固定与超时行为偏好
 
-系统 SHALL 提供超时等待时长（缺省回退到 `device_agent_permission_timeout_seconds` 量级）与超时行为开关 `device_agent_clarification_on_timeout ∈ {cancel, continue}`，且该行为开关 MUST 可由用户在设置中修改、运行期生效；**默认值 MUST 为 `cancel`**。
+系统 SHALL 以代码常量明确澄清等待时长 `device_agent_clarification_timeout_seconds = 300`（5 分钟），该时长 MUST NOT 暴露为用户可改项。超时**行为**由用户偏好 `clarification_on_timeout ∈ {cancel, continue}` 决定，**默认值 MUST 为 `cancel`**。
 
 - `continue`：超时后系统 MUST 发 `clarification_resolved{outcome:"timeout"}`，并使工具返回一个"用户未作答、请基于已知信息给出最合理处理或最佳猜测"的结果，让模型继续。
 - `cancel`：超时后系统 MUST 发 `clarification_resolved{outcome:"cancelled", reason:"timeout"}`，并通过运行级取消（复用既有 run cancel 路径）将本轮 run 终止为 `cancelled`。
 
 #### Scenario: 默认超时取消本轮
 
-- **WHEN** `device_agent_clarification_on_timeout == "cancel"`（默认）且用户在超时时长内未作答
+- **WHEN** 用户 `clarification_on_timeout == "cancel"`（默认）且用户在 5 分钟内未作答
 - **THEN** 系统 MUST 终止本轮 run 为 `cancelled`
 - **AND** MUST 发出 `clarification_resolved{outcome:"cancelled", reason:"timeout"}`
 
 #### Scenario: 用户启用超时继续
 
-- **WHEN** 用户将设置改为 `continue` 且在超时时长内未作答
+- **WHEN** 用户将偏好改为 `continue` 且在 5 分钟内未作答
 - **THEN** 系统 MUST 发 `clarification_resolved{outcome:"timeout"}`
 - **AND** 工具 MUST 返回提示模型基于已知信息继续的结果，run MUST NOT 因超时被取消
+
+### Requirement: 全局禁用澄清（用户设置）
+
+系统 SHALL 提供用户级偏好 `clarification_enabled`（持久化于用户 profile，默认 `true`），用户 MUST 能在自己的设置中修改。当某用户 `clarification_enabled == false` 时，其发起的 run MUST NOT 向 Agent 暴露 `AskUserQuestion` 工具（不加入 `mcp_servers` / `allowed_tools`），等同从未引入该能力；模型无从发起澄清。匿名用户（无 profile）MUST 使用默认值 `true`。
+
+#### Scenario: 用户关闭澄清后不再提问
+
+- **WHEN** 用户将 `clarification_enabled` 设为 `false` 并发起一轮 run
+- **THEN** 该 run MUST NOT 注册 `AskUserQuestion` 工具
+- **AND** 即使指令不清晰，run 也 MUST NOT 发出 `clarification_request`
+
+#### Scenario: 默认启用
+
+- **WHEN** 新用户未修改任何澄清设置
+- **THEN** `clarification_enabled` MUST 为 `true`，澄清能力可用
+
+### Requirement: 每轮 run 最多提问次数（用户设置）
+
+系统 SHALL 提供用户级偏好 `clarification_max_rounds`（持久化于用户 profile，默认 `5`），用户 MUST 能在自己的设置中修改。系统 MUST 为每个 run 统计 `AskUserQuestion` 的成功发起次数；当已达上限时，再次调用工具 MUST NOT 发出 `clarification_request`、MUST NOT 阻塞用户，而是直接返回一个"已达本轮提问上限，请基于已知信息自行决断"的工具结果让模型继续。匿名用户 MUST 使用默认值 `5`。
+
+#### Scenario: 达到上限后不再阻塞
+
+- **WHEN** 某 run 已成功发起 `clarification_max_rounds` 次 `AskUserQuestion`，模型再次调用该工具
+- **THEN** 系统 MUST NOT 发出新的 `clarification_request`
+- **AND** 工具 MUST 返回提示模型自行决断的结果，run 继续推进
+
+#### Scenario: 上限内正常提问
+
+- **WHEN** 某 run 第 `k` 次（`k <= clarification_max_rounds`）调用 `AskUserQuestion`
+- **THEN** 系统 MUST 正常发出 `clarification_request` 并阻塞等待用户作答
 
 ### Requirement: 未决澄清的快照回放与会话隔离
 

@@ -33,6 +33,12 @@ TOOL_PERMISSION_REQUEST = "tool_permission_request"
 TOOL_PERMISSION_RESOLVED = "tool_permission_resolved"
 RESULT_VALIDATION = "result_validation"
 
+# Clarification (AskUserQuestion) event constants. Emitted when the agent
+# decides a user instruction is ambiguous and asks for clarification, and when
+# that request is resolved (answered / timed out / cancelled).
+CLARIFICATION_REQUEST = "clarification_request"
+CLARIFICATION_RESOLVED = "clarification_resolved"
+
 
 __all__ = [
     "AgentTraceEvent",
@@ -48,4 +54,6 @@ __all__ = [
     "TOOL_PERMISSION_REQUEST",
     "TOOL_PERMISSION_RESOLVED",
     "RESULT_VALIDATION",
+    "CLARIFICATION_REQUEST",
+    "CLARIFICATION_RESOLVED",
 ]

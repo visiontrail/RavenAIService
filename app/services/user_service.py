@@ -64,6 +64,30 @@ def _normalize_profile_role(role: Optional[str]) -> str:
     return DEFAULT_PROFILE_ROLE
 
 
+CLARIFICATION_ON_TIMEOUT_VALUES = ("cancel", "continue")
+CLARIFICATION_MAX_ROUNDS_MIN = 0
+CLARIFICATION_MAX_ROUNDS_MAX = 20
+
+
+def _normalize_clarification_on_timeout(value: Optional[str]) -> str:
+    """Coerce the clarification timeout behaviour to a known value."""
+    if not value:
+        return "cancel"
+    normalized = str(value).strip().lower()
+    return normalized if normalized in CLARIFICATION_ON_TIMEOUT_VALUES else "cancel"
+
+
+def _clamp_clarification_max_rounds(value: Optional[int]) -> int:
+    """Clamp the per-run clarification cap into a sane range (default 5)."""
+    if value is None:
+        return 5
+    try:
+        rounds = int(value)
+    except (TypeError, ValueError):
+        return 5
+    return max(CLARIFICATION_MAX_ROUNDS_MIN, min(CLARIFICATION_MAX_ROUNDS_MAX, rounds))
+
+
 class UserService(BaseService):
     """Encapsulate user CRUD and authentication."""
 
@@ -215,10 +239,16 @@ class UserService(BaseService):
         email: Optional[str] = None,
         language: Optional[str] = None,
         profile_role: Optional[str] = None,
+        clarification_enabled: Optional[bool] = None,
+        clarification_max_rounds: Optional[int] = None,
+        clarification_on_timeout: Optional[str] = None,
         update_display_name: bool = False,
         update_email: bool = False,
         update_language: bool = False,
         update_profile_role: bool = False,
+        update_clarification_enabled: bool = False,
+        update_clarification_max_rounds: bool = False,
+        update_clarification_on_timeout: bool = False,
     ) -> Optional[User]:
         """Update the self-service profile, including explicit null clears."""
         user = await self.get_by_id(db, user_id)
@@ -232,6 +262,16 @@ class UserService(BaseService):
             user.language = normalize_locale(language)
         if update_profile_role:
             user.profile_role = _normalize_profile_role(profile_role)
+        if update_clarification_enabled:
+            user.clarification_enabled = bool(clarification_enabled)
+        if update_clarification_max_rounds:
+            user.clarification_max_rounds = _clamp_clarification_max_rounds(
+                clarification_max_rounds
+            )
+        if update_clarification_on_timeout:
+            user.clarification_on_timeout = _normalize_clarification_on_timeout(
+                clarification_on_timeout
+            )
         await db.flush()
         await db.refresh(user)
         return user

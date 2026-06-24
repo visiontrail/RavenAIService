@@ -19,7 +19,9 @@ import {
   type ChatEntry,
   type PendingPermission,
 } from '@/stores/conversationRuns'
+import type { PendingClarification } from '@/types/agentTrace'
 import AgentTraceStream from '@/components/AgentTraceStream.vue'
+import ClarificationCard from '@/components/ClarificationCard.vue'
 import ShareConversationModal from '@/components/ShareConversationModal.vue'
 import { projectRepoApi, type ProjectRepoOption } from '@/api'
 import { copyToClipboard, downloadFile } from '@/utils'
@@ -138,6 +140,12 @@ const currentPermission = computed<PendingPermission | null>(() =>
   pendingPermissions.value.length > 0 ? pendingPermissions.value[0] : null,
 )
 const permissionDecisionInFlight = ref(false)
+const pendingClarifications = computed<PendingClarification[]>(
+  () => currentConversation.value?.pendingClarifications || [],
+)
+const currentClarification = computed<PendingClarification | null>(() =>
+  pendingClarifications.value.length > 0 ? pendingClarifications.value[0] : null,
+)
 // The composer send button morphs into a stop button whenever the current
 // session has a run in flight, regardless of agent kind.
 const canCancelCurrentRun = computed(() => {
@@ -783,6 +791,12 @@ const isLogFileUploadDisabled = computed(() =>
 const isProjectRepoRequired = computed(() =>
   isProjectExpertAgentSelected.value || isPackageAgentSelected.value
 )
+// 「未关联代码仓库」的项目仅项目专家可见；日志分析、包检索等 Agent 的项目
+// 下拉中需要过滤掉这类项目（has_repo === false）。
+const visibleProjectRepoOptions = computed(() => {
+  if (isProjectExpertAgentSelected.value) return projectRepoOptions.value
+  return projectRepoOptions.value.filter((repo) => repo.has_repo !== false)
+})
 const isProjectRepoRequiredMissing = computed(() =>
   isProjectRepoRequired.value && selectedProjectRepoId.value === null
 )
@@ -1339,6 +1353,20 @@ const submitPermissionDecision = async (
     // store has already recorded ``editingError`` on the entry
   } finally {
     permissionDecisionInFlight.value = false
+  }
+}
+
+const submitClarificationAnswers = async () => {
+  const head = currentClarification.value
+  const sid = effectiveSessionId.value
+  if (!head || !sid || head.submitting) return
+  try {
+    const authToken = userStore.token as unknown as string | undefined
+    await runsStore.submitClarification(sid, head.request_id, {
+      authToken: authToken || null,
+    })
+  } catch {
+    // store has already recorded ``error`` on the entry
   }
 }
 
@@ -1981,7 +2009,7 @@ const openShareModal = () => {
                 : isProjectRepoRequired ? t('aiChat.project.requiredPlaceholder') : t('aiChat.project.optionalPlaceholder') }}
             </option>
             <option
-              v-for="repo in projectRepoOptions"
+              v-for="repo in visibleProjectRepoOptions"
               :key="repo.id"
               :value="repo.id"
             >
@@ -2104,6 +2132,16 @@ const openShareModal = () => {
             @click="submitPermissionDecision('allow')"
           >{{ t('aiChat.permission.allow') }}</button>
         </div>
+      </div>
+    </div>
+
+    <!-- AskUserQuestion clarification modal -->
+    <div v-if="currentClarification" class="rw-modal-backdrop rw-hitl-backdrop">
+      <div class="rw-modal rw-hitl-modal">
+        <ClarificationCard
+          :pending="currentClarification"
+          @submit="submitClarificationAnswers"
+        />
       </div>
     </div>
 

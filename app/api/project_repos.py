@@ -23,6 +23,7 @@ class ProjectRepoOption(BaseModel):
     project_code: str
     project_name: str
     default_branch: str
+    has_repo: bool = False
     description: Optional[str] = None
 
 
@@ -36,11 +37,23 @@ class ProjectRepoOptionListResponse(BaseModel):
 async def list_enabled_project_repos(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=200, ge=1, le=500),
+    with_repo: Optional[bool] = Query(
+        default=None,
+        description=(
+            "为 true 仅返回已关联代码仓库的项目；为 false 仅返回未关联的项目；"
+            "不传返回全部。未关联代码仓库的项目仅项目专家可见。"
+        ),
+    ),
     db=Depends(get_db),
 ) -> ProjectRepoOptionListResponse:
-    """列出所有已启用的项目仓库（仅返回展示用字段）。"""
+    """列出所有已启用的项目（仅返回展示用字段）。
+
+    通过 ``with_repo`` 过滤是否关联代码仓库：日志分析、包检索等 Agent 应传
+    ``with_repo=true``，从而对「未关联代码仓库」的项目不可见；项目专家则可
+    看到全部项目。``has_repo`` 字段也会一并返回，便于前端按所选 Agent 过滤。
+    """
     repos = await project_repo_service.list_repos(
-        db, include_disabled=False, offset=offset, limit=limit
+        db, include_disabled=False, offset=offset, limit=limit, with_repo=with_repo
     )
     items = [
         ProjectRepoOption(
@@ -48,6 +61,7 @@ async def list_enabled_project_repos(
             project_code=repo.project_code,
             project_name=repo.project_name,
             default_branch=repo.default_branch,
+            has_repo=project_repo_service.has_repo(repo),
             description=repo.description,
         )
         for repo in repos

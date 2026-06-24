@@ -3,7 +3,7 @@ AI 对话相关 API
 """
 import logging
 import uuid
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
@@ -73,6 +73,41 @@ class ChatPermissionResolveResponse(BaseModel):
     message: str = "ok"
     request_id: str
     decision: str
+
+
+class ChatClarificationAnswer(BaseModel):
+    """单个澄清问题的用户答案。
+
+    ``selected_labels`` 为用户从预设 options 中选中的 label（多选可多个，单选一个）；
+    ``custom_text`` 为用户的自由输入。两者至少其一非空，否则视为未作答。
+    """
+
+    question_index: int
+    selected_labels: List[str] = []
+    custom_text: Optional[str] = None
+
+    def is_answered(self) -> bool:
+        if any(str(s).strip() for s in self.selected_labels):
+            return True
+        return bool((self.custom_text or "").strip())
+
+
+class ChatClarificationResolveRequest(BaseModel):
+    """澄清答案提交体（前端问题卡片 -> 后端 broker）。
+
+    ``run_id`` 优先、``session_id`` 兼容，查找逻辑与工具审批一致。
+    """
+
+    answers: List[ChatClarificationAnswer]
+    run_id: Optional[str] = None
+    session_id: Optional[str] = None
+
+
+class ChatClarificationResolveResponse(BaseModel):
+    success: bool = True
+    message: str = "ok"
+    request_id: str
+
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -358,6 +393,82 @@ async def chat_permission_resolve_endpoint(
     raise HTTPException(
         status_code=404,
         detail=t("chat.permission_not_found", locale, request_id=request_id),
+    )
+
+
+@router.post(
+    "/chat/clarifications/{request_id}/resolve",
+    response_model=ChatClarificationResolveResponse,
+    summary="AskUserQuestion 澄清答案提交",
+)
+async def chat_clarification_resolve_endpoint(
+    request_id: str,
+    payload: ChatClarificationResolveRequest,
+    http_request: Request,
+    response: Response,
+    current_user=Depends(get_optional_user),
+    locale: str = Depends(get_request_locale),
+) -> ChatClarificationResolveResponse:
+    """Resolve a pending ``AskUserQuestion`` request raised by a DeviceAgent run.
+
+    Lookup / ownership rules mirror :func:`chat_permission_resolve_endpoint`:
+    1. ``run_id`` (preferred) → 2. ``session_id`` active run → 3. legacy scan,
+    all filtered by ``owner_scope`` so user B can never resolve user A's request.
+
+    Behaviour:
+    - 400 if ``answers`` is empty or any answer has neither a selected option nor
+      custom text (a required question was left blank).
+    - 403/404 handled the same way as permissions (we return 404 on miss).
+    - 200 with ``{request_id}`` on success; the broker future receives
+      ``{"answers": [...]}`` and the agent loop continues.
+    """
+    if not payload.answers or any(not ans.is_answered() for ans in payload.answers):
+        raise HTTPException(
+            status_code=400, detail=t("chat.clarification_answers_invalid", locale)
+        )
+
+    answers_payload = [
+        {
+            "question_index": ans.question_index,
+            "selected_labels": [s for s in ans.selected_labels if str(s).strip()],
+            "custom_text": (ans.custom_text or "").strip() or None,
+        }
+        for ans in payload.answers
+    ]
+    decision_payload: dict = {"answers": answers_payload}
+
+    owner_scope = resolve_owner_scope(http_request, response, current_user)
+
+    def _owns(job_owner_scope: str) -> bool:
+        return job_owner_scope == owner_scope
+
+    # 1. run_id lookup — preferred. Only resolve if the run belongs to caller.
+    if payload.run_id:
+        job = chat_run_service.get_job(payload.run_id)
+        if job is not None and _owns(job.owner_scope):
+            broker = chat_run_service.get_broker_by_run_id(payload.run_id)
+            if broker is not None and broker.resolve(request_id, decision_payload):
+                return ChatClarificationResolveResponse(request_id=request_id)
+
+    # 2. session_id fallback — resolve to active run within owner_scope.
+    if payload.session_id:
+        job = chat_run_service.get_active_job_for_session(owner_scope, payload.session_id)
+        if job is not None:
+            broker = chat_run_service.get_broker_by_run_id(job.run_id)
+            if broker is not None and broker.resolve(request_id, decision_payload):
+                return ChatClarificationResolveResponse(request_id=request_id)
+
+    # 3. Legacy scan: filter by owner_scope before attempting resolve.
+    for run_id, broker in list(chat_run_service._brokers.items()):  # noqa: SLF001
+        job = chat_run_service.get_job(run_id)
+        if job is None or not _owns(job.owner_scope):
+            continue
+        if broker.resolve(request_id, decision_payload):
+            return ChatClarificationResolveResponse(request_id=request_id)
+
+    raise HTTPException(
+        status_code=404,
+        detail=t("chat.clarification_not_found", locale, request_id=request_id),
     )
 
 

@@ -61,6 +61,51 @@ class TestGetByProjectCode:
         found = await get_by_project_code(mock_db, "foo")
         assert found is None
 
+    @pytest.mark.asyncio
+    async def test_require_repo_hides_repoless_project(self, mock_db):
+        """未关联代码仓库（repo_url 为空）的项目在 require_repo=True 时不可见。"""
+        from app.services.project_repo_service import get_by_project_code
+
+        repoless = _make_repo(project_code="foo", repo_url="")
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = repoless
+        mock_db.execute = AsyncMock(return_value=result_mock)
+
+        # 项目专家（默认 require_repo=False）仍可看到该项目。
+        assert await get_by_project_code(mock_db, "foo") is repoless
+        # 其它 Agent（require_repo=True）看不到。
+        assert await get_by_project_code(mock_db, "foo", require_repo=True) is None
+
+
+class TestHasRepo:
+    def test_has_repo_truthy_only_for_nonblank_url(self):
+        from app.services.project_repo_service import has_repo
+
+        assert has_repo(_make_repo(repo_url="https://git.example/x.git")) is True
+        assert has_repo(_make_repo(repo_url="")) is False
+        assert has_repo(_make_repo(repo_url="   ")) is False
+        assert has_repo(_make_repo(repo_url=None)) is False
+        assert has_repo(None) is False
+
+
+class TestCreateRepoless:
+    @pytest.mark.asyncio
+    async def test_create_without_repo_url_drops_token(self, mock_db):
+        """不关联代码仓库时不应保存 git_token。"""
+        from app.services.project_repo_service import create
+
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+        repo = await create(
+            mock_db,
+            project_code="bar",
+            project_name="Bar",
+            repo_url=None,
+            git_token="should-be-dropped",
+        )
+        assert repo.repo_url == ""
+        assert repo.git_token is None
+
 
 class TestCreate:
     @pytest.mark.asyncio

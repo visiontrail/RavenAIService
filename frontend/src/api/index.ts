@@ -199,12 +199,14 @@ export const taskApi = {
   },
 }
 
-// 项目仓库（只读，供 AI 分析时选择项目使用）
+// 项目（只读，供 AI 分析时选择项目使用）
 export interface ProjectRepoOption {
   id: number
   project_code: string
   project_name: string
   default_branch: string
+  // 是否关联了代码仓库。未关联的项目仅项目专家可见。
+  has_repo?: boolean
   description?: string | null
 }
 

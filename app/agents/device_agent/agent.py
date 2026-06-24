@@ -98,6 +98,16 @@ class DeviceAgentContext:
     # （``ChatRunService`` / ``AIChatService``）从请求/用户偏好解析后传入；
     # 缺省时回退到系统默认语言，旧调用方无需改动即可工作。
     locale: Optional[str] = None
+    # ---- AskUserQuestion 澄清提问（用户偏好 + run 级取消回调）----
+    # 是否向 Agent 暴露 AskUserQuestion 工具（用户「全局禁用澄清」开关，默认开）。
+    clarification_enabled: bool = True
+    # 单轮 run 内最多发起 AskUserQuestion 的次数（用户偏好，默认 5）。
+    clarification_max_rounds: int = 5
+    # 澄清超时（固定 5 分钟）后的行为：``cancel`` 取消本轮 / ``continue`` 基于已知信息继续。
+    clarification_on_timeout: str = "cancel"
+    # run 级取消回调，澄清超时 ``cancel`` 模式时调用；由 ``ChatRunService`` 注入。
+    # 缺省（如 legacy ``ai_chat_service`` 路径）时澄清超时降级为 ``continue`` 语义。
+    cancel_run: Optional[Callable[[], None]] = None
 
 
 # ─────────────────────── Helpers ───────────────────────────────────
@@ -341,6 +351,35 @@ class DeviceAgent:
                 task_id=task_id,
             )
 
+            # --- AskUserQuestion clarification tool (optional) ---------------
+            # Only exposed when the user's ``clarification_enabled`` preference is
+            # on; disabling it removes the tool entirely so the model cannot ask.
+            mcp_servers: Dict[str, Any] = {}
+            if mcp_server is not None:
+                mcp_servers["device"] = mcp_server
+            if ctx.clarification_enabled:
+                from app.agents.device_agent.clarification import (
+                    build_clarification_mcp_server,
+                )
+
+                clarify_timeout_s = float(
+                    getattr(settings, "device_agent_clarification_timeout_seconds", 300)
+                )
+                ask_server, ask_tool_name = build_clarification_mcp_server(
+                    broker=broker,
+                    timeout_seconds=clarify_timeout_s,
+                    on_timeout=ctx.clarification_on_timeout,
+                    max_rounds=int(ctx.clarification_max_rounds),
+                    cancel_run=ctx.cancel_run,
+                    emit=emit,
+                    seq_counter=seq_counter,
+                    task_id=task_id,
+                    run_id=run_id,
+                    session_id=session_id,
+                )
+                mcp_servers["ask"] = ask_server
+                full_allowed.append(ask_tool_name)
+
             # --- Compose prompts --------------------------------------------
             base_system, user_template = get_prompts(ctx.scene_hint, locale=ctx.locale)
             system_prompt = _compose_system_prompt(base_system, ctx.system_prompt_override)
@@ -351,6 +390,16 @@ class DeviceAgent:
             system_prompt = _compose_system_prompt(
                 system_prompt, response_language_directive(ctx.locale)
             )
+            # 仅当本轮暴露了 AskUserQuestion 工具时，追加其使用指引。
+            if ctx.clarification_enabled:
+                from app.agents.device_agent.prompts import clarification_guidance
+
+                system_prompt = _compose_system_prompt(
+                    system_prompt,
+                    clarification_guidance(
+                        ctx.locale, max_rounds=int(ctx.clarification_max_rounds)
+                    ),
+                )
 
             max_history_turns = int(
                 getattr(settings, "anthropic_max_history_turns", 10)
@@ -372,7 +421,7 @@ class DeviceAgent:
                     allowed_tools=full_allowed,
                     cwd=str(workspace_path),
                     permission_mode="default",
-                    mcp_servers={"device": mcp_server} if mcp_server is not None else None,
+                    mcp_servers=mcp_servers or None,
                     setting_sources=setting_sources,
                     can_use_tool=can_use_tool,
                     hooks={"PostToolUse": [post_hook]},

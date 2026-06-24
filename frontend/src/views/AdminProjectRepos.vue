@@ -62,6 +62,9 @@ const authForm = reactive({
 const repoForm = reactive({
   project_code: '',
   project_name: '',
+  // 是否关联代码仓库。为 false 时无需填写 Git URL / Token，
+  // 该项目仅项目专家可见。
+  associate_repo: true,
   repo_url: '',
   default_branch: 'main',
   git_token: '',
@@ -272,6 +275,7 @@ const resetRepoForm = () => {
   editingRepoId.value = null
   repoForm.project_code = ''
   repoForm.project_name = ''
+  repoForm.associate_repo = true
   repoForm.repo_url = ''
   repoForm.default_branch = 'main'
   repoForm.git_token = ''
@@ -290,6 +294,7 @@ const openEditDialog = (repo: ProjectRepo) => {
   dialogMode.value = 'edit'
   repoForm.project_code = repo.project_code
   repoForm.project_name = repo.project_name
+  repoForm.associate_repo = repo.has_repo ?? !!repo.repo_url
   repoForm.repo_url = repo.repo_url
   repoForm.default_branch = repo.default_branch || 'main'
   repoForm.git_token = ''
@@ -304,9 +309,11 @@ const closeDialog = () => {
 }
 
 const buildPayload = (): ProjectRepoPayload => {
+  const associate = repoForm.associate_repo
   const payload: ProjectRepoPayload = {
     project_name: repoForm.project_name.trim(),
-    repo_url: repoForm.repo_url.trim(),
+    // 未关联代码仓库时清空 URL（后端据此判定项目不向其它 Agent 暴露）。
+    repo_url: associate ? repoForm.repo_url.trim() : '',
     default_branch: repoForm.default_branch.trim() || 'main',
     description: repoForm.description.trim() || null,
     enabled: repoForm.enabled,
@@ -314,15 +321,20 @@ const buildPayload = (): ProjectRepoPayload => {
   if (dialogMode.value === 'create') {
     payload.project_code = repoForm.project_code.trim().toLowerCase()
   }
-  const token = repoForm.git_token.trim()
-  if (token && token !== '••••••••') payload.git_token = token
+  if (associate) {
+    const token = repoForm.git_token.trim()
+    if (token && token !== '••••••••') payload.git_token = token
+  } else {
+    // 编辑时若改为不关联仓库，显式清空 Token。
+    payload.git_token = ''
+  }
   return payload
 }
 
 const validateForm = () => {
   if (!repoForm.project_code.trim()) return t('admin.projectRepos.projectCodeRequired')
   if (!repoForm.project_name.trim()) return t('admin.projectRepos.projectNameRequired')
-  if (!repoForm.repo_url.trim()) return t('admin.projectRepos.repoUrlRequired')
+  if (repoForm.associate_repo && !repoForm.repo_url.trim()) return t('admin.projectRepos.repoUrlRequired')
   return ''
 }
 
@@ -601,8 +613,18 @@ onMounted(() => bootstrap())
                     </div>
                   </td>
                   <td class="py-3 pr-4">
-                    <span class="block max-w-[360px] truncate font-mono text-xs text-slate-600" :title="repo.repo_url">
+                    <span
+                      v-if="(repo.has_repo ?? !!repo.repo_url)"
+                      class="block max-w-[360px] truncate font-mono text-xs text-slate-600"
+                      :title="repo.repo_url"
+                    >
                       {{ repo.repo_url }}
+                    </span>
+                    <span
+                      v-else
+                      class="inline-flex rounded-full bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700"
+                    >
+                      {{ t('admin.projectRepos.noRepoTag') }}
                     </span>
                     <div
                       v-if="testResults[repo.id]"
@@ -653,6 +675,7 @@ onMounted(() => bootstrap())
                         <Users :size="15" />
                       </button>
                       <button
+                        v-if="(repo.has_repo ?? !!repo.repo_url)"
                         class="admin-action-btn"
                         :disabled="testingId === repo.id"
                         :title="t('admin.projectRepos.tooltipTestConn')"
@@ -716,7 +739,18 @@ onMounted(() => bootstrap())
               placeholder="OAM Antenna"
             />
           </label>
-          <label class="block md:col-span-2">
+          <div class="md:col-span-2 flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+            <div>
+              <p class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.associateRepoLabel') }}</p>
+              <p class="text-xs text-slate-400">{{ t('admin.projectRepos.associateRepoHint') }}</p>
+            </div>
+            <label class="relative inline-flex cursor-pointer items-center">
+              <input v-model="repoForm.associate_repo" type="checkbox" class="peer sr-only" />
+              <span class="h-6 w-11 rounded-full bg-slate-300 transition peer-checked:bg-cyan-500"></span>
+              <span class="absolute left-0.5 h-5 w-5 rounded-full bg-white shadow transition peer-checked:translate-x-5"></span>
+            </label>
+          </div>
+          <label v-if="repoForm.associate_repo" class="block md:col-span-2">
             <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldRepoUrl') }} <span class="text-rose-500">*</span></span>
             <input
               v-model="repoForm.repo_url"
@@ -726,7 +760,7 @@ onMounted(() => bootstrap())
               spellcheck="false"
             />
           </label>
-          <label class="block">
+          <label v-if="repoForm.associate_repo" class="block">
             <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldBranch') }}</span>
             <input
               v-model="repoForm.default_branch"
@@ -736,7 +770,7 @@ onMounted(() => bootstrap())
               spellcheck="false"
             />
           </label>
-          <label class="block">
+          <label v-if="repoForm.associate_repo" class="block">
             <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldToken') }}</span>
             <input
               v-model="repoForm.git_token"
@@ -746,6 +780,9 @@ onMounted(() => bootstrap())
               :placeholder="dialogMode === 'edit' ? t('admin.projectRepos.tokenPlaceholderEdit') : t('admin.projectRepos.tokenPlaceholderCreate')"
             />
           </label>
+          <p v-else class="md:col-span-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+            {{ t('admin.projectRepos.noRepoNotice') }}
+          </p>
           <label class="block md:col-span-2">
             <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldDesc') }}</span>
             <textarea

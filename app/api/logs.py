@@ -58,13 +58,14 @@ async def resolve_project(
     统一的项目解析：显式 project_id → 显式 project_code → None。
     显式 project_id/project_code 无效时抛出 HTTP 400。
     """
+    # 日志（日志分析 Agent 域）对「未关联代码仓库」的项目不可见。
     if project_id is not None:
         repo = await project_repo_service.get_by_id(db, project_id)
-        if not repo or not repo.enabled:
+        if not repo or not repo.enabled or not project_repo_service.has_repo(repo):
             raise HTTPException(status_code=400, detail=t("log.project_not_found_id", locale, project_id=project_id))
         return repo
     if project_code:
-        repo = await project_repo_service.get_by_project_code(db, project_code)
+        repo = await project_repo_service.get_by_project_code(db, project_code, require_repo=True)
         if not repo:
             raise HTTPException(status_code=400, detail=t("log.project_not_found_code", locale, project_code=project_code))
         return repo
@@ -476,7 +477,9 @@ async def upload_t04_logs(
                     
                     # 解析关联项目：仅使用显式传入的 project_code，不再按文件名推断
                     inferred_project = (
-                        await project_repo_service.get_by_project_code(db, project_code)
+                        await project_repo_service.get_by_project_code(
+                            db, project_code, require_repo=True
+                        )
                         if project_code
                         else None
                     )

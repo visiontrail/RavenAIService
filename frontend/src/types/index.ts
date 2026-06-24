@@ -287,6 +287,7 @@ export interface ProjectRepo {
   repo_url: string
   default_branch: string
   git_token_set: boolean
+  has_repo?: boolean
   description?: string | null
   enabled: boolean
   member_count?: number
@@ -471,6 +472,9 @@ export interface UserProfile {
   role?: UserRole | string
   profile_role?: UserProfileRole | null
   language?: string | null
+  clarification_enabled?: boolean
+  clarification_max_rounds?: number
+  clarification_on_timeout?: 'cancel' | 'continue' | string
   last_login_at?: string | null
   created_at: string
   updated_at: string

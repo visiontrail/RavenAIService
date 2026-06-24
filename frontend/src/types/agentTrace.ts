@@ -17,6 +17,8 @@ export type AgentTraceEventType =
   | 'thinking_end'
   | 'answer_delta'
   | 'system_notice'
+  | 'clarification_request'
+  | 'clarification_resolved'
   | 'error'
 
 export type StepStatus = 'ok' | 'error'
@@ -119,6 +121,59 @@ export interface SystemNoticeEvent extends BaseTraceEvent {
   loaded_skills?: string[]
 }
 
+// ---- AskUserQuestion clarification -------------------------------------
+
+export interface ClarificationOption {
+  label: string
+  description?: string
+}
+
+export interface ClarificationQuestion {
+  header?: string
+  question: string
+  multiSelect?: boolean
+  options: ClarificationOption[]
+}
+
+export interface ClarificationRequestEvent extends BaseTraceEvent {
+  type: 'clarification_request'
+  request_id: string
+  questions: ClarificationQuestion[]
+  run_id?: string
+  session_id?: string
+}
+
+export type ClarificationOutcome = 'answered' | 'timeout' | 'cancelled'
+
+export interface ClarificationResolvedEvent extends BaseTraceEvent {
+  type: 'clarification_resolved'
+  request_id: string
+  outcome: ClarificationOutcome
+  reason?: string
+  run_id?: string
+  session_id?: string
+}
+
+/** A single question's answer submitted by the user. */
+export interface ClarificationAnswer {
+  question_index: number
+  selected_labels: string[]
+  custom_text?: string | null
+}
+
+/** Pending clarification stored per-session in the conversation runs store. */
+export interface PendingClarification {
+  request_id: string
+  questions: ClarificationQuestion[]
+  session_id?: string
+  run_id?: string
+  // Per-question working state for the card UI (selected labels + free text).
+  draftSelected: string[][]
+  draftCustom: string[]
+  submitting?: boolean
+  error?: string | null
+}
+
 export type AgentTraceEvent =
   | RunStartEvent
   | RunCompleteEvent
@@ -132,6 +187,8 @@ export type AgentTraceEvent =
   | ThinkingEndEvent
   | AnswerDeltaEvent
   | SystemNoticeEvent
+  | ClarificationRequestEvent
+  | ClarificationResolvedEvent
 
 export type TerminalEventType = 'run_complete' | 'cancelled' | 'error'
 
