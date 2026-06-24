@@ -280,7 +280,7 @@ class PackageSearchAgent:
             from app.services import project_prompt_service
 
             project_prompt_addendum = project_prompt_service.build_project_prompt_addendum(
-                ctx.project_code
+                ctx.project_code, "package_search"
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("PackageSearchAgent: failed to load project prompt: %s", exc)

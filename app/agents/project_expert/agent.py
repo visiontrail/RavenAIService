@@ -213,7 +213,7 @@ class ProjectExpertAgent:
             from app.services import project_prompt_service
 
             project_prompt_addendum = project_prompt_service.build_project_prompt_addendum(
-                project_code, project_name=project_name
+                project_code, AGENT_KEY, project_name=project_name
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("ProjectExpertAgent: failed to load project prompt: %s", exc)

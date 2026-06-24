@@ -98,3 +98,34 @@ def test_code_normalized(client: TestClient) -> None:
 def test_auth_required(no_auth_client: TestClient) -> None:
     resp = no_auth_client.get("/admin/project-repos/myproj/system-prompt")
     assert resp.status_code in (401, 403, 422)
+
+
+def test_agent_scoped_layer_roundtrip(client: TestClient) -> None:
+    # Writing the project_expert layer must not leak into the shared layer.
+    resp = client.put(
+        "/admin/project-repos/myproj/system-prompt",
+        params={"agent": "project_expert"},
+        json={"content": "EXPERT-LAYER"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()["data"]
+    assert body["agent_key"] == "project_expert"
+    assert body["content"] == "EXPERT-LAYER"
+
+    # Shared layer stays empty.
+    shared = client.get("/admin/project-repos/myproj/system-prompt").json()["data"]
+    assert shared["agent_key"] is None
+    assert shared["exists"] is False
+
+    # The agent layer reads back via the query param.
+    again = client.get(
+        "/admin/project-repos/myproj/system-prompt", params={"agent": "project_expert"}
+    ).json()["data"]
+    assert again["content"] == "EXPERT-LAYER"
+
+
+def test_invalid_agent_rejected(client: TestClient) -> None:
+    resp = client.get(
+        "/admin/project-repos/myproj/system-prompt", params={"agent": "bogus"}
+    )
+    assert resp.status_code == 422

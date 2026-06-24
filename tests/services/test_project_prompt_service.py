@@ -99,3 +99,95 @@ def test_empty_project_code_rejected(isolated_prompts_dir):
     assert svc.get_project_prompt_text("") == ""
     assert svc.get_project_prompt_text(None) == ""
     assert svc.build_project_prompt_addendum(None) == ""
+
+
+# ─────────────────── Agent-scoped layer (code workflow) ────────────────────
+
+
+def test_agent_scoped_layers_are_isolated(isolated_prompts_dir):
+    from app.services import project_prompt_service as svc
+
+    svc.set_project_prompt("myproj", "EXPERT-ONLY", agent_key="project_expert")
+
+    # Stored under the agent's own layer; other layers stay empty.
+    assert svc.get_project_prompt_text("myproj", "project_expert") == "EXPERT-ONLY"
+    assert svc.get_project_prompt_text("myproj", "log_analysis") == ""
+    assert svc.get_project_prompt_text("myproj", None) == ""
+    assert svc.get_project_prompt("myproj", "project_expert")["agent_key"] == "project_expert"
+
+
+def test_invalid_agent_key_rejected(isolated_prompts_dir):
+    from app.services import project_prompt_service as svc
+
+    with pytest.raises(svc.ProjectPromptValidationError):
+        svc.get_project_prompt("myproj", "bogus_agent")
+    # The convenience helpers swallow the bad key rather than raising.
+    assert svc.get_project_prompt_text("myproj", "bogus_agent") == ""
+
+
+def test_addendum_merges_agent_and_shared_layers(isolated_prompts_dir):
+    from app.services import project_prompt_service as svc
+
+    svc.set_project_prompt("myproj", "SHARED-RULE")
+    svc.set_project_prompt("myproj", "EXPERT-WORKFLOW", agent_key="project_expert")
+
+    expert = svc.build_project_prompt_addendum("myproj", "project_expert")
+    assert "EXPERT-WORKFLOW" in expert
+    assert "SHARED-RULE" in expert
+
+    # A different agent only sees the shared layer (no expert workflow).
+    log = svc.build_project_prompt_addendum("myproj", "log_analysis")
+    assert "EXPERT-WORKFLOW" not in log
+    assert "SHARED-RULE" in log
+
+    # No agent_key -> shared layer only (backward-compatible behavior).
+    shared_only = svc.build_project_prompt_addendum("myproj")
+    assert "EXPERT-WORKFLOW" not in shared_only
+    assert "SHARED-RULE" in shared_only
+
+
+def test_addendum_agent_layer_without_shared(isolated_prompts_dir):
+    from app.services import project_prompt_service as svc
+
+    svc.set_project_prompt("myproj", "ONLY-WORKFLOW", agent_key="log_analysis")
+    addendum = svc.build_project_prompt_addendum("myproj", "log_analysis")
+    assert "ONLY-WORKFLOW" in addendum
+
+
+def test_load_code_workflow_template_per_agent(isolated_prompts_dir):
+    from app.services import project_prompt_service as svc
+
+    # Templates come from the real prompts_config.yaml; each known agent has one.
+    for agent in svc.CODE_WORKFLOW_AGENT_KEYS:
+        text = svc.load_code_workflow_template(agent)
+        assert text, f"expected a code-workflow template for {agent}"
+        assert "repo" in text.lower()
+    # Unknown agents resolve to empty without raising.
+    assert svc.load_code_workflow_template("nope") == ""
+
+
+def test_seed_code_workflow_is_idempotent(isolated_prompts_dir):
+    from app.services import project_prompt_service as svc
+
+    # First seed writes the template; second seed is a no-op (does not clobber).
+    assert svc.seed_code_workflow_prompt("myproj", "project_expert") is True
+    seeded = svc.get_project_prompt_text("myproj", "project_expert")
+    assert seeded
+
+    # An admin edit must survive a re-seed.
+    svc.set_project_prompt("myproj", "ADMIN-EDIT", agent_key="project_expert")
+    assert svc.seed_code_workflow_prompt("myproj", "project_expert") is False
+    assert svc.get_project_prompt_text("myproj", "project_expert") == "ADMIN-EDIT"
+
+    # overwrite=True forces a refresh from the template.
+    assert svc.seed_code_workflow_prompt("myproj", "project_expert", overwrite=True) is True
+    assert svc.get_project_prompt_text("myproj", "project_expert") != "ADMIN-EDIT"
+
+
+def test_seed_project_code_workflows_all_agents(isolated_prompts_dir):
+    from app.services import project_prompt_service as svc
+
+    seeded = svc.seed_project_code_workflows("myproj")
+    assert sorted(seeded) == sorted(svc.CODE_WORKFLOW_AGENT_KEYS)
+    for agent in svc.CODE_WORKFLOW_AGENT_KEYS:
+        assert svc.get_project_prompt_text("myproj", agent)

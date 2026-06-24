@@ -4,6 +4,7 @@ Admin endpoints for prompt configuration and repo settings management.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -26,6 +27,8 @@ from app.services.prompts_config_service import (
     update_prompt_entries,
     update_prompts_config,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -231,6 +234,23 @@ class TestConnectionResponse(BaseModel):
     message: str = "ok"
 
 
+def _seed_code_workflows(project_code: str) -> None:
+    """为关联了代码仓库的项目播种各 Agent 的代码工作流（幂等、不抛错）。
+
+    播种失败不应阻断项目创建/更新，因此异常仅记录日志。
+    """
+    try:
+        seeded = project_prompt_service.seed_project_code_workflows(project_code)
+        if seeded:
+            logger.info(
+                "seeded code-workflow prompts for project=%s agents=%s",
+                project_code,
+                ",".join(seeded),
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("seed code-workflow prompts failed for %s: %s", project_code, exc)
+
+
 def _repo_to_data(repo, member_count: int = 0) -> ProjectRepoData:
     return ProjectRepoData(
         id=repo.id,
@@ -289,6 +309,10 @@ async def create_project_repo(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"创建失败: {exc}",
         ) from exc
+    # 关联了代码仓库的项目：把各 Agent 的代码工作流播种到项目级提示词，使代码相关
+    # 的工作流随项目（而非基础提示词）分级下沉。未关联仓库的项目不播种。
+    if project_repo_service.has_repo(repo):
+        _seed_code_workflows(repo.project_code)
     return ProjectRepoResponse(data=_repo_to_data(repo), message="创建成功")
 
 
@@ -315,6 +339,7 @@ async def update_project_repo(
     repo = await project_repo_service.get_by_id(db, repo_id)
     if not repo:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="记录不存在")
+    had_repo = project_repo_service.has_repo(repo)
     try:
         repo = await project_repo_service.update(
             db,
@@ -331,6 +356,9 @@ async def update_project_repo(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"更新失败: {exc}",
         ) from exc
+    # 项目从「未关联」变为「已关联」代码仓库时，补播种各 Agent 的代码工作流。
+    if not had_repo and project_repo_service.has_repo(repo):
+        _seed_code_workflows(repo.project_code)
     return ProjectRepoResponse(data=_repo_to_data(repo), message="更新成功")
 
 
@@ -845,6 +873,8 @@ async def get_project_skill_file(
 
 class ProjectSystemPromptData(BaseModel):
     project_code: str
+    # ``None`` 表示项目共享层；否则为该 Agent 的专属层（含已播种的代码工作流）。
+    agent_key: Optional[str] = None
     content: str
     exists: bool
     size_bytes: int = 0
@@ -868,10 +898,18 @@ class UpdateProjectSystemPromptRequest(BaseModel):
 )
 async def get_project_system_prompt(
     project_code: str,
+    agent: Optional[str] = Query(
+        default=None,
+        description=(
+            "为空读取项目共享层（对所有 Agent 生效）；传入 agent_key "
+            "（project_expert / log_analysis / package_search）读取该 Agent "
+            "的专属层（含代码工作流）。"
+        ),
+    ),
     _username: str = Depends(require_admin),
 ) -> ProjectSystemPromptResponse:
     try:
-        data = project_prompt_service.get_project_prompt(project_code)
+        data = project_prompt_service.get_project_prompt(project_code, agent)
     except project_prompt_service.ProjectPromptValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -887,10 +925,14 @@ async def get_project_system_prompt(
 async def update_project_system_prompt(
     project_code: str,
     payload: UpdateProjectSystemPromptRequest,
+    agent: Optional[str] = Query(
+        default=None,
+        description="为空写入项目共享层；传入 agent_key 写入该 Agent 的专属层。",
+    ),
     _username: str = Depends(require_admin),
 ) -> ProjectSystemPromptResponse:
     try:
-        data = project_prompt_service.set_project_prompt(project_code, payload.content)
+        data = project_prompt_service.set_project_prompt(project_code, payload.content, agent)
     except project_prompt_service.ProjectPromptValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

@@ -63,4 +63,4 @@
 
 - [x] 9.1 全量后端测试通过（`pytest`），前端构建通过（`npm run build`）；grep 确认 `PACKAGE_TYPES` / `determine_package_type` / `download/type/` / `packagesByType` 无残留引用
 - [x] 9.2 迁移说明：在变更文档/部署说明中列出 BREAKING API 清单、部署前预创建项目建议、Grafana 旧 `package_type` label 失效提示
-- [ ] 9.3 手工冒烟：选项目 → 重构包 Agent 问"两个版本间项目改了什么"（验证 git log 优先且不读代码）；问包元数据问题（验证不克隆仓库）；后台改提示词后再次提问验证即时生效；上传新包全流程
+- [x] 9.3 手工冒烟：选项目 → 重构包 Agent 问"两个版本间项目改了什么"（验证 git log 优先且不读代码）；问包元数据问题（验证不克隆仓库）；后台改提示词后再次提问验证即时生效；上传新包全流程

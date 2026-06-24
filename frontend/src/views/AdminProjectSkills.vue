@@ -59,6 +59,16 @@ const systemPromptMeta = ref<{ exists: boolean; updated_at?: string | null }>({
 const systemPromptLoading = ref(false)
 const systemPromptSaving = ref(false)
 
+// 提示词分层：'' = 项目共享层（对所有 Agent 生效）；其余为某个 Agent 的专属层
+// （关联了代码仓库的项目会在该层播种代码工作流）。
+const promptLayer = ref('')
+const promptLayers = computed(() => [
+  { value: '', label: t('admin.projectSkills.systemPrompt.layers.shared') },
+  { value: 'project_expert', label: t('admin.projectSkills.systemPrompt.layers.project_expert') },
+  { value: 'log_analysis', label: t('admin.projectSkills.systemPrompt.layers.log_analysis') },
+  { value: 'package_search', label: t('admin.projectSkills.systemPrompt.layers.package_search') },
+])
+
 const overwrite = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const dragOver = ref(false)
@@ -266,7 +276,7 @@ const fetchSystemPrompt = async () => {
   if (!isAuthenticated.value || !projectCode.value) return
   systemPromptLoading.value = true
   try {
-    const resp = await adminApi.getProjectSystemPrompt(projectCode.value)
+    const resp = await adminApi.getProjectSystemPrompt(projectCode.value, promptLayer.value || null)
     if (!resp?.success || !resp.data)
       throw new Error(resp?.message || t('admin.projectSkills.systemPrompt.loadFail'))
     systemPrompt.value = resp.data.content || ''
@@ -287,7 +297,11 @@ const saveSystemPrompt = async () => {
   if (systemPrompt.value.length > MAX_SYSTEM_PROMPT_CHARS) return
   systemPromptSaving.value = true
   try {
-    const resp = await adminApi.updateProjectSystemPrompt(projectCode.value, systemPrompt.value)
+    const resp = await adminApi.updateProjectSystemPrompt(
+      projectCode.value,
+      systemPrompt.value,
+      promptLayer.value || null
+    )
     if (!resp?.success || !resp.data)
       throw new Error(resp?.message || t('admin.projectSkills.systemPrompt.saveFail'))
     systemPrompt.value = resp.data.content || ''
@@ -314,10 +328,18 @@ watch(projectCode, () => {
   skills.value = []
   systemPrompt.value = ''
   systemPromptMeta.value = { exists: false, updated_at: null }
+  promptLayer.value = ''
   if (projectCode.value) {
     fetchSkills()
     fetchSystemPrompt()
   }
+})
+
+// 切换分层（共享层 / 各 Agent 专属层）时重新拉取对应内容。
+watch(promptLayer, () => {
+  systemPrompt.value = ''
+  systemPromptMeta.value = { exists: false, updated_at: null }
+  if (projectCode.value) fetchSystemPrompt()
 })
 
 const handleNavClick = (item: (typeof navItems)[number]) => {
@@ -666,7 +688,28 @@ onMounted(() => bootstrap())
             </div>
           </div>
 
-          <div class="mt-4">
+          <div class="mt-4 flex flex-wrap gap-1.5">
+            <button
+              v-for="layer in promptLayers"
+              :key="layer.value || 'shared'"
+              type="button"
+              class="rounded-lg px-3 py-1.5 text-xs font-medium transition"
+              :class="promptLayer === layer.value
+                ? 'bg-cyan-600 text-white'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+              :disabled="systemPromptLoading || systemPromptSaving"
+              @click="promptLayer = layer.value"
+            >
+              {{ layer.label }}
+            </button>
+          </div>
+          <p class="mt-2 text-xs text-slate-500">
+            {{ promptLayer
+              ? t('admin.projectSkills.systemPrompt.layerHintAgent')
+              : t('admin.projectSkills.systemPrompt.layerHintShared') }}
+          </p>
+
+          <div class="mt-3">
             <textarea
               v-model="systemPrompt"
               :maxlength="MAX_SYSTEM_PROMPT_CHARS"

@@ -453,6 +453,8 @@ export interface SkillFileContent {
 // 项目级追加系统提示词（与 prompts_config.yaml 的 Agent 级基础提示词分级叠加）
 export interface ProjectSystemPrompt {
   project_code: string
+  // null = 项目共享层（对所有 Agent 生效）；否则为该 Agent 的专属层（含代码工作流）。
+  agent_key?: string | null
   content: string
   exists: boolean
   size_bytes: number

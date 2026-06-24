@@ -4,19 +4,31 @@ Project 级系统提示词管理服务。
 让系统提示词也能像 Skill 一样分级处理：
 
 - **Agent 级（基础层）**：来自 ``prompts_config.yaml``，按 agent + locale 选择，
-  是每个 Agent 的通用系统提示词。
-- **Project 级（追加层）**：用户针对单个 ``project_code`` 追加的系统提示词，
-  用于限定该项目的专属约束（可以为空）。本服务负责存取这一层。
+  是每个 Agent 的**通用、与代码无关**的系统提示词。
+- **Project 级（追加层）**：针对单个 ``project_code`` 追加的系统提示词，用于限定
+  该项目的专属约束（可以为空）。本服务负责存取这一层，它又分为两类：
+
+  * **项目共享层**：对该项目下所有 Agent 生效（即历史上的单一文件，保持兼容）。
+  * **Agent 专属层**：仅对某个 Agent 生效。**当项目关联了代码仓库时，各 Agent
+    与代码相关的工作流提示词（``prompts_config.yaml`` 中的 ``code_workflow_prompt``）
+    会被「播种」到这一层**，从而让代码工作流随项目（而非基础提示词）分级下沉。
 
 存储布局（按 project_code 隔离，与 Project Skills 平行）：
 
     data/project_prompts/
     └── <project_code>/
-        └── system_prompt.md
+        ├── system_prompt.md            # 项目共享层（对所有 Agent 生效）
+        ├── project_expert/
+        │   └── system_prompt.md        # Agent 专属层（仅项目专家）
+        ├── log_analysis/
+        │   └── system_prompt.md        # Agent 专属层（仅日志分析）
+        └── package_search/
+            └── system_prompt.md        # Agent 专属层（仅重构包配置管理员）
 
 读取走文件系统、无缓存，Admin 编辑后立即对后续 Agent 运行生效。Agent 运行前
-调用 :func:`build_project_prompt_addendum` 拿到要拼接到基础系统提示词之后的
-项目级附加段（无内容时返回空串）。
+调用 :func:`build_project_prompt_addendum` （传入 ``agent_key``）拿到要拼接到基础
+系统提示词之后的项目级附加段：它会合并「Agent 专属层 + 项目共享层」（无内容时
+返回空串）。
 """
 
 from __future__ import annotations
@@ -25,7 +37,7 @@ import logging
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -34,13 +46,24 @@ MAX_PROJECT_PROMPT_CHARS = 20000
 
 _PROMPT_FILENAME = "system_prompt.md"
 
+# 拥有「代码工作流」分级提示词的 Agent。键既是磁盘上的子目录名，也是各 Agent
+# 在 ``build_project_prompt_addendum`` 中传入的 ``agent_key``。
+CODE_WORKFLOW_AGENT_KEYS = ("project_expert", "log_analysis", "package_search")
+
+# agent_key -> prompts_config.yaml 中对应的功能键，用于读取 ``code_workflow_prompt``。
+_AGENT_CONFIG_KEY: Dict[str, str] = {
+    "project_expert": "claude_agent_project_expert",
+    "log_analysis": "claude_agent_log_analysis",
+    "package_search": "claude_agent_package_search",
+}
+
 
 class ProjectPromptError(Exception):
     """项目提示词管理基础异常。"""
 
 
 class ProjectPromptValidationError(ProjectPromptError):
-    """project_code 非法或内容超限。"""
+    """project_code / agent_key 非法或内容超限。"""
 
 
 # ─────────────────────── Path helpers ──────────────────────────────
@@ -58,23 +81,44 @@ def validate_project_code(project_code: str) -> str:
     return project_code.strip().lower()
 
 
-def _prompt_path(project_code: str) -> Path:
+def validate_agent_key(agent_key: Optional[str]) -> Optional[str]:
+    """校验 agent_key：``None`` 表示项目共享层；否则必须是已知的 Agent。
+
+    限定取值可同时充当路径白名单，避免 ``../`` 之类的目录穿越。
+    """
+    if agent_key is None:
+        return None
+    normalized = agent_key.strip().lower()
+    if normalized not in CODE_WORKFLOW_AGENT_KEYS:
+        raise ProjectPromptValidationError(f"未知的 agent_key: {agent_key}")
+    return normalized
+
+
+def _prompt_path(project_code: str, agent_key: Optional[str] = None) -> Path:
     code = validate_project_code(project_code)
-    return _project_prompts_root() / code / _PROMPT_FILENAME
+    agent = validate_agent_key(agent_key)
+    base = _project_prompts_root() / code
+    if agent is not None:
+        base = base / agent
+    return base / _PROMPT_FILENAME
 
 
 # ─────────────────────── Public API ────────────────────────────────
 
-def get_project_prompt(project_code: str) -> Dict[str, Any]:
+def get_project_prompt(project_code: str, agent_key: Optional[str] = None) -> Dict[str, Any]:
     """返回项目系统提示词的可读视图。
 
-    Always returns a dict; ``content`` 为空串且 ``exists=False`` 表示该项目
-    尚未配置项目级提示词。
+    ``agent_key`` 为 ``None`` 时读取项目共享层；否则读取该 Agent 的专属层。
+    Always returns a dict; ``content`` 为空串且 ``exists=False`` 表示该层尚未
+    配置项目级提示词。
     """
-    path = _prompt_path(project_code)
+    code = validate_project_code(project_code)
+    agent = validate_agent_key(agent_key)
+    path = _prompt_path(code, agent)
     if not path.is_file():
         return {
-            "project_code": validate_project_code(project_code),
+            "project_code": code,
+            "agent_key": agent,
             "content": "",
             "exists": False,
             "updated_at": None,
@@ -83,7 +127,8 @@ def get_project_prompt(project_code: str) -> Dict[str, Any]:
     content = path.read_text(encoding="utf-8", errors="replace")
     stat = path.stat()
     return {
-        "project_code": validate_project_code(project_code),
+        "project_code": code,
+        "agent_key": agent,
         "content": content,
         "exists": True,
         "updated_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
@@ -91,12 +136,14 @@ def get_project_prompt(project_code: str) -> Dict[str, Any]:
     }
 
 
-def get_project_prompt_text(project_code: Optional[str]) -> str:
-    """便捷读取：仅返回提示词正文，无内容时返回空串、绝不抛错。"""
+def get_project_prompt_text(
+    project_code: Optional[str], agent_key: Optional[str] = None
+) -> str:
+    """便捷读取：仅返回某一层的提示词正文，无内容时返回空串、绝不抛错。"""
     if not project_code:
         return ""
     try:
-        path = _prompt_path(project_code)
+        path = _prompt_path(project_code, agent_key)
     except ProjectPromptValidationError:
         return ""
     if not path.is_file():
@@ -108,8 +155,10 @@ def get_project_prompt_text(project_code: Optional[str]) -> str:
         return ""
 
 
-def set_project_prompt(project_code: str, content: str) -> Dict[str, Any]:
-    """写入（或清空）项目系统提示词。
+def set_project_prompt(
+    project_code: str, content: str, agent_key: Optional[str] = None
+) -> Dict[str, Any]:
+    """写入（或清空）某一层的项目系统提示词。
 
     空内容会删除底层文件，等价于“未配置”。返回写入后的可读视图。
     """
@@ -121,57 +170,173 @@ def set_project_prompt(project_code: str, content: str) -> Dict[str, Any]:
         )
 
     code = validate_project_code(project_code)
-    path = _prompt_path(code)
+    agent = validate_agent_key(agent_key)
+    path = _prompt_path(code, agent)
 
     if not content.strip():
-        # 空内容视为清除：删除文件（若存在）。
+        # 空内容视为清除：删除文件（若存在），并回收已空的 Agent 子目录。
         if path.exists():
             path.unlink()
-            logger.info("project prompt cleared: project=%s", code)
-        return get_project_prompt(code)
+            logger.info("project prompt cleared: project=%s agent=%s", code, agent)
+        if agent is not None:
+            _cleanup_empty_dir(path.parent)
+        return get_project_prompt(code, agent)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".md.tmp")
     tmp.write_text(content, encoding="utf-8")
     tmp.replace(path)
-    logger.info("project prompt saved: project=%s size=%d", code, len(content))
-    return get_project_prompt(code)
+    logger.info("project prompt saved: project=%s agent=%s size=%d", code, agent, len(content))
+    return get_project_prompt(code, agent)
 
 
-def delete_project_prompt(project_code: str) -> None:
-    """删除项目系统提示词（含其目录，若已为空）。"""
+def delete_project_prompt(project_code: str, agent_key: Optional[str] = None) -> None:
+    """删除某一层的项目系统提示词（含其目录，若已为空）。"""
     code = validate_project_code(project_code)
-    path = _prompt_path(code)
+    agent = validate_agent_key(agent_key)
+    path = _prompt_path(code, agent)
     if path.exists():
         path.unlink()
-    project_dir = path.parent
+    _cleanup_empty_dir(path.parent)
+    logger.info("project prompt deleted: project=%s agent=%s", code, agent)
+
+
+def _cleanup_empty_dir(directory: Path) -> None:
     try:
-        if project_dir.is_dir() and not any(project_dir.iterdir()):
-            shutil.rmtree(project_dir, ignore_errors=True)
+        if directory.is_dir() and not any(directory.iterdir()):
+            shutil.rmtree(directory, ignore_errors=True)
     except OSError:
         pass
-    logger.info("project prompt deleted: project=%s", code)
 
 
 def build_project_prompt_addendum(
     project_code: Optional[str],
+    agent_key: Optional[str] = None,
     *,
     project_name: Optional[str] = None,
 ) -> str:
     """构建拼接到基础系统提示词之后的项目级附加段。
 
-    无项目级提示词时返回空串。返回的内容包含一个清晰的小标题，并声明该段是
-    针对当前项目的专属约束，优先级高于通用约束（但不得违背安全/格式底线）。
+    合并顺序为「Agent 专属层（含已播种的代码工作流）→ 项目共享层」，两者皆可为
+    空。无任何内容时返回空串。返回的内容包含一个清晰的小标题，并声明该段是针对
+    当前项目的专属约束，优先级高于通用约束（但不得违背安全/格式底线）。
+
+    ``agent_key`` 为 ``None`` 时仅取项目共享层（保持历史调用方的行为不变）。
     """
-    text = get_project_prompt_text(project_code)
-    if not text:
+    sections: List[str] = []
+    agent_text = get_project_prompt_text(project_code, agent_key) if agent_key else ""
+    if agent_text:
+        sections.append(agent_text)
+    shared_text = get_project_prompt_text(project_code, None)
+    if shared_text and shared_text != agent_text:
+        sections.append(shared_text)
+    if not sections:
         return ""
 
     label = (project_name or "").strip() or validate_project_code(project_code)
+    body = "\n\n---\n\n".join(sections)
     return (
         "\n\n## 项目级附加系统指令（{label}）\n"
-        "以下是管理员针对当前项目「{label}」配置的专属系统指令。在不违背安全"
-        "约束与最终输出格式要求的前提下，这些项目特定的约束优先于通用指令，"
+        "以下是针对当前项目「{label}」配置的专属系统指令（含代码工作流）。在不违背"
+        "安全约束与最终输出格式要求的前提下，这些项目特定的约束优先于通用指令，"
         "你必须严格遵守：\n\n"
-        "{text}\n"
-    ).format(label=label, text=text)
+        "{body}\n"
+    ).format(label=label, body=body)
+
+
+# ─────────────────────── Code-workflow seeding ─────────────────────
+
+def load_code_workflow_template(agent_key: str, locale: Optional[str] = None) -> str:
+    """读取某 Agent 的「代码工作流」模板正文（来自 ``prompts_config.yaml`` 的
+    ``code_workflow_prompt``），用于播种到关联了代码仓库的项目。
+
+    ``locale`` 选择多语言变体，缺失时回退默认语言（``zh``）。未知 agent_key 或
+    读不到时返回空串、绝不抛错。
+    """
+    try:
+        agent = validate_agent_key(agent_key)
+    except ProjectPromptValidationError:
+        return ""
+    if agent is None:
+        return ""
+    function_key = _AGENT_CONFIG_KEY.get(agent)
+    if not function_key:
+        return ""
+
+    try:
+        import os
+
+        import yaml
+
+        from app.config import settings
+        from app.i18n.prompts import select_localized_body
+
+        raw = getattr(settings, "prompts_config_path", "app/prompts/prompts_config.yaml")
+        if os.path.isabs(raw):
+            path = Path(raw)
+        else:
+            project_root = Path(__file__).resolve().parents[2]  # repository root
+            path = (project_root / raw).resolve()
+
+        parsed = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        agent_cfg = parsed.get(function_key) or {}
+        variant = agent_cfg.get("generic") or {}
+        body = select_localized_body(variant.get("code_workflow_prompt"), locale)
+        return (body or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("load_code_workflow_template failed for %s: %s", agent_key, exc)
+        return ""
+
+
+def seed_code_workflow_prompt(
+    project_code: str,
+    agent_key: str,
+    *,
+    locale: Optional[str] = None,
+    overwrite: bool = False,
+) -> bool:
+    """把某 Agent 的代码工作流模板播种到该项目的 Agent 专属层。
+
+    幂等：当目标文件已存在且 ``overwrite=False`` 时跳过（不覆盖管理员的改动）。
+    返回是否实际写入。
+    """
+    code = validate_project_code(project_code)
+    agent = validate_agent_key(agent_key)
+    if agent is None:
+        return False
+    path = _prompt_path(code, agent)
+    if path.is_file() and not overwrite:
+        return False
+    template = load_code_workflow_template(agent, locale)
+    if not template:
+        return False
+    set_project_prompt(code, template, agent_key=agent)
+    logger.info("seeded code-workflow prompt: project=%s agent=%s", code, agent)
+    return True
+
+
+def seed_project_code_workflows(
+    project_code: str,
+    *,
+    locale: Optional[str] = None,
+    overwrite: bool = False,
+) -> List[str]:
+    """为关联了代码仓库的项目播种所有 Agent 的代码工作流。
+
+    返回实际写入的 agent_key 列表。仅应在项目「关联了代码仓库」时调用。
+    """
+    seeded: List[str] = []
+    for agent in CODE_WORKFLOW_AGENT_KEYS:
+        try:
+            if seed_code_workflow_prompt(
+                project_code, agent, locale=locale, overwrite=overwrite
+            ):
+                seeded.append(agent)
+        except ProjectPromptValidationError as exc:
+            logger.warning(
+                "seed_project_code_workflows skipped project=%s agent=%s: %s",
+                project_code,
+                agent,
+                exc,
+            )
+    return seeded

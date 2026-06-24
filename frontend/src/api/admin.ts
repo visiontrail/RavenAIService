@@ -254,15 +254,23 @@ export const adminApi = {
   // ==================== 项目级系统提示词 ====================
 
   getProjectSystemPrompt: (
-    projectCode: string
+    projectCode: string,
+    agent?: string | null
   ): Promise<ApiResponse<ProjectSystemPrompt>> =>
-    adminClient.get(`/admin/project-repos/${projectCode}/system-prompt`),
+    adminClient.get(`/admin/project-repos/${projectCode}/system-prompt`, {
+      params: agent ? { agent } : undefined,
+    }),
 
   updateProjectSystemPrompt: (
     projectCode: string,
-    content: string
+    content: string,
+    agent?: string | null
   ): Promise<ApiResponse<ProjectSystemPrompt>> =>
-    adminClient.put(`/admin/project-repos/${projectCode}/system-prompt`, { content }),
+    adminClient.put(
+      `/admin/project-repos/${projectCode}/system-prompt`,
+      { content },
+      { params: agent ? { agent } : undefined }
+    ),
 
   // ==================== 系统/用户指标 (Metrics) ====================
 
