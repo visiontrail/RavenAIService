@@ -412,10 +412,10 @@ class TestLogAnalysisAgentRun:
              )):
             await LogAnalysisAgent().run(workspace_ctx)
 
-        mock_get_mcp_server.assert_not_called()
+        mock_get_mcp_server.assert_called_once()
         kwargs = mock_build_options.call_args.kwargs
-        assert kwargs["mcp_servers"] is None
-        assert "mcp__project_repo__lookup_project_repo" not in kwargs["allowed_tools"]
+        assert kwargs["mcp_servers"] is not None
+        assert "mcp__project_repo__lookup_project_repo" in kwargs["allowed_tools"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("locale", ["en", "zh"])

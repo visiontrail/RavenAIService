@@ -23,7 +23,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import ai_chat as ai_chat_api
-from app.api.users import get_optional_user
+from app.api.users import get_current_user, get_optional_user
 from app.models.database import get_db
 
 
@@ -69,6 +69,9 @@ def app() -> FastAPI:
     application = FastAPI()
     application.include_router(ai_chat_api.router)
     application.dependency_overrides[get_optional_user] = lambda: None
+    application.dependency_overrides[get_current_user] = lambda: type(
+        "User", (), {"id": "test-user", "username": "tester", "role": "user", "language": "zh"}
+    )()
 
     async def _no_db():
         yield None
@@ -166,6 +169,7 @@ def test_enabled_device_agent_skill_is_materialized_before_query(
         json={
             "message": "请检查设备",
             "session_id": "sess-skill-1",
+            "agent_type": "device",
             "target_device_id": "dev-1",
             "remember": False,
         },
@@ -224,6 +228,7 @@ def test_disabled_skill_is_not_materialized(
         json={
             "message": "hi",
             "session_id": "sess-skill-2",
+            "agent_type": "device",
             "target_device_id": "dev-1",
             "remember": False,
         },

@@ -26,7 +26,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import ai_chat as ai_chat_api
-from app.api.users import get_optional_user
+from app.api.users import get_current_user, get_optional_user
 from app.models.database import get_db
 from app.services.chat_run_service import chat_run_service
 
@@ -90,6 +90,9 @@ def app() -> FastAPI:
     application = FastAPI()
     application.include_router(ai_chat_api.router)
     application.dependency_overrides[get_optional_user] = lambda: None
+    application.dependency_overrides[get_current_user] = lambda: type(
+        "User", (), {"id": "test-user", "username": "tester", "role": "user", "language": "zh"}
+    )()
 
     async def _no_db():
         yield None
@@ -158,6 +161,7 @@ def _post_chat_stream(client: TestClient, session_id: str, scope_token: str, ans
         json={
             "message": f"please return {answer}",
             "session_id": session_id,
+            "agent_type": "device",
             "target_device_id": "dev-x",
             "remember": False,
         },

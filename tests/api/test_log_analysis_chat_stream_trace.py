@@ -134,7 +134,10 @@ async def test_emitter_events_flow_through_to_sse(monkeypatch, tmp_path):
             break
 
     # Extract just the agent_trace frames in arrival order.
-    trace_frames = [ev for ev in events if ev.get("event") == "agent_trace"]
+    trace_frames = [
+        ev for ev in events
+        if ev.get("event") == "agent_trace" and ev.get("type") != "system_notice"
+    ]
     assert [f.get("type") for f in trace_frames] == [
         "run_start", "step_start", "step_delta", "step_end", "run_complete",
     ], f"unexpected trace frame order: {[f.get('type') for f in trace_frames]}"
@@ -265,10 +268,13 @@ async def test_reconnect_replays_trace_events_in_order(monkeypatch, tmp_path):
     proceed.set()
     await asyncio.wait_for(drainer, timeout=5)
 
-    trace_frames = [e for e in consumed_second if e.get("event") == "agent_trace"]
+    trace_frames = [
+        e for e in consumed_second
+        if e.get("event") == "agent_trace" and e.get("type") != "system_notice"
+    ]
     # All pre-events should appear in the replay in original seq order.
     pre_seqs = [e["seq"] for e in emitted_pre]
-    replayed_seqs = [f["seq"] for f in trace_frames if f["seq"] in pre_seqs]
+    replayed_seqs = [f["seq"] for f in trace_frames if f.get("seq") in pre_seqs]
     assert replayed_seqs == pre_seqs
 
     # Plus the run_complete that fired after reconnect.

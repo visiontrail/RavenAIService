@@ -3,6 +3,8 @@
 import json
 import logging
 import re
+import subprocess
+import tempfile
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -374,6 +376,50 @@ def _extract_repo_fields_from_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
         extracted["commit_id"] = commit_id.strip()
         extracted["commit_source"] = commit_source
     return extracted
+
+
+def _extract_repo_metadata(log_record) -> tuple[Optional[str], Optional[str], Optional[str], Dict[str, Any]]:
+    """Backward-compatible wrapper for tests and ad-hoc diagnostics."""
+    try:
+        meta = json.loads(getattr(log_record, "metadata_json", "") or "{}")
+    except Exception:
+        meta = {}
+    if not isinstance(meta, dict):
+        meta = {}
+    fields = _extract_repo_fields_from_metadata(meta)
+    return (
+        fields.get("repo_url"),
+        fields.get("commit_id"),
+        fields.get("branch_name"),
+        fields,
+    )
+
+
+def _clone_repository(
+    repo_url: str,
+    *,
+    commit_id: Optional[str] = None,
+    branch_name: Optional[str] = None,
+) -> str:
+    """Backward-compatible clone helper used by legacy tests."""
+    from app.agents.log_analysis.mcp_tools import build_clone_url
+
+    workspace = tempfile.mkdtemp(prefix="ai-analysis-repo-")
+    clone_url = build_clone_url(repo_url, settings.code_repo_git_token or None)
+    branch = _normalize_branch_name(branch_name)
+    cmd = ["git", "clone"]
+    if branch:
+        cmd.extend(["--single-branch", "--branch", branch])
+    cmd.extend([clone_url, workspace])
+    subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if commit_id:
+        subprocess.run(
+            ["git", "-C", workspace, "checkout", commit_id],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    return workspace
 
 
 def _metadata_debug_keys(meta: Dict[str, Any]) -> Dict[str, Any]:

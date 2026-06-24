@@ -21,7 +21,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import ai_chat as ai_chat_api
-from app.api.users import get_optional_user
+from app.api.users import get_current_user, get_optional_user
 from app.models.database import get_db
 
 
@@ -66,7 +66,13 @@ def _capture_prompt_query_factory(messages: List[Any], captured: Dict[str, str])
     """Like ``_fake_query_factory`` but also records the ``prompt`` argument."""
 
     async def _q(*, prompt: str, options: Any) -> AsyncIterator[Any]:  # noqa: ARG001
-        captured["prompt"] = prompt
+        if isinstance(prompt, str):
+            captured["prompt"] = prompt
+        else:
+            chunks: List[str] = []
+            async for chunk in prompt:
+                chunks.append(str(chunk))
+            captured["prompt"] = "".join(chunks)
         for m in messages:
             yield m
 
@@ -86,6 +92,9 @@ def app() -> FastAPI:
     application = FastAPI()
     application.include_router(ai_chat_api.router)
     application.dependency_overrides[get_optional_user] = lambda: None
+    application.dependency_overrides[get_current_user] = lambda: type(
+        "User", (), {"id": "test-user", "username": "tester", "role": "user", "language": "zh"}
+    )()
 
     async def _no_db():
         yield None
@@ -152,6 +161,7 @@ def test_chat_stream_happy_path_emits_session_runstart_thinking_runcomplete_done
         json={
             "message": "帮我看一下设备状态",
             "session_id": "sess-happy-1",
+            "agent_type": "device",
             "target_device_id": "dev-1",
             "remember": False,
         },
@@ -204,6 +214,7 @@ def test_chat_nonstream_happy_path_returns_populated_response(
         json={
             "message": "你好",
             "session_id": "sess-nonstream-1",
+            "agent_type": "device",
             "target_device_id": "dev-1",
             "remember": False,
         },
@@ -255,6 +266,7 @@ def test_chat_stream_truncates_history_to_max_turns(
         json={
             "message": "新的问题",
             "session_id": "sess-trunc",
+            "agent_type": "device",
             "target_device_id": "dev-1",
             "history": history,
             "remember": False,

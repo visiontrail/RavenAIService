@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import ai_chat as ai_chat_api
-from app.api.users import get_optional_user
+from app.api.users import get_current_user, get_optional_user
 from app.models.database import get_db
 
 
@@ -26,6 +26,9 @@ def app() -> FastAPI:
     application = FastAPI()
     application.include_router(ai_chat_api.router)
     application.dependency_overrides[get_optional_user] = lambda: None
+    application.dependency_overrides[get_current_user] = lambda: type(
+        "User", (), {"id": "test-user", "username": "tester", "role": "user", "language": "zh"}
+    )()
 
     async def _no_db():
         yield None
@@ -100,6 +103,7 @@ def test_chat_stream_refuses_when_provider_no_mcp_support(
         json={
             "message": "list background tasks",
             "session_id": "sess-deepseek",
+            "agent_type": "device",
             "target_device_id": "dev-x",
             "remember": False,
         },
@@ -141,6 +145,7 @@ def test_chat_nonstream_returns_empty_answer_when_provider_no_mcp_support(
         json={
             "message": "hello",
             "session_id": "sess-ds-nonstream",
+            "agent_type": "device",
             "target_device_id": "dev-x",
             "remember": False,
         },

@@ -32,6 +32,7 @@ from app.models.log import (
 from app.models.project_repo import ProjectRepo
 from app.services import project_repo_service
 from app.services.log_service import log_service
+from app.services.agent_trace_redis import get_buffer
 from app.utils.validation import request_validator
 from app.utils.file_upload_validator import t04_file_validator
 from app.utils.temp_file_cleaner import temp_file_cleaner, upload_temp_manager

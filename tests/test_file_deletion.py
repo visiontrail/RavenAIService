@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 from app.services.log_service import log_service
-from app.utils.temp_directory_cleaner import temp_directory_cleaner
+from app.utils.temp_directory_cleaner import TempDirectoryCleaner, temp_directory_cleaner
 from app.models.log import LogRecord, LogStatus
 from app.config import settings
 
@@ -119,10 +119,12 @@ class TestTempDirectoryCleaner:
         # 创建一个旧的处理目录
         old_processing_dir = temp_test_dir / "processing_old_task"
         old_processing_dir.mkdir()
-        (old_processing_dir / "test.txt").write_text("old file")
+        old_file = old_processing_dir / "test.txt"
+        old_file.write_text("old file")
         
         # 修改目录的修改时间为25小时前
-        old_time = (datetime.now() - timedelta(hours=25)).timestamp()
+        old_time = (datetime.utcnow() - timedelta(hours=25)).timestamp()
+        os.utime(old_file, (old_time, old_time))
         os.utime(old_processing_dir, (old_time, old_time))
         
         # 创建一个新的处理目录
@@ -166,10 +168,12 @@ class TestTempDirectoryCleaner:
         processing_dir.mkdir()
         extracted_dir = processing_dir / "extracted"
         extracted_dir.mkdir()
-        (extracted_dir / "test.txt").write_text("extracted file")
+        extracted_file = extracted_dir / "test.txt"
+        extracted_file.write_text("extracted file")
         
         # 修改目录的修改时间为49小时前
-        old_time = (datetime.now() - timedelta(hours=49)).timestamp()
+        old_time = (datetime.utcnow() - timedelta(hours=49)).timestamp()
+        os.utime(extracted_file, (old_time, old_time))
         os.utime(extracted_dir, (old_time, old_time))
         
         # 执行清理（保留时间48小时）
@@ -186,7 +190,7 @@ class TestTempDirectoryCleaner:
         # 1. 旧的处理目录
         old_processing = temp_test_dir / "processing_old"
         old_processing.mkdir()
-        old_time = (datetime.now() - timedelta(hours=25)).timestamp()
+        old_time = (datetime.utcnow() - timedelta(hours=25)).timestamp()
         os.utime(old_processing, (old_time, old_time))
         
         # 2. 旧的解压目录
@@ -194,7 +198,8 @@ class TestTempDirectoryCleaner:
         processing.mkdir()
         extracted = processing / "extracted"
         extracted.mkdir()
-        old_time = (datetime.now() - timedelta(hours=49)).timestamp()
+        old_time = (datetime.utcnow() - timedelta(hours=49)).timestamp()
+        os.utime(processing, (old_time, old_time))
         os.utime(extracted, (old_time, old_time))
         
         # 执行完整清理
@@ -211,11 +216,27 @@ class TestTempDirectoryCleaner:
 # Pytest fixtures
 
 @pytest.fixture
-async def test_db():
+async def test_db(tmp_path):
     """创建测试数据库会话"""
-    from app.models.database import get_db
-    async for db in get_db():
-        yield db
+    from app.models.database import db_manager
+
+    prev_url = settings.database_url
+    prev_engine = db_manager.engine
+    prev_factory = db_manager.session_factory
+
+    settings.database_url = f"sqlite+aiosqlite:///{tmp_path / 'file_deletion.sqlite'}"
+    db_manager.initialize()
+    await db_manager.create_tables()
+
+    try:
+        async for db in db_manager.get_session():
+            yield db
+            break
+    finally:
+        await db_manager.close()
+        settings.database_url = prev_url
+        db_manager.engine = prev_engine
+        db_manager.session_factory = prev_factory
 
 
 @pytest.fixture
@@ -236,4 +257,3 @@ def temp_test_dir(tmp_path):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-
