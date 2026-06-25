@@ -57,6 +57,11 @@ const importUserToken = async () => {
   return (await import('@/api/user')).userToken
 }
 
+const makeUserToken = (expiresAt: number) => {
+  const payload = `user-id:alice:${expiresAt}:nonce`
+  return `${btoa(payload).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}.sig`
+}
+
 const importAdminToken = async () => {
   vi.resetModules()
   return (await import('@/api/admin')).adminToken
@@ -106,6 +111,13 @@ describe('userToken persistence', () => {
 
     expect(window.localStorage.getItem('raven_user_token')).toBeNull()
     expect(document.cookie).not.toContain('raven_user_token=')
+  })
+
+  it('detects expired Raven login tokens from their payload', async () => {
+    const userToken = await importUserToken()
+
+    expect(userToken.isExpired(makeUserToken(Math.floor(Date.now() / 1000) - 1))).toBe(true)
+    expect(userToken.isExpired(makeUserToken(Math.floor(Date.now() / 1000) + 60))).toBe(false)
   })
 
   it('lets admin auth fall back to the persisted user token', async () => {

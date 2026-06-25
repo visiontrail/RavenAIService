@@ -22,7 +22,8 @@ import {
 } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
-import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
+import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
+import { useAdminScope } from '@/composables/useAdminScope'
 import { renderMarkdown } from '@/utils/markdownRenderer'
 import type {
   AgentSkill,
@@ -35,9 +36,14 @@ const appStore = useAppStore()
 const route = useRoute()
 const router = useRouter()
 
-const navItems = adminNavItems
+const { visibleNavItems, canAccessProjectCode, setAdminIdentity } = useAdminScope()
 
 const projectCode = computed(() => route.params.projectCode as string)
+// Whether the current admin scope may manage Skills for this project code.
+// Global admins (and callers before the scope resolves) always pass; project
+// members are limited to their allowed project codes. The backend independently
+// returns 404 for non-member projects.
+const projectAllowed = computed(() => canAccessProjectCode(projectCode.value))
 
 const isAuthenticated = ref(false)
 const isLoggingIn = ref(false)
@@ -342,7 +348,7 @@ watch(promptLayer, () => {
   if (projectCode.value) fetchSystemPrompt()
 })
 
-const handleNavClick = (item: (typeof navItems)[number]) => {
+const handleNavClick = (item: AdminNavItem) => {
   if (item.path && route.path !== item.path) router.push(item.path)
 }
 
@@ -529,8 +535,13 @@ const bootstrap = async () => {
   try {
     const resp = await adminApi.me()
     if (resp?.success) {
+      if (resp.data) setAdminIdentity(resp.data)
       isAuthenticated.value = true
-      await Promise.all([fetchSkills(), fetchSystemPrompt()])
+      // Skip data loads for project codes outside the member's scope; the
+      // template renders a not-found state instead of Skill controls.
+      if (projectAllowed.value) {
+        await Promise.all([fetchSkills(), fetchSystemPrompt()])
+      }
     } else {
       clearAuth()
     }
@@ -586,7 +597,7 @@ onMounted(() => bootstrap())
     <aside v-if="isAuthenticated" class="admin-sidebar" :class="{ 'is-hidden': !navVisible }">
       <div class="space-y-2">
         <button
-          v-for="item in navItems"
+          v-for="item in visibleNavItems"
           :key="item.key"
           class="admin-side-nav-item"
           :class="{ 'is-active': activeNavKey === item.key }"
@@ -637,6 +648,20 @@ onMounted(() => bootstrap())
               {{ isLoggingIn ? t('admin.loginBtnLoading') : t('admin.loginBtn') }}
             </button>
           </form>
+        </div>
+      </section>
+
+      <section v-else-if="!projectAllowed" class="admin-login-wrap">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 text-center">
+          <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.projectSkills.notFoundTitle') }}</h2>
+          <p class="mt-2 text-sm text-slate-500">{{ t('admin.projectSkills.notFoundDesc') }}</p>
+          <button
+            class="mt-5 inline-flex items-center gap-1.5 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+            @click="goBack"
+          >
+            <ArrowLeft :size="16" />
+            {{ t('admin.projectSkills.backToRepos') }}
+          </button>
         </div>
       </section>
 

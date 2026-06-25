@@ -212,7 +212,7 @@ class AdminAuthManager:
         if exp_ts < int(time.time()):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token expired",
+                detail="Login session expired. Please sign in again.",
             )
         self._ensure_loaded()
         user = self._find_user(username)

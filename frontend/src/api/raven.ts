@@ -1,6 +1,7 @@
 import { i18n } from '@/i18n'
 import axios from 'axios'
 import { localeHeaderInterceptor } from '@/api'
+import { userToken } from '@/api/user'
 import { getActiveLocale, LOCALE_HEADER } from '@/i18n/runtime'
 import type {
   ApiResponse,
@@ -41,7 +42,17 @@ const ravenApi = axios.create({
   },
 })
 
-ravenApi.interceptors.request.use(localeHeaderInterceptor)
+// Attach the active locale and, when logged in, the user bearer token so the
+// detail endpoint can return `canEditMetadata` and the metadata PATCH can
+// authorize the caller. Anonymous requests simply omit the header.
+ravenApi.interceptors.request.use((config) => {
+  const token = userToken.get()
+  if (token) {
+    config.headers = config.headers ?? {}
+    ;(config.headers as Record<string, string>).Authorization = `Bearer ${token}`
+  }
+  return localeHeaderInterceptor(config)
+})
 
 export const listRavenPackages = (params: {
   page?: number
@@ -58,6 +69,22 @@ export const getRavenPackageDetail = (id: string) =>
 
 export const deleteRavenPackage = (id: string) =>
   ravenApi.delete<ApiResponse>(`/packages/${encodeURIComponent(id)}`)
+
+export interface RavenPackageMetadataPatch {
+  description?: string | null
+  tags?: string[]
+}
+
+/**
+ * Update only a package's `description` and/or `tags`. Requires an
+ * authenticated user authorized for the package's project (or a global admin);
+ * the backend re-checks. Returns the saved package in the success envelope.
+ */
+export const updateRavenPackageMetadata = (id: string, patch: RavenPackageMetadataPatch) =>
+  ravenApi.patch<ApiResponse<RavenPackage>>(
+    `/packages/${encodeURIComponent(id)}/metadata`,
+    patch
+  )
 
 export interface AgentSearchOptions {
   sessionId?: string

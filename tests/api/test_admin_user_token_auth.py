@@ -77,13 +77,15 @@ def test_admin_routes_accept_admin_role_user_token(client: TestClient) -> None:
 
 
 def test_admin_routes_reject_regular_user_token(client: TestClient) -> None:
+    # A regular user with no enabled project membership is not admitted to the
+    # admin console as a project-member admin.
     resp = client.get(
         "/admin/auth/me",
         headers={"Authorization": f"Bearer {client._state['regular_token']}"},
     )
 
     assert resp.status_code == 403, resp.text
-    assert resp.json()["detail"] == "Admin role required"
+    assert resp.json()["detail"] == "Project membership required"
 
 
 def test_user_management_accepts_admin_role_user_token(client: TestClient) -> None:

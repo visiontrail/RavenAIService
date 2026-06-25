@@ -51,6 +51,13 @@ const getTokenMaxAge = (token: string) => {
   return USER_TOKEN_FALLBACK_MAX_AGE_SECONDS
 }
 
+const getTokenExpiresAt = (token: string) => {
+  const payload = token.split('.', 1)[0]
+  const decoded = payload ? decodeBase64Url(payload) : ''
+  const exp = Number(decoded.split(':')[2])
+  return Number.isFinite(exp) && exp > 0 ? exp : null
+}
+
 const getCookieToken = () => {
   if (typeof document === 'undefined') return ''
   const prefix = `${USER_TOKEN_KEY}=`
@@ -106,6 +113,11 @@ export const userToken = {
     const storage = getStorage()
     if (storage) storage.removeItem(USER_TOKEN_KEY)
     clearCookieToken()
+  },
+  isExpired(token: string, skewSeconds = 0): boolean {
+    const expiresAt = getTokenExpiresAt(token)
+    if (!expiresAt) return false
+    return expiresAt <= Math.floor(Date.now() / 1000) + skewSeconds
   },
 }
 

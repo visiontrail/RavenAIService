@@ -1,6 +1,9 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { i18n } from '@/i18n'
 import type { RouteRecordRaw } from 'vue-router'
+import { adminApi, adminToken } from '@/api/admin'
+import { setAdminIdentity, useAdminScope } from '@/composables/useAdminScope'
+import { resolveAdminRedirect } from '@/utils/adminNav'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -215,12 +218,45 @@ const router = createRouter({
   routes,
 })
 
+// Resolve the admin identity scope for project-member route guarding. Backend
+// authorization remains authoritative; this only prevents project-member admins
+// from landing on global-only admin pages they cannot use.
+const ensureAdminScope = async () => {
+  const { identity } = useAdminScope()
+  if (identity.value) return identity.value
+  if (!adminToken.get()) return null
+  try {
+    const resp = await adminApi.me()
+    if (resp?.success && resp.data) {
+      setAdminIdentity(resp.data)
+      return resp.data
+    }
+  } catch {
+    // No valid admin scope — leave it unset so the view renders its login flow.
+  }
+  return null
+}
+
 // 路由守卫
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   // 设置页面标题
   if (to.meta?.title) {
     document.title = `${to.meta.title}${i18n.global.t('router.docTitleSuffix')}`
   }
+
+  if (to.path.startsWith('/admin')) {
+    const identity = await ensureAdminScope()
+    // Project-member admins are sent from /admin (or any global-only admin
+    // route) to their project repositories. The Project Skills route resolves
+    // to the project-repos nav key and is allowed; its project-code scope is
+    // enforced inside the view and by the backend.
+    const redirect = resolveAdminRedirect(identity, to.path)
+    if (redirect) {
+      next(redirect)
+      return
+    }
+  }
+
   next()
 })
 

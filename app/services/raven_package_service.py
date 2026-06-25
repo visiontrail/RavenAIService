@@ -37,6 +37,83 @@ logger = logging.getLogger(__name__)
 # Special filter value selecting packages without a project association.
 UNASSOCIATED_PROJECT = "__unassociated__"
 
+# ─────────────── Editable package metadata limits & validation ───────────────
+# These bound the only two fields the metadata-edit flow may change so a direct
+# API caller cannot bloat the JSON store. They are intentionally generous; the
+# UI never needs the full range.
+PACKAGE_DESCRIPTION_MAX_LEN = 4000
+PACKAGE_TAG_MAX_COUNT = 30
+PACKAGE_TAG_MAX_LEN = 64
+
+# Sentinel marking an editable field as "not supplied" so a caller can clear a
+# field to empty (``description=None`` / ``tags=[]``) without it being confused
+# with "leave unchanged".
+_UNSET: Any = object()
+
+
+class MetadataValidationError(ValueError):
+    """Raised when an editable metadata field fails normalization.
+
+    Carries a stable ``code`` so the API layer can map it to a localized 400
+    message, plus optional ``params`` for message interpolation (e.g. ``max``).
+    """
+
+    def __init__(self, code: str, **params: Any) -> None:
+        super().__init__(code)
+        self.code = code
+        self.params = params
+
+
+def normalize_description(value: Any) -> str:
+    """Trim a description, allow clearing to empty, cap at the max length.
+
+    ``None`` clears the field to an empty string. Non-string values and
+    over-length input raise :class:`MetadataValidationError`.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise MetadataValidationError("metadata_description_invalid")
+    text = value.strip()
+    if len(text) > PACKAGE_DESCRIPTION_MAX_LEN:
+        raise MetadataValidationError(
+            "metadata_description_too_long", max=PACKAGE_DESCRIPTION_MAX_LEN
+        )
+    return text
+
+
+def normalize_tags(value: Any) -> list[str]:
+    """Normalize tags to a unique, ordered list of trimmed non-empty strings.
+
+    Input must be a list of strings. Each tag is trimmed; empty tags are
+    dropped; duplicates (by exact trimmed value) are removed keeping first-seen
+    order. Over-length tags or too many tags raise
+    :class:`MetadataValidationError`.
+    """
+    if not isinstance(value, list):
+        raise MetadataValidationError("metadata_tags_invalid")
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            raise MetadataValidationError("metadata_tags_invalid")
+        tag = item.strip()
+        if not tag:
+            continue
+        if len(tag) > PACKAGE_TAG_MAX_LEN:
+            raise MetadataValidationError(
+                "metadata_tag_too_long", max=PACKAGE_TAG_MAX_LEN
+            )
+        if tag in seen:
+            continue
+        seen.add(tag)
+        out.append(tag)
+    if len(out) > PACKAGE_TAG_MAX_COUNT:
+        raise MetadataValidationError(
+            "metadata_tags_too_many", max=PACKAGE_TAG_MAX_COUNT
+        )
+    return out
+
 
 def _normalize_project_code(package: dict[str, Any]) -> dict[str, Any]:
     """Idempotent lazy migration: ensure ``projectCode`` on a package record.
@@ -189,6 +266,45 @@ class RavenPackageService:
 
         if not updated:
             packages.append(package)
+
+        self.save_packages(packages)
+        return package
+
+    def update_package_metadata(
+        self,
+        package_id: str,
+        *,
+        description: Any = _UNSET,
+        tags: Any = _UNSET,
+    ) -> Optional[dict[str, Any]]:
+        """Update only ``metadata.description`` and/or ``metadata.tags``.
+
+        Pass a value to change a field, omit it to leave it untouched. All
+        non-editable package fields (``path``, ``size``, ``metadata.sha256``,
+        ``version``, ``projectCode``, ``metadata.isPatch``,
+        ``metadata.components``, ``createdAt`` …) are preserved. The change is
+        persisted to the metadata JSON file and the saved package is returned.
+        Returns ``None`` when no package matches ``package_id``.
+
+        Values are expected to be already normalized by the caller
+        (:func:`normalize_description` / :func:`normalize_tags`).
+        """
+        packages = self.load_packages()
+        target_index = next(
+            (i for i, pkg in enumerate(packages) if pkg.get("id") == package_id),
+            None,
+        )
+        if target_index is None:
+            return None
+
+        package = packages[target_index]
+        metadata = dict(package.get("metadata") or {})
+        if description is not _UNSET:
+            metadata["description"] = description
+        if tags is not _UNSET:
+            metadata["tags"] = list(tags)
+        package["metadata"] = metadata
+        packages[target_index] = package
 
         self.save_packages(packages)
         return package

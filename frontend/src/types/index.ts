@@ -151,6 +151,10 @@ export interface RavenPackage {
   createdAt: string
   path?: string
   metadata?: RavenMetadata
+  // Presentation-only hint from the detail endpoint: true when the current
+  // user may edit this package's description and tags. The backend re-checks
+  // on the metadata PATCH, so this only gates whether edit controls render.
+  canEditMetadata?: boolean
 }
 
 export interface RavenPagination {
@@ -238,6 +242,16 @@ export interface AdminAuthData {
   token: string
   expires_at: string
   ttl_minutes: number
+}
+
+export type AdminAccessLevel = 'global_admin' | 'project_member'
+
+export interface AdminIdentity {
+  username: string
+  access_level: AdminAccessLevel
+  allowed_nav_keys: string[]
+  allowed_project_ids: number[]
+  allowed_project_codes: string[]
 }
 
 export interface PromptsSummary {

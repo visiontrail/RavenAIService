@@ -98,7 +98,7 @@ class UserAuthManager:
         if exp_ts < int(time.time()):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token expired",
+                detail="Login session expired. Please sign in again.",
             )
         return user_id, username
 

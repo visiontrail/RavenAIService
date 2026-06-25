@@ -10,10 +10,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.api import admin as admin_api
-from app.api.admin import require_admin
+from app.api.admin import require_admin, require_project_admin_by_repo_id
 from app.models.database import Base, get_db
 from app.models.project_repo import ProjectRepo
 from app.models.user import User
+from app.security.admin_dependency import AdminPrincipal
 
 
 @pytest.fixture
@@ -58,6 +59,11 @@ def client(tmp_path) -> TestClient:
     application.include_router(admin_api.router)
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[require_admin] = lambda: "admin"
+    application.dependency_overrides[require_project_admin_by_repo_id] = (
+        lambda: AdminPrincipal(
+            kind="legacy_admin", username="admin", is_global_admin=True
+        )
+    )
 
     with TestClient(application) as test_client:
         test_client._state = state

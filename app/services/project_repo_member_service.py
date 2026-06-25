@@ -41,6 +41,29 @@ async def list_user_projects(db: AsyncSession, user_id: str) -> List[int]:
     return [row[0] for row in result.all()]
 
 
+async def list_user_enabled_projects(
+    db: AsyncSession, user_id: str
+) -> List["ProjectRepo"]:
+    """列出某用户作为成员且「已启用」的项目（ProjectRepo 实体），按 id 排序。
+
+    用作项目成员管理员（project-member admin）的鉴权范围：仅已启用项目才授予
+    受限 admin 访问。
+    """
+    from app.models.project_repo import ProjectRepo
+
+    stmt = (
+        select(ProjectRepo)
+        .join(ProjectRepoMember, ProjectRepoMember.project_repo_id == ProjectRepo.id)
+        .where(
+            ProjectRepoMember.user_id == user_id,
+            ProjectRepo.enabled.is_(True),
+        )
+        .order_by(ProjectRepo.id)
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def is_member(db: AsyncSession, project_repo_id: int, user_id: str) -> bool:
     """判断给定用户是否为给定项目的成员。"""
     stmt = select(ProjectRepoMember.id).where(

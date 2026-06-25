@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { deviceLinkApi } from '@/api/deviceLink'
-import { userApi } from '@/api/user'
+import { userApi, userToken } from '@/api/user'
 import type { DeviceInfo } from '@/types'
 import { renderMarkdown, processMermaidBlocks } from '@/utils/markdownRenderer'
 import { loadMermaid } from '@/utils/mermaidLoader'
@@ -1425,6 +1425,18 @@ const sendMessage = async () => {
   const fileForRequest = selectedLogFile.value
   if (!content && !fileForRequest) return
 
+  const authToken = (userStore.token as unknown as string) || null
+  if (authToken && userToken.isExpired(authToken)) {
+    userStore.clear()
+    appStore.showNotification({
+      title: t('aiChat.notifications.sessionExpired'),
+      type: 'warning',
+      duration: 5000,
+    })
+    appStore.requestLoginModal('login')
+    return
+  }
+
   // Allocate a session id locally if this is a brand-new conversation. The
   // run service / DB layer will keep the same id for persistence.
   let sid = effectiveSessionId.value
@@ -1472,8 +1484,6 @@ const sendMessage = async () => {
   }
 
   const outgoingContent = content || t('aiChat.defaultLogAnalysisMessage')
-  const authToken = (userStore.token as unknown as string) || null
-
   // History payload only for anonymous sessions; logged-in sessions reuse
   // the DB transcript on the backend.
   const historyPayload = isLoggedIn.value

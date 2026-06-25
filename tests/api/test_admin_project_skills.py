@@ -20,7 +20,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import admin as admin_api
-from app.api.admin import require_admin
+from app.api.admin import require_project_admin_by_code
+from app.security.admin_dependency import AdminPrincipal
+
+
+def _global_admin() -> AdminPrincipal:
+    return AdminPrincipal(kind="legacy_admin", username="admin", is_global_admin=True)
 
 
 def _build_zip(members: Dict[str, bytes]) -> bytes:
@@ -53,7 +58,7 @@ def isolated_skills_dir(tmp_path, monkeypatch):
 def app(isolated_skills_dir) -> FastAPI:
     application = FastAPI()
     application.include_router(admin_api.router)
-    application.dependency_overrides[require_admin] = lambda: "admin"
+    application.dependency_overrides[require_project_admin_by_code] = _global_admin
     return application
 
 
@@ -64,7 +69,7 @@ def client(app: FastAPI) -> TestClient:
 
 @pytest.fixture()
 def no_auth_client(isolated_skills_dir) -> TestClient:
-    """Client WITHOUT admin auth override — require_admin will reject."""
+    """Client WITHOUT admin auth override — the auth dependency will reject."""
     application = FastAPI()
     application.include_router(admin_api.router)
     return TestClient(application)

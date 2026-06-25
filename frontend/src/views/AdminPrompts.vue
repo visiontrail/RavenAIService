@@ -5,7 +5,8 @@ import { useI18n } from 'vue-i18n'
 import { LogOut, Menu, PanelLeftClose, RefreshCw, Save } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
-import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
+import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
+import { useAdminScope } from '@/composables/useAdminScope'
 import type { PromptEntry, PromptsConfigData } from '@/types'
 
 type PromptSnapshot = Record<string, string>
@@ -29,7 +30,7 @@ const appStore = useAppStore()
 const router = useRouter()
 const route = useRoute()
 
-const navItems = adminNavItems
+const { visibleNavItems } = useAdminScope()
 
 const configState = reactive<PromptsConfigData>({
   path: 'app/prompts/prompts_config.yaml',
@@ -358,7 +359,7 @@ const handleLogout = async () => {
   }
 }
 
-const handleNavClick = (item: (typeof navItems)[number]) => {
+const handleNavClick = (item: AdminNavItem) => {
   if (item.path && route.path !== item.path) {
     router.push(item.path)
   }
@@ -453,7 +454,7 @@ onBeforeUnmount(() => {
     >
       <div class="space-y-2">
         <button
-          v-for="item in navItems"
+          v-for="item in visibleNavItems"
           :key="item.key"
           class="admin-side-nav-item"
           :class="{ 'is-active': activeNavKey === item.key }"

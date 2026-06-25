@@ -111,91 +111,79 @@ class DatabaseManager:
                 await session.close()
     
     async def create_tables(self):
-        """创建所有表"""
+        """创建所有表，并根据 ORM 模型自动补齐已存在表缺失的列。"""
         if not self.engine:
             raise RuntimeError("数据库引擎未初始化")
-            
+
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            # ``create_all`` only creates missing *tables*; it never adds new
-            # columns to tables that already exist. Since this project manages
-            # schema via ``create_all`` at startup (alembic migrations are not
-            # run at runtime), additive columns must be backfilled here so an
-            # existing database stays in sync with the ORM models.
-            await conn.run_sync(self._ensure_additive_columns)
+            # ``create_all`` 只会创建缺失的“表”，绝不会向已存在的表添加新“列”。
+            # 本项目在运行期不执行 alembic 迁移，而是通过 ``create_all`` + 自动列
+            # 同步来维护 schema。因此这里根据 ORM 模型自动补齐任何缺失的列，使旧库
+            # 与模型保持一致——新增模型字段无需再手工维护补列清单。
+            await conn.run_sync(self._sync_columns_from_models)
 
-    @staticmethod
-    def _ensure_additive_columns(conn) -> None:
-        """Backfill columns that were added to existing tables over time.
+    # 已从 ORM 模型中移除、需要从旧库里删除的列。这类信息无法从模型推导
+    # （属性已不存在），因此显式列出。SQLite 自 3.35.0 起支持 DROP COLUMN，
+    # PostgreSQL 一直支持。
+    _REMOVED_COLUMNS: dict[str, tuple[str, ...]] = {
+        "log_records": ("log_type",),
+    }
 
-        Idempotent and dialect-aware (SQLite / PostgreSQL). Each entry maps a
-        table to the columns that may be missing on older databases, with the
-        ``ALTER TABLE ADD COLUMN`` type clause per dialect.
+    @classmethod
+    def _sync_columns_from_models(cls, conn) -> None:
+        """自动将已存在表的列结构同步到 ORM 模型定义。
+
+        - 为缺失的列执行 ``ALTER TABLE ... ADD COLUMN``；其 DDL（类型 /
+          server_default / 可空性）由 Alembic 依据模型列定义渲染，与迁移文件中
+          ``op.add_column`` 的行为完全一致，因此字符串默认值等都会被正确转义。
+        - 删除 ``_REMOVED_COLUMNS`` 中声明的废弃列。
+
+        幂等且方言无关（SQLite / PostgreSQL）。对于无法安全自动添加的列
+        （NOT NULL 且无 server_default，向已有数据的表追加会失败），记录告警并
+        跳过，需由人工编写迁移做数据回填。
         """
-        dialect = conn.dialect.name
-        is_sqlite = dialect == "sqlite"
-
-        # column_name -> {"sqlite": <ddl>, "default": <ddl for others>}
-        additive: dict[str, dict[str, dict[str, str]]] = {
-            "chat_sessions": {
-                "is_pinned": {
-                    "sqlite": "BOOLEAN NOT NULL DEFAULT 0",
-                    "default": "BOOLEAN NOT NULL DEFAULT FALSE",
-                },
-                "pinned_at": {
-                    "sqlite": "DATETIME",
-                    "default": "TIMESTAMP",
-                },
-            },
-            "users": {
-                "language": {
-                    "sqlite": "VARCHAR(8) NOT NULL DEFAULT 'zh'",
-                    "default": "VARCHAR(8) NOT NULL DEFAULT 'zh'",
-                },
-                "profile_role": {
-                    "sqlite": "VARCHAR(64) NOT NULL DEFAULT 'developer'",
-                    "default": "VARCHAR(64) NOT NULL DEFAULT 'developer'",
-                },
-            },
-            "log_records": {
-                "project_id": {
-                    "sqlite": "INTEGER",
-                    "default": "INTEGER REFERENCES project_repo(id) ON DELETE SET NULL",
-                },
-            },
-        }
-
-        # Columns that were removed from ORM models and must be dropped from
-        # existing databases. SQLite supports DROP COLUMN since 3.35.0;
-        # PostgreSQL has always supported it.
-        removed: dict[str, list[str]] = {
-            "log_records": ["log_type"],
-        }
+        from alembic.migration import MigrationContext
+        from alembic.operations import Operations
 
         inspector = inspect(conn)
         existing_tables = set(inspector.get_table_names())
-        for table, columns in additive.items():
-            if table not in existing_tables:
-                continue
-            present = {col["name"] for col in inspector.get_columns(table)}
-            for column, ddl in columns.items():
-                if column in present:
-                    continue
-                type_clause = ddl["sqlite"] if is_sqlite else ddl["default"]
-                conn.execute(
-                    text(f"ALTER TABLE {table} ADD COLUMN {column} {type_clause}")
-                )
-                logger.info("已为表 %s 补充缺失列: %s", table, column)
+        op = Operations(MigrationContext.configure(conn))
 
-        for table, columns in removed.items():
-            if table not in existing_tables:
+        # 1) 依据模型自动补齐缺失列
+        for table in Base.metadata.sorted_tables:
+            if table.name not in existing_tables:
+                continue  # 新表交给 create_all 创建
+            present = {col["name"] for col in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in present:
+                    continue
+                if not column.nullable and column.server_default is None:
+                    logger.warning(
+                        "表 %s 缺失列 %s（NOT NULL 且无 server_default），"
+                        "无法自动补齐，请编写迁移处理",
+                        table.name,
+                        column.name,
+                    )
+                    continue
+                new_column = column._copy()
+                # 附加列不携带外键约束：SQLite 无法通过 ALTER ADD COLUMN 追加外键，
+                # 此处只需补齐数据列本身（与历史手工补列的行为一致）。
+                new_column.foreign_keys = set()
+                op.add_column(table.name, new_column)
+                logger.info("已为表 %s 自动补充缺失列: %s", table.name, column.name)
+
+        # 2) 删除已废弃列
+        inspector.clear_cache()
+        for table_name, columns in cls._REMOVED_COLUMNS.items():
+            if table_name not in existing_tables:
                 continue
-            present = {col["name"] for col in inspector.get_columns(table)}
+            present = {col["name"] for col in inspector.get_columns(table_name)}
             for column in columns:
                 if column not in present:
                     continue
-                conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {column}"))
-                logger.info("已从表 %s 删除废弃列: %s", table, column)
+                conn.execute(text(f"ALTER TABLE {table_name} DROP COLUMN {column}"))
+                logger.info("已从表 %s 删除废弃列: %s", table_name, column)
 
     async def drop_tables(self):
         """删除所有表"""

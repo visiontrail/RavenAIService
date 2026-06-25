@@ -13,6 +13,7 @@ import {
 import { projectRepoApi, type ProjectRepoOption } from '@/api'
 import { copyToClipboard, downloadFileByUrl, formatDateTime, formatFileSize } from '@/utils'
 import { renderMarkdown } from '@/utils/markdownRenderer'
+import { useRavenMetadataEditor } from '@/composables/useRavenMetadataEditor'
 import type { RavenComponent, RavenPackage } from '@/types'
 
 const route = useRoute()
@@ -112,6 +113,36 @@ const renderedDescription = computed(() =>
 
 const tags = computed(() => normalizeTags(pkg.value?.metadata?.tags))
 const components = computed(() => normalizeComponents(pkg.value?.metadata?.components))
+
+// Inline description + tag editing. Only renders affordances when the backend
+// reports `canEditMetadata`; the PATCH endpoint re-checks authorization.
+const {
+  canEdit,
+  editingDesc,
+  descDraft,
+  savingDesc,
+  startEditDesc,
+  cancelEditDesc,
+  saveDesc,
+  editingTags,
+  tagsDraft,
+  tagInput,
+  savingTags,
+  startEditTags,
+  cancelEditTags,
+  addTag,
+  removeTag,
+  saveTags,
+} = useRavenMetadataEditor({
+  pkg,
+  onSaved: (saved) => {
+    pkg.value = saved
+  },
+  onSuccess: (message) => ElMessage.success(message),
+  onError: (message) => ElMessage.error(message),
+  onWarn: (message) => ElMessage.warning(message),
+  t,
+})
 
 const fetchDetail = async () => {
   if (!packageId.value) {
@@ -322,21 +353,91 @@ watch(
         <section class="rw-card">
           <div class="card-head">
             <h2 class="card-title">{{ t('raven.descSection') }}</h2>
+            <button
+              v-if="canEdit && !editingDesc"
+              class="rw-btn-text card-head-action"
+              @click="startEditDesc"
+            >
+              {{ t('raven.editAction') }}
+            </button>
           </div>
-          <div class="rw-markdown" v-html="renderedDescription" />
+          <div v-if="!editingDesc" class="rw-markdown" v-html="renderedDescription" />
+          <div v-else class="edit-block">
+            <textarea
+              v-model="descDraft"
+              class="rw-textarea"
+              rows="8"
+              :placeholder="t('raven.descEditPlaceholder')"
+              :disabled="savingDesc"
+            />
+            <div class="edit-actions">
+              <button class="rw-btn-primary" :disabled="savingDesc" @click="saveDesc">
+                {{ savingDesc ? t('raven.savingAction') : t('raven.saveAction') }}
+              </button>
+              <button class="rw-btn-secondary" :disabled="savingDesc" @click="cancelEditDesc">
+                {{ t('raven.cancelAction') }}
+              </button>
+            </div>
+          </div>
         </section>
 
         <!-- 标签 -->
         <section class="rw-card">
           <div class="card-head">
             <h2 class="card-title">{{ t('raven.tagsSection') }}</h2>
-            <span v-if="tags.length" class="card-subtitle">{{ t('raven.totalCount', { count: tags.length }) }}</span>
+            <span v-if="!editingTags && tags.length" class="card-subtitle">{{ t('raven.totalCount', { count: tags.length }) }}</span>
+            <button
+              v-if="canEdit && !editingTags"
+              class="rw-btn-text card-head-action"
+              @click="startEditTags"
+            >
+              {{ t('raven.editAction') }}
+            </button>
           </div>
-          <div class="pill-group">
+          <div v-if="!editingTags" class="pill-group">
             <span v-for="tag in tags" :key="tag" class="rw-pill rw-pill-neutral">
               {{ tag }}
             </span>
             <span v-if="!tags.length" class="empty-inline">{{ t('raven.noTags') }}</span>
+          </div>
+          <div v-else class="edit-block">
+            <div class="pill-group">
+              <span
+                v-for="tag in tagsDraft"
+                :key="tag"
+                class="rw-pill rw-pill-neutral editable-pill"
+              >
+                {{ tag }}
+                <button
+                  type="button"
+                  class="pill-remove"
+                  :title="t('raven.removeTagAction')"
+                  :disabled="savingTags"
+                  @click="removeTag(tag)"
+                >×</button>
+              </span>
+              <span v-if="!tagsDraft.length" class="empty-inline">{{ t('raven.noTags') }}</span>
+            </div>
+            <div class="tag-input-row">
+              <input
+                v-model="tagInput"
+                class="rw-input"
+                :placeholder="t('raven.tagInputPlaceholder')"
+                :disabled="savingTags"
+                @keydown.enter.prevent="addTag"
+              />
+              <button class="rw-btn-secondary" :disabled="savingTags" @click="addTag">
+                {{ t('raven.addTagAction') }}
+              </button>
+            </div>
+            <div class="edit-actions">
+              <button class="rw-btn-primary" :disabled="savingTags" @click="saveTags">
+                {{ savingTags ? t('raven.savingAction') : t('raven.saveAction') }}
+              </button>
+              <button class="rw-btn-secondary" :disabled="savingTags" @click="cancelEditTags">
+                {{ t('raven.cancelAction') }}
+              </button>
+            </div>
           </div>
         </section>
 
@@ -540,6 +641,69 @@ watch(
 .empty-inline {
   color: var(--rw-muted, #999);
   font-size: 13px;
+}
+
+/* Inline metadata editing */
+.card-head-action {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rw-accent, #2563eb);
+}
+.card-head-action:hover:not(:disabled) { text-decoration: underline; }
+
+.edit-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rw-textarea,
+.rw-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--rw-ink, #171717);
+  background: var(--rw-canvas, #fff);
+  border: 1px solid var(--rw-hairline-strong, #dcdee0);
+  border-radius: 8px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+.rw-textarea:focus,
+.rw-input:focus {
+  outline: none;
+  border-color: var(--rw-accent, #2563eb);
+}
+.rw-textarea:disabled,
+.rw-input:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.tag-input-row {
+  display: flex;
+  gap: 8px;
+}
+.tag-input-row .rw-input { flex: 1; }
+
+.editable-pill { padding-right: 4px; }
+.pill-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--rw-body, #60646c);
+}
+.pill-remove:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--rw-ink, #171717);
+}
+.pill-remove:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.edit-actions {
+  display: flex;
+  gap: 10px;
 }
 
 /* Page scroll */

@@ -3,6 +3,7 @@ import { API_BASE_URL, localeHeaderInterceptor } from './index'
 import { userToken } from './user'
 import type {
   AdminAuthData,
+  AdminIdentity,
   AgentSkill,
   AgentSkillAgentInfo,
   ApiResponse,
@@ -80,7 +81,7 @@ export const adminApi = {
   login: (username: string, password: string): Promise<ApiResponse<AdminAuthData>> =>
     adminClient.post('/admin/auth/login', { username, password }),
 
-  me: (): Promise<ApiResponse<{ username: string }>> => adminClient.get('/admin/auth/me'),
+  me: (): Promise<ApiResponse<AdminIdentity>> => adminClient.get('/admin/auth/me'),
 
   logout: (): Promise<ApiResponse> => adminClient.post('/admin/auth/logout'),
 

@@ -33,6 +33,9 @@ from app.api.users import get_optional_user, get_request_locale
 from app.i18n.messages import t
 from app.models.database import get_db
 from app.services.raven_package_service import (
+    MetadataValidationError,
+    normalize_description,
+    normalize_tags,
     raven_package_service,
     validate_project_code,
 )
@@ -116,6 +119,51 @@ def _ok(data: Any = None, message: str = "ok", **extra: Any) -> dict[str, Any]:
         payload["data"] = data
     payload.update(extra)
     return payload
+
+
+async def _can_edit_package_metadata(db: Any, package: dict[str, Any], user: Any) -> bool:
+    """Return whether ``user`` may edit ``package`` description/tags.
+
+    Authorization: global ``role == "admin"`` may edit any existing package;
+    otherwise the package's ``projectCode`` must resolve to an enabled
+    ``project_repo`` of which the user is a member. Anonymous users (``user is
+    None``) are never authorized. Never raises — used both for the detail-page
+    capability flag and (via :func:`_require_package_metadata_edit`) enforcement.
+    """
+    if user is None:
+        return False
+    if str(getattr(user, "role", "") or "") == "admin":
+        return True
+    code = str(package.get("projectCode") or "").strip()
+    if not code:
+        return False
+
+    from app.services import project_repo_member_service, project_repo_service
+
+    repo = await project_repo_service.get_by_project_code(db, code)
+    if repo is None or not getattr(repo, "enabled", True):
+        return False
+    return await project_repo_member_service.is_member(db, repo.id, str(user.id))
+
+
+async def _require_package_metadata_edit(
+    db: Any, package: dict[str, Any], user: Any, locale: str
+) -> None:
+    """Enforce metadata-edit authorization, raising 401/403 as appropriate.
+
+    Anonymous callers get 401; authenticated non-members (including packages
+    with no resolvable enabled project for non-admins) get 403.
+    """
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=t("auth.not_logged_in", locale),
+        )
+    if not await _can_edit_package_metadata(db, package, user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=t("package.metadata_forbidden", locale),
+        )
 
 
 def _metadata_fields(
@@ -227,6 +275,8 @@ async def scan_packages(
 @router.get("/packages/{package_id}")
 async def get_package(
     package_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_optional_user),
     locale: str = Depends(get_request_locale),
 ) -> dict[str, Any]:
     package = raven_package_service.get_package(package_id)
@@ -235,7 +285,81 @@ async def get_package(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=t("package.not_found", locale),
         )
-    return _ok(package)
+    # ``canEditMetadata`` is a presentation-only hint so the detail page can
+    # show edit controls to eligible users; the PATCH endpoint re-checks.
+    data = dict(package)
+    data["canEditMetadata"] = await _can_edit_package_metadata(db, package, current_user)
+    return _ok(data)
+
+
+@router.patch("/packages/{package_id}/metadata")
+async def update_package_metadata(
+    package_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_optional_user),
+    locale: str = Depends(get_request_locale),
+) -> dict[str, Any]:
+    """Update only the Raven package ``description`` and/or ``tags``.
+
+    Body: ``{description?: string | null, tags?: string[]}`` with at least one
+    field present. Authorized for global admins and members of the package's
+    enabled project. Non-editable package asset fields are never touched.
+    """
+    package = raven_package_service.get_package(package_id)
+    if not package:
+        # 401 for anonymous callers takes priority so we don't leak existence,
+        # but an authenticated caller hitting a missing package gets 404.
+        if current_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=t("auth.not_logged_in", locale),
+            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=t("package.not_found", locale),
+        )
+
+    await _require_package_metadata_edit(db, package, current_user, locale)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=t("package.body_not_object", locale),
+        )
+
+    has_description = "description" in body
+    has_tags = "tags" in body
+    if not has_description and not has_tags:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=t("package.metadata_patch_empty", locale),
+        )
+
+    updates: dict[str, Any] = {}
+    try:
+        if has_description:
+            updates["description"] = normalize_description(body.get("description"))
+        if has_tags:
+            updates["tags"] = normalize_tags(body.get("tags"))
+    except MetadataValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=t(f"package.{exc.code}", locale, **exc.params),
+        ) from exc
+
+    saved = raven_package_service.update_package_metadata(package_id, **updates)
+    if saved is None:
+        # Race: package removed between load and write.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=t("package.not_found", locale),
+        )
+    return _ok(saved, message=t("package.metadata_update_success", locale))
 
 
 @router.delete("/packages/{package_id}")

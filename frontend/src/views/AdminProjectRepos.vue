@@ -23,7 +23,8 @@ import {
 } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
-import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
+import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
+import { useAdminScope } from '@/composables/useAdminScope'
 import type { ProjectMember, ProjectRepo, ProjectRepoPayload, TestConnectionResult, UserProfile } from '@/types'
 
 const { t } = useI18n()
@@ -31,7 +32,7 @@ const appStore = useAppStore()
 const route = useRoute()
 const router = useRouter()
 
-const navItems = adminNavItems
+const { visibleNavItems, isGlobalAdmin } = useAdminScope()
 
 const isAuthenticated = ref(false)
 const isLoggingIn = ref(false)
@@ -157,7 +158,7 @@ const handleLogout = async () => {
   }
 }
 
-const handleNavClick = (item: (typeof navItems)[number]) => {
+const handleNavClick = (item: AdminNavItem) => {
   if (item.path && route.path !== item.path) router.push(item.path)
 }
 
@@ -316,8 +317,13 @@ const buildPayload = (): ProjectRepoPayload => {
     repo_url: associate ? repoForm.repo_url.trim() : '',
     default_branch: repoForm.default_branch.trim() || 'main',
     description: repoForm.description.trim() || null,
-    enabled: repoForm.enabled,
   }
+  // 项目成员管理员仅能修改安全的项目字段；enabled/git_token 为全局管理员专属，
+  // 后端也会拒绝项目成员对这些字段的修改，因此前端不下发。
+  if (!isGlobalAdmin.value) {
+    return payload
+  }
+  payload.enabled = repoForm.enabled
   if (dialogMode.value === 'create') {
     payload.project_code = repoForm.project_code.trim().toLowerCase()
   }
@@ -460,7 +466,7 @@ onMounted(() => bootstrap())
     <aside v-if="isAuthenticated" class="admin-sidebar" :class="{ 'is-hidden': !navVisible }">
       <div class="space-y-2">
         <button
-          v-for="item in navItems"
+          v-for="item in visibleNavItems"
           :key="item.key"
           class="admin-side-nav-item"
           :class="{ 'is-active': activeNavKey === item.key }"
@@ -542,6 +548,7 @@ onMounted(() => bootstrap())
                 {{ loadingRepos ? t('admin.refreshing') : t('common.refresh') }}
               </button>
               <button
+                v-if="isGlobalAdmin"
                 class="inline-flex items-center gap-1.5 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
                 @click="openCreateDialog"
               >
@@ -671,7 +678,7 @@ onMounted(() => bootstrap())
                       >
                         <FolderTree :size="15" />
                       </button>
-                      <button class="admin-action-btn" :title="t('admin.projectRepos.tooltipMembers')" @click="openMemberDialog(repo)">
+                      <button v-if="isGlobalAdmin" class="admin-action-btn" :title="t('admin.projectRepos.tooltipMembers')" @click="openMemberDialog(repo)">
                         <Users :size="15" />
                       </button>
                       <button
@@ -687,6 +694,7 @@ onMounted(() => bootstrap())
                         <Pencil :size="15" />
                       </button>
                       <button
+                        v-if="isGlobalAdmin"
                         class="admin-action-btn danger"
                         :disabled="deletingId === repo.id"
                         :title="t('common.delete')"
@@ -770,7 +778,7 @@ onMounted(() => bootstrap())
               spellcheck="false"
             />
           </label>
-          <label v-if="repoForm.associate_repo" class="block">
+          <label v-if="repoForm.associate_repo && isGlobalAdmin" class="block">
             <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldToken') }}</span>
             <input
               v-model="repoForm.git_token"
@@ -794,7 +802,7 @@ onMounted(() => bootstrap())
           </label>
         </div>
 
-        <div class="mt-4 flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+        <div v-if="isGlobalAdmin" class="mt-4 flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
           <div>
             <p class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.enableRepoLabel') }}</p>
             <p class="text-xs text-slate-400">{{ t('admin.projectRepos.enableRepoHint') }}</p>

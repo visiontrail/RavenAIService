@@ -22,7 +22,8 @@ import {
 } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
-import { adminNavItems, resolveAdminNavKey } from '@/utils/adminNav'
+import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
+import { useAdminScope } from '@/composables/useAdminScope'
 import { renderMarkdown } from '@/utils/markdownRenderer'
 import type {
   AgentSkill,
@@ -36,7 +37,7 @@ const appStore = useAppStore()
 const route = useRoute()
 const router = useRouter()
 
-const navItems = adminNavItems
+const { visibleNavItems } = useAdminScope()
 
 const isAuthenticated = ref(false)
 const isLoggingIn = ref(false)
@@ -280,7 +281,7 @@ watch(selectedAgentKey, () => {
   if (selectedAgentKey.value) fetchSkills()
 })
 
-const handleNavClick = (item: (typeof navItems)[number]) => {
+const handleNavClick = (item: AdminNavItem) => {
   if (item.path && route.path !== item.path) router.push(item.path)
 }
 
@@ -522,7 +523,7 @@ onMounted(() => bootstrap())
     <aside v-if="isAuthenticated" class="admin-sidebar" :class="{ 'is-hidden': !navVisible }">
       <div class="space-y-2">
         <button
-          v-for="item in navItems"
+          v-for="item in visibleNavItems"
           :key="item.key"
           class="admin-side-nav-item"
           :class="{ 'is-active': activeNavKey === item.key }"

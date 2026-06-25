@@ -14,7 +14,11 @@ from pydantic import BaseModel, Field
 
 from app.models.database import get_db
 from app.security.admin_auth import ADMIN_TOKEN_HEADER, ADMIN_TOKEN_PREFIX, auth_manager
-from app.security.admin_dependency import resolve_admin_identity
+from app.security.admin_dependency import (
+    AdminPrincipal,
+    resolve_admin_identity,
+    resolve_admin_principal,
+)
 from app.services import (
     project_prompt_service,
     project_repo_member_service,
@@ -110,8 +114,66 @@ async def require_admin(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> str:
-    """Validate bearer token from Authorization header."""
+    """Validate bearer token for global-admin-only routes.
+
+    Returns the admin username. Accepts a legacy admin token or a
+    ``role == "admin"`` user token; rejects everyone else.
+    """
     return await resolve_admin_identity(credentials, request=request)
+
+
+# ``require_admin`` already enforces global-admin-only access. Expose an alias so
+# global-only routes can document intent explicitly.
+require_global_admin = require_admin
+
+
+async def require_admin_principal(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+) -> AdminPrincipal:
+    """Admit global admins or project-member admins (any enabled membership)."""
+    return await resolve_admin_principal(credentials, request=request)
+
+
+async def require_project_admin_by_repo_id(
+    repo_id: int,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+) -> AdminPrincipal:
+    """Authorize access to a project repo by numeric id.
+
+    Global admins are always allowed. Project-member admins are allowed only for
+    enabled projects they belong to; otherwise the project is treated as
+    non-existent (404) to avoid leaking project existence.
+    """
+    principal = await resolve_admin_principal(credentials, request=request)
+    if principal.is_global_admin:
+        return principal
+    if repo_id not in principal.allowed_project_ids:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="记录不存在")
+    return principal
+
+
+async def require_project_admin_by_code(
+    project_code: str,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+) -> AdminPrincipal:
+    """Authorize access to project-scoped resources by ``project_code``.
+
+    Global admins keep existing behavior, including referencing project codes
+    that do not yet have a repo row (pre-provisioning). Project-member admins
+    must reference an enabled project they belong to; otherwise 404. The lookup
+    uses the principal's allowed (normalized) project codes, so no extra DB query
+    is required.
+    """
+    principal = await resolve_admin_principal(credentials, request=request)
+    if principal.is_global_admin:
+        return principal
+    normalized = (project_code or "").strip().lower()
+    if normalized not in principal.allowed_project_codes:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="记录不存在")
+    return principal
 
 
 @router.post("/auth/login", response_model=AdminAuthResponse)
@@ -136,8 +198,18 @@ async def admin_logout() -> MeResponse:
 
 
 @router.get("/auth/me", response_model=MeResponse)
-async def auth_me(username: str = Depends(require_admin)) -> MeResponse:
-    return MeResponse(data={"username": username})
+async def auth_me(
+    principal: AdminPrincipal = Depends(require_admin_principal),
+) -> MeResponse:
+    return MeResponse(
+        data={
+            "username": principal.username,
+            "access_level": principal.access_level,
+            "allowed_nav_keys": principal.allowed_nav_keys,
+            "allowed_project_ids": principal.allowed_project_ids,
+            "allowed_project_codes": principal.allowed_project_codes,
+        }
+    )
 
 
 @router.get("/prompts/config", response_model=PromptsConfigResponse)
@@ -273,12 +345,22 @@ async def list_project_repos(
     include_disabled: bool = Query(default=False),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
-    _username: str = Depends(require_admin),
+    principal: AdminPrincipal = Depends(require_admin_principal),
     db=Depends(get_db),
 ) -> ProjectRepoListResponse:
-    repos = await project_repo_service.list_repos(
-        db, include_disabled=include_disabled, offset=offset, limit=limit
-    )
+    if principal.is_global_admin:
+        repos = await project_repo_service.list_repos(
+            db, include_disabled=include_disabled, offset=offset, limit=limit
+        )
+    else:
+        # Project-member admins only ever see their own enabled projects,
+        # regardless of include_disabled.
+        allowed = set(principal.allowed_project_ids)
+        all_enabled = await project_repo_service.list_repos(
+            db, include_disabled=False, offset=0, limit=10_000
+        )
+        scoped = [r for r in all_enabled if r.id in allowed]
+        repos = scoped[offset : offset + limit]
     counts = await project_repo_member_service.count_members_bulk(
         db, [r.id for r in repos]
     )
@@ -319,7 +401,7 @@ async def create_project_repo(
 @router.get("/project-repos/{repo_id}", response_model=ProjectRepoResponse)
 async def get_project_repo(
     repo_id: int,
-    _username: str = Depends(require_admin),
+    _principal: AdminPrincipal = Depends(require_project_admin_by_repo_id),
     db=Depends(get_db),
 ) -> ProjectRepoResponse:
     repo = await project_repo_service.get_by_id(db, repo_id)
@@ -333,9 +415,18 @@ async def get_project_repo(
 async def update_project_repo(
     repo_id: int,
     payload: UpdateProjectRepoRequest,
-    _username: str = Depends(require_admin),
+    principal: AdminPrincipal = Depends(require_project_admin_by_repo_id),
     db=Depends(get_db),
 ) -> ProjectRepoResponse:
+    # Project-member admins may only edit safe project fields. Ownership/security
+    # fields (enabled, git_token) remain global-admin-only.
+    if not principal.is_global_admin and (
+        payload.enabled is not None or payload.git_token is not None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="项目成员管理员不可修改启用状态或 Git 凭据",
+        )
     repo = await project_repo_service.get_by_id(db, repo_id)
     if not repo:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="记录不存在")
@@ -406,7 +497,7 @@ async def delete_project_repo(
 @router.post("/project-repos/{repo_id}/test-connection", response_model=TestConnectionResponse)
 async def test_project_repo_connection(
     repo_id: int,
-    _username: str = Depends(require_admin),
+    _principal: AdminPrincipal = Depends(require_project_admin_by_repo_id),
     db=Depends(get_db),
 ) -> TestConnectionResponse:
     result = await project_repo_service.test_connection(db, repo_id)
@@ -734,7 +825,7 @@ async def delete_agent_skill(
 )
 async def list_project_skills(
     project_code: str,
-    _username: str = Depends(require_admin),
+    _principal: AdminPrincipal = Depends(require_project_admin_by_code),
 ) -> SkillListResponse:
     items = skills_service.list_project_skills(project_code)
     return SkillListResponse(data=[SkillData(**item) for item in items])
@@ -749,7 +840,7 @@ async def upload_project_skill(
     project_code: str,
     file: UploadFile = File(..., description="Skill zip 包"),
     overwrite: bool = Query(default=False),
-    _username: str = Depends(require_admin),
+    _principal: AdminPrincipal = Depends(require_project_admin_by_code),
 ) -> SkillResponse:
     filename = (file.filename or "").strip()
     if not filename.lower().endswith(".zip"):
@@ -793,7 +884,7 @@ async def update_project_skill(
     project_code: str,
     skill_id: str,
     payload: UpdateSkillRequest,
-    _username: str = Depends(require_admin),
+    _principal: AdminPrincipal = Depends(require_project_admin_by_code),
 ) -> SkillResponse:
     try:
         entry = skills_service.set_project_skill_enabled(
@@ -811,7 +902,7 @@ async def update_project_skill(
 async def delete_project_skill(
     project_code: str,
     skill_id: str,
-    _username: str = Depends(require_admin),
+    _principal: AdminPrincipal = Depends(require_project_admin_by_code),
 ) -> None:
     try:
         skills_service.delete_project_skill(project_code, skill_id)
@@ -826,7 +917,7 @@ async def delete_project_skill(
 async def list_project_skill_files(
     project_code: str,
     skill_id: str,
-    _username: str = Depends(require_admin),
+    _principal: AdminPrincipal = Depends(require_project_admin_by_code),
 ) -> SkillFilesResponse:
     try:
         data = skills_service.list_project_skill_files(project_code, skill_id)
@@ -848,7 +939,7 @@ async def get_project_skill_file(
     project_code: str,
     skill_id: str,
     path: str = Query(..., description="Skill 目录下的相对路径"),
-    _username: str = Depends(require_admin),
+    _principal: AdminPrincipal = Depends(require_project_admin_by_code),
 ) -> SkillFileContentResponse:
     try:
         data = skills_service.read_project_skill_file(project_code, skill_id, path)
@@ -906,7 +997,7 @@ async def get_project_system_prompt(
             "的专属层（含代码工作流）。"
         ),
     ),
-    _username: str = Depends(require_admin),
+    _principal: AdminPrincipal = Depends(require_project_admin_by_code),
 ) -> ProjectSystemPromptResponse:
     try:
         data = project_prompt_service.get_project_prompt(project_code, agent)
@@ -929,7 +1020,7 @@ async def update_project_system_prompt(
         default=None,
         description="为空写入项目共享层；传入 agent_key 写入该 Agent 的专属层。",
     ),
-    _username: str = Depends(require_admin),
+    _principal: AdminPrincipal = Depends(require_project_admin_by_code),
 ) -> ProjectSystemPromptResponse:
     try:
         data = project_prompt_service.set_project_prompt(project_code, payload.content, agent)
