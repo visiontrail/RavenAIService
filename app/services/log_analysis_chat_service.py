@@ -29,6 +29,7 @@ from app.agents.log_analysis.workspace import (
     MissingMetadataJsonError,
     UnsupportedUploadFormatError,
     WorkspaceContext,
+    WorkspaceError,
     WorkspaceExtractTooLarge,
     cleanup,
     prepare,
@@ -371,6 +372,24 @@ class LogAnalysisChatService:
                         "这个附件既不是受支持的日志压缩包，也不是可识别的纯文本日志或 Excel 表格。"
                         "请上传 .zip/.tar.gz/.7z/.rar 等压缩包，"
                         "或 .log/.txt/.json/.xml/.csv/.xlsx/.xlsm 等文件后再试。"
+                    ),
+                }
+            )
+            return
+        except WorkspaceError as exc:
+            logger.warning(
+                "log-analysis chat: workspace preparation failed session_id=%s: %s",
+                effective_session_id,
+                exc,
+            )
+            yield self._sse_event(
+                {
+                    "event": "error",
+                    "reason": "archive_extract_failed",
+                    "message": (
+                        "这个附件保存成功了，但解压日志包时失败。"
+                        "请确认压缩包完整、未加密、不是缺少分卷的 RAR；"
+                        "也可以重新打包为 .zip 后再上传。"
                     ),
                 }
             )

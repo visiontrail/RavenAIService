@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import tarfile
 import uuid
 import zipfile
@@ -141,41 +142,133 @@ def _extract_7z(archive_path: Path, dest: Path, max_bytes: int) -> None:
             out.write_bytes(data)
 
 
+def _validate_unar_output(dest: Path, max_bytes: int) -> None:
+    extracted = 0
+    for path in dest.rglob("*"):
+        try:
+            resolved = path.resolve()
+        except OSError as exc:
+            raise WorkspaceError(f"Failed to inspect extracted path: {path}") from exc
+        if dest.resolve() != resolved and dest.resolve() not in resolved.parents:
+            raise WorkspaceError(f"Unsafe extracted path: {path}")
+        if path.is_symlink():
+            raise WorkspaceError(f"Unsafe symlink in archive output: {path}")
+        if not path.is_file():
+            continue
+        extracted += path.stat().st_size
+        if extracted > max_bytes:
+            raise WorkspaceExtractTooLarge(
+                f"Extraction aborted: cumulative size {extracted} bytes "
+                f"exceeds limit {max_bytes} bytes"
+            )
+
+
+def _extract_rar_with_unar(archive_path: Path, dest: Path, max_bytes: int) -> None:
+    if shutil.which("lsar") is None or shutil.which("unar") is None:
+        raise WorkspaceError("unar/lsar is required as a fallback to extract this .rar archive")
+
+    try:
+        listing = subprocess.run(
+            ["lsar", "-json", str(archive_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        payload = json.loads(listing.stdout or "{}")
+    except (subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise WorkspaceError(f"Failed to inspect .rar archive with lsar: {exc}") from exc
+
+    extracted = 0
+    for item in payload.get("lsarContents", []) or []:
+        name = item.get("XADFileName") or item.get("name") or ""
+        if not name or name.endswith("/") or item.get("XADIsDirectory"):
+            continue
+        _safe_output_path(dest, name)
+        extracted += int(item.get("XADFileSize") or 0)
+        if extracted > max_bytes:
+            raise WorkspaceExtractTooLarge(
+                f"Extraction aborted: cumulative size {extracted} bytes "
+                f"exceeds limit {max_bytes} bytes"
+            )
+
+    try:
+        subprocess.run(
+            [
+                "unar",
+                "-quiet",
+                "-force-overwrite",
+                "-no-directory",
+                "-output-directory",
+                str(dest),
+                str(archive_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except subprocess.SubprocessError as exc:
+        stderr = getattr(exc, "stderr", "") or ""
+        detail = f": {stderr.strip()}" if stderr.strip() else ""
+        raise WorkspaceError(f"Failed to extract .rar archive with unar{detail}") from exc
+
+    _validate_unar_output(dest, max_bytes)
+
+
 def _extract_rar(archive_path: Path, dest: Path, max_bytes: int) -> None:
+    rar_error: Optional[BaseException] = None
     try:
         import rarfile
     except ImportError as exc:
-        raise WorkspaceError("rarfile is required to extract .rar archives") from exc
+        rar_error = exc
+    else:
+        extracted = 0
+        try:
+            with rarfile.RarFile(archive_path, mode="r") as rf:
+                for info in rf.infolist():
+                    name = info.filename
+                    if not name or name.endswith("/") or info.isdir():
+                        continue
+                    is_symlink = getattr(info, "is_symlink", None)
+                    if callable(is_symlink) and is_symlink():
+                        continue
+                    file_size = int(getattr(info, "file_size", 0) or 0)
+                    extracted += file_size
+                    if extracted > max_bytes:
+                        raise WorkspaceExtractTooLarge(
+                            f"Extraction aborted: cumulative size {extracted} bytes "
+                            f"exceeds limit {max_bytes} bytes"
+                        )
+                    out = _safe_output_path(dest, name)
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    with rf.open(info) as src, out.open("wb") as dst:
+                        while True:
+                            chunk = src.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            dst.write(chunk)
+            return
+        except WorkspaceExtractTooLarge:
+            raise
+        except rarfile.Error as exc:
+            rar_error = exc
+            logger.warning(
+                "rarfile failed to extract %s; trying unar fallback: %s",
+                archive_path,
+                exc,
+            )
 
-    extracted = 0
     try:
-        with rarfile.RarFile(archive_path, mode="r") as rf:
-            for info in rf.infolist():
-                name = info.filename
-                if not name or name.endswith("/") or info.isdir():
-                    continue
-                is_symlink = getattr(info, "is_symlink", None)
-                if callable(is_symlink) and is_symlink():
-                    continue
-                file_size = int(getattr(info, "file_size", 0) or 0)
-                extracted += file_size
-                if extracted > max_bytes:
-                    raise WorkspaceExtractTooLarge(
-                        f"Extraction aborted: cumulative size {extracted} bytes "
-                        f"exceeds limit {max_bytes} bytes"
-                    )
-                out = _safe_output_path(dest, name)
-                out.parent.mkdir(parents=True, exist_ok=True)
-                with rf.open(info) as src, out.open("wb") as dst:
-                    while True:
-                        chunk = src.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        dst.write(chunk)
+        _extract_rar_with_unar(archive_path, dest, max_bytes)
     except WorkspaceExtractTooLarge:
         raise
-    except rarfile.Error as exc:
-        raise WorkspaceError(f"Failed to extract .rar archive: {exc}") from exc
+    except WorkspaceError as exc:
+        if rar_error is not None:
+            raise WorkspaceError(
+                f"Failed to extract .rar archive: {rar_error}; unar fallback failed: {exc}"
+            ) from exc
+        raise
 
 
 def _extract_archive(archive_path: Path, dest: Path, max_bytes: int) -> None:

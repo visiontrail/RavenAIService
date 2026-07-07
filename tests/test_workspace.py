@@ -233,6 +233,72 @@ class TestPrepare:
         with pytest.raises(WorkspaceExtractTooLarge):
             _extract_rar(tmp_path / "sample.rar", dest, 10)
 
+    def test_rar_extraction_falls_back_to_unar(self, tmp_path, monkeypatch):
+        from app.agents.log_analysis import workspace
+
+        class FakeRarError(Exception):
+            pass
+
+        class FakeRarInfo:
+            filename = "logs/app.log"
+            file_size = 10
+
+            def isdir(self):
+                return False
+
+        class FakeRarFile:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def infolist(self):
+                return [FakeRarInfo()]
+
+            def open(self, _info):
+                raise FakeRarError("Failed the read enough data: req=81920 got=0")
+
+        fake_rarfile = SimpleNamespace(RarFile=FakeRarFile, Error=FakeRarError)
+        monkeypatch.setitem(sys.modules, "rarfile", fake_rarfile)
+        monkeypatch.setattr(workspace.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+        calls = []
+
+        def fake_run(cmd, **_kwargs):
+            calls.append(cmd[0])
+            if cmd[0] == "lsar":
+                return SimpleNamespace(
+                    stdout=json.dumps(
+                        {
+                            "lsarContents": [
+                                {
+                                    "XADFileName": "logs/app.log",
+                                    "XADFileSize": 15,
+                                }
+                            ]
+                        }
+                    )
+                )
+            if cmd[0] == "unar":
+                out_dir = Path(cmd[cmd.index("-output-directory") + 1])
+                (out_dir / "logs").mkdir(parents=True, exist_ok=True)
+                (out_dir / "logs" / "app.log").write_text("unar recovered\n", encoding="utf-8")
+                return SimpleNamespace(stdout="")
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        monkeypatch.setattr(workspace.subprocess, "run", fake_run)
+
+        dest = tmp_path / "out"
+        dest.mkdir()
+        workspace._extract_rar(tmp_path / "sample.rar", dest, 1024)
+
+        assert calls == ["lsar", "unar"]
+        assert (dest / "logs" / "app.log").read_text(encoding="utf-8") == "unar recovered\n"
+
 
 class TestPrepareTextUpload:
     def test_plain_text_log_copied_in_without_metadata_when_opted_out(self, tmp_path, mock_settings):
