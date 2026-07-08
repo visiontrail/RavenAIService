@@ -82,6 +82,7 @@ class PromptEntryData(BaseModel):
     prompt_type: str
     path: list[str]
     content: str
+    locale: Optional[str] = None
 
 
 class PromptsConfigData(BaseModel):
@@ -1042,6 +1043,34 @@ class ProjectSystemPromptResponse(BaseModel):
     message: str = "ok"
 
 
+class ProjectSystemPromptPreviewLayerData(BaseModel):
+    key: str
+    label: str
+    exists: bool
+    size_bytes: int = 0
+    updated_at: Optional[datetime] = None
+
+
+class ProjectSystemPromptPreviewData(BaseModel):
+    project_code: str
+    project_name: str
+    agent_key: str
+    locale: Optional[str] = None
+    base_prompt: str
+    project_addendum: str
+    content: str
+    base_chars: int
+    addendum_chars: int
+    total_chars: int
+    layers: List[ProjectSystemPromptPreviewLayerData] = Field(default_factory=list)
+
+
+class ProjectSystemPromptPreviewResponse(BaseModel):
+    success: bool = True
+    data: ProjectSystemPromptPreviewData
+    message: str = "ok"
+
+
 class UpdateProjectSystemPromptRequest(BaseModel):
     # 允许空字符串：空内容等价于清除项目级追加提示词。
     content: str = Field(default="", max_length=project_prompt_service.MAX_PROJECT_PROMPT_CHARS)
@@ -1071,6 +1100,40 @@ async def get_project_system_prompt(
             detail=str(exc),
         ) from exc
     return ProjectSystemPromptResponse(data=ProjectSystemPromptData(**data), message="读取成功")
+
+
+@router.get(
+    "/project-repos/{project_code}/system-prompt/preview",
+    response_model=ProjectSystemPromptPreviewResponse,
+)
+async def preview_project_system_prompt(
+    project_code: str,
+    agent: str = Query(
+        ...,
+        description="要预览的 Agent key（project_expert / log_analysis / package_search）。",
+    ),
+    locale: Optional[str] = Query(default=None, description="提示词语言，如 zh / en。"),
+    _principal: AdminPrincipal = Depends(require_project_admin_by_code),
+    db=Depends(get_db),
+) -> ProjectSystemPromptPreviewResponse:
+    repo = await project_repo_service.get_by_project_code(db, project_code)
+    project_name = repo.project_name if repo else project_code
+    try:
+        data = project_prompt_service.build_project_system_prompt_preview(
+            project_code,
+            agent,
+            project_name=project_name,
+            locale=locale,
+        )
+    except project_prompt_service.ProjectPromptValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return ProjectSystemPromptPreviewResponse(
+        data=ProjectSystemPromptPreviewData(**data),
+        message="读取成功",
+    )
 
 
 @router.put(

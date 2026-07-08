@@ -7,12 +7,15 @@ Covers:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import admin as admin_api
 from app.api.admin import require_project_admin_by_code
+from app.models.database import get_db
 from app.security.admin_dependency import AdminPrincipal
 
 
@@ -27,14 +30,47 @@ def isolated_prompts_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(
         settings, "project_prompts_data_dir", str(tmp_path / "project_prompts")
     )
+    prompts_config = tmp_path / "prompts_config.yaml"
+    prompts_config.write_text(
+        """
+claude_agent_project_expert:
+  generic:
+    system_prompt:
+      zh: |
+        BASE-ZH
+      en: |
+        BASE-EN
+claude_agent_log_analysis:
+  generic:
+    system_prompt:
+      zh: |
+        LOG-BASE-ZH
+claude_agent_package_search:
+  generic:
+    system_prompt:
+      zh: |
+        PACKAGE-BASE-ZH
+""".lstrip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings, "prompts_config_path", str(prompts_config))
     return tmp_path
 
 
 @pytest.fixture()
-def app(isolated_prompts_dir) -> FastAPI:
+def app(isolated_prompts_dir, monkeypatch) -> FastAPI:
+    async def fake_get_by_project_code(db, code: str, require_repo: bool = False):
+        return SimpleNamespace(project_name="My Project")
+
+    monkeypatch.setattr(
+        admin_api.project_repo_service,
+        "get_by_project_code",
+        fake_get_by_project_code,
+    )
     application = FastAPI()
     application.include_router(admin_api.router)
     application.dependency_overrides[require_project_admin_by_code] = _global_admin
+    application.dependency_overrides[get_db] = lambda: None
     return application
 
 
@@ -134,3 +170,32 @@ def test_invalid_agent_rejected(client: TestClient) -> None:
         "/admin/project-repos/myproj/system-prompt", params={"agent": "bogus"}
     )
     assert resp.status_code == 422
+
+
+def test_preview_composes_base_agent_and_project_layers(client: TestClient) -> None:
+    client.put(
+        "/admin/project-repos/myproj/system-prompt",
+        json={"content": "SHARED-LAYER"},
+    )
+    client.put(
+        "/admin/project-repos/myproj/system-prompt",
+        params={"agent": "project_expert"},
+        json={"content": "EXPERT-LAYER"},
+    )
+
+    resp = client.get(
+        "/admin/project-repos/myproj/system-prompt/preview",
+        params={"agent": "project_expert", "locale": "zh"},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["project_code"] == "myproj"
+    assert data["project_name"] == "My Project"
+    assert data["agent_key"] == "project_expert"
+    assert data["base_prompt"] == "BASE-ZH"
+    assert "BASE-ZH" in data["content"]
+    assert "EXPERT-LAYER" in data["content"]
+    assert "SHARED-LAYER" in data["content"]
+    assert data["total_chars"] == len(data["content"])
+    assert {layer["key"] for layer in data["layers"]} == {"base", "agent", "shared"}

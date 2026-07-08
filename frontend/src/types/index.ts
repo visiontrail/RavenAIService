@@ -486,6 +486,28 @@ export interface ProjectSystemPrompt {
   updated_at?: string | null
 }
 
+export interface ProjectSystemPromptPreviewLayer {
+  key: string
+  label: string
+  exists: boolean
+  size_bytes: number
+  updated_at?: string | null
+}
+
+export interface ProjectSystemPromptPreview {
+  project_code: string
+  project_name: string
+  agent_key: string
+  locale?: string | null
+  base_prompt: string
+  project_addendum: string
+  content: string
+  base_chars: number
+  addendum_chars: number
+  total_chars: number
+  layers: ProjectSystemPromptPreviewLayer[]
+}
+
 // 用户与会话
 export type UserRole = 'user' | 'admin'
 export type UserProfileRole = 'developer' | 'tester' | 'product' | 'ops' | 'other' | string

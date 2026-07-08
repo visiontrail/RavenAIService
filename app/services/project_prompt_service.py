@@ -259,6 +259,109 @@ def build_project_prompt_addendum(
     ).format(label=label, body=body)
 
 
+def load_agent_base_system_prompt(agent_key: str, *, locale: Optional[str] = None) -> str:
+    """读取某个项目型 Agent 的基础层系统提示词。
+
+    该基础层来自 ``prompts_config.yaml``，与 Agent 运行时的 loader 使用同一套
+    locale fallback 规则。未知 Agent 抛出校验异常，便于 API 返回 422。
+    """
+    agent = validate_agent_key(agent_key)
+    if agent is None:
+        raise ProjectPromptValidationError("agent_key 不能为空")
+    function_key = _AGENT_CONFIG_KEY.get(agent)
+    if not function_key:
+        return ""
+
+    try:
+        import os
+
+        import yaml
+
+        from app.config import settings
+        from app.i18n.prompts import select_localized_body
+
+        raw = getattr(settings, "prompts_config_path", "app/prompts/prompts_config.yaml")
+        if os.path.isabs(raw):
+            path = Path(raw)
+        else:
+            project_root = Path(__file__).resolve().parents[2]  # repository root
+            path = (project_root / raw).resolve()
+
+        parsed = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        agent_cfg = parsed.get(function_key) or {}
+        variant = agent_cfg.get("generic") or {}
+        return select_localized_body(variant.get("system_prompt"), locale)
+    except FileNotFoundError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("load_agent_base_system_prompt failed for %s: %s", agent_key, exc)
+        return ""
+
+
+def build_project_system_prompt_preview(
+    project_code: str,
+    agent_key: str,
+    *,
+    project_name: Optional[str] = None,
+    locale: Optional[str] = None,
+) -> Dict[str, Any]:
+    """构建后台配置层的系统提示词拼接预览。
+
+    返回 ``基础层 Agent system_prompt + 项目级附加系统指令``。这里刻意不注入
+    每次运行才产生的动态上下文（工作区路径、Skill 菜单、回复语言指令等）。
+    """
+    code = validate_project_code(project_code)
+    agent = validate_agent_key(agent_key)
+    if agent is None:
+        raise ProjectPromptValidationError("agent_key 不能为空")
+
+    base_prompt = load_agent_base_system_prompt(agent, locale=locale)
+    project_addendum = build_project_prompt_addendum(
+        code,
+        agent,
+        project_name=project_name,
+    )
+    composed_prompt = f"{base_prompt}{project_addendum}"
+    agent_layer = get_project_prompt(code, agent)
+    shared_layer = get_project_prompt(code, None)
+
+    return {
+        "project_code": code,
+        "project_name": (project_name or "").strip() or code,
+        "agent_key": agent,
+        "locale": locale or None,
+        "base_prompt": base_prompt,
+        "project_addendum": project_addendum,
+        "content": composed_prompt,
+        "base_chars": len(base_prompt),
+        "addendum_chars": len(project_addendum),
+        "total_chars": len(composed_prompt),
+        "layers": [
+            {
+                "key": "base",
+                "label": "Agent 基础层",
+                "exists": bool(base_prompt.strip()),
+                "size_bytes": len(base_prompt.encode("utf-8")),
+                "updated_at": None,
+            },
+            {
+                "key": "agent",
+                "label": "Agent 项目层",
+                "exists": agent_layer["exists"],
+                "size_bytes": agent_layer["size_bytes"],
+                "updated_at": agent_layer["updated_at"],
+            },
+            {
+                "key": "shared",
+                "label": "项目共享层",
+                "exists": shared_layer["exists"],
+                "size_bytes": shared_layer["size_bytes"],
+                "updated_at": shared_layer["updated_at"],
+            },
+        ],
+    }
+
+
 # ─────────────────────── Default-prompt seeding ─────────────────────
 
 def load_default_prompt_template(

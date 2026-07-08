@@ -17,6 +17,7 @@ import type {
   ProjectRepo,
   ProjectRepoPayload,
   ProjectSystemPrompt,
+  ProjectSystemPromptPreview,
   SkillFileContent,
   SkillFileTree,
   TestConnectionResult,
@@ -264,6 +265,18 @@ export const adminApi = {
   ): Promise<ApiResponse<ProjectSystemPrompt>> =>
     adminClient.get(`/admin/project-repos/${projectCode}/system-prompt`, {
       params: agent ? { agent } : undefined,
+    }),
+
+  getProjectSystemPromptPreview: (
+    projectCode: string,
+    agent: string,
+    locale?: string | null
+  ): Promise<ApiResponse<ProjectSystemPromptPreview>> =>
+    adminClient.get(`/admin/project-repos/${projectCode}/system-prompt/preview`, {
+      params: {
+        agent,
+        ...(locale ? { locale } : {}),
+      },
     }),
 
   updateProjectSystemPrompt: (

@@ -154,6 +154,28 @@ def test_addendum_agent_layer_without_shared(isolated_prompts_dir):
     assert "ONLY-WORKFLOW" in addendum
 
 
+def test_build_project_system_prompt_preview_includes_layers(isolated_prompts_dir):
+    from app.services import project_prompt_service as svc
+
+    svc.set_project_prompt("myproj", "SHARED-RULE")
+    svc.set_project_prompt("myproj", "EXPERT-RULE", agent_key="project_expert")
+
+    preview = svc.build_project_system_prompt_preview(
+        "myproj",
+        "project_expert",
+        project_name="My Project",
+        locale="zh",
+    )
+
+    assert preview["project_code"] == "myproj"
+    assert preview["agent_key"] == "project_expert"
+    assert preview["base_prompt"]
+    assert "EXPERT-RULE" in preview["content"]
+    assert "SHARED-RULE" in preview["content"]
+    assert preview["total_chars"] == len(preview["content"])
+    assert {layer["key"] for layer in preview["layers"]} == {"base", "agent", "shared"}
+
+
 def test_load_default_prompt_templates(isolated_prompts_dir):
     from app.services import project_prompt_service as svc
 
