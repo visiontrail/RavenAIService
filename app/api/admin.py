@@ -261,6 +261,7 @@ class ProjectRepoData(BaseModel):
     default_branch: str
     git_token_set: bool
     has_repo: bool = False
+    enabled_agent_keys: List[str] = Field(default_factory=list)
     description: Optional[str] = None
     enabled: bool
     member_count: int = 0
@@ -289,6 +290,7 @@ class CreateProjectRepoRequest(BaseModel):
     git_token: Optional[str] = None
     description: Optional[str] = None
     enabled: bool = True
+    enabled_agent_keys: Optional[List[str]] = None
 
 
 class UpdateProjectRepoRequest(BaseModel):
@@ -298,6 +300,7 @@ class UpdateProjectRepoRequest(BaseModel):
     git_token: Optional[str] = None
     description: Optional[str] = None
     enabled: Optional[bool] = None
+    enabled_agent_keys: Optional[List[str]] = None
 
 
 class TestConnectionResponse(BaseModel):
@@ -323,7 +326,24 @@ def _seed_code_workflows(project_code: str) -> None:
         logger.warning("seed code-workflow prompts failed for %s: %s", project_code, exc)
 
 
-def _repo_to_data(repo, member_count: int = 0) -> ProjectRepoData:
+class ProjectAgentInfo(BaseModel):
+    key: str
+    name: str
+    display_name: str
+    framework: str
+    requires_repo: bool = False
+    description: Optional[str] = None
+
+
+class ProjectAgentListResponse(BaseModel):
+    success: bool = True
+    data: List[ProjectAgentInfo]
+    message: str = "ok"
+
+
+def _repo_to_data(
+    repo, member_count: int = 0, enabled_agent_keys: Optional[List[str]] = None
+) -> ProjectRepoData:
     return ProjectRepoData(
         id=repo.id,
         project_code=repo.project_code,
@@ -332,11 +352,27 @@ def _repo_to_data(repo, member_count: int = 0) -> ProjectRepoData:
         default_branch=repo.default_branch,
         git_token_set=bool(repo.git_token),
         has_repo=project_repo_service.has_repo(repo),
+        enabled_agent_keys=enabled_agent_keys
+        if enabled_agent_keys is not None
+        else project_repo_service.default_agent_keys_for_repo(repo),
         description=repo.description,
         enabled=repo.enabled,
         member_count=member_count,
         created_at=repo.created_at,
         updated_at=repo.updated_at,
+    )
+
+
+@router.get("/project-agents", response_model=ProjectAgentListResponse)
+async def list_project_agents(
+    _principal: AdminPrincipal = Depends(require_admin_principal),
+) -> ProjectAgentListResponse:
+    """列出可在项目创建/编辑时启用的项目型 Agent。"""
+    return ProjectAgentListResponse(
+        data=[
+            ProjectAgentInfo(**item)
+            for item in project_repo_service.list_project_agents()
+        ]
     )
 
 
@@ -364,8 +400,12 @@ async def list_project_repos(
     counts = await project_repo_member_service.count_members_bulk(
         db, [r.id for r in repos]
     )
+    agent_keys_by_repo = await project_repo_service.list_agent_keys_bulk(db, repos)
     return ProjectRepoListResponse(
-        data=[_repo_to_data(r, counts.get(r.id, 0)) for r in repos]
+        data=[
+            _repo_to_data(r, counts.get(r.id, 0), agent_keys_by_repo.get(r.id, []))
+            for r in repos
+        ]
     )
 
 
@@ -386,6 +426,9 @@ async def create_project_repo(
             description=payload.description,
             enabled=payload.enabled,
         )
+        agent_keys = await project_repo_service.replace_agent_keys(
+            db, repo, payload.enabled_agent_keys
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -395,7 +438,10 @@ async def create_project_repo(
     # 的工作流随项目（而非基础提示词）分级下沉。未关联仓库的项目不播种。
     if project_repo_service.has_repo(repo):
         _seed_code_workflows(repo.project_code)
-    return ProjectRepoResponse(data=_repo_to_data(repo), message="创建成功")
+    return ProjectRepoResponse(
+        data=_repo_to_data(repo, enabled_agent_keys=agent_keys),
+        message="创建成功",
+    )
 
 
 @router.get("/project-repos/{repo_id}", response_model=ProjectRepoResponse)
@@ -408,7 +454,8 @@ async def get_project_repo(
     if not repo:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="记录不存在")
     member_count = await project_repo_member_service.count_members(db, repo.id)
-    return ProjectRepoResponse(data=_repo_to_data(repo, member_count))
+    agent_keys = await project_repo_service.list_agent_keys(db, repo)
+    return ProjectRepoResponse(data=_repo_to_data(repo, member_count, agent_keys))
 
 
 @router.put("/project-repos/{repo_id}", response_model=ProjectRepoResponse)
@@ -421,11 +468,13 @@ async def update_project_repo(
     # Project-member admins may only edit safe project fields. Ownership/security
     # fields (enabled, git_token) remain global-admin-only.
     if not principal.is_global_admin and (
-        payload.enabled is not None or payload.git_token is not None
+        payload.enabled is not None
+        or payload.git_token is not None
+        or payload.enabled_agent_keys is not None
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="项目成员管理员不可修改启用状态或 Git 凭据",
+            detail="项目成员管理员不可修改启用状态、Git 凭据或项目 Agent",
         )
     repo = await project_repo_service.get_by_id(db, repo_id)
     if not repo:
@@ -442,6 +491,14 @@ async def update_project_repo(
             description=payload.description,
             enabled=payload.enabled,
         )
+        if payload.enabled_agent_keys is not None:
+            agent_keys = await project_repo_service.replace_agent_keys(
+                db, repo, payload.enabled_agent_keys
+            )
+        elif had_repo != project_repo_service.has_repo(repo):
+            agent_keys = await project_repo_service.reconcile_agent_keys(db, repo)
+        else:
+            agent_keys = await project_repo_service.list_agent_keys(db, repo)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -450,7 +507,10 @@ async def update_project_repo(
     # 项目从「未关联」变为「已关联」代码仓库时，补播种各 Agent 的代码工作流。
     if not had_repo and project_repo_service.has_repo(repo):
         _seed_code_workflows(repo.project_code)
-    return ProjectRepoResponse(data=_repo_to_data(repo), message="更新成功")
+    return ProjectRepoResponse(
+        data=_repo_to_data(repo, enabled_agent_keys=agent_keys),
+        message="更新成功",
+    )
 
 
 @router.delete("/project-repos/{repo_id}", status_code=status.HTTP_204_NO_CONTENT)

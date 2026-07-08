@@ -6,7 +6,7 @@
 from .log import LogRecord  # noqa: F401
 from .user import User, ChatSession, ChatMessage, ChatAgentRun  # noqa: F401
 from .conversation_share import ConversationShare  # noqa: F401
-from .project_repo import ProjectRepo, ProjectRepoMember  # noqa: F401
+from .project_repo import ProjectRepo, ProjectRepoAgent, ProjectRepoMember  # noqa: F401
 from .metrics import MetricEvent  # noqa: F401
 from .bug_fix import (  # noqa: F401
     BugFixTask,

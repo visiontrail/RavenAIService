@@ -302,11 +302,21 @@ export interface ProjectRepo {
   default_branch: string
   git_token_set: boolean
   has_repo?: boolean
+  enabled_agent_keys?: string[]
   description?: string | null
   enabled: boolean
   member_count?: number
   created_at: string
   updated_at: string
+}
+
+export interface ProjectAgentInfo {
+  key: string
+  name: string
+  display_name: string
+  framework: string
+  requires_repo: boolean
+  description?: string | null
 }
 
 export interface ProjectMember {
@@ -324,6 +334,7 @@ export interface ProjectRepoPayload {
   git_token?: string | null
   description?: string | null
   enabled?: boolean
+  enabled_agent_keys?: string[]
 }
 
 // Bug 修复任务

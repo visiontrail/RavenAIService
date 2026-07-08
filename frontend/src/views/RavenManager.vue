@@ -167,6 +167,17 @@ const projectPillClass = (code?: string) => {
   return projectByCode.value.has(normalized) ? 'rw-pill-info' : 'rw-pill-warning'
 }
 
+const projectSupportsPackageSearch = (project: ProjectRepoOption) => {
+  if (Array.isArray(project.enabled_agent_keys) && project.enabled_agent_keys.length) {
+    return project.enabled_agent_keys.includes('package_search')
+  }
+  return project.has_repo !== false
+}
+
+const packageSearchProjectOptions = computed(() =>
+  projectOptions.value.filter(projectSupportsPackageSearch)
+)
+
 const fetchProjectOptions = async () => {
   projectOptionsLoading.value = true
   try {
@@ -832,7 +843,7 @@ onMounted(() => {
                 filterable
               >
                 <el-option
-                  v-for="project in projectOptions"
+                  v-for="project in packageSearchProjectOptions"
                   :key="project.id"
                   :label="project.project_name || project.project_code"
                   :value="project.project_code"
@@ -944,7 +955,7 @@ onMounted(() => {
             :disabled="searchLoading"
           >
             <el-option
-              v-for="project in projectOptions"
+              v-for="project in packageSearchProjectOptions"
               :key="project.id"
               :label="project.project_name || project.project_code"
               :value="project.id"

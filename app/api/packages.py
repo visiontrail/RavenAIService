@@ -651,7 +651,11 @@ async def agent_search_packages(
     from app.services import project_repo_service
 
     repo = await project_repo_service.get_by_id(db, project_repo_id)
-    if repo is None or not getattr(repo, "enabled", True):
+    if (
+        repo is None
+        or not getattr(repo, "enabled", True)
+        or not await project_repo_service.supports_agent(db, repo, "package_search")
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={

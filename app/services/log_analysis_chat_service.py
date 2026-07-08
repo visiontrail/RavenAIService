@@ -194,6 +194,16 @@ class LogAnalysisChatService:
                     }
                 )
                 return
+            if not await project_repo_service.supports_agent(
+                db, repo, "log_analysis"
+            ):
+                yield self._sse_event(
+                    {
+                        "event": "error",
+                        "message": "该项目未启用日志分析 Agent，请重新选择项目或联系管理员配置。",
+                    }
+                )
+                return
 
         # Start a new Job.
         try:

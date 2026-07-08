@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 from app.models.database import get_db
 from app.services import project_repo_service
@@ -24,6 +24,7 @@ class ProjectRepoOption(BaseModel):
     project_name: str
     default_branch: str
     has_repo: bool = False
+    enabled_agent_keys: List[str] = Field(default_factory=list)
     description: Optional[str] = None
 
 
@@ -44,6 +45,13 @@ async def list_enabled_project_repos(
             "不传返回全部。未关联代码仓库的项目仅项目专家可见。"
         ),
     ),
+    agent_key: Optional[str] = Query(
+        default=None,
+        description=(
+            "可选：仅返回启用了指定 Agent 的项目，取值如 "
+            "project_expert/log_analysis/package_search。"
+        ),
+    ),
     db=Depends(get_db),
 ) -> ProjectRepoOptionListResponse:
     """列出所有已启用的项目（仅返回展示用字段）。
@@ -52,9 +60,27 @@ async def list_enabled_project_repos(
     ``with_repo=true``，从而对「未关联代码仓库」的项目不可见；项目专家则可
     看到全部项目。``has_repo`` 字段也会一并返回，便于前端按所选 Agent 过滤。
     """
+    requested_agent = (agent_key or "").strip()
+    if requested_agent and requested_agent not in project_repo_service.PROJECT_AGENT_REGISTRY:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown agent_key: {requested_agent}",
+        )
+
     repos = await project_repo_service.list_repos(
-        db, include_disabled=False, offset=offset, limit=limit, with_repo=with_repo
+        db,
+        include_disabled=False,
+        offset=0 if requested_agent else offset,
+        limit=10_000 if requested_agent else limit,
+        with_repo=with_repo,
     )
+    agent_keys_by_repo = await project_repo_service.list_agent_keys_bulk(db, repos)
+    if requested_agent:
+        repos = [
+            repo
+            for repo in repos
+            if requested_agent in agent_keys_by_repo.get(repo.id, [])
+        ][offset : offset + limit]
     items = [
         ProjectRepoOption(
             id=repo.id,
@@ -62,6 +88,7 @@ async def list_enabled_project_repos(
             project_name=repo.project_name,
             default_branch=repo.default_branch,
             has_repo=project_repo_service.has_repo(repo),
+            enabled_agent_keys=agent_keys_by_repo.get(repo.id, []),
             description=repo.description,
         )
         for repo in repos

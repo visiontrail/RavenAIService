@@ -207,13 +207,14 @@ export interface ProjectRepoOption {
   default_branch: string
   // 是否关联了代码仓库。未关联的项目仅项目专家可见。
   has_repo?: boolean
+  enabled_agent_keys?: string[]
   description?: string | null
 }
 
 export const projectRepoApi = {
   // 列出所有已启用的项目仓库
-  listEnabled: (): Promise<ApiResponse<ProjectRepoOption[]>> => {
-    return api.get('/api/v1/project-repos')
+  listEnabled: (params?: { agent_key?: string }): Promise<ApiResponse<ProjectRepoOption[]>> => {
+    return api.get('/api/v1/project-repos', { params })
   },
 }
 

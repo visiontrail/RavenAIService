@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
   CheckCircle2,
   CircleAlert,
+  Bot,
   FolderTree,
   LogOut,
   Menu,
@@ -25,7 +26,7 @@ import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
 import { useAdminScope } from '@/composables/useAdminScope'
-import type { ProjectMember, ProjectRepo, ProjectRepoPayload, TestConnectionResult, UserProfile } from '@/types'
+import type { ProjectAgentInfo, ProjectMember, ProjectRepo, ProjectRepoPayload, TestConnectionResult, UserProfile } from '@/types'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -37,6 +38,7 @@ const { visibleNavItems, isGlobalAdmin } = useAdminScope()
 const isAuthenticated = ref(false)
 const isLoggingIn = ref(false)
 const loadingRepos = ref(false)
+const loadingProjectAgents = ref(false)
 const savingRepo = ref(false)
 const dialogVisible = ref(false)
 const dialogMode = ref<'create' | 'edit'>('create')
@@ -44,6 +46,7 @@ const deletingId = ref<number | null>(null)
 const testingId = ref<number | null>(null)
 const includeDisabled = ref(true)
 const repos = ref<ProjectRepo[]>([])
+const projectAgents = ref<ProjectAgentInfo[]>([])
 const testResults = reactive<Record<number, TestConnectionResult | undefined>>({})
 const memberDialogVisible = ref(false)
 const selectedRepoForMembers = ref<ProjectRepo | null>(null)
@@ -71,6 +74,7 @@ const repoForm = reactive({
   git_token: '',
   description: '',
   enabled: true,
+  enabled_agent_keys: [] as string[],
 })
 
 const editingRepoId = ref<number | null>(null)
@@ -92,6 +96,44 @@ const filteredUserCandidates = computed(() => {
     })
     .slice(0, 12)
 })
+const projectAgentByKey = computed(() => {
+  const map = new Map<string, ProjectAgentInfo>()
+  projectAgents.value.forEach((agent) => map.set(agent.key, agent))
+  return map
+})
+
+const compatibleProjectAgents = computed(() =>
+  projectAgents.value.filter((agent) => repoForm.associate_repo || !agent.requires_repo)
+)
+
+const enabledAgentLabels = (repo: ProjectRepo): string[] =>
+  (repo.enabled_agent_keys || [])
+    .map((key) => projectAgentByKey.value.get(key)?.display_name || key)
+    .filter(Boolean)
+
+const defaultAgentKeysForAssociateState = (): string[] =>
+  projectAgents.value
+    .filter((agent) => repoForm.associate_repo || !agent.requires_repo)
+    .map((agent) => agent.key)
+
+const normalizeRepoFormAgentKeys = () => {
+  const allowed = new Set(compatibleProjectAgents.value.map((agent) => agent.key))
+  repoForm.enabled_agent_keys = repoForm.enabled_agent_keys.filter((key) => allowed.has(key))
+  if (!repoForm.enabled_agent_keys.length) {
+    repoForm.enabled_agent_keys = defaultAgentKeysForAssociateState()
+  }
+}
+
+const toggleProjectAgent = (key: string) => {
+  const agent = projectAgentByKey.value.get(key)
+  if (!agent) return
+  if (agent.requires_repo && !repoForm.associate_repo) return
+  if (repoForm.enabled_agent_keys.includes(key)) {
+    repoForm.enabled_agent_keys = repoForm.enabled_agent_keys.filter((item) => item !== key)
+  } else {
+    repoForm.enabled_agent_keys = [...repoForm.enabled_agent_keys, key]
+  }
+}
 
 const parseErrorMessage = (err: any): string => {
   if (err?.response?.data?.detail) return err.response.data.detail
@@ -120,6 +162,7 @@ const clearAuth = () => {
   adminToken.clear()
   isAuthenticated.value = false
   repos.value = []
+  projectAgents.value = []
   memberDialogVisible.value = false
   selectedRepoForMembers.value = null
   projectMembers.value = []
@@ -139,7 +182,7 @@ const handleLogin = async () => {
     adminToken.set(resp.data.token)
     isAuthenticated.value = true
     appStore.showNotification({ title: t('admin.loginSuccessTitle'), message: t('admin.loginSuccessMsg', { username: resp.data.username }), type: 'success' })
-    await fetchRepos()
+    await Promise.all([fetchProjectAgents(), fetchRepos()])
   } catch (err: any) {
     appStore.showNotification({ title: t('admin.loginFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
@@ -178,6 +221,21 @@ const fetchRepos = async () => {
     appStore.showNotification({ title: t('admin.loadFail'), message: parseErrorMessage(err), type: 'error' })
   } finally {
     loadingRepos.value = false
+  }
+}
+
+const fetchProjectAgents = async () => {
+  if (!isAuthenticated.value || loadingProjectAgents.value || projectAgents.value.length) return
+  loadingProjectAgents.value = true
+  try {
+    const resp = await adminApi.listProjectAgents()
+    if (!resp?.success || !resp.data) throw new Error(resp?.message || t('admin.projectRepos.loadAgentsFailFallback'))
+    projectAgents.value = resp.data
+  } catch (err: any) {
+    projectAgents.value = []
+    appStore.showNotification({ title: t('admin.loadFail'), message: parseErrorMessage(err), type: 'error' })
+  } finally {
+    loadingProjectAgents.value = false
   }
 }
 
@@ -282,15 +340,18 @@ const resetRepoForm = () => {
   repoForm.git_token = ''
   repoForm.description = ''
   repoForm.enabled = true
+  repoForm.enabled_agent_keys = defaultAgentKeysForAssociateState()
 }
 
-const openCreateDialog = () => {
+const openCreateDialog = async () => {
+  await fetchProjectAgents()
   resetRepoForm()
   dialogMode.value = 'create'
   dialogVisible.value = true
 }
 
-const openEditDialog = (repo: ProjectRepo) => {
+const openEditDialog = async (repo: ProjectRepo) => {
+  await fetchProjectAgents()
   editingRepoId.value = repo.id
   dialogMode.value = 'edit'
   repoForm.project_code = repo.project_code
@@ -301,6 +362,8 @@ const openEditDialog = (repo: ProjectRepo) => {
   repoForm.git_token = ''
   repoForm.description = repo.description || ''
   repoForm.enabled = repo.enabled
+  repoForm.enabled_agent_keys = [...(repo.enabled_agent_keys || [])]
+  normalizeRepoFormAgentKeys()
   dialogVisible.value = true
 }
 
@@ -324,6 +387,7 @@ const buildPayload = (): ProjectRepoPayload => {
     return payload
   }
   payload.enabled = repoForm.enabled
+  payload.enabled_agent_keys = [...repoForm.enabled_agent_keys]
   if (dialogMode.value === 'create') {
     payload.project_code = repoForm.project_code.trim().toLowerCase()
   }
@@ -341,6 +405,7 @@ const validateForm = () => {
   if (!repoForm.project_code.trim()) return t('admin.projectRepos.projectCodeRequired')
   if (!repoForm.project_name.trim()) return t('admin.projectRepos.projectNameRequired')
   if (repoForm.associate_repo && !repoForm.repo_url.trim()) return t('admin.projectRepos.repoUrlRequired')
+  if (isGlobalAdmin.value && !repoForm.enabled_agent_keys.length) return t('admin.projectRepos.agentRequired')
   return ''
 }
 
@@ -412,7 +477,7 @@ const bootstrap = async () => {
     const resp = await adminApi.me()
     if (resp?.success) {
       isAuthenticated.value = true
-      await fetchRepos()
+      await Promise.all([fetchProjectAgents(), fetchRepos()])
     } else {
       clearAuth()
     }
@@ -422,6 +487,13 @@ const bootstrap = async () => {
 }
 
 onMounted(() => bootstrap())
+
+watch(
+  () => repoForm.associate_repo,
+  () => {
+    normalizeRepoFormAgentKeys()
+  }
+)
 </script>
 
 <template>
@@ -618,6 +690,15 @@ onMounted(() => bootstrap())
                         {{ repo.description }}
                       </span>
                     </div>
+                    <div class="mt-2 flex max-w-[360px] flex-wrap gap-1">
+                      <span
+                        v-for="label in enabledAgentLabels(repo)"
+                        :key="`${repo.id}-${label}`"
+                        class="inline-flex items-center rounded-full bg-cyan-50 px-2 py-0.5 text-[11px] font-semibold text-cyan-700"
+                      >
+                        {{ label }}
+                      </span>
+                    </div>
                   </td>
                   <td class="py-3 pr-4">
                     <span
@@ -757,6 +838,46 @@ onMounted(() => bootstrap())
               <span class="h-6 w-11 rounded-full bg-slate-300 transition peer-checked:bg-cyan-500"></span>
               <span class="absolute left-0.5 h-5 w-5 rounded-full bg-white shadow transition peer-checked:translate-x-5"></span>
             </label>
+          </div>
+          <div v-if="isGlobalAdmin" class="md:col-span-2 rounded-lg border border-slate-200 bg-white px-3 py-3">
+            <div class="mb-3 flex items-start gap-2">
+              <Bot :size="17" class="mt-0.5 text-cyan-600" />
+              <div>
+                <p class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.agentSelectLabel') }}</p>
+                <p class="text-xs text-slate-400">{{ t('admin.projectRepos.agentSelectHint') }}</p>
+              </div>
+            </div>
+            <div v-if="loadingProjectAgents" class="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-400">
+              {{ t('admin.projectRepos.loadingAgents') }}
+            </div>
+            <div v-else class="grid gap-2 md:grid-cols-3">
+              <label
+                v-for="agent in projectAgents"
+                :key="agent.key"
+                class="flex min-h-[92px] cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-sm transition"
+                :class="[
+                  repoForm.enabled_agent_keys.includes(agent.key)
+                    ? 'border-cyan-300 bg-cyan-50 text-cyan-900'
+                    : 'border-slate-200 bg-slate-50 text-slate-600',
+                  agent.requires_repo && !repoForm.associate_repo ? 'cursor-not-allowed opacity-55' : 'hover:border-cyan-200 hover:bg-cyan-50/60'
+                ]"
+              >
+                <input
+                  type="checkbox"
+                  class="mt-0.5 h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                  :checked="repoForm.enabled_agent_keys.includes(agent.key)"
+                  :disabled="agent.requires_repo && !repoForm.associate_repo"
+                  @change="toggleProjectAgent(agent.key)"
+                />
+                <span class="min-w-0">
+                  <span class="block font-semibold">{{ agent.display_name }}</span>
+                  <span class="mt-1 block text-xs leading-5 text-slate-500">{{ agent.description }}</span>
+                  <span v-if="agent.requires_repo" class="mt-1 inline-flex rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-500">
+                    {{ t('admin.projectRepos.agentRequiresRepo') }}
+                  </span>
+                </span>
+              </label>
+            </div>
           </div>
           <label v-if="repoForm.associate_repo" class="block md:col-span-2">
             <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldRepoUrl') }} <span class="text-rose-500">*</span></span>

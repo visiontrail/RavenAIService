@@ -86,7 +86,6 @@ const generateUUID = (): string => {
 const inputMessage = ref('')
 const chatContainerRef = ref<HTMLElement | null>(null)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
-const inputAreaRef = ref<HTMLElement | null>(null)
 const deviceMenuRef = ref<HTMLElement | null>(null)
 const deviceMenuBtnRef = ref<HTMLElement | null>(null)
 const topMoreMenuRef = ref<HTMLElement | null>(null)
@@ -792,14 +791,37 @@ const isProjectRepoRequired = computed(() =>
   isProjectExpertAgentSelected.value || isPackageAgentSelected.value
 )
 // 「未关联代码仓库」的项目仅项目专家可见；日志分析、包检索等 Agent 的项目
-// 下拉中需要过滤掉这类项目（has_repo === false）。
+// 下拉中需要按项目启用的 Agent 精确过滤。
+const selectedProjectAgentKey = computed(() => {
+  if (isProjectExpertAgentSelected.value) return 'project_expert'
+  if (isPackageAgentSelected.value) return 'package_search'
+  if (isLogAnalysisAgentSelected.value) return 'log_analysis'
+  return null
+})
+
+const repoSupportsAgent = (repo: ProjectRepoOption, agentKey: string): boolean => {
+  if (Array.isArray(repo.enabled_agent_keys) && repo.enabled_agent_keys.length) {
+    return repo.enabled_agent_keys.includes(agentKey)
+  }
+  if (agentKey === 'project_expert') return true
+  return repo.has_repo !== false
+}
+
 const visibleProjectRepoOptions = computed(() => {
-  if (isProjectExpertAgentSelected.value) return projectRepoOptions.value
-  return projectRepoOptions.value.filter((repo) => repo.has_repo !== false)
+  const agentKey = selectedProjectAgentKey.value
+  if (!agentKey) return []
+  return projectRepoOptions.value.filter((repo) => repoSupportsAgent(repo, agentKey))
 })
 const isProjectRepoRequiredMissing = computed(() =>
   isProjectRepoRequired.value && selectedProjectRepoId.value === null
 )
+
+watch(visibleProjectRepoOptions, (options) => {
+  if (selectedProjectRepoId.value === null) return
+  if (!options.some((repo) => repo.id === selectedProjectRepoId.value)) {
+    selectedProjectRepoId.value = null
+  }
+})
 
 // ZIP inspection: read central directory to check if metadata.json is present
 const zipMetadataCheckResult = ref<boolean | null>(null) // null=unknown/non-zip, true=present, false=absent
@@ -1859,7 +1881,6 @@ const openShareModal = () => {
         </span>
       </div>
       <div
-        ref="inputAreaRef"
         class="rw-composer"
         :class="{ 'is-log-drag-over': isLogFileDragOver }"
         @dragenter.prevent="handleLogFileDragEnter"

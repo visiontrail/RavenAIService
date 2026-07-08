@@ -88,6 +88,32 @@ class TestHasRepo:
         assert has_repo(None) is False
 
 
+class TestProjectAgents:
+    def test_default_agents_depend_on_repo_url(self):
+        from app.services.project_repo_service import default_agent_keys_for_repo
+
+        assert default_agent_keys_for_repo(_make_repo(repo_url="")) == ["project_expert"]
+        assert default_agent_keys_for_repo(_make_repo(repo_url="https://git.example/x.git")) == [
+            "project_expert",
+            "log_analysis",
+            "package_search",
+        ]
+
+    def test_normalize_rejects_repo_bound_agent_without_repo(self):
+        from app.services.project_repo_service import normalize_agent_keys
+
+        with pytest.raises(ValueError, match="不能启用"):
+            normalize_agent_keys(["log_analysis"], _make_repo(repo_url=""))
+
+    def test_normalize_allows_subset_for_repo_project(self):
+        from app.services.project_repo_service import normalize_agent_keys
+
+        assert normalize_agent_keys(
+            ["package_search", "package_search"],
+            _make_repo(repo_url="https://git.example/x.git"),
+        ) == ["package_search"]
+
+
 class TestCreateRepoless:
     @pytest.mark.asyncio
     async def test_create_without_repo_url_drops_token(self, mock_db):
@@ -156,6 +182,21 @@ class TestUpdate:
 
         await update(mock_db, repo, git_token="new-token")
         assert repo.git_token == "new-token"
+
+    @pytest.mark.asyncio
+    async def test_clearing_repo_url_drops_git_token(self, mock_db):
+        from app.services.project_repo_service import update
+
+        repo = _make_repo(
+            repo_url="https://git.example/x.git",
+            git_token="old-token",
+        )
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        await update(mock_db, repo, repo_url="", git_token="new-token")
+        assert repo.repo_url == ""
+        assert repo.git_token is None
 
 
 class TestConnectionTest:

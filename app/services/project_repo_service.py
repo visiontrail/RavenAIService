@@ -8,17 +8,45 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.project_repo import ProjectRepo
+from app.models.project_repo import ProjectRepo, ProjectRepoAgent
 from app.services.repo_settings_service import test_repo_connection
 
 logger = logging.getLogger(__name__)
 
 _TOKEN_MASK = "••••••••"
+
+
+PROJECT_AGENT_REGISTRY: Dict[str, Dict[str, Any]] = {
+    "project_expert": {
+        "key": "project_expert",
+        "name": "ProjectExpertAgent",
+        "display_name": "项目专家",
+        "framework": "Claude Agent SDK",
+        "requires_repo": False,
+        "description": "基于项目上下文、项目级提示词和可选代码仓库进行源码/项目答疑",
+    },
+    "log_analysis": {
+        "key": "log_analysis",
+        "name": "LogAnalysisAgent",
+        "display_name": "日志分析",
+        "framework": "Claude Agent SDK",
+        "requires_repo": True,
+        "description": "分析日志归档并结合项目代码仓库定位根因",
+    },
+    "package_search": {
+        "key": "package_search",
+        "name": "PackageSearchAgent",
+        "display_name": "重构包配置管理员",
+        "framework": "Claude Agent SDK",
+        "requires_repo": True,
+        "description": "在项目范围内检索重构包、版本资产与配置线索",
+    },
+}
 
 
 def _normalize_code(code: str) -> str:
@@ -36,6 +64,81 @@ def has_repo(repo: Optional[ProjectRepo]) -> bool:
         return False
     url = getattr(repo, "repo_url", None)
     return bool(url and url.strip())
+
+
+def list_project_agents() -> List[Dict[str, Any]]:
+    """列出可绑定到项目的 Agent。"""
+    return [dict(item) for item in PROJECT_AGENT_REGISTRY.values()]
+
+
+def _is_agent_compatible(repo: ProjectRepo, agent_key: str) -> bool:
+    meta = PROJECT_AGENT_REGISTRY.get(agent_key)
+    if not meta:
+        return False
+    return not bool(meta.get("requires_repo")) or has_repo(repo)
+
+
+def default_agent_keys_for_repo(repo: ProjectRepo) -> List[str]:
+    """旧项目/未显式配置时的兼容默认值。"""
+    return [
+        key
+        for key in PROJECT_AGENT_REGISTRY
+        if _is_agent_compatible(repo, key)
+    ]
+
+
+def normalize_agent_keys(
+    agent_keys: Optional[Iterable[str]],
+    repo: ProjectRepo,
+    *,
+    fallback_to_default: bool = True,
+) -> List[str]:
+    """规范化并校验项目 Agent key。
+
+    ``None`` 表示使用与旧行为等价的默认值；显式空列表会被拒绝，避免创建后
+    项目没有任何可用 Agent。
+    """
+    if agent_keys is None:
+        return default_agent_keys_for_repo(repo) if fallback_to_default else []
+
+    normalized: List[str] = []
+    unknown: List[str] = []
+    incompatible: List[str] = []
+    for raw in agent_keys:
+        key = str(raw or "").strip()
+        if not key:
+            continue
+        if key not in PROJECT_AGENT_REGISTRY:
+            unknown.append(key)
+            continue
+        if not _is_agent_compatible(repo, key):
+            incompatible.append(key)
+            continue
+        if key not in normalized:
+            normalized.append(key)
+
+    if unknown:
+        raise ValueError(f"未知 Agent: {', '.join(unknown)}")
+    if incompatible:
+        names = ", ".join(
+            PROJECT_AGENT_REGISTRY[key].get("display_name", key)
+            for key in incompatible
+        )
+        raise ValueError(f"当前项目未关联代码仓库，不能启用: {names}")
+    if not normalized:
+        raise ValueError("请至少选择一个可用 Agent")
+    return normalized
+
+
+def _effective_agent_keys(repo: ProjectRepo, stored_keys: Optional[Iterable[str]]) -> List[str]:
+    if stored_keys is None:
+        return default_agent_keys_for_repo(repo)
+    effective = [
+        key
+        for key in stored_keys
+        if key in PROJECT_AGENT_REGISTRY and _is_agent_compatible(repo, key)
+    ]
+    return effective or default_agent_keys_for_repo(repo)
 
 
 # ─────────────────────── Read ──────────────────────────────────────
@@ -89,6 +192,91 @@ async def get_by_project_code(
     if require_repo and not has_repo(repo):
         return None
     return repo
+
+
+async def list_agent_keys(db: AsyncSession, repo: ProjectRepo) -> List[str]:
+    result = await db.execute(
+        select(ProjectRepoAgent.agent_key)
+        .where(ProjectRepoAgent.project_repo_id == repo.id)
+        .order_by(ProjectRepoAgent.id)
+    )
+    stored = list(result.scalars().all())
+    return _effective_agent_keys(repo, stored if stored else None)
+
+
+async def list_agent_keys_bulk(
+    db: AsyncSession, repos: Iterable[ProjectRepo]
+) -> Dict[int, List[str]]:
+    repo_list = list(repos)
+    if not repo_list:
+        return {}
+    repo_by_id = {repo.id: repo for repo in repo_list}
+    result = await db.execute(
+        select(ProjectRepoAgent.project_repo_id, ProjectRepoAgent.agent_key)
+        .where(ProjectRepoAgent.project_repo_id.in_(list(repo_by_id)))
+        .order_by(ProjectRepoAgent.id)
+    )
+    stored: Dict[int, List[str]] = {repo.id: [] for repo in repo_list}
+    for repo_id, agent_key in result.all():
+        if repo_id in stored:
+            stored[repo_id].append(agent_key)
+    return {
+        repo.id: _effective_agent_keys(repo, stored[repo.id] or None)
+        for repo in repo_list
+    }
+
+
+async def replace_agent_keys(
+    db: AsyncSession,
+    repo: ProjectRepo,
+    agent_keys: Optional[Iterable[str]] = None,
+) -> List[str]:
+    normalized = normalize_agent_keys(agent_keys, repo)
+    await db.execute(
+        sa_delete(ProjectRepoAgent).where(ProjectRepoAgent.project_repo_id == repo.id)
+    )
+    now = datetime.utcnow()
+    for key in normalized:
+        db.add(
+            ProjectRepoAgent(
+                project_repo_id=repo.id,
+                agent_key=key,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    await db.flush()
+    logger.info(
+        "Updated project_repo agents id=%d agents=%s",
+        repo.id,
+        ",".join(normalized),
+    )
+    return normalized
+
+
+async def reconcile_agent_keys(db: AsyncSession, repo: ProjectRepo) -> List[str]:
+    """按当前 repo_url 清理不再兼容的 Agent，并保证至少一个有效 Agent。"""
+    result = await db.execute(
+        select(ProjectRepoAgent.agent_key)
+        .where(ProjectRepoAgent.project_repo_id == repo.id)
+        .order_by(ProjectRepoAgent.id)
+    )
+    stored = list(result.scalars().all())
+    effective = _effective_agent_keys(repo, stored if stored else None)
+    return await replace_agent_keys(db, repo, effective)
+
+
+async def supports_agent(
+    db: AsyncSession,
+    repo: Optional[ProjectRepo],
+    agent_key: str,
+) -> bool:
+    if repo is None or not getattr(repo, "enabled", True):
+        return False
+    if agent_key not in PROJECT_AGENT_REGISTRY or not _is_agent_compatible(repo, agent_key):
+        return False
+    keys = await list_agent_keys(db, repo)
+    return agent_key in keys
 
 
 # ─────────────────────── Write ─────────────────────────────────────
@@ -151,6 +339,8 @@ async def update(
         repo.description = description
     if enabled is not None:
         repo.enabled = enabled
+    if not has_repo(repo):
+        repo.git_token = None
     repo.updated_at = datetime.utcnow()
     await db.flush()
     await db.refresh(repo)

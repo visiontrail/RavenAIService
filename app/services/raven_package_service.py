@@ -189,9 +189,11 @@ async def validate_project_code(db: Any, project_code: Any, locale: str = "zh") 
         )
     from app.services import project_repo_service
 
-    # 包检索 Agent 对「未关联代码仓库」的项目不可见。
+    # 包检索/配置管理员 Agent 对未启用 package_search 的项目不可见。
     repo = await project_repo_service.get_by_project_code(db, code, require_repo=True)
-    if repo is None:
+    if repo is None or not await project_repo_service.supports_agent(
+        db, repo, "package_search"
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=t("package.project_invalid", locale, code=code),

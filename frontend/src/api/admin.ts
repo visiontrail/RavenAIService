@@ -13,6 +13,7 @@ import type {
   MetricsUserListData,
   PromptsConfigData,
   ProjectMember,
+  ProjectAgentInfo,
   ProjectRepo,
   ProjectRepoPayload,
   ProjectSystemPrompt,
@@ -125,6 +126,9 @@ export const adminApi = {
     limit?: number
   }): Promise<ApiResponse<ProjectRepo[]>> =>
     adminClient.get('/admin/project-repos', { params }),
+
+  listProjectAgents: (): Promise<ApiResponse<ProjectAgentInfo[]>> =>
+    adminClient.get('/admin/project-agents'),
 
   createProjectRepo: (payload: ProjectRepoPayload): Promise<ApiResponse<ProjectRepo>> =>
     adminClient.post('/admin/project-repos', payload),

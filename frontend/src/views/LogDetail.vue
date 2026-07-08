@@ -552,7 +552,7 @@ const fetchProjectRepos = async () => {
   if (projectReposLoading.value || projectReposLoaded.value) return
   projectReposLoading.value = true
   try {
-    const response = await projectRepoApi.listEnabled()
+    const response = await projectRepoApi.listEnabled({ agent_key: 'log_analysis' })
     if (response.success && Array.isArray(response.data)) {
       projectRepos.value = response.data
     } else {

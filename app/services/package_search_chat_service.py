@@ -200,7 +200,7 @@ class PackageSearchChatService:
                     yield self._sse_event(
                         {
                             "event": "error",
-                            "message": "所选项目仓库不存在或已禁用，请重新选择。",
+                            "message": "所选项目不存在、已禁用或未启用重构包配置管理员 Agent，请重新选择。",
                         }
                     )
                     return
@@ -731,6 +731,14 @@ class PackageSearchChatService:
             from app.services import project_repo_service
 
             repo = await project_repo_service.get_by_id(db, project_repo_id)
+            if repo and not await project_repo_service.supports_agent(
+                db, repo, "package_search"
+            ):
+                logger.info(
+                    "package-search chat: project_repo_id=%s does not enable package_search",
+                    project_repo_id,
+                )
+                return None
         except Exception as exc:  # noqa: BLE001
             logger.warning("package-search chat: 校验 project_repo_id 失败: %s", exc)
             return None

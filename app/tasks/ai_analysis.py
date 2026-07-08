@@ -335,9 +335,40 @@ def _match_project_repo_by_candidates(session, candidates: list[str]):
             .filter(ProjectRepo.project_code == code, ProjectRepo.enabled.is_(True))
             .first()
         )
-        if repo:
+        if repo and _project_repo_supports_agent(session, repo, "log_analysis"):
             return repo, code
     return None, None
+
+
+def _project_repo_supports_agent(session, repo, agent_key: str) -> bool:
+    """Synchronous mirror of project_repo_service.supports_agent for Celery tasks."""
+    if not repo or not getattr(repo, "enabled", True):
+        return False
+    has_repo = bool(str(getattr(repo, "repo_url", "") or "").strip())
+    if agent_key in {"log_analysis", "package_search"} and not has_repo:
+        return False
+    if agent_key == "project_expert":
+        default_allowed = True
+    elif agent_key in {"log_analysis", "package_search"}:
+        default_allowed = has_repo
+    else:
+        return False
+
+    try:
+        from app.models.project_repo import ProjectRepoAgent
+
+        rows = (
+            session.query(ProjectRepoAgent.agent_key)
+            .filter(ProjectRepoAgent.project_repo_id == repo.id)
+            .all()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("project agent lookup failed, using default: %s", exc)
+        return default_allowed
+    stored = [row[0] for row in rows]
+    if not stored:
+        return default_allowed
+    return agent_key in stored
 
 
 def _normalize_branch_name(value: Optional[str]) -> Optional[str]:
@@ -584,8 +615,10 @@ def _inject_repo_info(session, workspace_ctx) -> None:
             .filter(ProjectRepo.id == bound_project_id, ProjectRepo.enabled.is_(True))
             .first()
         )
-        if repo:
+        if repo and _project_repo_supports_agent(session, repo, "log_analysis"):
             matched_code = "project_id"
+        else:
+            repo = None
 
     if repo is None:
         candidates = _project_code_candidates_from_metadata(meta)
@@ -735,6 +768,12 @@ def _inject_repo_info_from_project_id(session, workspace_ctx, project_repo_id: i
     if not repo:
         logger.info(
             "_inject_repo_info_from_project_id: project_repo_id=%s not found or disabled",
+            project_repo_id,
+        )
+        return False
+    if not _project_repo_supports_agent(session, repo, "log_analysis"):
+        logger.info(
+            "_inject_repo_info_from_project_id: project_repo_id=%s does not enable log_analysis",
             project_repo_id,
         )
         return False

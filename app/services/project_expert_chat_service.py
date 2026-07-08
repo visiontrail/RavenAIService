@@ -198,7 +198,7 @@ class ProjectExpertChatService:
                     yield self._sse_event(
                         {
                             "event": "error",
-                            "message": "所选项目仓库不存在或已禁用，请重新选择。",
+                            "message": "所选项目不存在、已禁用或未启用项目专家 Agent，请重新选择。",
                         }
                     )
                     return
@@ -719,6 +719,14 @@ class ProjectExpertChatService:
             from app.services import project_repo_service
 
             repo = await project_repo_service.get_by_id(db, project_repo_id)
+            if repo and not await project_repo_service.supports_agent(
+                db, repo, "project_expert"
+            ):
+                logger.info(
+                    "project-expert chat: project_repo_id=%s does not enable project_expert",
+                    project_repo_id,
+                )
+                return None
         except Exception as exc:  # noqa: BLE001
             logger.warning("project-expert chat: 校验 project_repo_id 失败: %s", exc)
             return None

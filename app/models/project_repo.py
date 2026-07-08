@@ -74,3 +74,32 @@ class ProjectRepoMember(Base, TimestampMixin):
         index=True,
         comment="成员用户（users.id）",
     )
+
+
+class ProjectRepoAgent(Base, TimestampMixin):
+    """项目仓库 ↔ 可用 Agent 的关系。
+
+    关系存在即表示该项目允许该 Agent 作为后续操作/分析入口使用。
+    """
+
+    __tablename__ = "project_repo_agent"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_repo_id", "agent_key", name="uq_project_repo_agent"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_repo_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("project_repo.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="所属项目仓库（project_repo.id）",
+    )
+    agent_key: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+        comment="可操作该项目的 Agent key，如 project_expert/log_analysis/package_search",
+    )
