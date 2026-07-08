@@ -43,7 +43,9 @@ def client(tmp_path, monkeypatch) -> TestClient:
             is_global_admin=True,
         )
 
-    monkeypatch.setattr(admin_api, "_seed_code_workflows", lambda _project_code: None)
+    monkeypatch.setattr(
+        admin_api, "_seed_default_prompts", lambda _project_code, _has_repo: None
+    )
 
     app = FastAPI()
     app.include_router(admin_api.router)

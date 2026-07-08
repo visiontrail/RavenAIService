@@ -309,21 +309,25 @@ class TestConnectionResponse(BaseModel):
     message: str = "ok"
 
 
-def _seed_code_workflows(project_code: str) -> None:
-    """为关联了代码仓库的项目播种各 Agent 的代码工作流（幂等、不抛错）。
+def _seed_default_prompts(project_code: str, has_repo: bool) -> None:
+    """为项目播种默认的项目级提示词（目前仅项目专家；幂等、不抛错）。
 
-    播种失败不应阻断项目创建/更新，因此异常仅记录日志。
+    ``has_repo`` 决定播种「代码工作流」还是「无仓库」变体。播种失败不应阻断
+    项目创建/更新，因此异常仅记录日志。
     """
     try:
-        seeded = project_prompt_service.seed_project_code_workflows(project_code)
+        seeded = project_prompt_service.seed_project_default_prompts(
+            project_code, has_repo=has_repo
+        )
         if seeded:
             logger.info(
-                "seeded code-workflow prompts for project=%s agents=%s",
+                "seeded default project prompts for project=%s has_repo=%s agents=%s",
                 project_code,
+                has_repo,
                 ",".join(seeded),
             )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("seed code-workflow prompts failed for %s: %s", project_code, exc)
+        logger.warning("seed default project prompts failed for %s: %s", project_code, exc)
 
 
 class ProjectAgentInfo(BaseModel):
@@ -434,10 +438,9 @@ async def create_project_repo(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"创建失败: {exc}",
         ) from exc
-    # 关联了代码仓库的项目：把各 Agent 的代码工作流播种到项目级提示词，使代码相关
-    # 的工作流随项目（而非基础提示词）分级下沉。未关联仓库的项目不播种。
-    if project_repo_service.has_repo(repo):
-        _seed_code_workflows(repo.project_code)
+    # 为「项目专家」播种默认的项目级提示词：关联了代码仓库的项目播种代码工作流，
+    # 未关联仓库的项目播种「无仓库」约束（日志分析 / 重构包管理员不播种，保持为空）。
+    _seed_default_prompts(repo.project_code, project_repo_service.has_repo(repo))
     return ProjectRepoResponse(
         data=_repo_to_data(repo, enabled_agent_keys=agent_keys),
         message="创建成功",
@@ -504,9 +507,10 @@ async def update_project_repo(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"更新失败: {exc}",
         ) from exc
-    # 项目从「未关联」变为「已关联」代码仓库时，补播种各 Agent 的代码工作流。
-    if not had_repo and project_repo_service.has_repo(repo):
-        _seed_code_workflows(repo.project_code)
+    # 项目在「有仓库 ↔ 无仓库」之间切换时，为项目专家切换默认项目级提示词
+    # （仅当该层仍是未改动的默认值；管理员的自定义内容不会被覆盖）。
+    if had_repo != project_repo_service.has_repo(repo):
+        _seed_default_prompts(repo.project_code, project_repo_service.has_repo(repo))
     return ProjectRepoResponse(
         data=_repo_to_data(repo, enabled_agent_keys=agent_keys),
         message="更新成功",

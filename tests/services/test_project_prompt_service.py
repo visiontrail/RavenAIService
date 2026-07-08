@@ -154,40 +154,89 @@ def test_addendum_agent_layer_without_shared(isolated_prompts_dir):
     assert "ONLY-WORKFLOW" in addendum
 
 
-def test_load_code_workflow_template_per_agent(isolated_prompts_dir):
+def test_load_default_prompt_templates(isolated_prompts_dir):
     from app.services import project_prompt_service as svc
 
-    # Templates come from the real prompts_config.yaml; each known agent has one.
-    for agent in svc.CODE_WORKFLOW_AGENT_KEYS:
-        text = svc.load_code_workflow_template(agent)
-        assert text, f"expected a code-workflow template for {agent}"
-        assert "repo" in text.lower()
+    # Templates come from the real prompts_config.yaml. Only the project expert
+    # has tiered defaults (repo + repoless); the other agents ship their code
+    # workflow inside the base system prompt and have no seeding templates.
+    with_repo = svc.load_default_prompt_template("project_expert", has_repo=True)
+    without_repo = svc.load_default_prompt_template("project_expert", has_repo=False)
+    assert with_repo and "repo" in with_repo.lower()
+    assert without_repo and without_repo != with_repo
+
+    for agent in ("log_analysis", "package_search"):
+        assert svc.load_default_prompt_template(agent, has_repo=True) == ""
+        assert svc.load_default_prompt_template(agent, has_repo=False) == ""
+
     # Unknown agents resolve to empty without raising.
-    assert svc.load_code_workflow_template("nope") == ""
+    assert svc.load_default_prompt_template("nope", has_repo=True) == ""
 
 
-def test_seed_code_workflow_is_idempotent(isolated_prompts_dir):
+def test_seed_default_prompt_is_idempotent(isolated_prompts_dir):
     from app.services import project_prompt_service as svc
 
     # First seed writes the template; second seed is a no-op (does not clobber).
-    assert svc.seed_code_workflow_prompt("myproj", "project_expert") is True
+    assert svc.seed_default_project_prompt("myproj", "project_expert", has_repo=True) is True
     seeded = svc.get_project_prompt_text("myproj", "project_expert")
     assert seeded
+    assert (
+        svc.seed_default_project_prompt("myproj", "project_expert", has_repo=True) is False
+    )
 
-    # An admin edit must survive a re-seed.
+    # An admin edit must survive a re-seed (for either variant).
     svc.set_project_prompt("myproj", "ADMIN-EDIT", agent_key="project_expert")
-    assert svc.seed_code_workflow_prompt("myproj", "project_expert") is False
+    assert (
+        svc.seed_default_project_prompt("myproj", "project_expert", has_repo=True) is False
+    )
+    assert (
+        svc.seed_default_project_prompt("myproj", "project_expert", has_repo=False) is False
+    )
     assert svc.get_project_prompt_text("myproj", "project_expert") == "ADMIN-EDIT"
 
     # overwrite=True forces a refresh from the template.
-    assert svc.seed_code_workflow_prompt("myproj", "project_expert", overwrite=True) is True
+    assert (
+        svc.seed_default_project_prompt(
+            "myproj", "project_expert", has_repo=True, overwrite=True
+        )
+        is True
+    )
     assert svc.get_project_prompt_text("myproj", "project_expert") != "ADMIN-EDIT"
 
 
-def test_seed_project_code_workflows_all_agents(isolated_prompts_dir):
+def test_seed_swaps_unedited_default_on_repo_flip(isolated_prompts_dir):
     from app.services import project_prompt_service as svc
 
-    seeded = svc.seed_project_code_workflows("myproj")
-    assert sorted(seeded) == sorted(svc.CODE_WORKFLOW_AGENT_KEYS)
-    for agent in svc.CODE_WORKFLOW_AGENT_KEYS:
-        assert svc.get_project_prompt_text("myproj", agent)
+    # Repoless project gets the no-repo default.
+    assert svc.seed_default_project_prompt("myproj", "project_expert", has_repo=False) is True
+    no_repo_default = svc.get_project_prompt_text("myproj", "project_expert")
+    assert no_repo_default == svc.load_default_prompt_template(
+        "project_expert", has_repo=False
+    )
+
+    # Linking a repo swaps the unedited default to the code-workflow variant.
+    assert svc.seed_default_project_prompt("myproj", "project_expert", has_repo=True) is True
+    assert svc.get_project_prompt_text("myproj", "project_expert") == (
+        svc.load_default_prompt_template("project_expert", has_repo=True)
+    )
+
+    # And unlinking swaps it back.
+    assert svc.seed_default_project_prompt("myproj", "project_expert", has_repo=False) is True
+    assert svc.get_project_prompt_text("myproj", "project_expert") == no_repo_default
+
+
+def test_seed_project_default_prompts_only_expert(isolated_prompts_dir):
+    from app.services import project_prompt_service as svc
+
+    seeded = svc.seed_project_default_prompts("myproj", has_repo=True)
+    assert seeded == ["project_expert"]
+    assert svc.get_project_prompt_text("myproj", "project_expert")
+    # The other agents' layers stay empty by default.
+    assert svc.get_project_prompt_text("myproj", "log_analysis") == ""
+    assert svc.get_project_prompt_text("myproj", "package_search") == ""
+
+    seeded_repoless = svc.seed_project_default_prompts("myproj2", has_repo=False)
+    assert seeded_repoless == ["project_expert"]
+    assert svc.get_project_prompt_text("myproj2", "project_expert") == (
+        svc.load_default_prompt_template("project_expert", has_repo=False)
+    )

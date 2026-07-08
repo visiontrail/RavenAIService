@@ -3,15 +3,17 @@ Project 级系统提示词管理服务。
 
 让系统提示词也能像 Skill 一样分级处理：
 
-- **Agent 级（基础层）**：来自 ``prompts_config.yaml``，按 agent + locale 选择，
-  是每个 Agent 的**通用、与代码无关**的系统提示词。
+- **Agent 级（基础层）**：来自 ``prompts_config.yaml``，按 agent + locale 选择。
+  日志分析与重构包配置管理员的基础提示词**自带**代码仓库工作流（这两个 Agent
+  必须能克隆仓库）；只有项目专家的基础提示词是**通用、与代码无关**的。
 - **Project 级（追加层）**：针对单个 ``project_code`` 追加的系统提示词，用于限定
   该项目的专属约束（可以为空）。本服务负责存取这一层，它又分为两类：
 
   * **项目共享层**：对该项目下所有 Agent 生效（即历史上的单一文件，保持兼容）。
-  * **Agent 专属层**：仅对某个 Agent 生效。**当项目关联了代码仓库时，各 Agent
-    与代码相关的工作流提示词（``prompts_config.yaml`` 中的 ``code_workflow_prompt``）
-    会被「播种」到这一层**，从而让代码工作流随项目（而非基础提示词）分级下沉。
+  * **Agent 专属层**：仅对某个 Agent 生效。**项目创建时会为「项目专家」播种默认
+    提示词**：关联了代码仓库的项目播种 ``code_workflow_prompt``（克隆/分析源码
+    的工作流），未关联仓库的项目播种 ``no_repo_workflow_prompt``（无代码约束）。
+    日志分析与重构包配置管理员的这一层默认为空，仅由管理员按需填写。
 
 存储布局（按 project_code 隔离，与 Project Skills 平行）：
 
@@ -46,15 +48,28 @@ MAX_PROJECT_PROMPT_CHARS = 20000
 
 _PROMPT_FILENAME = "system_prompt.md"
 
-# 拥有「代码工作流」分级提示词的 Agent。键既是磁盘上的子目录名，也是各 Agent
+# 拥有「Agent 专属层」项目提示词的 Agent。键既是磁盘上的子目录名，也是各 Agent
 # 在 ``build_project_prompt_addendum`` 中传入的 ``agent_key``。
-CODE_WORKFLOW_AGENT_KEYS = ("project_expert", "log_analysis", "package_search")
+PROJECT_AGENT_KEYS = ("project_expert", "log_analysis", "package_search")
 
-# agent_key -> prompts_config.yaml 中对应的功能键，用于读取 ``code_workflow_prompt``。
+# 兼容旧名（历史脚本/调用方可能仍引用）。
+CODE_WORKFLOW_AGENT_KEYS = PROJECT_AGENT_KEYS
+
+# 项目创建时会播种默认项目级提示词的 Agent：目前仅项目专家。日志分析与重构包
+# 配置管理员的代码工作流内置在基础提示词中，其项目级提示词默认为空。
+SEEDED_AGENT_KEYS = ("project_expert",)
+
+# agent_key -> prompts_config.yaml 中对应的功能键，用于读取默认提示词模板。
 _AGENT_CONFIG_KEY: Dict[str, str] = {
     "project_expert": "claude_agent_project_expert",
     "log_analysis": "claude_agent_log_analysis",
     "package_search": "claude_agent_package_search",
+}
+
+# 默认项目级提示词模板在 prompts_config.yaml 中的字段名，按「是否关联代码仓库」区分。
+_DEFAULT_TEMPLATE_FIELD: Dict[bool, str] = {
+    True: "code_workflow_prompt",
+    False: "no_repo_workflow_prompt",
 }
 
 
@@ -89,7 +104,7 @@ def validate_agent_key(agent_key: Optional[str]) -> Optional[str]:
     if agent_key is None:
         return None
     normalized = agent_key.strip().lower()
-    if normalized not in CODE_WORKFLOW_AGENT_KEYS:
+    if normalized not in PROJECT_AGENT_KEYS:
         raise ProjectPromptValidationError(f"未知的 agent_key: {agent_key}")
     return normalized
 
@@ -244,14 +259,17 @@ def build_project_prompt_addendum(
     ).format(label=label, body=body)
 
 
-# ─────────────────────── Code-workflow seeding ─────────────────────
+# ─────────────────────── Default-prompt seeding ─────────────────────
 
-def load_code_workflow_template(agent_key: str, locale: Optional[str] = None) -> str:
-    """读取某 Agent 的「代码工作流」模板正文（来自 ``prompts_config.yaml`` 的
-    ``code_workflow_prompt``），用于播种到关联了代码仓库的项目。
+def load_default_prompt_template(
+    agent_key: str, *, has_repo: bool = True, locale: Optional[str] = None
+) -> str:
+    """读取某 Agent 的默认项目级提示词模板（来自 ``prompts_config.yaml``）。
 
-    ``locale`` 选择多语言变体，缺失时回退默认语言（``zh``）。未知 agent_key 或
-    读不到时返回空串、绝不抛错。
+    ``has_repo=True`` 读取 ``code_workflow_prompt``（关联了代码仓库的项目），
+    ``has_repo=False`` 读取 ``no_repo_workflow_prompt``（未关联仓库的项目）。
+    ``locale`` 选择多语言变体，缺失时回退默认语言（``zh``）。未知 agent_key、
+    模板不存在或读不到时返回空串、绝不抛错。
     """
     try:
         agent = validate_agent_key(agent_key)
@@ -281,60 +299,81 @@ def load_code_workflow_template(agent_key: str, locale: Optional[str] = None) ->
         parsed = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         agent_cfg = parsed.get(function_key) or {}
         variant = agent_cfg.get("generic") or {}
-        body = select_localized_body(variant.get("code_workflow_prompt"), locale)
+        field = _DEFAULT_TEMPLATE_FIELD[bool(has_repo)]
+        body = select_localized_body(variant.get(field), locale)
         return (body or "").strip()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("load_code_workflow_template failed for %s: %s", agent_key, exc)
+        logger.warning("load_default_prompt_template failed for %s: %s", agent_key, exc)
         return ""
 
 
-def seed_code_workflow_prompt(
+def load_code_workflow_template(agent_key: str, locale: Optional[str] = None) -> str:
+    """兼容旧名：读取某 Agent 的「代码工作流」模板正文。"""
+    return load_default_prompt_template(agent_key, has_repo=True, locale=locale)
+
+
+def seed_default_project_prompt(
     project_code: str,
     agent_key: str,
     *,
+    has_repo: bool,
     locale: Optional[str] = None,
     overwrite: bool = False,
 ) -> bool:
-    """把某 Agent 的代码工作流模板播种到该项目的 Agent 专属层。
+    """把某 Agent 的默认项目级提示词模板播种到该项目的 Agent 专属层。
 
-    幂等：当目标文件已存在且 ``overwrite=False`` 时跳过（不覆盖管理员的改动）。
-    返回是否实际写入。
+    幂等且不覆盖管理员的改动：目标文件已存在时，仅当其内容仍是**另一变体**的
+    未改动默认值（项目在「有仓库 ↔ 无仓库」之间切换）才替换为新变体；其余情况
+    一律跳过。``overwrite=True`` 强制用最新模板刷新。返回是否实际写入。
     """
     code = validate_project_code(project_code)
     agent = validate_agent_key(agent_key)
     if agent is None:
         return False
-    path = _prompt_path(code, agent)
-    if path.is_file() and not overwrite:
-        return False
-    template = load_code_workflow_template(agent, locale)
+    template = load_default_prompt_template(agent, has_repo=has_repo, locale=locale)
     if not template:
         return False
+    path = _prompt_path(code, agent)
+    if path.is_file() and not overwrite:
+        current = path.read_text(encoding="utf-8", errors="replace").strip()
+        if current == template:
+            return False
+        other = load_default_prompt_template(agent, has_repo=not has_repo, locale=locale)
+        if current != other:
+            # 管理员已自定义该层：保留改动，不播种。
+            return False
     set_project_prompt(code, template, agent_key=agent)
-    logger.info("seeded code-workflow prompt: project=%s agent=%s", code, agent)
+    logger.info(
+        "seeded default project prompt: project=%s agent=%s has_repo=%s",
+        code,
+        agent,
+        has_repo,
+    )
     return True
 
 
-def seed_project_code_workflows(
+def seed_project_default_prompts(
     project_code: str,
     *,
+    has_repo: bool,
     locale: Optional[str] = None,
     overwrite: bool = False,
 ) -> List[str]:
-    """为关联了代码仓库的项目播种所有 Agent 的代码工作流。
+    """为项目播种各 Agent 的默认项目级提示词（目前仅项目专家）。
 
-    返回实际写入的 agent_key 列表。仅应在项目「关联了代码仓库」时调用。
+    ``has_repo`` 决定播种「代码工作流」还是「无仓库」变体。返回实际写入的
+    agent_key 列表。项目创建以及仓库关联状态变化时都应调用。
     """
     seeded: List[str] = []
-    for agent in CODE_WORKFLOW_AGENT_KEYS:
+    for agent in SEEDED_AGENT_KEYS:
         try:
-            if seed_code_workflow_prompt(
-                project_code, agent, locale=locale, overwrite=overwrite
+            if seed_default_project_prompt(
+                project_code, agent, has_repo=has_repo, locale=locale, overwrite=overwrite
             ):
                 seeded.append(agent)
         except ProjectPromptValidationError as exc:
             logger.warning(
-                "seed_project_code_workflows skipped project=%s agent=%s: %s",
+                "seed_project_default_prompts skipped project=%s agent=%s: %s",
                 project_code,
                 agent,
                 exc,
