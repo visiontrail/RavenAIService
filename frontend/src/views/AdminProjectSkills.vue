@@ -64,6 +64,9 @@ const systemPromptMeta = ref<{ exists: boolean; updated_at?: string | null }>({
 })
 const systemPromptLoading = ref(false)
 const systemPromptSaving = ref(false)
+// 递增令牌：切换分层会并发多次拉取，只有「最后发起」的那次响应允许落地，
+// 丢弃更早发起但更晚返回的过期响应，避免共享层内容被误显示到专属层输入框。
+let promptFetchSeq = 0
 
 // 提示词分层：'' = 项目共享层（对所有 Agent 生效）；其余为某个 Agent 的专属层
 // （关联了代码仓库的项目会在该层播种代码工作流）。
@@ -280,21 +283,26 @@ const fetchSkills = async () => {
 
 const fetchSystemPrompt = async () => {
   if (!isAuthenticated.value || !projectCode.value) return
+  const seq = ++promptFetchSeq
   systemPromptLoading.value = true
   try {
     const resp = await adminApi.getProjectSystemPrompt(projectCode.value, promptLayer.value || null)
+    // 期间用户已切到别的分层（发起了更新的请求）——本次响应已过期，直接丢弃，
+    // 否则会把旧分层（如共享层）的内容覆盖到当前分层的输入框。
+    if (seq !== promptFetchSeq) return
     if (!resp?.success || !resp.data)
       throw new Error(resp?.message || t('admin.projectSkills.systemPrompt.loadFail'))
     systemPrompt.value = resp.data.content || ''
     systemPromptMeta.value = { exists: resp.data.exists, updated_at: resp.data.updated_at }
   } catch (err: any) {
+    if (seq !== promptFetchSeq) return
     appStore.showNotification({
       title: t('admin.projectSkills.systemPrompt.loadFail'),
       message: parseErrorMessage(err),
       type: 'error',
     })
   } finally {
-    systemPromptLoading.value = false
+    if (seq === promptFetchSeq) systemPromptLoading.value = false
   }
 }
 

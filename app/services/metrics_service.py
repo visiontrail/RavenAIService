@@ -661,6 +661,10 @@ _VALID_BUCKETS = ("hour", "day")
 # Terminal statuses surfaced as dedicated counters; anything else folds into "other".
 _KNOWN_STATUSES = ("succeeded", "failed", "cancelled", "stale", "timeout")
 
+# Internal helper LLM tasks that should remain auditable as raw events, but should
+# not inflate user-request dashboards.
+_INTERNAL_AI_SOURCES = ("title_generator",)
+
 # Cap for the duration fetch used to compute avg/p95 in Python. API callers already
 # bound the time range; this is a defensive ceiling against pathological windows.
 _DURATION_FETCH_CAP = 200_000
@@ -683,6 +687,7 @@ def _ai_filters(
         MetricEvent.event_type == "ai_usage",
         MetricEvent.occurred_at >= from_time,
         MetricEvent.occurred_at < to_time,
+        MetricEvent.source.not_in(_INTERNAL_AI_SOURCES),
     ]
     if extra:
         clauses.extend(extra)

@@ -220,6 +220,38 @@ def test_overview_hour_bucket(client: TestClient) -> None:
     assert resp.json()["data"]["bucket"] == "hour"
 
 
+def test_overview_excludes_title_generator_from_user_request_rollups(
+    client: TestClient,
+) -> None:
+    user = _make_user("requester")
+    _seed([user])
+    _seed(
+        [
+            _ai_event(user_id=user.id, input_tokens=10, output_tokens=5),
+            _ai_event(
+                user_id=user.id,
+                input_tokens=1000,
+                output_tokens=500,
+                source="title_generator",
+                agent_kind="title_generator",
+            ),
+        ]
+    )
+
+    resp = client.get("/admin/metrics/overview")
+    assert resp.status_code == 200
+    overview = resp.json()["data"]
+
+    assert overview["invocation_count"] == 1
+    assert overview["tokens"]["total_tokens"] == 15
+    assert {g["key"] for g in overview["invocations_by_source"]} == {"general_agent"}
+
+    # Raw audit events still retain the internal title generation metric.
+    resp = client.get("/admin/metrics/events")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["total"] == 2
+
+
 def test_project_filter_scopes_admin_metrics(client: TestClient) -> None:
     alpha_user = _make_user("alpha")
     beta_user = _make_user("beta")
