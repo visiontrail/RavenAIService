@@ -1478,6 +1478,13 @@ export default {
     noStats: '暂无改动文件统计。',
     unknownFile: '未知文件',
     fileStats: '{count} 文件 · +{added} / -{removed}',
+    viewOutcomeMr: '查看对应 MR',
+    outcome: {
+      created_mr: '已提交 MR',
+      already_implemented: '基线已实现',
+      skipped: '无需修改',
+      failed: '修复失败',
+    },
     statusText: {
       pending: '等待执行',
       running: '修复中',

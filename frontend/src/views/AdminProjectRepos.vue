@@ -793,7 +793,7 @@ watch(
       </section>
     </main>
 
-    <div v-if="dialogVisible" class="admin-modal-backdrop" @click="closeDialog">
+    <div v-if="dialogVisible" class="admin-modal-backdrop">
       <div class="admin-modal-card repo-modal" @click.stop>
         <div class="mb-5 flex items-start justify-between gap-4">
           <div>

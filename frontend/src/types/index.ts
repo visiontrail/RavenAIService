@@ -363,6 +363,22 @@ export interface BugFixProposedFix {
   [key: string]: unknown
 }
 
+export type BugFixOutcomeKind =
+  | 'created_mr'
+  | 'already_implemented'
+  | 'skipped'
+  | 'failed'
+  | string
+
+export interface BugFixFixOutcome {
+  fix_index?: number | null
+  title?: string | null
+  outcome: BugFixOutcomeKind
+  reason?: string | null
+  branch_name?: string | null
+  mr_url?: string | null
+}
+
 export interface BugFixChangedFile {
   path?: string
   file_path?: string
@@ -417,6 +433,7 @@ export interface BugFixTaskDetail extends BugFixTaskSummary {
   error?: string | null
   started_at?: string | null
   proposed_fixes: BugFixProposedFix[]
+  fix_outcomes?: BugFixFixOutcome[]
   merge_requests: BugFixMergeRequest[]
 }
 

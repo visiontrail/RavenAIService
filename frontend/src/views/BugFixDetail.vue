@@ -9,8 +9,10 @@ import { useBugFixStore } from '@/stores/bugFixes'
 import type {
   BugFixChangedFile,
   BugFixDiffStat,
+  BugFixFixOutcome,
   BugFixMergeRequest,
   BugFixMergeRequestStatus,
+  BugFixProposedFix,
   BugFixTaskStatus,
 } from '@/types'
 
@@ -54,6 +56,44 @@ const mrStatusText = (status: BugFixMergeRequestStatus) =>
 
 const mrStatusClass = (status: BugFixMergeRequestStatus) =>
   mrStatusMeta[String(status)]?.className || 'rw-pill-neutral'
+
+// 逐个拟修复项的处理结局：把每个 proposed_fix 与它的结局配对，让「拟修复项数 >
+// MR 数」的差异可被逐项解释（如某项已在基线实现，因而没有产出 MR）。
+const outcomeMeta: Record<string, { text: string; className: string }> = {
+  created_mr: { text: t('bugFix.outcome.created_mr'), className: 'rw-pill-success' },
+  already_implemented: { text: t('bugFix.outcome.already_implemented'), className: 'rw-pill-info' },
+  skipped: { text: t('bugFix.outcome.skipped'), className: 'rw-pill-neutral' },
+  failed: { text: t('bugFix.outcome.failed'), className: 'rw-pill-danger' },
+}
+
+const outcomeText = (outcome?: BugFixFixOutcome) =>
+  outcome ? outcomeMeta[String(outcome.outcome)]?.text || String(outcome.outcome) : ''
+
+const outcomeClass = (outcome?: BugFixFixOutcome) =>
+  (outcome && outcomeMeta[String(outcome.outcome)]?.className) || 'rw-pill-neutral'
+
+const outcomeForIndex = (index: number): BugFixFixOutcome | undefined => {
+  const list = task.value?.fix_outcomes || []
+  if (!list.length) return undefined
+  const oneBased = index + 1
+  const proposed = task.value?.proposed_fixes || []
+  return (
+    list.find((o) => o.fix_index != null && Number(o.fix_index) === oneBased) ||
+    list.find((o) => !!o.title && o.title === proposed[index]?.title) ||
+    list[index]
+  )
+}
+
+// 把 proposed_fixes 与其结局打包，模板里直接遍历，避免每格重复查找。
+const fixRows = computed<
+  Array<{ fix: BugFixProposedFix; index: number; outcome?: BugFixFixOutcome }>
+>(() =>
+  (task.value?.proposed_fixes || []).map((fix, index) => ({
+    fix,
+    index,
+    outcome: outcomeForIndex(index),
+  })),
+)
 
 const formatDateTime = (value?: string | null) => {
   if (!value) return '-'
@@ -187,16 +227,35 @@ onUnmounted(() => {
               <h2>{{ $t('bugFix.fixItems') }}</h2>
               <span class="rw-pill rw-pill-neutral">{{ task.proposed_fixes.length }}</span>
             </div>
-            <div v-if="task.proposed_fixes.length" class="fix-list">
-              <article v-for="(fix, index) in task.proposed_fixes" :key="index" class="fix-row">
-                <div class="fix-index">{{ index + 1 }}</div>
+            <div v-if="fixRows.length" class="fix-list">
+              <article v-for="row in fixRows" :key="row.index" class="fix-row">
+                <div class="fix-index">{{ row.index + 1 }}</div>
                 <div class="fix-body">
-                  <h3>{{ fix.title || $t('bugFix.fixItemTitle', { index: index + 1 }) }}</h3>
-                  <p v-if="fix.description">{{ fix.description }}</p>
-                  <p v-if="fix.rationale" class="fix-rationale">{{ fix.rationale }}</p>
-                  <div v-if="fix.suspected_files?.length || fix.suspected_symbols?.length" class="fix-tags">
-                    <code v-for="file in fix.suspected_files || []" :key="`file-${file}`">{{ file }}</code>
-                    <code v-for="symbol in fix.suspected_symbols || []" :key="`symbol-${symbol}`">{{ symbol }}</code>
+                  <div class="fix-head">
+                    <h3>{{ row.fix.title || $t('bugFix.fixItemTitle', { index: row.index + 1 }) }}</h3>
+                    <span
+                      v-if="row.outcome"
+                      :class="['rw-pill', outcomeClass(row.outcome)]"
+                    >{{ outcomeText(row.outcome) }}</span>
+                  </div>
+                  <p v-if="row.fix.description">{{ row.fix.description }}</p>
+                  <p v-if="row.fix.rationale" class="fix-rationale">{{ row.fix.rationale }}</p>
+                  <p v-if="row.outcome?.reason" class="fix-outcome-reason">
+                    {{ row.outcome.reason }}
+                  </p>
+                  <a
+                    v-if="row.outcome?.mr_url"
+                    :href="row.outcome.mr_url"
+                    target="_blank"
+                    rel="noreferrer"
+                    class="fix-mr-link"
+                  >
+                    {{ $t('bugFix.viewOutcomeMr') }}
+                    <ExternalLink :size="12" />
+                  </a>
+                  <div v-if="row.fix.suspected_files?.length || row.fix.suspected_symbols?.length" class="fix-tags">
+                    <code v-for="file in row.fix.suspected_files || []" :key="`file-${file}`">{{ file }}</code>
+                    <code v-for="symbol in row.fix.suspected_symbols || []" :key="`symbol-${symbol}`">{{ symbol }}</code>
                   </div>
                 </div>
               </article>
@@ -508,6 +567,22 @@ onUnmounted(() => {
   font-weight: 700;
 }
 
+.fix-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fix-head h3 {
+  margin: 0;
+  min-width: 0;
+}
+
+.fix-head .rw-pill {
+  flex-shrink: 0;
+}
+
 .fix-body h3 {
   margin: 0;
   font-size: 14px;
@@ -525,6 +600,27 @@ onUnmounted(() => {
 .fix-rationale {
   padding-left: 10px;
   border-left: 2px solid var(--rw-hairline-strong);
+}
+
+.fix-outcome-reason {
+  margin-top: 7px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--rw-canvas-soft);
+  color: var(--rw-body) !important;
+  font-size: 12.5px !important;
+}
+
+.fix-mr-link {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--rw-ink);
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .fix-tags {

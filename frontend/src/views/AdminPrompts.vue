@@ -210,7 +210,10 @@ const previewProjectAgents = computed(() => {
   const project = selectedPreviewProject.value
   if (!project) return []
   const enabled = new Set(project.enabled_agent_keys || [])
-  return projectAgents.value.filter((agent) => !enabled.size || enabled.has(agent.key))
+  return projectAgents.value.filter((agent) => {
+    if (agent.requires_repo && !project.has_repo) return false
+    return !enabled.size || enabled.has(agent.key)
+  })
 })
 
 const selectedPreviewAgent = computed(() =>

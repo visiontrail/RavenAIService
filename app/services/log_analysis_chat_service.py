@@ -569,7 +569,8 @@ class LogAnalysisChatService:
             "filename": job.filename,
             "log_id": job.context_meta.get("log_id"),
             "project_id": job.context_meta.get("project_id"),
-            "project_repo_id": job.context_meta.get("project_repo_id"),
+            "project_repo_id": job.context_meta.get("project_repo_id")
+            or job.context_meta.get("project_id"),
         }
 
         # Register the in-memory ChatRunJob first so even if DB write fails
@@ -694,7 +695,12 @@ class LogAnalysisChatService:
             from app.services import metrics_service
 
             log_id = job.context_meta.get("log_id")
-            project_repo_id = job.context_meta.get("project_repo_id")
+            # context_meta["project_id"] is the user-selected project_repo.id
+            # (see _create_context_from_upload); older saved contexts only
+            # carry this key, so fall back to it.
+            project_repo_id = job.context_meta.get(
+                "project_repo_id"
+            ) or job.context_meta.get("project_id")
             await metrics_service.record_agent_run_usage(
                 source="log_analysis_agent",
                 agent_kind="log_analysis",
@@ -983,6 +989,9 @@ class LogAnalysisChatService:
             "upload_kind": ctx.metadata.get("upload_kind"),
             "attachments": ctx.metadata.get("attachments", []),
             "project_id": effective_project_id,
+            # Duplicate under the canonical name used by metrics/attribution
+            # readers; "project_id" above is kept for saved-context compat.
+            "project_repo_id": effective_project_id,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
         }

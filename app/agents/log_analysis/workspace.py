@@ -322,6 +322,49 @@ def _place_spreadsheet_file(src: Path, dest_dir: Path, max_bytes: int, *, prefer
 
 # ─────────────────────── Public API ────────────────────────────────
 
+def populate_logs_dir(
+    archive_path: Path,
+    logs_dir: Path,
+    *,
+    max_bytes: Optional[int] = None,
+    preferred_name: str = "",
+) -> tuple[str, Optional[Path]]:
+    """把一次日志上传（压缩包或单文件）落到 ``logs_dir``。
+
+    与 ``prepare`` 的解压/落盘逻辑一致，供其它 Agent 工作区（如 Bug Fix）
+    复用，以获得与日志分析工作区相同的 ``logs/`` 内容。
+
+    Returns:
+        (upload_kind, attachment_path)：``attachment_path`` 仅在单文件
+        （text/spreadsheet）时非 None。
+
+    Raises:
+        UnsupportedUploadFormatError / WorkspaceExtractTooLarge / WorkspaceError
+    """
+    if max_bytes is None:
+        max_bytes = settings.ai_analysis_max_extract_bytes
+    upload_kind = detect_upload_kind(str(archive_path))
+    attachment_path: Optional[Path] = None
+    if upload_kind == "archive":
+        _extract_archive(archive_path, logs_dir, max_bytes)
+    elif upload_kind == "text":
+        attachment_path = _place_text_file(
+            archive_path, logs_dir, max_bytes,
+            preferred_name=preferred_name or archive_path.name,
+        )
+    elif upload_kind == "spreadsheet":
+        attachment_path = _place_spreadsheet_file(
+            archive_path, logs_dir, max_bytes,
+            preferred_name=preferred_name or archive_path.name,
+        )
+    else:
+        raise UnsupportedUploadFormatError(
+            f"Upload {archive_path.name!r} is neither a supported archive "
+            f"nor a recognizable plain-text log or spreadsheet"
+        )
+    return upload_kind, attachment_path
+
+
 def prepare(log_record: Any, *, require_metadata: bool = True) -> WorkspaceContext:
     """准备任务工作区：解压日志归档，创建 task.json，不包含仓库 URL / token。
 
@@ -365,30 +408,13 @@ def prepare(log_record: Any, *, require_metadata: bool = True) -> WorkspaceConte
         # a plain-text log is copied in verbatim, anything else is rejected up
         # front (before we ever try to extract a binary blob).
         max_bytes = settings.ai_analysis_max_extract_bytes
-        upload_kind = detect_upload_kind(str(archive_path))
-        attachment_path: Optional[Path] = None
         try:
-            if upload_kind == "archive":
-                _extract_archive(archive_path, logs_dir, max_bytes)
-            elif upload_kind == "text":
-                preferred_name = (
-                    getattr(log_record, "original_filename", None) or archive_path.name
-                )
-                attachment_path = _place_text_file(
-                    archive_path, logs_dir, max_bytes, preferred_name=preferred_name
-                )
-            elif upload_kind == "spreadsheet":
-                preferred_name = (
-                    getattr(log_record, "original_filename", None) or archive_path.name
-                )
-                attachment_path = _place_spreadsheet_file(
-                    archive_path, logs_dir, max_bytes, preferred_name=preferred_name
-                )
-            else:
-                raise UnsupportedUploadFormatError(
-                    f"Upload {archive_path.name!r} is neither a supported archive "
-                    f"nor a recognizable plain-text log or spreadsheet"
-                )
+            upload_kind, attachment_path = populate_logs_dir(
+                archive_path,
+                logs_dir,
+                max_bytes=max_bytes,
+                preferred_name=getattr(log_record, "original_filename", None) or "",
+            )
         except WorkspaceExtractTooLarge:
             shutil.rmtree(str(logs_dir), ignore_errors=True)
             raise

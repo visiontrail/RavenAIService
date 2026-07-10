@@ -1478,6 +1478,13 @@ export default {
     noStats: 'No changed files stats.',
     unknownFile: 'Unknown file',
     fileStats: '{count} files · +{added} / -{removed}',
+    viewOutcomeMr: 'View MR',
+    outcome: {
+      created_mr: 'MR created',
+      already_implemented: 'Already in baseline',
+      skipped: 'No change needed',
+      failed: 'Fix failed',
+    },
     statusText: {
       pending: 'Pending',
       running: 'Running',

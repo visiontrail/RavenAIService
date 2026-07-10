@@ -74,6 +74,44 @@ def test_normalize_handles_non_list():
     assert bf_agent._normalize_merge_requests(None) == []
 
 
+# ──────────────────── fix_outcomes normalization ───────────────────
+
+def test_normalize_fix_outcomes_basic_and_coercion():
+    out = bf_agent._normalize_fix_outcomes(
+        [
+            {"fix_index": 1, "title": "a", "outcome": "already_implemented",
+             "reason": "done in 9b750d5"},
+            # 无 outcome 但有 mr_url → created_mr；fix_index 字符串可强转
+            {"fix_index": "2", "title": "b", "mr_url": "https://h/mr/1"},
+            # 非法 outcome 且无 mr_url → skipped
+            {"title": "c", "outcome": "weird"},
+            "not-a-dict",
+        ]
+    )
+    assert len(out) == 3
+    assert out[0]["outcome"] == "already_implemented" and out[0]["fix_index"] == 1
+    assert out[1]["outcome"] == "created_mr" and out[1]["fix_index"] == 2
+    assert out[2]["outcome"] == "skipped"
+
+
+def test_normalize_fix_outcomes_redacts_tokens():
+    out = bf_agent._normalize_fix_outcomes(
+        [
+            {
+                "outcome": "created_mr",
+                "mr_url": "https://oauth2:secret@host/foo/-/merge_requests/1",
+                "reason": "pushed to https://oauth2:secret@host/foo.git",
+            }
+        ]
+    )
+    assert "secret" not in out[0]["mr_url"]
+    assert "secret" not in out[0]["reason"]
+
+
+def test_normalize_fix_outcomes_non_list():
+    assert bf_agent._normalize_fix_outcomes(None) == []
+
+
 # ───────────────────────── provider inference ──────────────────────
 
 def test_infer_provider_gitlab(monkeypatch):
@@ -124,6 +162,15 @@ def test_allowed_tools_include_write_capable_tools():
         assert tool in bf_agent.ALLOWED_TOOLS
 
 
+def test_system_prompt_defines_fix_outcomes_contract():
+    """契约必须要求逐项结局，并给出 already_implemented「无需改动」的处理路径。"""
+    system, _ = prompts.get_prompts()
+    assert "fix_outcomes" in system
+    assert "already_implemented" in system
+    # 已实现的项不应制造空 MR
+    assert "空 MR" in system or "空提交" in system
+
+
 def test_result_helper_redacts_error_tokens():
     res = bf_agent._result(
         status="failed",
@@ -131,3 +178,219 @@ def test_result_helper_redacts_error_tokens():
         error="clone failed for https://oauth2:secret@host/x.git",
     )
     assert "secret" not in res["error"]
+
+
+# ───────────────────────── prompt logging ──────────────────────────
+
+def test_run_logs_full_prompts(monkeypatch, caplog):
+    """run() 必须把系统/用户提示词完整落日志，供事后评估修复准确性。"""
+    import asyncio
+    import logging
+
+    import claude_agent_sdk
+    from app.agents import anthropic_client
+    from app.agents.bug_fix.workspace import BugFixWorkspaceContext
+
+    async def _fake_query(*, prompt, options):
+        class _Msg:
+            content = '```json\n{"status": "failed", "merge_requests": []}\n```'
+
+        yield _Msg()
+
+    monkeypatch.setattr(claude_agent_sdk, "query", _fake_query)
+    monkeypatch.setattr(anthropic_client, "build_options", lambda **kw: object())
+
+    ctx = BugFixWorkspaceContext(
+        task_id="t-1",
+        temp_dir="/tmp/ws",
+        repo_dir="/tmp/ws/repo",
+        task_json_path="/tmp/ws/task.json",
+        default_branch="main",
+    )
+    with caplog.at_level(logging.INFO, logger="app.agents.bug_fix.agent"):
+        asyncio.run(bf_agent.BugFixCodingAgent().run(ctx))
+
+    prompt_logs = [r.message for r in caplog.records if "prompt task=t-1" in r.message]
+    system_logs = [m for m in prompt_logs if "kind=system" in m]
+    user_logs = [m for m in prompt_logs if "kind=user" in m]
+    assert len(system_logs) == 1 and len(user_logs) == 1
+    # 系统提示词全文（含工作区附录）在日志中
+    assert "最小改动原则" in system_logs[0]
+    assert "/tmp/ws" in system_logs[0]
+    # 用户提示词全文（已渲染变量）在日志中
+    assert "t-1" in user_logs[0]
+    assert "main" in user_logs[0]
+
+
+def test_run_logs_workflow_events(monkeypatch, caplog):
+    """run() 必须按内容块落 workflow 中间日志，否则长运行无法与卡死区分。"""
+    import asyncio
+    import logging
+
+    import claude_agent_sdk
+    from app.agents import anthropic_client
+    from app.agents.bug_fix.workspace import BugFixWorkspaceContext
+
+    class _Thinking:
+        thinking = "先读 task.json 定位根因"
+
+    class _ToolUse:
+        name = "Bash"
+        input = {"command": "git checkout -b bugfix/ai-t-2-1"}
+
+    class _ToolResult:
+        tool_use_id = "toolu_01"
+        is_error = False
+        content = "Switched to a new branch"
+
+    class _Text:
+        text = "已创建修复分支"
+
+    class _AssistantMsg:
+        content = [_Thinking(), _ToolUse(), _ToolResult(), _Text()]
+
+    class _ResultMsg:
+        content = None
+        result = '```json\n{"status": "failed", "merge_requests": []}\n```'
+
+    async def _fake_query(*, prompt, options):
+        yield _AssistantMsg()
+        yield _ResultMsg()
+
+    monkeypatch.setattr(claude_agent_sdk, "query", _fake_query)
+    monkeypatch.setattr(anthropic_client, "build_options", lambda **kw: object())
+
+    ctx = BugFixWorkspaceContext(
+        task_id="t-2",
+        temp_dir="/tmp/ws",
+        repo_dir="/tmp/ws/repo",
+        task_json_path="/tmp/ws/task.json",
+        default_branch="main",
+    )
+    with caplog.at_level(logging.INFO, logger="app.agents.bug_fix.agent"):
+        asyncio.run(bf_agent.BugFixCodingAgent().run(ctx))
+
+    workflow = [r.message for r in caplog.records if "workflow task=t-2" in r.message]
+    assert any("event=thinking" in m and "task.json" in m for m in workflow)
+    assert any("event=tool_call" in m and "tool=Bash" in m for m in workflow)
+    assert any("event=tool_result" in m and "status=ok" in m for m in workflow)
+    assert any("event=assistant_text" in m for m in workflow)
+    assert any("event=result" in m for m in workflow)
+
+
+def _make_ctx(task_id: str):
+    from app.agents.bug_fix.workspace import BugFixWorkspaceContext
+
+    return BugFixWorkspaceContext(
+        task_id=task_id,
+        temp_dir="/tmp/ws",
+        repo_dir="/tmp/ws/repo",
+        task_json_path="/tmp/ws/task.json",
+        default_branch="main",
+    )
+
+
+def test_run_returns_structured_failed_on_max_turns(monkeypatch):
+    """SDK 超回合抛裸异常时，run() 必须返回 error_kind=max_turns_exceeded 的结构化结果。"""
+    import asyncio
+
+    import claude_agent_sdk
+    from app.agents import anthropic_client
+
+    async def _fake_query(*, prompt, options):
+        class _Msg:
+            content = "开始修复"
+
+        yield _Msg()
+        raise Exception(
+            "Claude Code returned an error result: Reached maximum number of turns (60)"
+        )
+
+    monkeypatch.setattr(claude_agent_sdk, "query", _fake_query)
+    monkeypatch.setattr(anthropic_client, "build_options", lambda **kw: object())
+
+    result = asyncio.run(bf_agent.BugFixCodingAgent().run(_make_ctx("t-3")))
+    assert result["status"] == "failed"
+    assert result["error_kind"] == "max_turns_exceeded"
+    assert result["merge_requests"] == []
+
+
+def test_run_salvages_json_emitted_before_sdk_error(monkeypatch):
+    """异常前已输出的最终 JSON（如 MR 已建好、收尾时才报错）必须被采信。"""
+    import asyncio
+
+    import claude_agent_sdk
+    from app.agents import anthropic_client
+
+    async def _fake_query(*, prompt, options):
+        class _Msg:
+            content = (
+                '```json\n{"status": "succeeded", "merge_requests": ['
+                '{"branch_name": "bugfix/ai-t-4-1", "title": "fix", '
+                '"mr_url": "https://git.example.com/mr/1"}]}\n```'
+            )
+
+        yield _Msg()
+        raise Exception(
+            "Claude Code returned an error result: Reached maximum number of turns (60)"
+        )
+
+    monkeypatch.setattr(claude_agent_sdk, "query", _fake_query)
+    monkeypatch.setattr(anthropic_client, "build_options", lambda **kw: object())
+
+    result = asyncio.run(bf_agent.BugFixCodingAgent().run(_make_ctx("t-4")))
+    assert result["status"] == "succeeded"
+    assert len(result["merge_requests"]) == 1
+    assert result["merge_requests"][0]["branch_name"] == "bugfix/ai-t-4-1"
+
+
+def test_run_keeps_succeeded_when_all_fixes_already_implemented(monkeypatch):
+    """0 MR 但每个拟修复项都 already_implemented → 判 succeeded，并透传 fix_outcomes。
+
+    复现真实场景：某修复项在基线分支已实现（空 diff、无 MR），不应被误判为失败，
+    也不应静默消失——结局要能在结果里被解释。
+    """
+    import asyncio
+
+    import claude_agent_sdk
+    from app.agents import anthropic_client
+
+    async def _fake_query(*, prompt, options):
+        class _Msg:
+            content = (
+                '```json\n{"status": "succeeded", "merge_requests": [], '
+                '"fix_outcomes": [{"fix_index": 1, "title": "guard", '
+                '"outcome": "already_implemented", "reason": "in 9b750d5"}]}\n```'
+            )
+
+        yield _Msg()
+
+    monkeypatch.setattr(claude_agent_sdk, "query", _fake_query)
+    monkeypatch.setattr(anthropic_client, "build_options", lambda **kw: object())
+
+    result = asyncio.run(bf_agent.BugFixCodingAgent().run(_make_ctx("t-5")))
+    assert result["status"] == "succeeded"
+    assert result["merge_requests"] == []
+    assert len(result["fix_outcomes"]) == 1
+    assert result["fix_outcomes"][0]["outcome"] == "already_implemented"
+
+
+def test_run_still_fails_when_zero_mr_without_clean_outcomes(monkeypatch):
+    """0 MR 且没有「全部无需改动」的结局解释 → 仍判失败（防止无产出被伪装成功）。"""
+    import asyncio
+
+    import claude_agent_sdk
+    from app.agents import anthropic_client
+
+    async def _fake_query(*, prompt, options):
+        class _Msg:
+            content = '```json\n{"status": "succeeded", "merge_requests": []}\n```'
+
+        yield _Msg()
+
+    monkeypatch.setattr(claude_agent_sdk, "query", _fake_query)
+    monkeypatch.setattr(anthropic_client, "build_options", lambda **kw: object())
+
+    result = asyncio.run(bf_agent.BugFixCodingAgent().run(_make_ctx("t-6")))
+    assert result["status"] == "failed"
+    assert result["error_kind"] == "no_merge_requests"

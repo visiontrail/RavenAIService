@@ -114,6 +114,26 @@ services:
       retries: 3
       start_period: 30s
 
+  # Bug 修复任务专用 worker：app.tasks.bug_fix.* 被路由到独立的 bug_fix 队列
+  # （见 app/celery_app.py task_routes），必须有专门的消费者，否则任务会
+  # 一直停留在“等待执行”。独立进程也避免长时间的写代码/建 MR 任务挤占
+  # 日志分析的并发额度。
+  worker-bugfix:
+    <<: *backend_service
+    container_name: raven-worker-bugfix
+    command: >
+      celery -A app.celery_app worker
+      --loglevel=info
+      --concurrency=${CELERY_BUGFIX_WORKER_CONCURRENCY:-1}
+      --queues=bug_fix
+      --hostname=bugfix@%h
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping --destination=bugfix@$$(hostname) || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   beat:
     <<: *backend_service
     container_name: raven-beat

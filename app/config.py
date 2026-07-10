@@ -102,7 +102,7 @@ class Settings(BaseSettings):
     bug_fix_auto_dispatch: bool = False             # 自动派发总开关，默认关闭，灰度可控
     bug_fix_agent_model: Optional[str] = None       # None 时复用 anthropic_model / provider 默认
     bug_fix_agent_request_timeout_seconds: int = 3600
-    bug_fix_agent_max_turns: int = 60               # 写入型任务需要更多回合（克隆/编辑/提交/推送/建 MR）
+    bug_fix_agent_max_turns: int = 150              # 写入型任务回合多（定位/编辑/提交/推送/建 MR × 多个修复项）；实测 60 回合不够修完 2 个修复项
     bug_fix_git_provider: Optional[str] = None      # None 时由 repo_url host 推断（gitlab|github）
     bug_fix_git_api_base: Optional[str] = None       # None 时由 repo_url host 推断
 

@@ -19,7 +19,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from app.agents.bug_fix.workspace import BugFixWorkspaceContext
-from app.agents.log_analysis.trace import mask_tokens
+from app.agents.log_analysis.trace import mask_input, mask_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -110,10 +110,64 @@ def _normalize_merge_requests(value: Any) -> List[Dict[str, Any]]:
     return out
 
 
+# 逐个拟修复项的处理结局取值。created_mr=产出了 MR；already_implemented=基线已
+# 实现、无需改动；skipped=判断无需修改；failed=尝试修复但失败。
+_FIX_OUTCOME_VALUES = frozenset(
+    {"created_mr", "already_implemented", "skipped", "failed"}
+)
+# 视为「无需改动」的结局：全为此类且无 MR 时，0 MR 属正常「已确认无需修复」而非失败。
+_NO_ACTION_OUTCOMES = frozenset({"already_implemented", "skipped"})
+
+
+def _normalize_fix_outcomes(value: Any) -> List[Dict[str, Any]]:
+    """校验并规范化 fix_outcomes 数组：每个拟修复项一条处理结局。token 脱敏。
+
+    契约要求 Agent 为**每个** ``proposed_fixes`` 项给出一条结局（含未产出 MR 的
+    项），使详情页能逐项解释「为何没有 MR」，而不是静默丢弃。
+
+    - ``outcome`` 归一到 ``_FIX_OUTCOME_VALUES``；缺失/非法时：带 ``mr_url`` 视为
+      ``created_mr``，否则退化为 ``skipped``。
+    - 非 dict 元素跳过；``reason``/``mr_url`` 做 token 脱敏兜底。
+    """
+    if not isinstance(value, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        mr_url = item.get("mr_url")
+        outcome = str(item.get("outcome") or "").strip().lower()
+        if outcome not in _FIX_OUTCOME_VALUES:
+            outcome = "created_mr" if mr_url else "skipped"
+        fix_index = item.get("fix_index")
+        try:
+            fix_index = int(fix_index) if fix_index is not None else None
+        except (TypeError, ValueError):
+            fix_index = None
+        out.append(
+            {
+                "fix_index": fix_index,
+                "title": (str(item.get("title")).strip() or None)
+                if item.get("title")
+                else None,
+                "outcome": outcome,
+                "reason": (mask_tokens(str(item.get("reason"))) or None)
+                if item.get("reason")
+                else None,
+                "branch_name": str(item["branch_name"]).strip()
+                if item.get("branch_name")
+                else None,
+                "mr_url": mask_tokens(str(mr_url)) if mr_url else None,
+            }
+        )
+    return out
+
+
 def _result(
     *,
     status: str,
     merge_requests: List[Dict[str, Any]],
+    fix_outcomes: Optional[List[Dict[str, Any]]] = None,
     error_kind: Optional[str] = None,
     error: Optional[str] = None,
     model: Optional[str] = None,
@@ -124,6 +178,7 @@ def _result(
         "error_kind": error_kind,
         "error": mask_tokens(error) if error else None,
         "merge_requests": merge_requests,
+        "fix_outcomes": fix_outcomes or [],
         "model": model,
         "duration_seconds": round(duration_seconds, 2),
         "engine": "claude_agent_sdk",
@@ -152,6 +207,11 @@ class BugFixCodingAgent:
             f"当前工作目录是 `{ctx.temp_dir}`。源码克隆在 `repo/`，"
             f"任务详情在 `task.json`。git 操作前先 `cd repo/`。\n"
         )
+        if ctx.logs_dir:
+            system_prompt_text += (
+                "触发本次修复的原始日志已同步到 `logs/`（内容与日志分析 Agent "
+                "工作区一致）。定位根因、确认错误上下文时优先查阅其中的日志证据。\n"
+            )
         # 改代码能力对齐原生 Claude Code：使用 claude_code preset，
         # 把 Bug 修复约束与最终 merge_requests JSON 输出契约作为 append 叠加。
         system_prompt = {
@@ -164,6 +224,24 @@ class BugFixCodingAgent:
             task_id=ctx.task_id,
             workspace_dir=ctx.temp_dir,
             default_branch=ctx.default_branch,
+        )
+
+        # 完整记录本次调用的提示词，便于事后评估 Agent 修复的准确性。
+        # 系统提示词实际以 claude_code preset 为底座、下方文本作为 append 叠加；
+        # preset 本体由 SDK 内置，这里记录的是我们可控的全部注入内容。
+        # 提示词当前不含凭据，mask_tokens 兜底防止未来变更引入带 token 的 URL。
+        logger.info(
+            "BugFixCodingAgent prompt task=%s kind=system "
+            "(preset=claude_code + append, %d chars):\n%s",
+            ctx.task_id,
+            len(system_prompt_text),
+            mask_tokens(system_prompt_text),
+        )
+        logger.info(
+            "BugFixCodingAgent prompt task=%s kind=user (%d chars):\n%s",
+            ctx.task_id,
+            len(user_prompt),
+            mask_tokens(user_prompt),
         )
 
         provider = settings.anthropic_provider
@@ -192,16 +270,43 @@ class BugFixCodingAgent:
 
         from claude_agent_sdk import query as _query
 
-        async for message in _query(prompt=user_prompt, options=options):
-            text = _message_text(message)
-            if text:
-                collected_text.append(text)
+        run_error: Optional[Exception] = None
+        try:
+            async for message in _query(prompt=user_prompt, options=options):
+                _log_message(ctx.task_id, message)
+                text = _message_text(message)
+                if text:
+                    collected_text.append(text)
+        except Exception as exc:  # noqa: BLE001
+            # SDK 在 CLI 报错（如超出 max_turns）时抛裸异常。此前已收集的输出里
+            # 可能已有可用的最终 JSON（如 MR 已建好、只是收尾超回合）；没有时也
+            # 返回结构化 failed，让任务侧记录明确的 error_kind 而非裸 traceback。
+            run_error = exc
+            logger.error(
+                "BugFixCodingAgent run_error task=%s error=%s",
+                ctx.task_id,
+                mask_tokens(str(exc)),
+            )
 
         duration = time.monotonic() - start
         full_text = "\n".join(collected_text)
         parsed = _extract_final_json(full_text)
 
         if not isinstance(parsed, dict):
+            if run_error is not None:
+                error_kind = (
+                    "max_turns_exceeded"
+                    if "maximum number of turns" in str(run_error).lower()
+                    else "sdk_error"
+                )
+                return _result(
+                    status="failed",
+                    merge_requests=[],
+                    error_kind=error_kind,
+                    error=str(run_error),
+                    model=effective_model,
+                    duration_seconds=duration,
+                )
             logger.warning(
                 "BugFixCodingAgent task=%s produced no parseable result JSON", ctx.task_id
             )
@@ -215,25 +320,35 @@ class BugFixCodingAgent:
             )
 
         merge_requests = _normalize_merge_requests(parsed.get("merge_requests"))
+        fix_outcomes = _normalize_fix_outcomes(parsed.get("fix_outcomes"))
         status = parsed.get("status")
         error_kind = parsed.get("error_kind")
         if status not in ("succeeded", "partial", "failed"):
             status = "succeeded" if merge_requests else "failed"
-        # 自洽校正：声称成功却无 MR → failed。
+        # 自洽校正：声称成功却无 MR，仅当每个拟修复项都给出「无需改动」类结局
+        # （already_implemented/skipped）时才可信——这是「已确认无需修复」而非失败；
+        # 否则（无结局解释或存在其它结局）仍判失败。
         if status == "succeeded" and not merge_requests:
-            status = "failed"
-            error_kind = error_kind or "no_merge_requests"
+            if fix_outcomes and all(
+                o["outcome"] in _NO_ACTION_OUTCOMES for o in fix_outcomes
+            ):
+                pass  # 全部已在基线实现/无需改动
+            else:
+                status = "failed"
+                error_kind = error_kind or "no_merge_requests"
 
         logger.info(
-            "BugFixCodingAgent run_complete task=%s status=%s mrs=%d duration=%.1fs",
+            "BugFixCodingAgent run_complete task=%s status=%s mrs=%d outcomes=%d duration=%.1fs",
             ctx.task_id,
             status,
             len(merge_requests),
+            len(fix_outcomes),
             duration,
         )
         return _result(
             status=status,
             merge_requests=merge_requests,
+            fix_outcomes=fix_outcomes,
             error_kind=error_kind,
             error=parsed.get("error"),
             model=effective_model,
@@ -274,3 +389,99 @@ def _message_text(message: Any) -> str:
     if isinstance(result_text, str):
         parts.append(result_text)
     return "\n".join(parts)
+
+
+_WORKFLOW_LOG_LIMIT = 600
+
+
+def _truncate_for_log(text: str, limit: int = _WORKFLOW_LOG_LIMIT) -> str:
+    normalized = " ".join(str(text or "").split())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[:limit] + "..."
+
+
+def _log_workflow(task_id: str, event: str, **fields: Any) -> None:
+    parts = [f"event={event}"]
+    for key, value in fields.items():
+        if value is None or value == "":
+            continue
+        parts.append(f"{key}={value}")
+    logger.info("BugFixCodingAgent workflow task=%s %s", task_id, " ".join(parts))
+
+
+def _log_message(task_id: str, message: Any) -> None:
+    """把一条 SDK 消息按内容块落 workflow 日志（thinking/tool_call/tool_result/文本）。
+
+    修复运行可长达数十分钟，没有中间日志时外部无法区分「仍在执行」和「已卡死」。
+    """
+    content = getattr(message, "content", None)
+    if isinstance(content, list):
+        for block in content:
+            thinking = getattr(block, "thinking", None)
+            if thinking:
+                _log_workflow(
+                    task_id,
+                    "thinking",
+                    content=_truncate_for_log(mask_tokens(str(thinking))),
+                )
+                continue
+            tool_use_id = getattr(block, "tool_use_id", None)
+            if tool_use_id is not None:
+                is_error = bool(getattr(block, "is_error", False))
+                _log_workflow(
+                    task_id,
+                    "tool_result",
+                    status="error" if is_error else "ok",
+                    output=_truncate_for_log(
+                        mask_tokens(_message_text_of_block(block))
+                    ),
+                )
+                continue
+            name = getattr(block, "name", None)
+            tool_input = getattr(block, "input", None)
+            if name and tool_input is not None:
+                _log_workflow(
+                    task_id,
+                    "tool_call",
+                    tool=str(name),
+                    input=_truncate_for_log(
+                        mask_tokens(
+                            json.dumps(mask_input(tool_input), ensure_ascii=False)
+                        )
+                        if isinstance(tool_input, (dict, list))
+                        else mask_tokens(str(tool_input))
+                    ),
+                )
+                continue
+            text = getattr(block, "text", None)
+            if text:
+                _log_workflow(
+                    task_id,
+                    "assistant_text",
+                    content=_truncate_for_log(mask_tokens(str(text))),
+                )
+        return
+    result_text = getattr(message, "result", None)
+    if isinstance(result_text, str):
+        _log_workflow(
+            task_id,
+            "result",
+            excerpt=_truncate_for_log(mask_tokens(result_text)),
+        )
+
+
+def _message_text_of_block(block: Any) -> str:
+    """提取 tool_result 块的文本输出（content 可能是 str 或块列表）。"""
+    content = getattr(block, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text", "")))
+            elif hasattr(item, "text"):
+                parts.append(str(getattr(item, "text", "")))
+        return "".join(parts)
+    return "" if content is None else str(content)

@@ -19,6 +19,7 @@ from app.agents.bug_fix.workspace import BugFixWorkspaceError, cleanup, prepare
 from app.celery_app import celery_app
 from app.config import settings
 from app.models.bug_fix import BugFixTask
+from app.models.log import LogRecord
 from app.models.project_repo import ProjectRepo
 from app.services import bug_fix_service
 from app.tasks.ai_analysis import SessionLocal  # 复用同步引擎/会话工厂
@@ -37,6 +38,17 @@ def run_bug_fix_task(self, bug_fix_task_id: str) -> Dict[str, Any]:
         if task is None:
             logger.warning("run_bug_fix_task: task %s not found", bug_fix_task_id)
             return {"status": "missing", "task_id": bug_fix_task_id}
+
+        # acks_late 下消息可能被重投（worker 重启、broker 可见性超时）。已到
+        # 终态的任务直接跳过，避免重复执行 Agent、重复提 MR。pending/running
+        # 仍允许执行：running 覆盖 worker 崩溃后重投的恢复场景。
+        current_status = getattr(task.status, "value", task.status)
+        if current_status in ("succeeded", "partial", "failed", "cancelled"):
+            logger.info(
+                "run_bug_fix_task: task %s already finished (status=%s), skip",
+                bug_fix_task_id, current_status,
+            )
+            return {"status": "skipped", "task_id": bug_fix_task_id}
 
         repo: Optional[ProjectRepo] = session.get(ProjectRepo, task.project_repo_id)
         if repo is None:
@@ -59,6 +71,19 @@ def run_bug_fix_task(self, bug_fix_task_id: str) -> Dict[str, Any]:
 
         git_token = repo.git_token or settings.code_repo_git_token
 
+        # 来源日志归档：用于在修复工作区重建与日志分析一致的 logs/。日志
+        # 分析工作区在分析结束后已清理，这里从持久化归档重新解压。
+        source_log_archive_path = None
+        source_log_filename = None
+        if task.source_log_id:
+            log_record = session.get(LogRecord, task.source_log_id)
+            if log_record is not None and not getattr(log_record, "is_deleted", False):
+                source_log_archive_path = (
+                    getattr(log_record, "archive_path", None)
+                    or getattr(log_record, "file_path", None)
+                )
+                source_log_filename = getattr(log_record, "original_filename", None)
+
         try:
             ctx = prepare(
                 bug_fix_task_id=bug_fix_task_id,
@@ -70,6 +95,8 @@ def run_bug_fix_task(self, bug_fix_task_id: str) -> Dict[str, Any]:
                 proposed_fixes=proposed_fixes,
                 source_log_id=task.source_log_id,
                 source_analysis_task_id=task.source_analysis_task_id,
+                source_log_archive_path=source_log_archive_path,
+                source_log_filename=source_log_filename,
             )
         except BugFixWorkspaceError as exc:
             bug_fix_service.finalize(
@@ -99,17 +126,33 @@ def run_bug_fix_task(self, bug_fix_task_id: str) -> Dict[str, Any]:
         if agent_status in ("partial", "failed"):
             error = result.get("error_kind") or result.get("error")
 
+        # 逐项结局：解释每个拟修复项为何有/没有 MR（already_implemented 等）。
+        fix_outcomes = result.get("fix_outcomes") or []
+        # 无 MR 但每个拟修复项都是「无需改动」类结局（已在基线实现/主动跳过）时，
+        # 这是「已确认无需修复」而非失败——据此让 finalize 判定为 succeeded。
+        no_action_needed = (
+            not merge_requests
+            and not error
+            and bool(fix_outcomes)
+            and all(
+                (o or {}).get("outcome") in ("already_implemented", "skipped")
+                for o in fix_outcomes
+            )
+        )
+
         bug_fix_service.finalize(
             session,
             bug_fix_task_id,
             merge_request_count=len(merge_requests),
             error=error,
+            fix_outcomes=fix_outcomes,
+            no_action_needed=no_action_needed,
         )
         session.commit()
 
         logger.info(
-            "run_bug_fix_task complete: task=%s agent_status=%s mrs=%d",
-            bug_fix_task_id, agent_status, len(merge_requests),
+            "run_bug_fix_task complete: task=%s agent_status=%s mrs=%d outcomes=%d",
+            bug_fix_task_id, agent_status, len(merge_requests), len(fix_outcomes),
         )
         return {
             "status": "completed",

@@ -29,6 +29,8 @@ import type {
   AgentSkill,
   SkillFileContent,
   SkillFileNode,
+  ProjectRepo,
+  ProjectAgentInfo,
 } from '@/types'
 
 const { t } = useI18n()
@@ -71,12 +73,32 @@ let promptFetchSeq = 0
 // 提示词分层：'' = 项目共享层（对所有 Agent 生效）；其余为某个 Agent 的专属层
 // （关联了代码仓库的项目会在该层播种代码工作流）。
 const promptLayer = ref('')
-const promptLayers = computed(() => [
-  { value: '', label: t('admin.projectSkills.systemPrompt.layers.shared') },
-  { value: 'project_expert', label: t('admin.projectSkills.systemPrompt.layers.project_expert') },
-  { value: 'log_analysis', label: t('admin.projectSkills.systemPrompt.layers.log_analysis') },
-  { value: 'package_search', label: t('admin.projectSkills.systemPrompt.layers.package_search') },
-])
+const currentProject = ref<ProjectRepo | null>(null)
+const projectAgents = ref<ProjectAgentInfo[]>([])
+
+const promptLayers = computed(() => {
+  const baseLayers = [
+    { value: '', label: t('admin.projectSkills.systemPrompt.layers.shared') },
+    { value: 'project_expert', label: t('admin.projectSkills.systemPrompt.layers.project_expert') },
+    { value: 'log_analysis', label: t('admin.projectSkills.systemPrompt.layers.log_analysis') },
+    { value: 'package_search', label: t('admin.projectSkills.systemPrompt.layers.package_search') },
+  ]
+
+  if (!currentProject.value || !projectAgents.value.length) {
+    return baseLayers
+  }
+
+  const hasRepo = !!currentProject.value.has_repo
+
+  return baseLayers.filter((layer) => {
+    if (layer.value === '') return true
+    const agent = projectAgents.value.find((a) => a.key === layer.value)
+    if (agent && agent.requires_repo && !hasRepo) {
+      return false
+    }
+    return true
+  })
+})
 
 const overwrite = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -248,7 +270,7 @@ const handleLogin = async () => {
       message: t('admin.loginSuccessMsg', { username: resp.data.username }),
       type: 'success',
     })
-    await Promise.all([fetchSkills(), fetchSystemPrompt()])
+    await Promise.all([fetchSkills(), fetchSystemPrompt(), fetchProjectData()])
   } catch (err: any) {
     appStore.showNotification({ title: t('admin.loginFailFallback'), message: parseErrorMessage(err), type: 'error' })
   } finally {
@@ -264,6 +286,24 @@ const handleLogout = async () => {
   } finally {
     clearAuth()
     appStore.showNotification({ title: t('admin.logoutSuccessTitle'), type: 'info' })
+  }
+}
+
+const fetchProjectData = async () => {
+  if (!isAuthenticated.value || !projectCode.value) return
+  try {
+    const [agentsResp, reposResp] = await Promise.all([
+      adminApi.listProjectAgents(),
+      adminApi.listProjectRepos()
+    ])
+    if (agentsResp?.success && agentsResp.data) {
+      projectAgents.value = agentsResp.data
+    }
+    if (reposResp?.success && reposResp.data) {
+      currentProject.value = reposResp.data.find(r => r.project_code === projectCode.value) || null
+    }
+  } catch (err: any) {
+    // silently fail
   }
 }
 
@@ -548,7 +588,7 @@ const bootstrap = async () => {
       // Skip data loads for project codes outside the member's scope; the
       // template renders a not-found state instead of Skill controls.
       if (projectAllowed.value) {
-        await Promise.all([fetchSkills(), fetchSystemPrompt()])
+        await Promise.all([fetchSkills(), fetchSystemPrompt(), fetchProjectData()])
       }
     } else {
       clearAuth()

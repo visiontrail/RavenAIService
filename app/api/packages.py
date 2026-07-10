@@ -48,12 +48,18 @@ PACKAGE_SEARCH_QUERY_MAX_LEN = 1000
 router = APIRouter()
 
 
-async def _record_package_search_metrics(result: Any, user: Any) -> None:
+async def _record_package_search_metrics(
+    result: Any, user: Any, project_repo_id: Optional[int] = None
+) -> None:
     """Best-effort AI usage recording for a package-search run. Never raises.
 
     ``result`` is the agent result dict (non-stream) or the synthetic dict built
     from the streaming ``final`` event; both expose ``model``/``usage`` and the
     recommended/relevant id lists used for the sanitized ``result_count``.
+
+    ``project_repo_id`` is the mandatory project the search was bound to; it is
+    recorded so the run is attributed to its project in the metrics dashboard
+    (without it every API-driven search shows as "未归属项目").
     """
     try:
         if not isinstance(result, dict):
@@ -73,6 +79,9 @@ async def _record_package_search_metrics(result: Any, user: Any) -> None:
             result=result,
             user_id=user_id,
             session_id=session_id,
+            project_repo_id=(
+                str(project_repo_id) if project_repo_id is not None else None
+            ),
             idempotency_key=f"ai_usage:package_search:{anchor}",
             extra_metadata={"result_count": result_count},
         )
@@ -677,7 +686,7 @@ async def agent_search_packages(
             result = await agent.run(ctx)
         finally:
             pkg_workspace.cleanup(ctx)
-        await _record_package_search_metrics(result, current_user)
+        await _record_package_search_metrics(result, current_user, project_repo_id)
         return {
             "answer": result["answer"],
             "recommended_package_ids": result["recommended_package_ids"],
@@ -713,6 +722,8 @@ async def agent_search_packages(
                 synthetic.setdefault(
                     "session_id", final_event.get("task_id") or session_id
                 )
-                await _record_package_search_metrics(synthetic, current_user)
+                await _record_package_search_metrics(
+                    synthetic, current_user, project_repo_id
+                )
 
     return StreamingResponse(_sse(), media_type="text/event-stream")

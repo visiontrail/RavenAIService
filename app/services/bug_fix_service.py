@@ -162,12 +162,20 @@ def finalize(
     *,
     merge_request_count: int,
     error: Optional[str] = None,
+    fix_outcomes: Optional[List[Dict[str, Any]]] = None,
+    no_action_needed: bool = False,
 ) -> BugFixTaskStatus:
     """依产出与错误把任务置为终态。
 
     - 至少一个 MR 且无错误 → ``succeeded``
     - 有 MR 但伴随错误（部分失败）→ ``partial``
-    - 无任何 MR → ``failed``
+    - 无任何 MR，但所有拟修复项已在基线实现/无需改动（``no_action_needed``）→
+      ``succeeded``（「已确认无需修复」而非失败）
+    - 其余无 MR 情形 → ``failed``
+
+    ``fix_outcomes`` 非 None 时序列化进 ``fix_outcomes_json``，供详情页逐项展示每个
+    拟修复项的处理结局（含未产出 MR 的项，如 already_implemented），从而解释
+    「拟修复项数 > MR 数」的差异，而非让某些修复项静默消失。
     """
     task = session.get(BugFixTask, task_id)
     if task is None:
@@ -177,18 +185,23 @@ def finalize(
         status = BugFixTaskStatus.SUCCEEDED
     elif merge_request_count > 0 and error:
         status = BugFixTaskStatus.PARTIAL
+    elif merge_request_count == 0 and no_action_needed and not error:
+        status = BugFixTaskStatus.SUCCEEDED
     else:
         status = BugFixTaskStatus.FAILED
 
     task.status = status
     task.error = error
     task.finished_at = datetime.utcnow()
+    if fix_outcomes is not None:
+        task.fix_outcomes_json = json.dumps(fix_outcomes, ensure_ascii=False)
     session.flush()
     logger.info(
-        "Finalized bug_fix_task id=%s status=%s mrs=%d error=%s",
+        "Finalized bug_fix_task id=%s status=%s mrs=%d error=%s outcomes=%d",
         task_id,
         status.value,
         merge_request_count,
         bool(error),
+        len(fix_outcomes) if fix_outcomes is not None else 0,
     )
     return status

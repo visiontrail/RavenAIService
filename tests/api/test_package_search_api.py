@@ -79,9 +79,14 @@ def fake_project_repo(monkeypatch):
             return disabled
         return None
 
+    async def fake_supports_agent(db, project_repo, agent_key):
+        # Only the enabled Project A supports package_search in these tests.
+        return getattr(project_repo, "id", None) == PROJECT_REPO_ID
+
     from app.services import project_repo_service
 
     monkeypatch.setattr(project_repo_service, "get_by_id", fake_get_by_id)
+    monkeypatch.setattr(project_repo_service, "supports_agent", fake_supports_agent)
     return repo
 
 
@@ -333,3 +338,48 @@ def test_invalid_ids_get_filtered_by_agent(
     assert body["relevant_package_ids"] == ["pkg-real-1"]
     warnings = [e for e in body["tool_trace"] if e.get("type") == "warning"]
     assert any("filtered 2 invalid ids" in w["message"] for w in warnings)
+
+
+# ────────────────────── metrics project attribution ──────────────────────
+
+
+@pytest.fixture
+def capture_metrics(monkeypatch):
+    """Capture the kwargs passed to ``record_agent_run_usage`` for assertions."""
+    calls: List[Dict[str, Any]] = []
+
+    async def fake_record(**kwargs):
+        calls.append(kwargs)
+
+    from app.services import metrics_service
+
+    monkeypatch.setattr(metrics_service, "record_agent_run_usage", fake_record)
+    return calls
+
+
+def test_non_stream_records_metric_with_project_repo_id(
+    client, fake_agent, capture_metrics
+):
+    """The API-driven search must attribute its ai_usage event to the bound
+    project; otherwise every run shows as "未归属项目" in the metrics dashboard."""
+    resp = client.post(
+        "/packages/agent-search",
+        json={"query": "x", "project_repo_id": PROJECT_REPO_ID},
+    )
+    assert resp.status_code == 200
+    assert len(capture_metrics) == 1
+    assert capture_metrics[0]["project_repo_id"] == str(PROJECT_REPO_ID)
+
+
+def test_stream_records_metric_with_project_repo_id(
+    client, fake_agent, capture_metrics
+):
+    with client.stream(
+        "POST",
+        "/packages/agent-search",
+        json={"query": "x", "stream": True, "project_repo_id": PROJECT_REPO_ID},
+    ) as resp:
+        assert resp.status_code == 200
+        b"".join(resp.iter_bytes())
+    assert len(capture_metrics) == 1
+    assert capture_metrics[0]["project_repo_id"] == str(PROJECT_REPO_ID)

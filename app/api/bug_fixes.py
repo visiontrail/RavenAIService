@@ -74,6 +74,7 @@ class BugFixTaskDetail(BugFixTaskSummary):
     error: Optional[str] = None
     started_at: Optional[str] = None
     proposed_fixes: List[Any] = []
+    fix_outcomes: List[Any] = []
     merge_requests: List[BugFixMergeRequestData] = []
 
 
@@ -254,6 +255,7 @@ async def get_bug_fix(
         summary=task.summary,
         error=task.error,
         proposed_fixes=_parse_json(task.proposed_fixes_json, []),
+        fix_outcomes=_parse_json(task.fix_outcomes_json, []),
         merge_requests=merge_requests,
     )
     return BugFixTaskDetailResponse(data=detail)
