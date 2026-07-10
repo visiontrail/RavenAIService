@@ -661,8 +661,8 @@ _VALID_BUCKETS = ("hour", "day")
 # Terminal statuses surfaced as dedicated counters; anything else folds into "other".
 _KNOWN_STATUSES = ("succeeded", "failed", "cancelled", "stale", "timeout")
 
-# Internal helper LLM tasks that should remain auditable as raw events, but should
-# not inflate user-request dashboards.
+# Internal helper LLM tasks that are paired with user-facing agent runs. Exclude
+# them from metrics read models so they do not duplicate user-request activity.
 _INTERNAL_AI_SOURCES = ("title_generator",)
 
 # Cap for the duration fetch used to compute avg/p95 in Python. API callers already
@@ -1321,9 +1321,9 @@ async def list_metric_events(
 ) -> Dict[str, Any]:
     """Paginated raw (sanitized) event listing for admin audit.
 
-    Log-upload activity events are intentionally excluded: a log upload is not an
-    AI/agent invocation, so it is neither counted toward invocation totals nor
-    surfaced in this raw-event audit feed.
+    Log-upload activity events are intentionally excluded because they are not
+    AI/agent invocations. Internal AI helper events are also excluded because they
+    are paired with user-facing agent runs and would duplicate request activity.
     """
     page = max(1, page)
     per_page = max(1, per_page)
@@ -1331,6 +1331,7 @@ async def list_metric_events(
         MetricEvent.occurred_at >= from_time,
         MetricEvent.occurred_at < to_time,
         MetricEvent.source != "log_upload",
+        MetricEvent.source.not_in(_INTERNAL_AI_SOURCES),
     ]
     if event_type:
         filters.append(MetricEvent.event_type == event_type)

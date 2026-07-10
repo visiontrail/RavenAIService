@@ -246,10 +246,18 @@ def test_overview_excludes_title_generator_from_user_request_rollups(
     assert overview["tokens"]["total_tokens"] == 15
     assert {g["key"] for g in overview["invocations_by_source"]} == {"general_agent"}
 
-    # Raw audit events still retain the internal title generation metric.
+    # The raw feed also excludes paired internal title-generation activity.
     resp = client.get("/admin/metrics/events")
     assert resp.status_code == 200
-    assert resp.json()["data"]["total"] == 2
+    assert resp.json()["data"]["total"] == 1
+    assert resp.json()["data"]["events"][0]["source"] == "general_agent"
+
+    # An explicit filter must not bypass the exclusion.
+    resp = client.get(
+        "/admin/metrics/events", params={"source": "title_generator"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["total"] == 0
 
 
 def test_project_filter_scopes_admin_metrics(client: TestClient) -> None:
