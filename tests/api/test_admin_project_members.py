@@ -28,7 +28,7 @@ def client(tmp_path) -> TestClient:
             await conn.run_sync(Base.metadata.create_all)
         async with factory() as session:
             repo = ProjectRepo(
-                project_code="stack", project_name="Stack", repo_url="", enabled=True
+                project_code="stack", project_name="Stack", project_card="Stack project", repo_url="", enabled=True
             )
             session.add(repo)
             user = User(

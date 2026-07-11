@@ -64,6 +64,12 @@ SUPPORTED_AGENTS: Dict[str, Dict[str, str]] = {
         "framework": "Claude Agent SDK",
         "description": "基于 Claude Agent SDK 的项目源码答疑智能体（POST /project-expert/stream）",
     },
+    "general_agent": {
+        "key": "general_agent",
+        "name": "GeneralAgent",
+        "framework": "Claude Agent SDK",
+        "description": "基于轻量模型的系统使用说明与 Agent/项目路由智能体（默认对话入口）",
+    },
 }
 
 MAX_SKILL_ZIP_BYTES = 50 * 1024 * 1024

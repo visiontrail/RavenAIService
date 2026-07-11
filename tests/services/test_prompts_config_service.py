@@ -98,6 +98,36 @@ def test_admin_prompt_entries_include_package_search_block():
     assert "claude_agent_package_search" in function_keys
 
 
+def test_admin_prompt_entries_include_localized_general_agent_block():
+    """GeneralAgent is editable in AdminPrompts through the shared YAML config."""
+    from app.services.prompts_config_service import load_prompts_config
+
+    data = load_prompts_config()
+    general_entries = [
+        entry
+        for entry in data["prompts"]
+        if entry["function_key"] == "claude_agent_general"
+    ]
+
+    assert {entry["locale"] for entry in general_entries} == {"zh", "en"}
+    assert all(entry["function_name"] == "通用助手" for entry in general_entries)
+    assert all(entry["agent_name"] == "通用路由 Agent" for entry in general_entries)
+
+
+def test_invalidate_prompt_caches_clears_general_agent_cache():
+    from app.agents.general_agent import prompts as general_prompts
+    from app.services.prompts_config_service import _invalidate_prompt_caches
+
+    general_prompts.reset_cache()
+    system_prompt, user_prompt_template = general_prompts.get_prompts("en")
+    assert "Raven AI" in system_prompt
+    assert "{user_message}" in user_prompt_template
+    assert general_prompts._PROMPTS_CACHE
+
+    _invalidate_prompt_caches()
+    assert not general_prompts._PROMPTS_CACHE
+
+
 def test_invalidate_prompt_caches_clears_package_search_cache():
     """Saving prompts in the admin panel must take effect on the next run."""
     from app.agents.package_search import prompts as pkg_prompts

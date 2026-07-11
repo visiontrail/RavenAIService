@@ -49,6 +49,7 @@ def _repo(**overrides):
         "id": 7,
         "project_code": "foo",
         "project_name": "Foo Service",
+        "project_card": "Foo service authentication and account APIs",
         "repo_url": "https://gitlab.example/foo.git",
         "default_branch": "main",
         "enabled": True,
@@ -172,6 +173,8 @@ def _make_ctx(tmp_path: Path) -> WorkspaceContext:
                 "hints": "",
                 "repo_info": {
                     "project_code": "foo",
+                    "project_name": "Foo Service",
+                    "project_card": "Foo service authentication and account APIs",
                     "repo_url": "https://gitlab.example/foo.git",
                     "default_branch": "main",
                     "source": "user_selected_project_repo",
@@ -209,6 +212,7 @@ def test_workspace_contains_only_repo_and_task_json_without_token(monkeypatch, t
     assert not (root / "logs").exists()
     assert task_data["repo_info"]["source"] == "user_selected_project_repo"
     assert task_data["repo_info"]["project_code"] == "foo"
+    assert task_data["repo_info"]["project_card"] == "Foo service authentication and account APIs"
     assert "secret-token" not in json.dumps(task_data, ensure_ascii=False)
 
     workspace.cleanup(ctx)
@@ -240,7 +244,8 @@ async def test_agent_uses_expected_tools_materializes_project_skills_and_masks_t
             "app.services.skills_service.enabled_skill_overviews",
             return_value=[{"name": "repo-reader", "description": "读取仓库源码文件"}],
         ), \
-        patch("app.agents.log_analysis.mcp_tools.get_mcp_server", return_value=MagicMock()):
+        patch("app.agents.log_analysis.mcp_tools.get_mcp_server", return_value=MagicMock()), \
+        patch("app.config.settings.anthropic_provider", "anthropic"):
         result = await ProjectExpertAgent().run(ctx, trace_emitter=trace_events.append)
 
     assert result["engine"] == "claude-agent-sdk"
@@ -252,6 +257,7 @@ async def test_agent_uses_expected_tools_materializes_project_skills_and_masks_t
 
     kwargs = build_options.call_args.kwargs
     assert kwargs["allowed_tools"] == ALLOWED_TOOLS
+    assert "mcp__project_repo__discover_projects" in kwargs["allowed_tools"]
     assert kwargs["cwd"] == ctx.temp_dir
     assert kwargs["setting_sources"] == ["project"]
     assert "可用的 Skill（按需加载）" in kwargs["system_prompt"]
@@ -259,6 +265,9 @@ async def test_agent_uses_expected_tools_materializes_project_skills_and_masks_t
     assert "`repo-reader`：读取仓库源码文件" in captured_prompt["prompt"]
     assert '"skill": "repo-reader"' in captured_prompt["prompt"]
     assert "最终输出仍必须遵守第 5 步的围栏 JSON schema" in captured_prompt["prompt"]
+    assert "项目适配性检查（最高优先级）" in kwargs["system_prompt"]
+    assert "Foo service authentication and account APIs" in kwargs["system_prompt"]
+    assert "当前系统还没有适合回答这个问题的项目" in kwargs["system_prompt"]
 
     trace_text = json.dumps(result["trace_events"], ensure_ascii=False)
     assert "secret-token" not in trace_text

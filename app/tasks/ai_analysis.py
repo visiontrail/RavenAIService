@@ -515,6 +515,15 @@ def _bind_query_to_workspace(workspace_ctx, *, query: str, project_id: Any = Non
     )
 
 
+def _safe_project_card(repo) -> Optional[str]:
+    """Return a serializable non-empty card from an ORM row/test double."""
+    value = getattr(repo, "project_card", None)
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 def _inject_repo_info(session, workspace_ctx) -> None:
     """Pre-resolve project_repo and write `repo_info` into task.json.
 
@@ -568,10 +577,12 @@ def _inject_repo_info(session, workspace_ctx) -> None:
         scoped_repo, scoped_code = _match_project_repo_by_candidates(session, scope_candidates)
         scoped_project_code = scoped_repo.project_code if scoped_repo else (scope_candidates[0] if scope_candidates else None)
         scoped_project_name = scoped_repo.project_name if scoped_repo else None
+        scoped_project_card = _safe_project_card(scoped_repo) if scoped_repo else None
 
         repo_info = {
             "project_code": scoped_project_code,
             "project_name": scoped_project_name,
+            "project_card": scoped_project_card,
             "repo_url": _mask_repo_url(repo_url),
             "clone_url": clone_url,
             "default_branch": explicit_repo_fields.get("default_branch") or "main",
@@ -657,6 +668,7 @@ def _inject_repo_info(session, workspace_ctx) -> None:
     task_data["repo_info"] = {
         "project_code": repo.project_code,
         "project_name": repo.project_name,
+        "project_card": _safe_project_card(repo),
         "repo_url": repo.repo_url,
         "clone_url": clone_url,
         "default_branch": repo.default_branch,
@@ -783,6 +795,7 @@ def _inject_repo_info_from_project_id(session, workspace_ctx, project_repo_id: i
     repo_info = {
         "project_code": repo.project_code,
         "project_name": repo.project_name,
+        "project_card": _safe_project_card(repo),
         "repo_url": repo.repo_url,
         "clone_url": clone_url,
         "default_branch": repo.default_branch,

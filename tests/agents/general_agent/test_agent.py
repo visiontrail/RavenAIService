@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app.agents.general_agent.agent import (
     GeneralAgent,
     GeneralAgentContext,
-    SYSTEM_PROMPT,
     VALID_SUGGESTED_AGENTS,
     _extract_suggested_agent,
     _format_history_block,
     _resolve_small_fast_model,
 )
+from app.agents.general_agent.prompts import get_prompts
 
 
 # ─────────────────────── Fake SDK messages ─────────────────────────
@@ -29,6 +29,32 @@ class _FakeTextBlock:
 class _FakeAssistantMessage:
     def __init__(self, text: str):
         self.content = [_FakeTextBlock(text)]
+
+
+class _FakeToolUseBlock:
+    def __init__(self, name: str, tool_input: Dict[str, Any], block_id: str):
+        self.name = name
+        self.input = tool_input
+        self.id = block_id
+
+
+class _FakeToolResultBlock:
+    def __init__(self, tool_use_id: str, text: str):
+        self.tool_use_id = tool_use_id
+        self.content = [{"type": "text", "text": text}]
+        self.is_error = False
+
+
+class _FakeContentMessage:
+    def __init__(self, *blocks: Any):
+        self.content = list(blocks)
+
+
+class _FakeResultMessage:
+    content = None
+
+    def __init__(self, result: str):
+        self.result = result
 
 
 # ─────────────────────── Helpers ─────────────────────────────────
@@ -135,7 +161,9 @@ async def test_run_returns_tuple(monkeypatch):
     events, final_text, model = await GeneralAgent().run(ctx)
     assert final_text == "回答内容"
     assert model == "test-model"
-    assert len(events) == 2
+    assert events[0]["type"] == "run_start"
+    assert events[-1]["type"] == "run_complete"
+    assert any(event["type"] == "thinking_delta" for event in events)
 
 
 @pytest.mark.asyncio
@@ -187,15 +215,144 @@ async def test_run_stream_turn_limit_uses_fallback_when_empty(monkeypatch):
 @pytest.mark.asyncio
 async def test_system_prompt_contains_key_guidance():
     """The system prompt mentions Raven AI, all four specialist agents, and the marker."""
-    assert "Raven AI" in SYSTEM_PROMPT
-    assert "设备操作" in SYSTEM_PROMPT
-    assert "日志分析" in SYSTEM_PROMPT
-    assert "检索包" in SYSTEM_PROMPT
-    assert "项目专家" in SYSTEM_PROMPT
+    system_prompt, _ = get_prompts("zh")
+    assert "Raven AI" in system_prompt
+    assert "设备操作" in system_prompt
+    assert "日志分析" in system_prompt
+    assert "检索包" in system_prompt
+    assert "项目专家" in system_prompt
     # The structured marker contract must be described to the model.
-    assert "SUGGESTED_AGENT" in SYSTEM_PROMPT
+    assert "SUGGESTED_AGENT" in system_prompt
+    assert "mcp__project_repo__discover_projects" in system_prompt
+    assert "当前系统还没有适合回答这个问题的项目" in system_prompt
     for key in VALID_SUGGESTED_AGENTS:
-        assert key in SYSTEM_PROMPT
+        assert key in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_general_agent_allows_only_safe_project_discovery(monkeypatch):
+    fake_query = _fake_query_factory("请使用项目专家。\n[[SUGGESTED_AGENT:project_expert]]")
+    build_options = MagicMock(return_value=MagicMock())
+    mcp_server = MagicMock()
+
+    monkeypatch.setattr("claude_agent_sdk.query", fake_query)
+    monkeypatch.setattr("app.config.settings.anthropic_provider", "anthropic")
+    monkeypatch.setattr("app.config.settings.anthropic_api_key", "sk-test")
+    monkeypatch.setattr("app.config.settings.anthropic_small_fast_model", "test-model")
+
+    with patch("app.agents.anthropic_client.build_options", build_options), patch(
+        "app.agents.log_analysis.mcp_tools.get_project_discovery_mcp_server",
+        return_value=mcp_server,
+    ):
+        async for _ in GeneralAgent().run_stream(
+            GeneralAgentContext(session_id="catalog", user_message="foo 项目的鉴权在哪？")
+        ):
+            pass
+
+    kwargs = build_options.call_args.kwargs
+    assert kwargs["allowed_tools"] == ["mcp__project_repo__discover_projects"]
+    assert kwargs["mcp_servers"] == {"project_repo": mcp_server}
+    assert "mcp__project_repo__lookup_project_repo" not in kwargs["allowed_tools"]
+    assert all(tool not in kwargs["allowed_tools"] for tool in ("Bash", "Read", "Grep"))
+
+
+@pytest.mark.asyncio
+async def test_general_agent_projects_tool_loop_into_trace(monkeypatch):
+    async def fake_query(*, prompt, options):  # noqa: ARG001
+        yield _FakeContentMessage(
+            _FakeToolUseBlock(
+                "mcp__project_repo__discover_projects",
+                {"query": "foo"},
+                "tool-1",
+            )
+        )
+        yield _FakeContentMessage(
+            _FakeToolResultBlock(
+                "tool-1",
+                '{"projects":[{"project_code":"foo"}]}',
+            )
+        )
+        yield _FakeResultMessage(
+            "请使用项目专家并选择 foo。\n[[SUGGESTED_AGENT:project_expert]]"
+        )
+
+    monkeypatch.setattr("claude_agent_sdk.query", fake_query)
+    monkeypatch.setattr("app.config.settings.anthropic_provider", "anthropic")
+    monkeypatch.setattr("app.config.settings.anthropic_api_key", "sk-test")
+    monkeypatch.setattr("app.config.settings.anthropic_small_fast_model", "small-model")
+
+    events = [
+        event
+        async for event in GeneralAgent().run_stream(
+            GeneralAgentContext(session_id="loop", user_message="foo 项目怎么改？")
+        )
+    ]
+
+    step_start = next(event for event in events if event["type"] == "step_start")
+    step_end = next(event for event in events if event["type"] == "step_end")
+    assert step_start["tool_name"] == "mcp__project_repo__discover_projects"
+    assert step_end["step_id"] == step_start["step_id"]
+    assert events[-1]["suggested_agent_type"] == "project_expert"
+    assert events[-1]["final_text"] == "请使用项目专家并选择 foo。"
+
+
+@pytest.mark.asyncio
+async def test_general_agent_materializes_agent_skills_without_project(monkeypatch):
+    fake_query = _fake_query_factory("系统使用说明\n[[SUGGESTED_AGENT:none]]")
+    build_options = MagicMock(return_value=MagicMock())
+    materialize = MagicMock(return_value=["routing_helper"])
+    overviews = MagicMock(
+        return_value=[{"name": "routing_helper", "description": "路由规则"}]
+    )
+
+    monkeypatch.setattr("claude_agent_sdk.query", fake_query)
+    monkeypatch.setattr("app.config.settings.anthropic_provider", "anthropic")
+    monkeypatch.setattr("app.config.settings.anthropic_api_key", "sk-test")
+    monkeypatch.setattr("app.config.settings.anthropic_small_fast_model", "small-model")
+
+    with patch("app.agents.anthropic_client.build_options", build_options), patch(
+        "app.services.skills_service.materialize_enabled_skills", materialize
+    ), patch(
+        "app.services.skills_service.enabled_skill_overviews", overviews
+    ):
+        events = [
+            event
+            async for event in GeneralAgent().run_stream(
+                GeneralAgentContext(session_id="skills", user_message="怎么用？")
+            )
+        ]
+
+    materialize.assert_called_once()
+    assert materialize.call_args.args[0] == "general_agent"
+    assert materialize.call_args.kwargs.get("project_code") is None
+    kwargs = build_options.call_args.kwargs
+    assert kwargs["model"] == "small-model"
+    assert kwargs["allowed_tools"] == [
+        "mcp__project_repo__discover_projects",
+        "Skill",
+    ]
+    assert kwargs["setting_sources"] == ["project"]
+    assert events[0]["loaded_skills"] == ["routing_helper"]
+    assert events[-1]["loaded_skills"] == ["routing_helper"]
+
+
+def test_general_agent_never_falls_back_to_primary_model(monkeypatch):
+    from app.agents.anthropic_client import AnthropicConfigurationError
+
+    monkeypatch.setattr("app.config.settings.anthropic_provider", "custom")
+    monkeypatch.setattr("app.config.settings.anthropic_small_fast_model", None)
+    monkeypatch.setattr("app.config.settings.anthropic_model", "large-primary-model")
+
+    with pytest.raises(AnthropicConfigurationError, match="refusing to use the primary"):
+        _resolve_small_fast_model()
+
+
+def test_general_agent_is_not_project_scoped():
+    from app.services.project_prompt_service import PROJECT_AGENT_KEYS
+    from app.services.skills_service import SUPPORTED_AGENTS
+
+    assert "general_agent" in SUPPORTED_AGENTS
+    assert "general_agent" not in PROJECT_AGENT_KEYS
 
 
 # ─────────────────────── _extract_suggested_agent ─────────────────

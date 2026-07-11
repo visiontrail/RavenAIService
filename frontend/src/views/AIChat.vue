@@ -812,6 +812,25 @@ const visibleProjectRepoOptions = computed(() => {
   if (!agentKey) return []
   return projectRepoOptions.value.filter((repo) => repoSupportsAgent(repo, agentKey))
 })
+const projectCardSummary = (card: string, maxLength = 64): string => {
+  const normalized = (card || '').replace(/\s+/g, ' ').trim()
+  if (normalized.length <= maxLength) return normalized
+  return `${normalized.slice(0, maxLength - 1)}…`
+}
+const projectOptionLabel = (repo: ProjectRepoOption): string =>
+  `${repo.project_name}（${repo.project_code}） — ${projectCardSummary(repo.project_card)}`
+const selectedProjectRepoOption = computed(() =>
+  visibleProjectRepoOptions.value.find((repo) => repo.id === selectedProjectRepoId.value) || null
+)
+const projectSelectTitle = computed(() => {
+  if (projectRepoOptionsLoading.value) return t('aiChat.project.loadingList')
+  if (selectedProjectRepoOption.value?.project_card) {
+    return selectedProjectRepoOption.value.project_card
+  }
+  return isProjectRepoRequired.value
+    ? t('aiChat.project.requiredTitle')
+    : t('aiChat.project.optionalTitle')
+})
 const isProjectRepoRequiredMissing = computed(() =>
   isProjectRepoRequired.value && selectedProjectRepoId.value === null
 )
@@ -2028,11 +2047,7 @@ const openShareModal = () => {
             class="rw-project-select"
             :class="{ required: isProjectRepoRequiredMissing }"
             :disabled="projectRepoOptionsLoading"
-            :title="projectRepoOptionsLoading
-              ? t('aiChat.project.loadingList')
-              : isProjectRepoRequired
-                ? t('aiChat.project.requiredTitle')
-                : t('aiChat.project.optionalTitle')"
+            :title="projectSelectTitle"
           >
             <option :value="null">
               {{ projectRepoOptionsLoading
@@ -2043,8 +2058,9 @@ const openShareModal = () => {
               v-for="repo in visibleProjectRepoOptions"
               :key="repo.id"
               :value="repo.id"
+              :title="repo.project_card"
             >
-              {{ repo.project_name }}（{{ repo.project_code }}）
+              {{ projectOptionLabel(repo) }}
             </option>
           </select>
           <button

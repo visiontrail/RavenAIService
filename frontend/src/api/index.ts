@@ -208,7 +208,7 @@ export interface ProjectRepoOption {
   // 是否关联了代码仓库。未关联的项目仅项目专家可见。
   has_repo?: boolean
   enabled_agent_keys?: string[]
-  description?: string | null
+  project_card: string
 }
 
 export const projectRepoApi = {

@@ -25,7 +25,7 @@ class ProjectRepoOption(BaseModel):
     default_branch: str
     has_repo: bool = False
     enabled_agent_keys: List[str] = Field(default_factory=list)
-    description: Optional[str] = None
+    project_card: str
 
 
 class ProjectRepoOptionListResponse(BaseModel):
@@ -89,7 +89,7 @@ async def list_enabled_project_repos(
             default_branch=repo.default_branch,
             has_repo=project_repo_service.has_repo(repo),
             enabled_agent_keys=agent_keys_by_repo.get(repo.id, []),
-            description=repo.description,
+            project_card=repo.project_card,
         )
         for repo in repos
     ]

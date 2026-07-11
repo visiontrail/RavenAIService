@@ -37,10 +37,10 @@ def client(tmp_path) -> TestClient:
             await conn.run_sync(Base.metadata.create_all)
         async with factory() as session:
             stack = ProjectRepo(
-                project_code="stack", project_name="Stack", repo_url="", enabled=True
+                project_code="stack", project_name="Stack", project_card="Stack project", repo_url="", enabled=True
             )
             oam = ProjectRepo(
-                project_code="oam_antenna", project_name="OAM", repo_url="", enabled=True
+                project_code="oam_antenna", project_name="OAM", project_card="OAM project", repo_url="", enabled=True
             )
             session.add_all([stack, oam])
             await session.flush()

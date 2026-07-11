@@ -49,6 +49,11 @@ from app.agents.log_analysis.trace import (
 )
 from app.agents.usage import accumulate_usage, new_token_usage
 from app.agents.log_analysis.workspace import WorkspaceContext
+from app.agents.log_analysis.mcp_tools import (
+    PROJECT_DISCOVERY_MCP_TOOL,
+    PROJECT_REPO_LOOKUP_MCP_TOOL,
+    build_project_fit_guidance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +62,7 @@ class AgentCancelled(Exception):
     """Raised inside the agent loop when an external cancel signal fires."""
 
 
-PROJECT_REPO_MCP_TOOL = "mcp__project_repo__lookup_project_repo"
+PROJECT_REPO_MCP_TOOL = PROJECT_REPO_LOOKUP_MCP_TOOL
 
 ALLOWED_TOOLS = [
     "Bash",
@@ -65,6 +70,7 @@ ALLOWED_TOOLS = [
     "Grep",
     "Glob",
     "Skill",  # 允许模型调用通过 setting_sources 加载的用户自定义 Skill
+    PROJECT_DISCOVERY_MCP_TOOL,
     PROJECT_REPO_MCP_TOOL,
 ]
 
@@ -1016,10 +1022,9 @@ class LogAnalysisAgent:
                 "\n\n## 用户已选定项目仓库\n"
                 "用户已为本次运行显式选择了项目仓库。`task.json` 中已经"
                 "包含完整解析过的 `repo_info`（`clone_url`、`repo_url`、"
-                "`default_branch`）—— 请将其视为权威来源，跳过对 "
-                "metadata.json 的发现与 `project_code` 查询，直接进入"
-                "第 4 步（克隆）与第 5 步（调查）。按基础工作流的规定，"
-                "克隆并使用源代码仍然是强制要求。\n"
+                "`default_branch`、`project_card`）。先执行后文的项目适配性"
+                "检查；仅在项目匹配时，才将其视为权威仓库来源，跳过对 "
+                "metadata.json 的项目发现并进入克隆与调查。\n"
             )
 
         user_prompt = render_user_prompt(
@@ -1044,12 +1049,12 @@ class LogAnalysisAgent:
             mcp_servers = {"project_repo": get_mcp_server()}
         else:
             allowed_tools = [
-                name for name in allowed_tools if name != PROJECT_REPO_MCP_TOOL
+                name for name in allowed_tools if not name.startswith("mcp__")
             ]
             system_prompt += (
                 "\n\n## 运行时约束\n"
                 f"当前 provider `{provider}` 不支持 MCP server 工具。"
-                "本次运行中 `mcp__project_repo__lookup_project_repo` 不可用。"
+                "本次运行中项目目录和仓库查询 MCP 工具不可用。"
                 "请使用 `task.json` / `metadata.json` 中的显式仓库字段或 "
                 "`repo_info` 来解析仓库。按基础工作流的规定，源代码侧的"
                 "查证依然是强制要求。如果任何地方都不存在显式仓库信息，"
@@ -1067,9 +1072,11 @@ class LogAnalysisAgent:
         # 模型按需调用 Skill 工具加载，后端不再预筛候选集。
         project_code: Optional[str] = None
         project_name: Optional[str] = None
+        project_card: Optional[str] = None
         if isinstance(repo_info, dict):
             project_code = repo_info.get("project_code") or None
             project_name = repo_info.get("project_name") or None
+            project_card = repo_info.get("project_card") or None
 
         # 项目级附加系统提示词：像 Skill 一样分级处理——在通用（Agent 级）系统
         # 提示词之后叠加该项目的专属约束。无配置时返回空串。无论 project_code 来
@@ -1123,6 +1130,15 @@ class LogAnalysisAgent:
             )
             system_prompt += skill_availability_prompt
             user_prompt += skill_availability_prompt
+
+        system_prompt += build_project_fit_guidance(
+            workflow_name="日志分析",
+            project_name=project_name,
+            project_code=project_code,
+            project_card=project_card,
+            catalog_available=supports_mcp,
+            switch_instruction="请用户重新选择该匹配项目后再发起分析。",
+        )
 
         user_prompt += "\n\nOutput language requirement:\n" + language_directive
 

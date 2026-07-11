@@ -356,9 +356,13 @@ def fake_project_repo(monkeypatch):
     async def fake_get_by_id(_db, repo_id):
         return repo if repo_id == PROJECT_REPO_ID else None
 
+    async def fake_supports_agent(_db, candidate, agent_key):
+        return candidate is repo and agent_key == "package_search"
+
     from app.services import project_repo_service
 
     monkeypatch.setattr(project_repo_service, "get_by_id", fake_get_by_id)
+    monkeypatch.setattr(project_repo_service, "supports_agent", fake_supports_agent)
     return repo
 
 

@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.database import get_db
 from app.security.admin_auth import ADMIN_TOKEN_HEADER, ADMIN_TOKEN_PREFIX, auth_manager
@@ -263,7 +263,7 @@ class ProjectRepoData(BaseModel):
     git_token_set: bool
     has_repo: bool = False
     enabled_agent_keys: List[str] = Field(default_factory=list)
-    description: Optional[str] = None
+    project_card: str
     enabled: bool
     member_count: int = 0
     created_at: datetime
@@ -289,9 +289,18 @@ class CreateProjectRepoRequest(BaseModel):
     repo_url: str = Field(default="")
     default_branch: str = Field(default="main", max_length=128)
     git_token: Optional[str] = None
-    description: Optional[str] = None
+    project_card: str = Field(
+        ...,
+        min_length=1,
+        max_length=project_repo_service.PROJECT_CARD_MAX_LENGTH,
+    )
     enabled: bool = True
     enabled_agent_keys: Optional[List[str]] = None
+
+    @field_validator("project_card")
+    @classmethod
+    def validate_project_card(cls, value: str) -> str:
+        return project_repo_service.normalize_project_card(value)
 
 
 class UpdateProjectRepoRequest(BaseModel):
@@ -299,9 +308,22 @@ class UpdateProjectRepoRequest(BaseModel):
     repo_url: Optional[str] = None
     default_branch: Optional[str] = None
     git_token: Optional[str] = None
-    description: Optional[str] = None
+    project_card: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=project_repo_service.PROJECT_CARD_MAX_LENGTH,
+    )
     enabled: Optional[bool] = None
     enabled_agent_keys: Optional[List[str]] = None
+
+    @field_validator("project_card")
+    @classmethod
+    def validate_explicit_project_card(cls, value: Optional[str]) -> Optional[str]:
+        # Omitted fields retain the existing card.  An explicitly supplied
+        # null/blank value must never clear this required project contract.
+        if value is None:
+            raise ValueError("项目卡片不能为空")
+        return project_repo_service.normalize_project_card(value)
 
 
 class TestConnectionResponse(BaseModel):
@@ -360,7 +382,7 @@ def _repo_to_data(
         enabled_agent_keys=enabled_agent_keys
         if enabled_agent_keys is not None
         else project_repo_service.default_agent_keys_for_repo(repo),
-        description=repo.description,
+        project_card=repo.project_card,
         enabled=repo.enabled,
         member_count=member_count,
         created_at=repo.created_at,
@@ -428,7 +450,7 @@ async def create_project_repo(
             repo_url=payload.repo_url,
             default_branch=payload.default_branch,
             git_token=payload.git_token,
-            description=payload.description,
+            project_card=payload.project_card,
             enabled=payload.enabled,
         )
         agent_keys = await project_repo_service.replace_agent_keys(
@@ -492,7 +514,7 @@ async def update_project_repo(
             repo_url=payload.repo_url,
             default_branch=payload.default_branch,
             git_token=payload.git_token,
-            description=payload.description,
+            project_card=payload.project_card,
             enabled=payload.enabled,
         )
         if payload.enabled_agent_keys is not None:

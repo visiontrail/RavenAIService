@@ -19,6 +19,8 @@ from app.services.repo_settings_service import test_repo_connection
 logger = logging.getLogger(__name__)
 
 _TOKEN_MASK = "••••••••"
+PROJECT_CARD_MAX_LENGTH = 4000
+PROJECT_DISCOVERY_MAX_ITEMS = 500
 
 
 PROJECT_AGENT_REGISTRY: Dict[str, Dict[str, Any]] = {
@@ -51,6 +53,18 @@ PROJECT_AGENT_REGISTRY: Dict[str, Dict[str, Any]] = {
 
 def _normalize_code(code: str) -> str:
     return code.strip().lower()
+
+
+def normalize_project_card(project_card: str) -> str:
+    """Normalize and validate the project-matching card text."""
+    if not isinstance(project_card, str):
+        raise ValueError("项目卡片为必填文本")
+    normalized = project_card.strip()
+    if not normalized:
+        raise ValueError("请填写项目卡片")
+    if len(normalized) > PROJECT_CARD_MAX_LENGTH:
+        raise ValueError(f"项目卡片不能超过 {PROJECT_CARD_MAX_LENGTH} 个字符")
+    return normalized
 
 
 def has_repo(repo: Optional[ProjectRepo]) -> bool:
@@ -226,6 +240,45 @@ async def list_agent_keys_bulk(
     }
 
 
+async def discover_projects(
+    db: AsyncSession,
+    *,
+    limit: int = PROJECT_DISCOVERY_MAX_ITEMS,
+) -> Dict[str, Any]:
+    """Return the bounded, credential-free enabled project catalog for Agents.
+
+    This is the single serializer used by the MCP discovery tool.  Keep the
+    allowlist explicit: repository URLs, tokens, auth state, and memberships
+    must never enter an Agent catalog response.
+    """
+    bounded_limit = max(1, min(int(limit), PROJECT_DISCOVERY_MAX_ITEMS))
+    repos = await list_repos(
+        db,
+        include_disabled=False,
+        offset=0,
+        limit=bounded_limit + 1,
+    )
+    truncated = len(repos) > bounded_limit
+    visible_repos = repos[:bounded_limit]
+    agent_keys_by_repo = await list_agent_keys_bulk(db, visible_repos)
+    projects = [
+        {
+            "id": repo.id,
+            "project_code": repo.project_code,
+            "project_name": repo.project_name,
+            "project_card": repo.project_card,
+            "has_repo": has_repo(repo),
+            "enabled_agent_keys": agent_keys_by_repo.get(repo.id, []),
+        }
+        for repo in visible_repos
+    ]
+    return {
+        "projects": projects,
+        "count": len(projects),
+        "truncated": truncated,
+    }
+
+
 async def replace_agent_keys(
     db: AsyncSession,
     repo: ProjectRepo,
@@ -289,7 +342,7 @@ async def create(
     repo_url: Optional[str] = None,
     default_branch: str = "main",
     git_token: Optional[str] = None,
-    description: Optional[str] = None,
+    project_card: str,
     enabled: bool = True,
 ) -> ProjectRepo:
     now = datetime.utcnow()
@@ -302,7 +355,7 @@ async def create(
         repo_url=normalized_url,
         default_branch=default_branch.strip() or "main",
         git_token=(git_token or None) if normalized_url else None,
-        description=description,
+        project_card=normalize_project_card(project_card),
         enabled=enabled,
         created_at=now,
         updated_at=now,
@@ -322,7 +375,7 @@ async def update(
     repo_url: Optional[str] = None,
     default_branch: Optional[str] = None,
     git_token: Optional[str] = None,
-    description: Optional[str] = None,
+    project_card: Optional[str] = None,
     enabled: Optional[bool] = None,
 ) -> ProjectRepo:
     if project_name is not None:
@@ -335,8 +388,8 @@ async def update(
         if git_token != _TOKEN_MASK:
             repo.git_token = git_token or None
         # if git_token == _TOKEN_MASK, leave unchanged
-    if description is not None:
-        repo.description = description
+    if project_card is not None:
+        repo.project_card = normalize_project_card(project_card)
     if enabled is not None:
         repo.enabled = enabled
     if not has_repo(repo):

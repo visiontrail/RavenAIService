@@ -36,6 +36,7 @@ def _seed(Session, *, fixes=None):
         project_code="foo",
         project_name="Foo",
         repo_url="https://gitlab.example.com/foo/bar.git",
+        project_card="Foo project source and bug fixes",
         default_branch="main",
         git_token="secret",
         enabled=True,

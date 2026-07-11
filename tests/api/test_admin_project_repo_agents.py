@@ -73,6 +73,7 @@ def test_create_project_persists_selected_agents(client: TestClient) -> None:
         json={
             "project_code": "alpha",
             "project_name": "Alpha",
+            "project_card": "Alpha project source, logs, and package assets",
             "repo_url": "https://git.example/alpha.git",
             "enabled_agent_keys": ["log_analysis", "package_search"],
         },
@@ -95,6 +96,7 @@ def test_create_repoless_project_rejects_repo_bound_agent(client: TestClient) ->
         json={
             "project_code": "docs-only",
             "project_name": "Docs Only",
+            "project_card": "Documentation-only project without a code repository",
             "repo_url": "",
             "enabled_agent_keys": ["log_analysis"],
         },

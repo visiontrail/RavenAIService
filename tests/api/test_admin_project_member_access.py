@@ -83,10 +83,10 @@ def client(tmp_path, monkeypatch) -> TestClient:
                 id="outsider-id", username="olivia", password_hash="x", role="user"
             )
             alpha = ProjectRepo(
-                project_code="alpha", project_name="Alpha", repo_url="", enabled=True
+                project_code="alpha", project_name="Alpha", project_card="Alpha project", repo_url="", enabled=True
             )
             beta = ProjectRepo(
-                project_code="beta", project_name="Beta", repo_url="", enabled=True
+                project_code="beta", project_name="Beta", project_card="Beta project", repo_url="", enabled=True
             )
             session.add_all([admin, member, outsider, alpha, beta])
             await session.flush()
@@ -200,7 +200,7 @@ def test_member_updates_allowed_fields(client: TestClient) -> None:
         headers=_h(client.seed_state["member_token"]),
         json={
             "project_name": "Alpha Renamed",
-            "description": "Updated",
+            "project_card": "Updated project scope",
             "default_branch": "develop",
         },
     )

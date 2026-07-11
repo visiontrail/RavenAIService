@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import {
   CheckCircle2,
   CircleAlert,
+  CircleHelp,
   Bot,
   FolderTree,
   LogOut,
@@ -57,6 +58,12 @@ const removingMemberId = ref<string | null>(null)
 const memberSearch = ref('')
 const projectMembers = ref<ProjectMember[]>([])
 const userCandidates = ref<UserProfile[]>([])
+type RepoHelpKey = 'projectCode' | 'token' | 'members' | 'connectivity'
+const activeHelp = ref<RepoHelpKey | null>(null)
+
+const toggleHelp = (key: RepoHelpKey) => {
+  activeHelp.value = activeHelp.value === key ? null : key
+}
 
 const authForm = reactive({
   username: '',
@@ -72,7 +79,7 @@ const repoForm = reactive({
   repo_url: '',
   default_branch: 'main',
   git_token: '',
-  description: '',
+  project_card: '',
   enabled: true,
   enabled_agent_keys: [] as string[],
 })
@@ -338,7 +345,7 @@ const resetRepoForm = () => {
   repoForm.repo_url = ''
   repoForm.default_branch = 'main'
   repoForm.git_token = ''
-  repoForm.description = ''
+  repoForm.project_card = ''
   repoForm.enabled = true
   repoForm.enabled_agent_keys = defaultAgentKeysForAssociateState()
 }
@@ -346,12 +353,14 @@ const resetRepoForm = () => {
 const openCreateDialog = async () => {
   await fetchProjectAgents()
   resetRepoForm()
+  activeHelp.value = null
   dialogMode.value = 'create'
   dialogVisible.value = true
 }
 
 const openEditDialog = async (repo: ProjectRepo) => {
   await fetchProjectAgents()
+  activeHelp.value = null
   editingRepoId.value = repo.id
   dialogMode.value = 'edit'
   repoForm.project_code = repo.project_code
@@ -360,7 +369,7 @@ const openEditDialog = async (repo: ProjectRepo) => {
   repoForm.repo_url = repo.repo_url
   repoForm.default_branch = repo.default_branch || 'main'
   repoForm.git_token = ''
-  repoForm.description = repo.description || ''
+  repoForm.project_card = repo.project_card || ''
   repoForm.enabled = repo.enabled
   repoForm.enabled_agent_keys = [...(repo.enabled_agent_keys || [])]
   normalizeRepoFormAgentKeys()
@@ -369,6 +378,7 @@ const openEditDialog = async (repo: ProjectRepo) => {
 
 const closeDialog = () => {
   if (savingRepo.value) return
+  activeHelp.value = null
   dialogVisible.value = false
 }
 
@@ -379,7 +389,7 @@ const buildPayload = (): ProjectRepoPayload => {
     // 未关联代码仓库时清空 URL（后端据此判定项目不向其它 Agent 暴露）。
     repo_url: associate ? repoForm.repo_url.trim() : '',
     default_branch: repoForm.default_branch.trim() || 'main',
-    description: repoForm.description.trim() || null,
+    project_card: repoForm.project_card.trim(),
   }
   // 项目成员管理员仅能修改安全的项目字段；enabled/git_token 为全局管理员专属，
   // 后端也会拒绝项目成员对这些字段的修改，因此前端不下发。
@@ -404,6 +414,7 @@ const buildPayload = (): ProjectRepoPayload => {
 const validateForm = () => {
   if (!repoForm.project_code.trim()) return t('admin.projectRepos.projectCodeRequired')
   if (!repoForm.project_name.trim()) return t('admin.projectRepos.projectNameRequired')
+  if (!repoForm.project_card.trim()) return t('admin.projectRepos.projectCardRequired')
   if (repoForm.associate_repo && !repoForm.repo_url.trim()) return t('admin.projectRepos.repoUrlRequired')
   if (isGlobalAdmin.value && !repoForm.enabled_agent_keys.length) return t('admin.projectRepos.agentRequired')
   return ''
@@ -594,14 +605,14 @@ watch(
 
       <section v-else class="space-y-4">
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
-          <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-            <div>
+          <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div class="min-w-0 flex-1">
               <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.projectRepos.listTitle') }}</h2>
-              <p class="text-sm text-slate-500 mt-0.5">
+              <p class="mt-0.5 text-sm text-slate-500 md:truncate" :title="t('admin.projectRepos.listDesc')">
                 {{ t('admin.projectRepos.listDesc') }}
               </p>
             </div>
-            <div class="flex flex-wrap items-center gap-2">
+            <div class="flex shrink-0 flex-nowrap items-center gap-2">
               <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600">
                 <input
                   v-model="includeDisabled"
@@ -631,27 +642,6 @@ watch(
           </div>
         </div>
 
-        <div class="bg-slate-50 border border-slate-200 rounded-2xl p-4">
-          <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div>
-              <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Project Code</p>
-              <p class="mt-1 text-sm text-slate-600">{{ t('admin.projectRepos.projectCodeHint') }}</p>
-            </div>
-            <div>
-              <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Token</p>
-              <p class="mt-1 text-sm text-slate-600">{{ t('admin.projectRepos.tokenHint') }}</p>
-            </div>
-            <div>
-              <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Members</p>
-              <p class="mt-1 text-sm text-slate-600">{{ t('admin.projectRepos.memberHint') }}</p>
-            </div>
-            <div>
-              <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Connectivity</p>
-              <p class="mt-1 text-sm text-slate-600">{{ t('admin.projectRepos.connectionHint') }}</p>
-            </div>
-          </div>
-        </div>
-
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
           <div v-if="loadingRepos" class="px-5 py-12 text-center text-sm text-slate-400">
             {{ t('admin.projectRepos.loadingText') }}
@@ -662,16 +652,20 @@ watch(
             <p class="mt-1 text-xs text-slate-400">{{ t('admin.projectRepos.emptyHint') }}</p>
           </div>
 
-          <div v-else class="overflow-x-auto">
-            <table class="min-w-full text-sm text-slate-700">
+          <div v-else class="project-table-wrap">
+            <table class="project-table text-sm text-slate-700">
+              <colgroup>
+                <col class="project-table-col-project" />
+                <col class="project-table-col-repository" />
+                <col class="project-table-col-access" />
+                <col class="project-table-col-updated" />
+                <col class="project-table-col-actions" />
+              </colgroup>
               <thead>
                 <tr class="border-b border-slate-100 bg-slate-50">
                   <th class="py-2.5 pl-5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.projectRepos.colProject') }}</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.projectRepos.colRepoUrl') }}</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.projectRepos.colBranch') }}</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">Token</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.projectRepos.colMembers') }}</th>
-                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.projectRepos.colStatus') }}</th>
+                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.projectRepos.colRepository') }}</th>
+                  <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.projectRepos.colAccessStatus') }}</th>
                   <th class="py-2.5 pr-4 text-left font-semibold text-slate-600">{{ t('admin.projectRepos.colUpdatedAt') }}</th>
                   <th class="py-2.5 pr-5 text-right font-semibold text-slate-600">{{ t('admin.projectRepos.colActions') }}</th>
                 </tr>
@@ -680,17 +674,17 @@ watch(
                 <tr
                   v-for="repo in repos"
                   :key="repo.id"
-                  class="border-b border-slate-50 hover:bg-slate-50/70 transition-colors"
+                  class="project-table-row border-b border-slate-100 hover:bg-slate-50/70 transition-colors"
                 >
-                  <td class="py-3 pl-5 pr-4">
-                    <div class="font-semibold text-slate-900">{{ repo.project_name }}</div>
-                    <div class="mt-1 flex items-center gap-2">
-                      <code class="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{{ repo.project_code }}</code>
-                      <span v-if="repo.description" class="max-w-[220px] truncate text-xs text-slate-400" :title="repo.description">
-                        {{ repo.description }}
+                  <td class="project-cell py-3 pl-5 pr-4" :data-label="t('admin.projectRepos.colProject')">
+                    <div class="project-name font-semibold text-slate-900">{{ repo.project_name }}</div>
+                    <div class="mt-1 flex min-w-0 flex-wrap items-center gap-2">
+                      <code class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{{ repo.project_code }}</code>
+                      <span class="project-card-summary min-w-0 truncate text-xs text-slate-400" :title="repo.project_card">
+                        {{ repo.project_card }}
                       </span>
                     </div>
-                    <div class="mt-2 flex max-w-[360px] flex-wrap gap-1">
+                    <div class="mt-2 flex flex-wrap gap-1">
                       <span
                         v-for="label in enabledAgentLabels(repo)"
                         :key="`${repo.id}-${label}`"
@@ -700,10 +694,10 @@ watch(
                       </span>
                     </div>
                   </td>
-                  <td class="py-3 pr-4">
+                  <td class="project-repository-cell py-3 pr-4" :data-label="t('admin.projectRepos.colRepository')">
                     <span
                       v-if="(repo.has_repo ?? !!repo.repo_url)"
-                      class="block max-w-[360px] truncate font-mono text-xs text-slate-600"
+                      class="project-repo-url block truncate font-mono text-xs text-slate-600"
                       :title="repo.repo_url"
                     >
                       {{ repo.repo_url }}
@@ -714,9 +708,21 @@ watch(
                     >
                       {{ t('admin.projectRepos.noRepoTag') }}
                     </span>
+                    <div v-if="(repo.has_repo ?? !!repo.repo_url)" class="project-repo-meta mt-2">
+                      <span class="project-repo-meta-item" :title="t('admin.projectRepos.colBranch')">
+                        <span>{{ t('admin.projectRepos.colBranch') }}</span>
+                        <code>{{ repo.default_branch }}</code>
+                      </span>
+                      <span
+                        class="inline-flex rounded-full px-2 py-1 text-xs font-semibold"
+                        :class="repo.git_token_set ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'"
+                      >
+                        {{ repo.git_token_set ? t('admin.projectRepos.tokenSet') : t('admin.projectRepos.tokenNotSet') }}
+                      </span>
+                    </div>
                     <div
                       v-if="testResults[repo.id]"
-                      class="mt-2 flex items-start gap-1.5 rounded-lg border px-2 py-1.5 text-xs"
+                      class="project-test-result mt-2 flex items-start gap-1.5 rounded-lg border px-2 py-1.5 text-xs"
                       :class="testResults[repo.id]?.success
                         ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
                         : 'border-red-200 bg-red-50 text-red-700'"
@@ -726,57 +732,50 @@ watch(
                       <span>{{ testResults[repo.id]?.message }}（{{ testResults[repo.id]?.auth_method }}）</span>
                     </div>
                   </td>
-                  <td class="py-3 pr-4 font-mono text-xs text-slate-500">{{ repo.default_branch }}</td>
-                  <td class="py-3 pr-4">
-                    <span
-                      class="inline-flex rounded-full px-2 py-1 text-xs font-semibold"
-                      :class="repo.git_token_set ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'"
-                    >
-                      {{ repo.git_token_set ? t('admin.projectRepos.tokenSet') : t('admin.projectRepos.tokenNotSet') }}
-                    </span>
-                  </td>
-                  <td class="py-3 pr-4">
+                  <td class="project-access-cell py-3 pr-4" :data-label="t('admin.projectRepos.colAccessStatus')">
+                    <div class="project-access-stack">
                     <span class="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-1 text-xs font-semibold text-indigo-700">
                       <Users :size="13" />
                       {{ t('admin.projectRepos.memberCount', { count: repo.member_count ?? 0 }) }}
                     </span>
-                  </td>
-                  <td class="py-3 pr-4">
                     <span
                       class="inline-flex rounded-full px-2 py-1 text-xs font-semibold"
                       :class="repo.enabled ? 'bg-cyan-50 text-cyan-700' : 'bg-slate-100 text-slate-500'"
                     >
                       {{ repo.enabled ? t('admin.projectRepos.statusEnabled') : t('admin.projectRepos.statusDisabled') }}
                     </span>
+                    </div>
                   </td>
-                  <td class="py-3 pr-4 whitespace-nowrap text-xs text-slate-400">{{ formatTimestamp(repo.updated_at) }}</td>
-                  <td class="py-3 pr-5">
-                    <div class="flex justify-end gap-2">
+                  <td class="project-updated-cell py-3 pr-4 text-xs text-slate-400" :data-label="t('admin.projectRepos.colUpdatedAt')">
+                    {{ formatTimestamp(repo.updated_at) }}
+                  </td>
+                  <td class="project-actions-cell py-3 pr-5" :data-label="t('admin.projectRepos.colActions')">
+                    <div class="project-table-actions">
                       <button
-                        class="admin-action-btn"
+                        class="admin-action-btn project-action-btn"
                         :title="t('admin.projectRepos.tooltipSkills')"
                         @click="router.push(`/admin/project-repos/${repo.project_code}/skills`)"
                       >
                         <FolderTree :size="15" />
                       </button>
-                      <button v-if="isGlobalAdmin" class="admin-action-btn" :title="t('admin.projectRepos.tooltipMembers')" @click="openMemberDialog(repo)">
+                      <button v-if="isGlobalAdmin" class="admin-action-btn project-action-btn" :title="t('admin.projectRepos.tooltipMembers')" @click="openMemberDialog(repo)">
                         <Users :size="15" />
                       </button>
                       <button
                         v-if="(repo.has_repo ?? !!repo.repo_url)"
-                        class="admin-action-btn"
+                        class="admin-action-btn project-action-btn"
                         :disabled="testingId === repo.id"
                         :title="t('admin.projectRepos.tooltipTestConn')"
                         @click="testConnection(repo)"
                       >
                         <PlugZap :size="15" />
                       </button>
-                      <button class="admin-action-btn" :title="t('common.edit')" @click="openEditDialog(repo)">
+                      <button class="admin-action-btn project-action-btn" :title="t('common.edit')" @click="openEditDialog(repo)">
                         <Pencil :size="15" />
                       </button>
                       <button
                         v-if="isGlobalAdmin"
-                        class="admin-action-btn danger"
+                        class="admin-action-btn project-action-btn danger"
                         :disabled="deletingId === repo.id"
                         :title="t('common.delete')"
                         @click="deleteRepo(repo)"
@@ -794,164 +793,294 @@ watch(
     </main>
 
     <div v-if="dialogVisible" class="admin-modal-backdrop">
-      <div class="admin-modal-card repo-modal" @click.stop>
-        <div class="mb-5 flex items-start justify-between gap-4">
-          <div>
-            <h3 class="text-base font-semibold text-slate-900">
-              {{ dialogMode === 'create' ? t('admin.projectRepos.dialogCreateTitle') : t('admin.projectRepos.dialogEditTitle') }}
-            </h3>
-            <p class="mt-0.5 text-sm text-slate-500">{{ t('admin.projectRepos.tokenHintEdit') }}</p>
+      <div
+        class="admin-modal-card repo-modal"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="dialogMode === 'create' ? t('admin.projectRepos.dialogCreateTitle') : t('admin.projectRepos.dialogEditTitle')"
+        @click.stop="activeHelp = null"
+        @keydown.esc="activeHelp = null"
+      >
+        <header class="repo-modal-header">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2.5">
+              <span class="repo-modal-mark"><FolderTree :size="17" /></span>
+              <h3 class="truncate text-base font-semibold text-slate-900">
+                {{ dialogMode === 'create' ? t('admin.projectRepos.dialogCreateTitle') : t('admin.projectRepos.dialogEditTitle') }}
+              </h3>
+            </div>
           </div>
-          <button class="admin-close-btn" :disabled="savingRepo" :title="t('admin.projectRepos.tooltipClose')" @click="closeDialog">
+          <button class="admin-close-btn shrink-0" :disabled="savingRepo" :title="t('admin.projectRepos.tooltipClose')" @click="closeDialog">
             <X :size="17" />
           </button>
-        </div>
+        </header>
 
-        <div class="grid gap-4 md:grid-cols-2">
-          <label class="block">
-            <span class="text-sm font-medium text-slate-700">Project Code <span class="text-rose-500">*</span></span>
-            <input
-              v-model="repoForm.project_code"
-              type="text"
-              class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none disabled:bg-slate-50 disabled:text-slate-400"
-              placeholder="oam_antenna"
-              :disabled="dialogMode === 'edit'"
-              spellcheck="false"
-            />
-          </label>
-          <label class="block">
-            <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldProjectName') }} <span class="text-rose-500">*</span></span>
-            <input
-              v-model="repoForm.project_name"
-              type="text"
-              class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-              placeholder="OAM Antenna"
-            />
-          </label>
-          <div class="md:col-span-2 flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-            <div>
-              <p class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.associateRepoLabel') }}</p>
-              <p class="text-xs text-slate-400">{{ t('admin.projectRepos.associateRepoHint') }}</p>
-            </div>
-            <label class="relative inline-flex cursor-pointer items-center">
-              <input v-model="repoForm.associate_repo" type="checkbox" class="peer sr-only" />
-              <span class="h-6 w-11 rounded-full bg-slate-300 transition peer-checked:bg-cyan-500"></span>
-              <span class="absolute left-0.5 h-5 w-5 rounded-full bg-white shadow transition peer-checked:translate-x-5"></span>
-            </label>
-          </div>
-          <div v-if="isGlobalAdmin" class="md:col-span-2 rounded-lg border border-slate-200 bg-white px-3 py-3">
-            <div class="mb-3 flex items-start gap-2">
-              <Bot :size="17" class="mt-0.5 text-cyan-600" />
-              <div>
-                <p class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.agentSelectLabel') }}</p>
-                <p class="text-xs text-slate-400">{{ t('admin.projectRepos.agentSelectHint') }}</p>
+        <div class="repo-modal-body">
+          <div class="repo-modal-grid">
+            <section class="repo-modal-section repo-project-section">
+              <div class="repo-section-heading">
+                <span class="repo-section-index">01</span>
+                <div class="min-w-0 flex-1">
+                  <div class="repo-section-title-line">
+                    <h4>{{ t('admin.projectRepos.projectSectionTitle') }}</h4>
+                    <div class="repo-help">
+                      <span class="repo-help-node"><Users :size="12" />{{ t('admin.projectRepos.colMembers') }}</span>
+                      <button
+                        type="button"
+                        class="repo-help-trigger"
+                        :class="{ 'is-active': activeHelp === 'members' }"
+                        :aria-label="t('admin.projectRepos.helpAriaLabel', { label: t('admin.projectRepos.colMembers') })"
+                        :aria-expanded="activeHelp === 'members'"
+                        aria-controls="repo-help-members"
+                        @click.stop="toggleHelp('members')"
+                      >
+                        <CircleHelp :size="14" />
+                      </button>
+                      <Transition name="repo-help-popover">
+                        <div v-if="activeHelp === 'members'" id="repo-help-members" class="repo-help-popover" role="dialog" @click.stop>
+                          <strong>{{ t('admin.projectRepos.colMembers') }}</strong>
+                          <p>{{ t('admin.projectRepos.memberHint') }}</p>
+                        </div>
+                      </Transition>
+                    </div>
+                  </div>
+                  <p>{{ t('admin.projectRepos.projectSectionHint') }}</p>
+                </div>
               </div>
-            </div>
-            <div v-if="loadingProjectAgents" class="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-400">
-              {{ t('admin.projectRepos.loadingAgents') }}
-            </div>
-            <div v-else class="grid gap-2 md:grid-cols-3">
-              <label
-                v-for="agent in projectAgents"
-                :key="agent.key"
-                class="flex min-h-[92px] cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-sm transition"
-                :class="[
-                  repoForm.enabled_agent_keys.includes(agent.key)
-                    ? 'border-cyan-300 bg-cyan-50 text-cyan-900'
-                    : 'border-slate-200 bg-slate-50 text-slate-600',
-                  agent.requires_repo && !repoForm.associate_repo ? 'cursor-not-allowed opacity-55' : 'hover:border-cyan-200 hover:bg-cyan-50/60'
-                ]"
-              >
-                <input
-                  type="checkbox"
-                  class="mt-0.5 h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
-                  :checked="repoForm.enabled_agent_keys.includes(agent.key)"
-                  :disabled="agent.requires_repo && !repoForm.associate_repo"
-                  @change="toggleProjectAgent(agent.key)"
+
+              <div class="repo-field-grid">
+                <div class="block">
+                  <div class="repo-field-label">
+                    <label for="repo-project-code">Project Code <span class="text-rose-500">*</span></label>
+                    <div class="repo-help">
+                      <button
+                        type="button"
+                        class="repo-help-trigger"
+                        :class="{ 'is-active': activeHelp === 'projectCode' }"
+                        :aria-label="t('admin.projectRepos.helpAriaLabel', { label: 'Project Code' })"
+                        :aria-expanded="activeHelp === 'projectCode'"
+                        aria-controls="repo-help-project-code"
+                        @click.stop="toggleHelp('projectCode')"
+                      >
+                        <CircleHelp :size="14" />
+                      </button>
+                      <Transition name="repo-help-popover">
+                        <div v-if="activeHelp === 'projectCode'" id="repo-help-project-code" class="repo-help-popover" role="dialog" @click.stop>
+                          <strong>Project Code</strong>
+                          <p>{{ t('admin.projectRepos.projectCodeHint') }}</p>
+                        </div>
+                      </Transition>
+                    </div>
+                  </div>
+                  <input
+                    id="repo-project-code"
+                    v-model="repoForm.project_code"
+                    type="text"
+                    class="repo-input font-mono disabled:bg-slate-50 disabled:text-slate-400"
+                    placeholder="oam_antenna"
+                    :disabled="dialogMode === 'edit'"
+                    spellcheck="false"
+                  />
+                </div>
+                <label class="block">
+                  <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldProjectName') }} <span class="text-rose-500">*</span></span>
+                  <input
+                    v-model="repoForm.project_name"
+                    type="text"
+                    class="repo-input"
+                    placeholder="OAM Antenna"
+                  />
+                </label>
+              </div>
+
+              <label class="block">
+                <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldProjectCard') }} <span class="text-rose-500">*</span></span>
+                <textarea
+                  v-model="repoForm.project_card"
+                  rows="5"
+                  maxlength="4000"
+                  class="repo-input repo-card-textarea resize-none"
+                  :placeholder="t('admin.projectRepos.projectCardPlaceholder')"
                 />
-                <span class="min-w-0">
-                  <span class="block font-semibold">{{ agent.display_name }}</span>
-                  <span class="mt-1 block text-xs leading-5 text-slate-500">{{ agent.description }}</span>
-                  <span v-if="agent.requires_repo" class="mt-1 inline-flex rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-500">
-                    {{ t('admin.projectRepos.agentRequiresRepo') }}
-                  </span>
-                </span>
+                <span class="mt-1.5 block text-xs leading-5 text-slate-400">{{ t('admin.projectRepos.projectCardHint') }}</span>
               </label>
-            </div>
+
+              <div v-if="isGlobalAdmin" class="repo-toggle-card repo-project-status">
+                <div>
+                  <p class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.enableRepoLabel') }}</p>
+                  <p class="mt-0.5 text-xs leading-5 text-slate-400">{{ t('admin.projectRepos.enableRepoHint') }}</p>
+                </div>
+                <label class="relative inline-flex shrink-0 cursor-pointer items-center">
+                  <input v-model="repoForm.enabled" type="checkbox" class="peer sr-only" />
+                  <span class="h-6 w-11 rounded-full bg-slate-300 transition peer-checked:bg-cyan-500"></span>
+                  <span class="absolute left-0.5 h-5 w-5 rounded-full bg-white shadow transition peer-checked:translate-x-5"></span>
+                </label>
+              </div>
+            </section>
+
+            <section class="repo-modal-section repo-integration-section">
+              <div class="repo-section-heading">
+                <span class="repo-section-index">02</span>
+                <div class="min-w-0 flex-1">
+                  <div class="repo-section-title-line">
+                    <h4>{{ t('admin.projectRepos.integrationSectionTitle') }}</h4>
+                    <div class="repo-help is-end">
+                      <span class="repo-help-node"><PlugZap :size="12" />{{ t('admin.projectRepos.connectivityLabel') }}</span>
+                      <button
+                        type="button"
+                        class="repo-help-trigger"
+                        :class="{ 'is-active': activeHelp === 'connectivity' }"
+                        :aria-label="t('admin.projectRepos.helpAriaLabel', { label: t('admin.projectRepos.connectivityLabel') })"
+                        :aria-expanded="activeHelp === 'connectivity'"
+                        aria-controls="repo-help-connectivity"
+                        @click.stop="toggleHelp('connectivity')"
+                      >
+                        <CircleHelp :size="14" />
+                      </button>
+                      <Transition name="repo-help-popover">
+                        <div v-if="activeHelp === 'connectivity'" id="repo-help-connectivity" class="repo-help-popover" role="dialog" @click.stop>
+                          <strong>{{ t('admin.projectRepos.connectivityLabel') }}</strong>
+                          <p>{{ t('admin.projectRepos.connectionHint') }}</p>
+                        </div>
+                      </Transition>
+                    </div>
+                  </div>
+                  <p>{{ t('admin.projectRepos.integrationSectionHint') }}</p>
+                </div>
+              </div>
+
+              <div class="repo-toggle-card">
+                <div>
+                  <p class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.associateRepoLabel') }}</p>
+                  <p class="mt-0.5 text-xs leading-5 text-slate-400">{{ t('admin.projectRepos.associateRepoHint') }}</p>
+                </div>
+                <label class="relative inline-flex shrink-0 cursor-pointer items-center">
+                  <input v-model="repoForm.associate_repo" type="checkbox" class="peer sr-only" />
+                  <span class="h-6 w-11 rounded-full bg-slate-300 transition peer-checked:bg-cyan-500"></span>
+                  <span class="absolute left-0.5 h-5 w-5 rounded-full bg-white shadow transition peer-checked:translate-x-5"></span>
+                </label>
+              </div>
+
+              <template v-if="repoForm.associate_repo">
+                <label class="block">
+                  <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldRepoUrl') }} <span class="text-rose-500">*</span></span>
+                  <input
+                    v-model="repoForm.repo_url"
+                    type="url"
+                    class="repo-input font-mono"
+                    placeholder="https://gitlab.example.com/group/project.git"
+                    spellcheck="false"
+                  />
+                </label>
+                <div class="repo-field-grid">
+                  <label class="block">
+                    <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldBranch') }}</span>
+                    <input
+                      v-model="repoForm.default_branch"
+                      type="text"
+                      class="repo-input font-mono"
+                      placeholder="main"
+                      spellcheck="false"
+                    />
+                  </label>
+                  <div v-if="isGlobalAdmin" class="block">
+                    <div class="repo-field-label">
+                      <label for="repo-git-token">{{ t('admin.projectRepos.fieldToken') }}</label>
+                      <div class="repo-help is-end">
+                        <button
+                          type="button"
+                          class="repo-help-trigger"
+                          :class="{ 'is-active': activeHelp === 'token' }"
+                          :aria-label="t('admin.projectRepos.helpAriaLabel', { label: t('admin.projectRepos.fieldToken') })"
+                          :aria-expanded="activeHelp === 'token'"
+                          aria-controls="repo-help-token"
+                          @click.stop="toggleHelp('token')"
+                        >
+                          <CircleHelp :size="14" />
+                        </button>
+                        <Transition name="repo-help-popover">
+                          <div v-if="activeHelp === 'token'" id="repo-help-token" class="repo-help-popover" role="dialog" @click.stop>
+                            <strong>{{ t('admin.projectRepos.fieldToken') }}</strong>
+                            <p>{{ t('admin.projectRepos.tokenHint') }}</p>
+                            <p class="repo-help-note">{{ t('admin.projectRepos.tokenHintEdit') }}</p>
+                          </div>
+                        </Transition>
+                      </div>
+                    </div>
+                    <input
+                      id="repo-git-token"
+                      v-model="repoForm.git_token"
+                      type="password"
+                      autocomplete="new-password"
+                      class="repo-input font-mono"
+                      :placeholder="dialogMode === 'edit' ? t('admin.projectRepos.tokenPlaceholderEdit') : t('admin.projectRepos.tokenPlaceholderCreate')"
+                    />
+                  </div>
+                </div>
+              </template>
+              <p v-else class="rounded-xl border border-dashed border-amber-200 bg-amber-50/70 px-3 py-2.5 text-xs leading-5 text-amber-800">
+                {{ t('admin.projectRepos.noRepoNotice') }}
+              </p>
+
+              <div v-if="isGlobalAdmin" class="repo-agent-panel">
+                <div class="repo-agent-heading">
+                  <Bot :size="17" class="mt-0.5 shrink-0 text-cyan-600" />
+                  <div>
+                    <p class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.agentSelectLabel') }}</p>
+                    <p class="mt-0.5 text-xs leading-5 text-slate-400">{{ t('admin.projectRepos.agentSelectHint') }}</p>
+                  </div>
+                </div>
+                <div v-if="loadingProjectAgents" class="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-400">
+                  {{ t('admin.projectRepos.loadingAgents') }}
+                </div>
+                <div v-else class="repo-agent-grid">
+                  <label
+                    v-for="agent in projectAgents"
+                    :key="agent.key"
+                    class="repo-agent-card"
+                    :class="[
+                      repoForm.enabled_agent_keys.includes(agent.key) ? 'is-selected' : '',
+                      agent.requires_repo && !repoForm.associate_repo ? 'is-disabled' : ''
+                    ]"
+                  >
+                    <input
+                      type="checkbox"
+                      class="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500"
+                      :checked="repoForm.enabled_agent_keys.includes(agent.key)"
+                      :disabled="agent.requires_repo && !repoForm.associate_repo"
+                      @change="toggleProjectAgent(agent.key)"
+                    />
+                    <span class="min-w-0">
+                      <span class="block font-semibold leading-5">{{ agent.display_name }}</span>
+                      <span class="mt-1 block text-[11px] leading-4 text-slate-500">{{ agent.description }}</span>
+                      <span v-if="agent.requires_repo" class="mt-1.5 inline-flex rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                        {{ t('admin.projectRepos.agentRequiresRepo') }}
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+            </section>
           </div>
-          <label v-if="repoForm.associate_repo" class="block md:col-span-2">
-            <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldRepoUrl') }} <span class="text-rose-500">*</span></span>
-            <input
-              v-model="repoForm.repo_url"
-              type="url"
-              class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-              placeholder="https://gitlab.example.com/group/project.git"
-              spellcheck="false"
-            />
-          </label>
-          <label v-if="repoForm.associate_repo" class="block">
-            <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldBranch') }}</span>
-            <input
-              v-model="repoForm.default_branch"
-              type="text"
-              class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-              placeholder="main"
-              spellcheck="false"
-            />
-          </label>
-          <label v-if="repoForm.associate_repo && isGlobalAdmin" class="block">
-            <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldToken') }}</span>
-            <input
-              v-model="repoForm.git_token"
-              type="password"
-              autocomplete="new-password"
-              class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-              :placeholder="dialogMode === 'edit' ? t('admin.projectRepos.tokenPlaceholderEdit') : t('admin.projectRepos.tokenPlaceholderCreate')"
-            />
-          </label>
-          <p v-else class="md:col-span-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-500">
-            {{ t('admin.projectRepos.noRepoNotice') }}
-          </p>
-          <label class="block md:col-span-2">
-            <span class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.fieldDesc') }}</span>
-            <textarea
-              v-model="repoForm.description"
-              rows="3"
-              class="mt-1 w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-              :placeholder="t('admin.projectRepos.descPlaceholder')"
-            />
-          </label>
         </div>
 
-        <div v-if="isGlobalAdmin" class="mt-4 flex items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-          <div>
-            <p class="text-sm font-medium text-slate-700">{{ t('admin.projectRepos.enableRepoLabel') }}</p>
-            <p class="text-xs text-slate-400">{{ t('admin.projectRepos.enableRepoHint') }}</p>
-          </div>
-          <label class="relative inline-flex cursor-pointer items-center">
-            <input v-model="repoForm.enabled" type="checkbox" class="peer sr-only" />
-            <span class="h-6 w-11 rounded-full bg-slate-300 transition peer-checked:bg-cyan-500"></span>
-            <span class="absolute left-0.5 h-5 w-5 rounded-full bg-white shadow transition peer-checked:translate-x-5"></span>
-          </label>
-        </div>
-
-        <div class="mt-5 flex justify-end gap-2">
+        <footer class="repo-modal-footer">
           <button
-            class="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            class="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
             :disabled="savingRepo"
             @click="closeDialog"
           >
             {{ t('admin.projectRepos.cancelBtn') }}
           </button>
           <button
-            class="inline-flex items-center gap-1.5 rounded-lg bg-cyan-600 px-5 py-2 text-sm font-semibold text-white hover:bg-cyan-700 disabled:opacity-60"
+            class="inline-flex items-center gap-1.5 rounded-lg bg-cyan-600 px-5 py-2 text-sm font-semibold text-white shadow-sm shadow-cyan-600/20 hover:bg-cyan-700 disabled:opacity-60"
             :disabled="savingRepo"
             @click="submitRepo"
           >
             <Save :size="16" />
             {{ savingRepo ? t('admin.projectRepos.savingBtn') : t('admin.projectRepos.saveBtn') }}
           </button>
-        </div>
+        </footer>
       </div>
     </div>
 
@@ -1256,6 +1385,120 @@ watch(
   cursor: not-allowed;
 }
 
+.project-table-wrap,
+.project-table {
+  width: 100%;
+}
+
+.project-table-wrap {
+  overflow: hidden;
+}
+
+.project-table {
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.project-table-col-project {
+  width: 28%;
+}
+
+.project-table-col-repository {
+  width: 29%;
+}
+
+.project-table-col-access {
+  width: 13%;
+}
+
+.project-table-col-updated {
+  width: 12%;
+}
+
+.project-table-col-actions {
+  width: 18%;
+}
+
+.project-table th,
+.project-table td {
+  min-width: 0;
+  vertical-align: top;
+}
+
+.project-name,
+.project-test-result span {
+  overflow-wrap: anywhere;
+}
+
+.project-card-summary,
+.project-repo-url {
+  width: 100%;
+}
+
+.project-cell > div:last-child span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.project-repo-meta {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.project-repo-meta-item {
+  min-width: 0;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: 999px;
+  background: #f1f5f9;
+  padding: 0.25rem 0.5rem;
+  color: #64748b;
+  font-size: 0.68rem;
+  line-height: 1rem;
+}
+
+.project-repo-meta-item span {
+  flex: none;
+}
+
+.project-repo-meta-item code {
+  min-width: 0;
+  overflow: hidden;
+  color: #334155;
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-access-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+
+.project-updated-cell {
+  line-height: 1.15rem;
+  overflow-wrap: anywhere;
+}
+
+.project-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.375rem;
+}
+
+.project-action-btn {
+  width: 1.9rem;
+  height: 1.9rem;
+}
+
 .admin-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -1274,6 +1517,337 @@ watch(
   background: #ffffff;
   box-shadow: 0 20px 45px rgba(15, 23, 42, 0.25);
   padding: 1.25rem;
+}
+
+.repo-modal {
+  width: min(1180px, 100%);
+  max-height: calc(100dvh - 2rem);
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.repo-modal-header,
+.repo-modal-footer {
+  flex: none;
+  background: rgba(255, 255, 255, 0.97);
+}
+
+.repo-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.repo-modal-mark {
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 0.55rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #0e7490;
+  background: #cffafe;
+  border: 1px solid #a5f3fc;
+}
+
+.repo-modal-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 1rem;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(34, 211, 238, 0.08), transparent 30%),
+    #f8fafc;
+}
+
+.repo-modal-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.88fr) minmax(0, 1.12fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.repo-modal-section {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.9rem;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.repo-section-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding-bottom: 0.7rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.repo-section-heading h4 {
+  color: #0f172a;
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+}
+
+.repo-section-heading p {
+  margin-top: 0.1rem;
+  color: #94a3b8;
+  font-size: 0.7rem;
+  line-height: 1rem;
+}
+
+.repo-section-title-line,
+.repo-field-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.repo-section-title-line {
+  justify-content: space-between;
+}
+
+.repo-field-label {
+  min-height: 1.25rem;
+  color: #334155;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.repo-help {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: none;
+}
+
+.repo-help-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  color: #64748b;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1rem;
+}
+
+.repo-help-trigger {
+  width: 1.15rem;
+  height: 1.15rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #94a3b8;
+  transition: color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.repo-help-trigger:hover,
+.repo-help-trigger:focus-visible,
+.repo-help-trigger.is-active {
+  color: #0891b2;
+  background: #cffafe;
+  outline: none;
+}
+
+.repo-help-trigger:active {
+  transform: scale(0.92);
+}
+
+.repo-help-popover {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  left: 0;
+  z-index: 30;
+  width: min(19rem, calc(100vw - 3rem));
+  border: 1px solid #cbd5e1;
+  border-radius: 0.75rem;
+  background: #ffffff;
+  padding: 0.7rem 0.8rem;
+  color: #475569;
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.25rem;
+  text-align: left;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.16);
+}
+
+.repo-help.is-end .repo-help-popover {
+  right: 0;
+  left: auto;
+}
+
+.repo-help-popover::before {
+  position: absolute;
+  top: -0.3rem;
+  left: 0.45rem;
+  width: 0.55rem;
+  height: 0.55rem;
+  content: '';
+  border-top: 1px solid #cbd5e1;
+  border-left: 1px solid #cbd5e1;
+  background: #ffffff;
+  transform: rotate(45deg);
+}
+
+.repo-help.is-end .repo-help-popover::before {
+  right: 0.45rem;
+  left: auto;
+}
+
+.repo-help-popover strong {
+  display: block;
+  margin-bottom: 0.2rem;
+  color: #0f172a;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.repo-help-note {
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid #f1f5f9;
+  color: #64748b;
+}
+
+.repo-help-popover-enter-active,
+.repo-help-popover-leave-active {
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  transform-origin: top left;
+}
+
+.repo-help-popover-enter-from,
+.repo-help-popover-leave-to {
+  opacity: 0;
+  transform: translateY(-0.2rem) scale(0.98);
+}
+
+.repo-section-index {
+  flex: none;
+  color: #0891b2;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1.25rem;
+}
+
+.repo-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.repo-input {
+  width: 100%;
+  margin-top: 0.25rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.625rem;
+  background: #ffffff;
+  padding: 0.55rem 0.75rem;
+  color: #0f172a;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.repo-input:focus {
+  border-color: #06b6d4;
+  box-shadow: 0 0 0 3px rgba(207, 250, 254, 0.95);
+}
+
+.repo-card-textarea {
+  min-height: 7.65rem;
+}
+
+.repo-toggle-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  background: #f8fafc;
+  padding: 0.65rem 0.75rem;
+}
+
+.repo-project-status {
+  margin-top: auto;
+}
+
+.repo-agent-panel {
+  border-top: 1px solid #f1f5f9;
+  padding-top: 0.8rem;
+}
+
+.repo-agent-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.65rem;
+}
+
+.repo-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.repo-agent-card {
+  min-width: 0;
+  min-height: 6.4rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  cursor: pointer;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.7rem;
+  background: #f8fafc;
+  padding: 0.6rem;
+  color: #475569;
+  font-size: 0.75rem;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.repo-agent-card:hover {
+  border-color: #a5f3fc;
+  background: #ecfeff;
+}
+
+.repo-agent-card.is-selected {
+  border-color: #67e8f9;
+  background: #ecfeff;
+  color: #164e63;
+  box-shadow: inset 0 0 0 1px rgba(103, 232, 249, 0.35);
+}
+
+.repo-agent-card.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.repo-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.8rem 1.25rem;
+  border-top: 1px solid #e2e8f0;
+  box-shadow: 0 -8px 22px rgba(15, 23, 42, 0.04);
 }
 
 .member-modal {
@@ -1305,6 +1879,88 @@ watch(
   background: #f8fafc;
 }
 
+@media (max-width: 1180px) {
+  .project-table colgroup {
+    display: none;
+  }
+
+  .project-table,
+  .project-table tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .project-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .project-table-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+    grid-template-areas:
+      'project repository'
+      'access updated'
+      'actions actions';
+    gap: 1rem 1.25rem;
+    padding: 1rem 1.1rem;
+  }
+
+  .project-table-row > td {
+    padding: 0;
+  }
+
+  .project-table-row > td::before {
+    display: block;
+    margin-bottom: 0.4rem;
+    color: #94a3b8;
+    content: attr(data-label);
+    font-size: 0.64rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    line-height: 1rem;
+    text-transform: uppercase;
+  }
+
+  .project-cell {
+    grid-area: project;
+  }
+
+  .project-repository-cell {
+    grid-area: repository;
+  }
+
+  .project-access-cell {
+    grid-area: access;
+  }
+
+  .project-updated-cell {
+    grid-area: updated;
+  }
+
+  .project-actions-cell {
+    grid-area: actions;
+    padding-top: 0.75rem !important;
+    border-top: 1px solid #f1f5f9;
+  }
+
+  .project-access-stack {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .project-table-actions {
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 1024px) {
   .admin-topbar-inner {
     padding: 0 0.75rem;
@@ -1312,6 +1968,10 @@ watch(
 
   .admin-topbar-right span {
     display: none;
+  }
+
+  .repo-modal-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1348,9 +2008,68 @@ watch(
     display: none;
   }
 
+  .admin-modal-backdrop {
+    padding: 0.5rem;
+  }
+
   .repo-modal {
-    max-height: 90vh;
-    overflow-y: auto;
+    max-height: calc(100dvh - 1rem);
+  }
+
+  .repo-modal-header,
+  .repo-modal-footer {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .repo-modal-body {
+    padding: 0.75rem;
+  }
+
+  .repo-field-grid,
+  .repo-agent-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .project-table-row {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'project'
+      'repository'
+      'access'
+      'updated'
+      'actions';
+    gap: 0.9rem;
+    padding: 0.9rem;
+  }
+}
+
+@media (max-height: 800px) and (min-width: 1025px) {
+  .repo-modal-header {
+    padding-top: 0.75rem;
+    padding-bottom: 0.75rem;
+  }
+
+  .repo-modal-body {
+    padding: 0.75rem;
+  }
+
+  .repo-modal-grid,
+  .repo-modal-section {
+    gap: 0.75rem;
+  }
+
+  .repo-modal-section {
+    padding: 0.85rem;
+  }
+
+  .repo-card-textarea {
+    min-height: 6.25rem;
+  }
+
+  .repo-modal-footer {
+    padding-top: 0.65rem;
+    padding-bottom: 0.65rem;
   }
 }
 </style>

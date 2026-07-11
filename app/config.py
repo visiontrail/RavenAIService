@@ -96,6 +96,7 @@ class Settings(BaseSettings):
     anthropic_max_history_turns: int = 10
     anthropic_small_fast_max_tokens: int = 1024
     anthropic_small_fast_request_timeout_seconds: int = 30
+    general_agent_max_turns: int = 6
     ai_analysis_max_extract_bytes: int = 2 * 1024 * 1024 * 1024  # 2 GiB
 
     # Bug Fix Coding Agent（分析判定需要代码修复时自动派发的写入型 Agent）

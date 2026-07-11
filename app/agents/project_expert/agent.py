@@ -58,11 +58,16 @@ from app.agents.log_analysis.agent import (
     extract_recoverable_result_fields,
 )
 from app.agents.project_expert.workspace import WorkspaceContext
+from app.agents.log_analysis.mcp_tools import (
+    PROJECT_DISCOVERY_MCP_TOOL,
+    PROJECT_REPO_LOOKUP_MCP_TOOL,
+    build_project_fit_guidance,
+)
 
 logger = logging.getLogger(__name__)
 
 
-PROJECT_REPO_MCP_TOOL = "mcp__project_repo__lookup_project_repo"
+PROJECT_REPO_MCP_TOOL = PROJECT_REPO_LOOKUP_MCP_TOOL
 
 ALLOWED_TOOLS = [
     "Bash",
@@ -70,6 +75,7 @@ ALLOWED_TOOLS = [
     "Grep",
     "Glob",
     "Skill",  # 允许模型调用通过 setting_sources 加载的用户自定义 Skill
+    PROJECT_DISCOVERY_MCP_TOOL,
     PROJECT_REPO_MCP_TOOL,
 ]
 
@@ -172,11 +178,13 @@ class ProjectExpertAgent:
             from app.agents.log_analysis.mcp_tools import get_mcp_server
             mcp_servers = {"project_repo": get_mcp_server()}
         else:
-            allowed_tools = [name for name in allowed_tools if name != PROJECT_REPO_MCP_TOOL]
+            allowed_tools = [
+                name for name in allowed_tools if not name.startswith("mcp__")
+            ]
             system_prompt += (
                 "\n\n## 运行时约束\n"
                 f"当前 provider `{provider}` 不支持 MCP server 工具。"
-                "本次运行中 `mcp__project_repo__lookup_project_repo` 不可用。"
+                "本次运行中项目目录和仓库查询 MCP 工具不可用。"
                 "请直接使用 `task.json` 中 `repo_info.repo_url` 克隆仓库。"
             )
             logger.info(
@@ -191,10 +199,12 @@ class ProjectExpertAgent:
         repo_info = task_data.get("repo_info") if isinstance(task_data, dict) else None
         project_code: Optional[str] = None
         project_name: Optional[str] = None
+        project_card: Optional[str] = None
         repo_url_value: Optional[str] = None
         if isinstance(repo_info, dict):
             project_code = repo_info.get("project_code") or None
             project_name = repo_info.get("project_name") or None
+            project_card = repo_info.get("project_card") or None
             repo_url_value = repo_info.get("repo_url") or None
 
         # 「未关联代码仓库」的项目：repo_url 为空。此时不要尝试克隆仓库，
@@ -256,6 +266,15 @@ class ProjectExpertAgent:
             )
             system_prompt += skill_availability_prompt
             user_prompt += skill_availability_prompt
+
+        system_prompt += build_project_fit_guidance(
+            workflow_name="项目专家",
+            project_name=project_name,
+            project_code=project_code,
+            project_card=project_card,
+            catalog_available=supports_mcp,
+            switch_instruction="当前会话已绑定项目，必须请用户新建会话并选择该匹配项目。",
+        )
 
         setting_sources = ["project"] if materialized_skills else None
 

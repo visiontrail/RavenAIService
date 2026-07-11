@@ -16,7 +16,7 @@ def _make_repo(**kwargs):
         repo_url="https://gitlab.example/foo.git",
         default_branch="main",
         git_token="secret-token",
-        description=None,
+        project_card="Foo project scope and supported questions",
         enabled=True,
         created_at=datetime(2026, 1, 1),
         updated_at=datetime(2026, 1, 1),
@@ -88,6 +88,79 @@ class TestHasRepo:
         assert has_repo(None) is False
 
 
+class TestProjectCard:
+    def test_normalize_trims_and_rejects_blank_or_oversized(self):
+        from app.services.project_repo_service import (
+            PROJECT_CARD_MAX_LENGTH,
+            normalize_project_card,
+        )
+
+        assert normalize_project_card("  Foo scope  ") == "Foo scope"
+        with pytest.raises(ValueError, match="请填写项目卡片"):
+            normalize_project_card("   ")
+        with pytest.raises(ValueError, match="不能超过"):
+            normalize_project_card("x" * (PROJECT_CARD_MAX_LENGTH + 1))
+
+    @pytest.mark.asyncio
+    async def test_update_cannot_clear_project_card(self, mock_db):
+        from app.services.project_repo_service import update
+
+        repo = _make_repo(project_card="Original project scope")
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        with pytest.raises(ValueError, match="请填写项目卡片"):
+            await update(mock_db, repo, project_card="   ")
+        assert repo.project_card == "Original project scope"
+
+
+class TestProjectDiscovery:
+    @pytest.mark.asyncio
+    async def test_catalog_is_bounded_enabled_and_safe(self, mock_db):
+        from app.services.project_repo_service import discover_projects
+
+        visible = _make_repo(
+            id=7,
+            project_code="foo",
+            project_name="Foo",
+            project_card="Foo authentication and account APIs",
+            repo_url="https://git.example/foo.git",
+            git_token="super-secret",
+        )
+        with patch(
+            "app.services.project_repo_service.list_repos",
+            new=AsyncMock(return_value=[visible]),
+        ) as list_repos, patch(
+            "app.services.project_repo_service.list_agent_keys_bulk",
+            new=AsyncMock(return_value={7: ["project_expert", "log_analysis"]}),
+        ):
+            payload = await discover_projects(mock_db)
+
+        list_repos.assert_awaited_once_with(
+            mock_db,
+            include_disabled=False,
+            offset=0,
+            limit=501,
+        )
+        assert payload == {
+            "projects": [
+                {
+                    "id": 7,
+                    "project_code": "foo",
+                    "project_name": "Foo",
+                    "project_card": "Foo authentication and account APIs",
+                    "has_repo": True,
+                    "enabled_agent_keys": ["project_expert", "log_analysis"],
+                }
+            ],
+            "count": 1,
+            "truncated": False,
+        }
+        serialized = str(payload)
+        for sensitive in ("repo_url", "clone_url", "git_token", "super-secret"):
+            assert sensitive not in serialized
+
+
 class TestProjectAgents:
     def test_default_agents_depend_on_repo_url(self):
         from app.services.project_repo_service import default_agent_keys_for_repo
@@ -126,6 +199,7 @@ class TestCreateRepoless:
             mock_db,
             project_code="bar",
             project_name="Bar",
+            project_card="Bar project scope",
             repo_url=None,
             git_token="should-be-dropped",
         )
@@ -151,12 +225,14 @@ class TestCreate:
                 mock_db,
                 project_code="  FOO  ",
                 project_name="Foo",
+                project_card="Foo project scope",
                 repo_url="https://gitlab.example/foo.git",
             )
         # project_code should be normalized
         MockRepo.assert_called_once()
         call_kwargs = MockRepo.call_args[1]
         assert call_kwargs["project_code"] == "foo"
+        assert call_kwargs["project_card"] == "Foo project scope"
 
 
 class TestUpdate:

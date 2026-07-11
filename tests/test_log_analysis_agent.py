@@ -416,6 +416,9 @@ class TestLogAnalysisAgentRun:
         kwargs = mock_build_options.call_args.kwargs
         assert kwargs["mcp_servers"] is not None
         assert "mcp__project_repo__lookup_project_repo" in kwargs["allowed_tools"]
+        assert "mcp__project_repo__discover_projects" in kwargs["allowed_tools"]
+        assert "项目适配性检查（最高优先级）" in kwargs["system_prompt"]
+        assert "当前系统还没有适合回答这个问题的项目" in kwargs["system_prompt"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("locale", ["en", "zh"])

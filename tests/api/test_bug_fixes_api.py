@@ -46,10 +46,10 @@ def client(tmp_path) -> TestClient:
             await conn.run_sync(Base.metadata.create_all)
         async with factory() as session:
             proj_a = ProjectRepo(
-                project_code="proj_a", project_name="Project A", repo_url="", enabled=True
+                project_code="proj_a", project_name="Project A", project_card="Project A", repo_url="", enabled=True
             )
             proj_b = ProjectRepo(
-                project_code="proj_b", project_name="Project B", repo_url="", enabled=True
+                project_code="proj_b", project_name="Project B", project_card="Project B", repo_url="", enabled=True
             )
             session.add_all([proj_a, proj_b])
 

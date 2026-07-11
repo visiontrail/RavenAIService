@@ -762,6 +762,7 @@ class ProjectExpertChatService:
             "project_repo_id": getattr(repo, "id", None),
             "project_code": getattr(repo, "project_code", None),
             "project_name": getattr(repo, "project_name", None),
+            "project_card": getattr(repo, "project_card", None),
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
         }
@@ -931,6 +932,7 @@ class ProjectExpertChatService:
                 "repo_info": {
                     "project_code": meta.get("project_code"),
                     "project_name": meta.get("project_name"),
+                    "project_card": meta.get("project_card"),
                     "source": "user_selected_project_repo",
                 },
             },

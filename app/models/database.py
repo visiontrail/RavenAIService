@@ -130,6 +130,134 @@ class DatabaseManager:
         "log_records": ("log_type",),
     }
 
+    _PROJECT_CARD_INSERT_TRIGGER = "trg_project_repo_project_card_required_insert"
+    _PROJECT_CARD_UPDATE_TRIGGER = "trg_project_repo_project_card_required_update"
+
+    @classmethod
+    def _ensure_sqlite_project_card_triggers(cls, conn) -> None:
+        """Enforce a non-null/non-blank project card without rebuilding the table.
+
+        Rebuilding ``project_repo`` while SQLite foreign keys are enabled causes
+        ON DELETE CASCADE on referencing tables. In-place rename plus triggers
+        preserves all rows and provides the same write-time invariant.
+        """
+        conn.execute(
+            text(
+                f"CREATE TRIGGER IF NOT EXISTS {cls._PROJECT_CARD_INSERT_TRIGGER} "
+                "BEFORE INSERT ON project_repo "
+                "FOR EACH ROW WHEN NEW.project_card IS NULL OR TRIM(NEW.project_card) = '' "
+                "BEGIN SELECT RAISE(ABORT, 'project_card is required'); END"
+            )
+        )
+        conn.execute(
+            text(
+                f"CREATE TRIGGER IF NOT EXISTS {cls._PROJECT_CARD_UPDATE_TRIGGER} "
+                "BEFORE UPDATE OF project_card ON project_repo "
+                "FOR EACH ROW WHEN NEW.project_card IS NULL OR TRIM(NEW.project_card) = '' "
+                "BEGIN SELECT RAISE(ABORT, 'project_card is required'); END"
+            )
+        )
+
+    @classmethod
+    def _sync_project_card_column(cls, conn, op) -> None:
+        """Idempotently upgrade legacy ``project_repo.description`` in runtime sync.
+
+        Deployments currently call ``create_all`` + this schema synchronizer on
+        startup instead of guaranteeing ``alembic upgrade``.  A NOT NULL rename
+        therefore needs an explicit data-preserving path here as well as the
+        formal Alembic revision.
+        """
+        inspector = inspect(conn)
+        if "project_repo" not in set(inspector.get_table_names()):
+            return
+
+        columns = {column["name"]: column for column in inspector.get_columns("project_repo")}
+        is_sqlite = conn.dialect.name == "sqlite"
+        has_description = "description" in columns
+        has_project_card = "project_card" in columns
+        if not has_description and not has_project_card:
+            return
+
+        fallback = (
+            "'历史项目「' || project_name || '」（' || project_code || "
+            "'）的项目范围尚未补充，请管理员完善项目卡片后再据此匹配问题。'"
+        )
+
+        if has_description and not has_project_card:
+            conn.execute(
+                text(
+                    "UPDATE project_repo SET description = " + fallback +
+                    " WHERE description IS NULL OR TRIM(description) = ''"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE project_repo SET description = TRIM(description) "
+                    "WHERE description IS NOT NULL"
+                )
+            )
+            if is_sqlite:
+                conn.execute(
+                    text(
+                        "ALTER TABLE project_repo "
+                        "RENAME COLUMN description TO project_card"
+                    )
+                )
+                cls._ensure_sqlite_project_card_triggers(conn)
+            else:
+                with op.batch_alter_table("project_repo") as batch_op:
+                    batch_op.alter_column(
+                        "description",
+                        new_column_name="project_card",
+                        existing_type=Text(),
+                        existing_nullable=True,
+                        nullable=False,
+                    )
+            logger.info("已将 project_repo.description 迁移为必填 project_card")
+            return
+
+        # A partially upgraded database may contain both columns or a nullable
+        # project_card. Merge legacy text first, then enforce the final shape.
+        if has_description:
+            conn.execute(
+                text(
+                    "UPDATE project_repo SET project_card = description "
+                    "WHERE (project_card IS NULL OR TRIM(project_card) = '') "
+                    "AND description IS NOT NULL AND TRIM(description) <> ''"
+                )
+            )
+        conn.execute(
+            text(
+                "UPDATE project_repo SET project_card = " + fallback +
+                " WHERE project_card IS NULL OR TRIM(project_card) = ''"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE project_repo SET project_card = TRIM(project_card) "
+                "WHERE project_card IS NOT NULL"
+            )
+        )
+        needs_not_null = bool(columns["project_card"].get("nullable", True))
+        if is_sqlite:
+            if has_description:
+                conn.execute(text("ALTER TABLE project_repo DROP COLUMN description"))
+            cls._ensure_sqlite_project_card_triggers(conn)
+            if has_description or needs_not_null:
+                logger.info("已完成 SQLite project_repo.project_card 非空约束同步")
+        elif has_description or needs_not_null:
+            with op.batch_alter_table("project_repo") as batch_op:
+                if has_description:
+                    batch_op.drop_column("description")
+                if needs_not_null:
+                    batch_op.alter_column(
+                        "project_card",
+                        existing_type=Text(),
+                        existing_nullable=True,
+                        nullable=False,
+                    )
+            logger.info("已完成 project_repo.project_card 约束同步")
+
     @classmethod
     def _sync_columns_from_models(cls, conn) -> None:
         """自动将已存在表的列结构同步到 ORM 模型定义。
@@ -146,9 +274,13 @@ class DatabaseManager:
         from alembic.migration import MigrationContext
         from alembic.operations import Operations
 
+        op = Operations(MigrationContext.configure(conn))
+        cls._sync_project_card_column(conn, op)
+
+        # The explicit rename/batch operation above invalidates reflection
+        # state, so create a fresh inspector before generic column sync.
         inspector = inspect(conn)
         existing_tables = set(inspector.get_table_names())
-        op = Operations(MigrationContext.configure(conn))
 
         # 1) 依据模型自动补齐缺失列
         for table in Base.metadata.sorted_tables:

@@ -97,6 +97,7 @@ def prepare(
         repo_info = {
             "project_code": getattr(project_repo, "project_code", None),
             "project_name": getattr(project_repo, "project_name", None),
+            "project_card": getattr(project_repo, "project_card", None),
             "repo_url": getattr(project_repo, "repo_url", None),
             "default_branch": getattr(project_repo, "default_branch", None),
             "source": "user_selected_project_repo",

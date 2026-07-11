@@ -303,7 +303,7 @@ export interface ProjectRepo {
   git_token_set: boolean
   has_repo?: boolean
   enabled_agent_keys?: string[]
-  description?: string | null
+  project_card: string
   enabled: boolean
   member_count?: number
   created_at: string
@@ -332,7 +332,7 @@ export interface ProjectRepoPayload {
   repo_url?: string
   default_branch?: string
   git_token?: string | null
-  description?: string | null
+  project_card?: string
   enabled?: boolean
   enabled_agent_keys?: string[]
 }

@@ -15,6 +15,7 @@ const DEFAULT_TOOL_DISPLAY_NAMES: Record<string, string> = {
   WebFetch: i18n.global.t('tools.WebFetch'),
   WebSearch: i18n.global.t('tools.WebSearch'),
   mcp__project_repo__lookup_project_repo: i18n.global.t('tools.ProjectRepo'),
+  mcp__project_repo__discover_projects: i18n.global.t('tools.ProjectDiscovery'),
 }
 
 export type ToolNameMap = Record<string, string>

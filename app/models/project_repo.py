@@ -39,7 +39,11 @@ class ProjectRepo(Base, TimestampMixin):
     git_token: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, comment="per-repo git token，覆盖全局 code_repo_git_token；NULL 表示走全局"
     )
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="备注说明")
+    project_card: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="项目卡片：描述项目范围、适用问题与边界，供用户和 Agent 选择项目",
+    )
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="1", comment="是否启用"
     )

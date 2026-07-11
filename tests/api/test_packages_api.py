@@ -66,9 +66,13 @@ def registry(monkeypatch):
             return _FakeRepo("demo-proj")
         return None
 
+    async def fake_supports_agent(_db: Any, repo: Optional[_FakeRepo], agent_key: str) -> bool:
+        return repo is not None and repo.enabled and agent_key == "package_search"
+
     from app.services import project_repo_service
 
     monkeypatch.setattr(project_repo_service, "get_by_project_code", fake_get_by_project_code)
+    monkeypatch.setattr(project_repo_service, "supports_agent", fake_supports_agent)
     return fake_get_by_project_code
 
 

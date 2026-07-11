@@ -36,6 +36,7 @@ def client(tmp_path, monkeypatch) -> TestClient:
             stack = ProjectRepo(
                 project_code="stack",
                 project_name="Stack",
+                project_card="Stack log analysis project",
                 repo_url="https://git.example/stack.git",
                 enabled=True,
             )

@@ -19,6 +19,12 @@ def test_package_search_defaults():
     assert s.package_search_max_limit == 50
 
 
+def test_general_agent_turn_bound_default_and_env_override(monkeypatch):
+    assert Settings().general_agent_max_turns == 6
+    monkeypatch.setenv("GENERAL_AGENT_MAX_TURNS", "9")
+    assert Settings().general_agent_max_turns == 9
+
+
 def test_legacy_rag_fields_removed():
     s = Settings()
     for legacy in ("raven_vector_store_path", "rag_embedding_provider", "rag_embedding_model"):
