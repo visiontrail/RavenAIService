@@ -47,7 +47,11 @@ def client_with_db(tmp_path):
 def _register(client: TestClient) -> tuple[str, str]:
     resp = client.post(
         "/api/v1/users/auth/register",
-        json={"username": "history_user", "password": "secret123"},
+        json={
+            "username": "history_user",
+            "password": "secret123",
+            "email": "history_user@example.test",
+        },
     )
     assert resp.status_code == 201, resp.text
     data = resp.json()["data"]

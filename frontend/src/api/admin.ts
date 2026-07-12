@@ -3,6 +3,7 @@ import { API_BASE_URL, localeHeaderInterceptor } from './index'
 import { userToken } from './user'
 import type {
   AdminAuthData,
+  AdminConversationDetail,
   AdminIdentity,
   AgentSkill,
   AgentSkillAgentInfo,
@@ -29,6 +30,11 @@ export interface MetricsTimeRangeParams {
   to?: string
   bucket?: 'hour' | 'day'
   project_repo_id?: number | string
+}
+
+export interface RegistrationEmailSettings {
+  email_regex: string
+  email_validation_message: string
 }
 
 const ADMIN_TOKEN_KEY = 'raven_admin_token'
@@ -98,6 +104,14 @@ export const adminApi = {
   }): Promise<ApiResponse<PromptsConfigData>> => adminClient.put('/admin/prompts/config', payload),
 
   listUsers: (): Promise<ApiResponse<UserProfile[]>> => adminClient.get('/api/v1/users'),
+
+  getRegistrationEmailSettings: (): Promise<ApiResponse<RegistrationEmailSettings>> =>
+    adminClient.get('/api/v1/users/registration-email-settings'),
+
+  updateRegistrationEmailSettings: (
+    payload: RegistrationEmailSettings
+  ): Promise<ApiResponse<RegistrationEmailSettings>> =>
+    adminClient.put('/api/v1/users/registration-email-settings', payload),
 
   createUser: (payload: {
     username: string
@@ -324,6 +338,11 @@ export const adminApi = {
     per_page?: number
   }): Promise<ApiResponse<MetricsRawEventsData>> =>
     adminClient.get('/admin/metrics/events', { params }),
+
+  metricsEventConversation: (
+    eventId: string
+  ): Promise<ApiResponse<AdminConversationDetail>> =>
+    adminClient.get(`/admin/metrics/events/${encodeURIComponent(eventId)}/conversation`),
 }
 
 export default adminApi

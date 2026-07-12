@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { LogOut, Menu, PanelLeftClose, RefreshCw, X } from 'lucide-vue-next'
@@ -7,7 +7,11 @@ import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
 import { useAdminScope } from '@/composables/useAdminScope'
+import AgentTraceStream from '@/components/AgentTraceStream.vue'
+import { processMermaidBlocks, renderMarkdown } from '@/utils/markdownRenderer'
+import type { AgentTraceEvent } from '@/types/agentTrace'
 import type {
+  AdminConversationDetail,
   MetricsRawEvent,
   MetricsServerTimezone,
   MetricsSystemOverview,
@@ -83,6 +87,11 @@ const eventsTotal = ref(0)
 const eventsPage = ref(1)
 const eventsPerPage = 50
 const eventSourceFilter = ref('')
+
+const conversationVisible = ref(false)
+const loadingConversation = ref(false)
+const conversation = ref<AdminConversationDetail | null>(null)
+const conversationThreadRef = ref<HTMLElement | null>(null)
 
 // ==================== Helpers ====================
 
@@ -161,6 +170,12 @@ const formatNumber = (value?: number | null) => {
   if (value === null || value === undefined) return '0'
   return value.toLocaleString('en-US')
 }
+
+const renderConversationAi = (content: string) =>
+  renderMarkdown(content || '', { wrapperClass: 'markdown-content text-ink' })
+
+const conversationTraceEvents = (events?: unknown[] | null): AgentTraceEvent[] =>
+  Array.isArray(events) ? (events as AgentTraceEvent[]) : []
 
 const formatBytes = (value?: number | null) => {
   if (!value) return '0 B'
@@ -439,6 +454,38 @@ const closeDetail = () => {
   detail.value = null
 }
 
+const openEventConversation = async (event: MetricsRawEvent) => {
+  if (!event.conversation_available) return
+  conversationVisible.value = true
+  loadingConversation.value = true
+  conversation.value = null
+  try {
+    const resp = await adminApi.metricsEventConversation(event.id)
+    if (!resp?.success || !resp.data) {
+      throw new Error(resp?.message || t('admin.metrics.loadConversationFail'))
+    }
+    conversation.value = resp.data
+    await nextTick()
+    if (conversationThreadRef.value) {
+      await processMermaidBlocks(conversationThreadRef.value)
+    }
+  } catch (err: any) {
+    appStore.showNotification({
+      title: t('admin.loadFail'),
+      message: parseErrorMessage(err),
+      type: 'error',
+    })
+    conversationVisible.value = false
+  } finally {
+    loadingConversation.value = false
+  }
+}
+
+const closeConversation = () => {
+  conversationVisible.value = false
+  conversation.value = null
+}
+
 const refreshAll = async () => {
   userPage.value = 1
   eventsPage.value = 1
@@ -531,6 +578,7 @@ const handleLogout = async () => {
     overview.value = null
     users.value = []
     events.value = []
+    closeConversation()
     projectRepos.value = []
     selectedProjectRepoId.value = 'system'
     appStore.showNotification({ title: t('admin.logoutSuccessTitle'), type: 'info' })
@@ -1007,6 +1055,7 @@ onMounted(() => {
                   <th>Model</th>
                   <th>{{ t('admin.metrics.colStatus') }}</th>
                   <th class="text-right">Token</th>
+                  <th class="text-right">{{ t('admin.metrics.colActions') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1019,6 +1068,16 @@ onMounted(() => {
                   <td class="text-xs">{{ ev.model || '--' }}</td>
                   <td><span class="metrics-status" :class="`is-${ev.status || 'unknown'}`">{{ ev.status || '--' }}</span></td>
                   <td class="text-right">{{ formatNumber(ev.total_tokens) }}</td>
+                  <td class="text-right">
+                    <button
+                      class="metrics-conversation-btn"
+                      :disabled="!ev.conversation_available"
+                      :title="ev.conversation_available ? t('admin.metrics.viewConversation') : t('admin.metrics.noLinkedConversation')"
+                      @click="openEventConversation(ev)"
+                    >
+                      {{ ev.conversation_available ? t('admin.metrics.viewConversation') : t('admin.metrics.noConversation') }}
+                    </button>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -1109,6 +1168,51 @@ onMounted(() => {
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin-only live conversation drawer -->
+    <div v-if="conversationVisible" class="admin-modal-backdrop" @click="closeConversation">
+      <div class="metrics-drawer conversation-drawer" @click.stop>
+        <div class="conversation-drawer-header">
+          <div class="min-w-0">
+            <div class="conversation-admin-badge">{{ t('admin.metrics.adminConversationBadge') }}</div>
+            <h3 class="conversation-title">
+              {{ conversation?.title || t('admin.metrics.conversationTitle') }}
+            </h3>
+            <p v-if="conversation" class="conversation-meta">
+              {{ conversation.display_name || conversation.username || conversation.user_id }}
+              · {{ t('admin.metrics.conversationMessageCount', { count: conversation.message_count }) }}
+              <span v-if="conversation.is_deleted"> · {{ t('admin.metrics.deletedConversation') }}</span>
+            </p>
+          </div>
+          <button class="admin-icon-btn !text-slate-600 !bg-slate-100 !border-slate-200" @click="closeConversation"><X :size="16" /></button>
+        </div>
+
+        <div v-if="loadingConversation" class="metrics-empty">{{ t('admin.metrics.loadingConversation') }}</div>
+        <div v-else-if="conversation" ref="conversationThreadRef" class="admin-conversation-thread">
+          <div
+            v-for="(message, index) in conversation.messages"
+            :key="`${message.created_at || 'message'}-${index}`"
+            :class="['admin-conversation-message', message.role === 'user' ? 'is-user' : 'is-ai']"
+          >
+            <template v-if="message.role === 'user'">
+              <div class="admin-user-bubble">{{ message.content }}</div>
+              <div class="admin-message-label">{{ t('sharedConversation.userLabel') }}</div>
+            </template>
+            <template v-else>
+              <div class="admin-ai-label">{{ t('sharedConversation.aiLabel') }}</div>
+              <AgentTraceStream
+                v-if="conversationTraceEvents(message.trace_events).length"
+                class="admin-ai-trace"
+                :events="conversationTraceEvents(message.trace_events)"
+                :running="false"
+              />
+              <div class="admin-ai-content" v-html="renderConversationAi(message.content)"></div>
+            </template>
+          </div>
+          <div v-if="!conversation.messages.length" class="metrics-empty">{{ t('admin.metrics.emptyConversation') }}</div>
         </div>
       </div>
     </div>
@@ -1666,6 +1770,30 @@ onMounted(() => {
   font-size: 0.8rem;
 }
 
+.metrics-conversation-btn {
+  white-space: nowrap;
+  color: #0e7490;
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid #a5f3fc;
+  border-radius: 0.5rem;
+  background: #ecfeff;
+}
+
+.metrics-conversation-btn:hover:not(:disabled) {
+  color: #ffffff;
+  border-color: #0891b2;
+  background: #0891b2;
+}
+
+.metrics-conversation-btn:disabled {
+  color: #94a3b8;
+  border-color: #e2e8f0;
+  background: #f8fafc;
+  cursor: not-allowed;
+}
+
 .metrics-drawer {
   width: min(640px, 100%);
   height: 100vh;
@@ -1673,6 +1801,105 @@ onMounted(() => {
   box-shadow: -20px 0 45px rgba(15, 23, 42, 0.25);
   padding: 1.25rem;
   overflow-y: auto;
+}
+
+.conversation-drawer {
+  width: min(820px, 100%);
+  background: #ffffff;
+  padding: 0;
+}
+
+.conversation-drawer-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 1.25rem;
+  background: rgba(255, 255, 255, 0.96);
+  border-bottom: 1px solid #e2e8f0;
+  backdrop-filter: blur(8px);
+}
+
+.conversation-admin-badge {
+  display: inline-flex;
+  margin-bottom: 0.35rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  color: #0e7490;
+  background: #cffafe;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.conversation-title {
+  color: #0f172a;
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.conversation-meta {
+  margin-top: 0.25rem;
+  color: #64748b;
+  font-size: 0.75rem;
+}
+
+.admin-conversation-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 1.7rem;
+  padding: 1.5rem 1.25rem 3rem;
+}
+
+.admin-conversation-message.is-user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.admin-user-bubble {
+  max-width: 90%;
+  padding: 0.7rem 0.95rem;
+  border-radius: 0.9rem 0.9rem 0.25rem 0.9rem;
+  color: #ffffff;
+  background: #0f172a;
+  font-size: 0.9rem;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.admin-message-label,
+.admin-ai-label {
+  margin-top: 0.35rem;
+  color: #94a3b8;
+  font-size: 0.7rem;
+}
+
+.admin-conversation-message.is-ai {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.admin-ai-label {
+  margin-top: 0;
+  color: #475569;
+  font-weight: 700;
+}
+
+.admin-ai-trace {
+  margin: 0.15rem 0 0.35rem;
+}
+
+.admin-ai-content {
+  color: #1e293b;
+  font-size: 0.9rem;
+  line-height: 1.7;
 }
 
 @media (max-width: 1024px) {

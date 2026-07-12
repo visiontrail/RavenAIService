@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
-import { Save, ShieldCheck } from 'lucide-vue-next'
+import { MessageCircleQuestion, Save, ShieldCheck, UserRound } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
 import { useChatSessionStore } from '@/stores/chatSession'
@@ -125,6 +125,7 @@ const loginForm = reactive({
 })
 const isLoggingIn = ref(false)
 const showSettingsModal = ref(false)
+const activeSettingsSection = ref<'account' | 'agent'>('account')
 const isSavingProfile = ref(false)
 const profileForm = reactive({
   displayName: '',
@@ -189,6 +190,7 @@ const openSettingsModal = () => {
     return
   }
   syncProfileForm()
+  activeSettingsSection.value = 'account'
   showSettingsModal.value = true
 }
 
@@ -495,6 +497,10 @@ const handleUserRegister = async () => {
     appStore.showNotification({ title: t('workbench.notifications.usernamePasswordRequired'), type: 'warning' })
     return
   }
+  if (!loginForm.email.trim()) {
+    appStore.showNotification({ title: t('workbench.notifications.emailRequired'), type: 'warning' })
+    return
+  }
   if (loginForm.password.length < 6) {
     appStore.showNotification({ title: t('workbench.notifications.passwordTooShort'), type: 'warning' })
     return
@@ -509,7 +515,7 @@ const handleUserRegister = async () => {
       username: loginForm.username.trim(),
       password: loginForm.password,
       display_name: loginForm.displayName.trim() || null,
-      email: loginForm.email.trim() || null,
+      email: loginForm.email.trim(),
     })
     if (!resp?.success || !resp.data) throw new Error(resp?.message || t('workbench.notifications.registerFailed'))
     userStore.setToken(resp.data.token)
@@ -794,13 +800,17 @@ const handleUserLogout = () => {
       <router-view />
     </main>
 
-    <!-- Settings modal — single-column popup, consistent with the login and
-         share-conversation dialogs. -->
+    <!-- Settings modal — category navigation on the left, focused settings on the right. -->
     <div v-if="showSettingsModal" class="rw-modal-backdrop" @click.self="closeSettingsModal">
-      <div class="rw-modal rw-settings-modal" role="dialog" aria-modal="true" :aria-label="t('workbench.settingsPanel.title')">
+      <div
+        class="rw-modal rw-settings-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="rw-settings-title"
+      >
         <div class="rw-modal-head">
           <div>
-            <h3 class="rw-modal-title">{{ t('workbench.settingsPanel.title') }}</h3>
+            <h3 id="rw-settings-title" class="rw-modal-title">{{ t('workbench.settingsPanel.title') }}</h3>
             <p class="rw-modal-sub">{{ t('workbench.settingsPanel.subtitle') }}</p>
           </div>
           <button class="rw-modal-close" @click="closeSettingsModal" :aria-label="t('workbench.settingsPanel.close')">
@@ -808,95 +818,155 @@ const handleUserLogout = () => {
           </button>
         </div>
 
-        <div class="rw-settings-account-strip">
-          <div class="rw-avatar lg">{{ userInitial }}</div>
-          <div class="rw-settings-account-meta">
-            <strong>{{ currentUserName }}</strong>
-            <span>{{ userStore.profile?.username }}</span>
-          </div>
-          <span class="rw-profile-role-chip">{{ currentProfileRoleLabel }}</span>
+        <div class="rw-settings-layout">
+          <aside class="rw-settings-sidebar">
+            <div class="rw-settings-account-strip">
+              <div class="rw-avatar lg">{{ userInitial }}</div>
+              <div class="rw-settings-account-meta">
+                <strong>{{ currentUserName }}</strong>
+                <span>{{ userStore.profile?.username }}</span>
+              </div>
+              <span class="rw-profile-role-chip">{{ currentProfileRoleLabel }}</span>
+            </div>
+
+            <nav class="rw-settings-nav" :aria-label="t('workbench.settingsPanel.categoryLabel')">
+              <button
+                type="button"
+                class="rw-settings-nav-item"
+                :class="{ active: activeSettingsSection === 'account' }"
+                :aria-current="activeSettingsSection === 'account' ? 'page' : undefined"
+                @click="activeSettingsSection = 'account'"
+              >
+                <span class="rw-settings-nav-icon"><UserRound :size="17" stroke-width="1.8" /></span>
+                <span class="rw-settings-nav-copy">
+                  <strong>{{ t('workbench.settingsPanel.categories.account') }}</strong>
+                  <small>{{ t('workbench.settingsPanel.categories.accountHint') }}</small>
+                </span>
+              </button>
+              <button
+                type="button"
+                class="rw-settings-nav-item"
+                :class="{ active: activeSettingsSection === 'agent' }"
+                :aria-current="activeSettingsSection === 'agent' ? 'page' : undefined"
+                @click="activeSettingsSection = 'agent'"
+              >
+                <span class="rw-settings-nav-icon"><MessageCircleQuestion :size="17" stroke-width="1.8" /></span>
+                <span class="rw-settings-nav-copy">
+                  <strong>{{ t('workbench.settingsPanel.categories.agent') }}</strong>
+                  <small>{{ t('workbench.settingsPanel.categories.agentHint') }}</small>
+                </span>
+              </button>
+            </nav>
+
+            <div class="rw-settings-permission">
+              <ShieldCheck :size="16" stroke-width="1.8" />
+              <span>{{ t('workbench.settingsPanel.permissionRole') }}</span>
+              <strong>{{ isAdmin ? t('workbench.adminRole') : t('workbench.settingsPanel.permissionUser') }}</strong>
+            </div>
+          </aside>
+
+          <form class="rw-settings-form" @submit.prevent="handleSaveProfile">
+            <div class="rw-settings-content">
+              <section v-if="activeSettingsSection === 'account'" class="rw-settings-pane" aria-labelledby="rw-account-settings-title">
+                <div class="rw-settings-pane-head">
+                  <span class="rw-settings-eyebrow">{{ t('workbench.settingsPanel.categories.account') }}</span>
+                  <h4 id="rw-account-settings-title">{{ t('workbench.settingsPanel.account.title') }}</h4>
+                  <p>{{ t('workbench.settingsPanel.account.description') }}</p>
+                </div>
+
+                <div class="rw-settings-field-grid">
+                  <label class="rw-form-field rw-form-field--wide">
+                    <span class="rw-form-label">{{ t('workbench.settingsPanel.username') }}</span>
+                    <input :value="userStore.profile?.username || ''" type="text" class="rw-input" disabled autocomplete="username" />
+                  </label>
+                  <label class="rw-form-field">
+                    <span class="rw-form-label">{{ t('workbench.settingsPanel.displayName') }}</span>
+                    <input
+                      v-model="profileForm.displayName"
+                      type="text"
+                      class="rw-input"
+                      maxlength="128"
+                      :placeholder="t('workbench.settingsPanel.displayNamePlaceholder')"
+                      autocomplete="name"
+                    />
+                  </label>
+                  <label class="rw-form-field">
+                    <span class="rw-form-label">{{ t('workbench.settingsPanel.email') }}</span>
+                    <input
+                      v-model="profileForm.email"
+                      type="email"
+                      class="rw-input"
+                      maxlength="255"
+                      :placeholder="t('workbench.settingsPanel.emailPlaceholder')"
+                      autocomplete="email"
+                    />
+                  </label>
+                  <label class="rw-form-field rw-form-field--wide">
+                    <span class="rw-form-label">{{ t('workbench.settingsPanel.profileRole') }}</span>
+                    <select v-model="profileForm.profileRole" class="rw-select">
+                      <option v-for="item in profileRoleOptions" :key="item.value" :value="item.value">
+                        {{ item.label }}
+                      </option>
+                    </select>
+                  </label>
+                </div>
+              </section>
+
+              <section v-else class="rw-settings-pane" aria-labelledby="rw-agent-settings-title">
+                <div class="rw-settings-pane-head">
+                  <span class="rw-settings-eyebrow">{{ t('workbench.settingsPanel.categories.agent') }}</span>
+                  <h4 id="rw-agent-settings-title">{{ t('workbench.settingsPanel.clarification.section') }}</h4>
+                  <p>{{ t('workbench.settingsPanel.clarification.description') }}</p>
+                </div>
+
+                <label class="rw-setting-toggle-card">
+                  <span class="rw-setting-toggle-copy">
+                    <strong>{{ t('workbench.settingsPanel.clarification.enabledLabel') }}</strong>
+                    <small>{{ t('workbench.settingsPanel.clarification.enabledHint') }}</small>
+                  </span>
+                  <span class="rw-switch">
+                    <input v-model="profileForm.clarificationEnabled" type="checkbox" />
+                    <span aria-hidden="true"></span>
+                  </span>
+                </label>
+
+                <div class="rw-settings-field-grid rw-settings-field-grid--agent" :class="{ disabled: !profileForm.clarificationEnabled }">
+                  <label class="rw-form-field">
+                    <span class="rw-form-label">{{ t('workbench.settingsPanel.clarification.maxRoundsLabel') }}</span>
+                    <input
+                      v-model.number="profileForm.clarificationMaxRounds"
+                      type="number"
+                      min="0"
+                      max="20"
+                      class="rw-input"
+                      :disabled="!profileForm.clarificationEnabled"
+                    />
+                  </label>
+                  <label class="rw-form-field">
+                    <span class="rw-form-label">{{ t('workbench.settingsPanel.clarification.onTimeoutLabel') }}</span>
+                    <select
+                      v-model="profileForm.clarificationOnTimeout"
+                      class="rw-select"
+                      :disabled="!profileForm.clarificationEnabled"
+                    >
+                      <option value="cancel">{{ t('workbench.settingsPanel.clarification.onTimeoutCancel') }}</option>
+                      <option value="continue">{{ t('workbench.settingsPanel.clarification.onTimeoutContinue') }}</option>
+                    </select>
+                  </label>
+                </div>
+                <p class="rw-settings-note">{{ t('workbench.settingsPanel.clarification.onTimeoutHint') }}</p>
+              </section>
+            </div>
+
+            <div class="rw-settings-actions">
+              <button type="button" class="rw-btn-ghost" @click="closeSettingsModal">{{ t('common.cancel') }}</button>
+              <button type="submit" class="rw-btn-primary rw-save-profile-btn" :disabled="isSavingProfile">
+                <Save v-if="!isSavingProfile" :size="14" stroke-width="1.8" />
+                {{ isSavingProfile ? t('workbench.settingsPanel.saving') : t('workbench.settingsPanel.save') }}
+              </button>
+            </div>
+          </form>
         </div>
-
-        <form class="rw-modal-form" @submit.prevent="handleSaveProfile">
-          <label class="rw-form-field">
-            <span class="rw-form-label">{{ t('workbench.settingsPanel.username') }}</span>
-            <input :value="userStore.profile?.username || ''" type="text" class="rw-input" disabled autocomplete="username" />
-          </label>
-          <label class="rw-form-field">
-            <span class="rw-form-label">{{ t('workbench.settingsPanel.displayName') }}</span>
-            <input
-              v-model="profileForm.displayName"
-              type="text"
-              class="rw-input"
-              maxlength="128"
-              :placeholder="t('workbench.settingsPanel.displayNamePlaceholder')"
-              autocomplete="name"
-            />
-          </label>
-          <label class="rw-form-field">
-            <span class="rw-form-label">{{ t('workbench.settingsPanel.email') }}</span>
-            <input
-              v-model="profileForm.email"
-              type="email"
-              class="rw-input"
-              maxlength="255"
-              :placeholder="t('workbench.settingsPanel.emailPlaceholder')"
-              autocomplete="email"
-            />
-          </label>
-          <label class="rw-form-field">
-            <span class="rw-form-label">{{ t('workbench.settingsPanel.profileRole') }}</span>
-            <select v-model="profileForm.profileRole" class="rw-select">
-              <option v-for="item in profileRoleOptions" :key="item.value" :value="item.value">
-                {{ item.label }}
-              </option>
-            </select>
-          </label>
-
-          <div class="rw-settings-section-title">{{ t('workbench.settingsPanel.clarification.section') }}</div>
-          <label class="rw-form-field rw-form-field--inline">
-            <span class="rw-form-label">{{ t('workbench.settingsPanel.clarification.enabledLabel') }}</span>
-            <input v-model="profileForm.clarificationEnabled" type="checkbox" class="rw-checkbox" />
-          </label>
-          <p class="rw-form-hint">{{ t('workbench.settingsPanel.clarification.enabledHint') }}</p>
-          <label class="rw-form-field">
-            <span class="rw-form-label">{{ t('workbench.settingsPanel.clarification.maxRoundsLabel') }}</span>
-            <input
-              v-model.number="profileForm.clarificationMaxRounds"
-              type="number"
-              min="0"
-              max="20"
-              class="rw-input"
-              :disabled="!profileForm.clarificationEnabled"
-            />
-          </label>
-          <label class="rw-form-field">
-            <span class="rw-form-label">{{ t('workbench.settingsPanel.clarification.onTimeoutLabel') }}</span>
-            <select
-              v-model="profileForm.clarificationOnTimeout"
-              class="rw-select"
-              :disabled="!profileForm.clarificationEnabled"
-            >
-              <option value="cancel">{{ t('workbench.settingsPanel.clarification.onTimeoutCancel') }}</option>
-              <option value="continue">{{ t('workbench.settingsPanel.clarification.onTimeoutContinue') }}</option>
-            </select>
-          </label>
-          <p class="rw-form-hint">{{ t('workbench.settingsPanel.clarification.onTimeoutHint') }}</p>
-
-          <div class="rw-settings-permission">
-            <ShieldCheck :size="16" stroke-width="1.8" />
-            <span>{{ t('workbench.settingsPanel.permissionRole') }}</span>
-            <strong>{{ isAdmin ? t('workbench.adminRole') : t('workbench.settingsPanel.permissionUser') }}</strong>
-          </div>
-
-          <div class="rw-modal-actions">
-            <button type="submit" class="rw-btn-primary rw-save-profile-btn" :disabled="isSavingProfile">
-              <Save v-if="!isSavingProfile" :size="14" stroke-width="1.8" />
-              {{ isSavingProfile ? t('workbench.settingsPanel.saving') : t('workbench.settingsPanel.save') }}
-            </button>
-            <button type="button" class="rw-btn-ghost" @click="closeSettingsModal">{{ t('common.cancel') }}</button>
-          </div>
-        </form>
       </div>
     </div>
 
@@ -927,7 +997,15 @@ const handleUserLogout = () => {
           </label>
           <label v-if="authMode === 'register'" class="rw-form-field">
             <span class="rw-form-label">{{ t('workbench.auth.email') }}</span>
-            <input v-model="loginForm.email" type="email" class="rw-input" :placeholder="t('workbench.auth.optional')" autocomplete="email" />
+            <input
+              v-model="loginForm.email"
+              type="email"
+              class="rw-input"
+              required
+              maxlength="255"
+              :placeholder="t('workbench.auth.emailPlaceholder')"
+              autocomplete="email"
+            />
           </label>
           <label class="rw-form-field">
             <span class="rw-form-label">{{ t('workbench.auth.password') }}</span>
@@ -1312,15 +1390,45 @@ const handleUserLogout = () => {
   box-shadow: 0 24px 64px rgba(0,0,0,.18);
 }
 .rw-modal.rw-settings-modal {
-  max-width: 420px;
+  max-width: 840px;
+  min-height: 560px;
+  max-height: calc(100vh - 40px);
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: rw-settings-enter .2s cubic-bezier(.2,.8,.2,1);
+}
+@keyframes rw-settings-enter {
+  from { opacity: 0; transform: translateY(8px) scale(.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.rw-settings-modal > .rw-modal-head {
+  min-height: 78px;
+  padding: 19px 22px;
+  border-bottom: 1px solid var(--rw-hairline);
+  background: var(--rw-canvas);
+}
+.rw-settings-layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+}
+.rw-settings-sidebar {
+  min-width: 0;
+  padding: 18px 14px 14px;
+  border-right: 1px solid var(--rw-hairline);
+  background: var(--rw-canvas-soft);
+  display: flex;
+  flex-direction: column;
 }
 .rw-settings-account-strip {
-  margin-top: 16px;
-  padding: 12px 0 16px;
+  padding: 2px 6px 18px;
   border-bottom: 1px solid var(--rw-hairline);
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 10px;
 }
 .rw-settings-account-meta {
   display: grid;
@@ -1341,15 +1449,225 @@ const handleUserLogout = () => {
   font-family: var(--rw-mono);
 }
 .rw-profile-role-chip {
-  margin-left: auto;
+  display: none;
+}
+.rw-settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 14px;
+}
+.raven-workbench button.rw-settings-nav-item {
+  width: 100%;
+  min-height: 58px;
+  padding: 9px 10px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--rw-body);
+  text-align: left;
+  transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+}
+.raven-workbench button.rw-settings-nav-item:hover {
+  background: var(--rw-surface-strong);
+  color: var(--rw-ink);
+}
+.raven-workbench button.rw-settings-nav-item.active {
+  background: var(--rw-canvas);
+  color: var(--rw-ink);
+  box-shadow: 0 1px 3px rgba(0,0,0,.08), inset 0 0 0 1px var(--rw-hairline);
+}
+.raven-workbench button.rw-settings-nav-item:focus-visible {
+  outline: 2px solid var(--rw-ink);
+  outline-offset: 2px;
+}
+.rw-settings-nav-icon {
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
-  border-radius: 999px;
-  background: #e8f7ef;
-  color: #116b3a;
-  border: 1px solid #c8ead6;
-  padding: 4px 9px;
-  font-size: 11.5px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: var(--rw-muted);
+  background: var(--rw-canvas);
+  border: 1px solid var(--rw-hairline);
+  transition: color .15s ease, border-color .15s ease;
+}
+.rw-settings-nav-item.active .rw-settings-nav-icon {
+  color: var(--rw-ink);
+  border-color: var(--rw-hairline-strong);
+}
+.rw-settings-nav-copy {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.rw-settings-nav-copy strong {
+  font-size: 12.5px;
   font-weight: 650;
+  line-height: 1.35;
+}
+.rw-settings-nav-copy small {
+  color: var(--rw-muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.rw-settings-form {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--rw-canvas);
+}
+.rw-settings-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 32px 38px 28px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rw-hairline-strong) transparent;
+}
+.rw-settings-pane {
+  animation: rw-settings-pane-in .18s ease-out;
+}
+@keyframes rw-settings-pane-in {
+  from { opacity: 0; transform: translateX(5px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.rw-settings-pane-head {
+  max-width: 520px;
+  padding-bottom: 24px;
+}
+.rw-settings-eyebrow {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--rw-muted);
+  font-family: var(--rw-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.rw-settings-pane-head h4 {
+  margin: 0;
+  color: var(--rw-ink);
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: -.02em;
+}
+.rw-settings-pane-head p {
+  margin: 7px 0 0;
+  color: var(--rw-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.rw-settings-field-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px 16px;
+}
+.rw-form-field--wide {
+  grid-column: 1 / -1;
+}
+.rw-settings-field-grid--agent {
+  margin-top: 20px;
+  transition: opacity .15s ease;
+}
+.rw-settings-field-grid--agent.disabled {
+  opacity: .55;
+}
+.rw-setting-toggle-card {
+  min-height: 86px;
+  padding: 16px;
+  border: 1px solid var(--rw-hairline-strong);
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.rw-setting-toggle-card:hover {
+  border-color: var(--rw-muted-soft);
+  background: var(--rw-canvas-soft);
+}
+.rw-setting-toggle-copy {
+  display: grid;
+  gap: 5px;
+}
+.rw-setting-toggle-copy strong {
+  color: var(--rw-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+.rw-setting-toggle-copy small {
+  max-width: 390px;
+  color: var(--rw-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.rw-switch {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  flex: 0 0 38px;
+}
+.rw-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.rw-switch span {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--rw-muted-soft);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.08);
+  transition: background .18s ease;
+}
+.rw-switch span::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.22);
+  transition: transform .18s cubic-bezier(.2,.8,.2,1);
+}
+.rw-switch input:checked + span {
+  background: var(--rw-primary);
+}
+.rw-switch input:checked + span::after {
+  transform: translateX(16px);
+}
+.rw-switch input:focus-visible + span {
+  outline: 2px solid var(--rw-ink);
+  outline-offset: 2px;
+}
+.rw-settings-note {
+  margin: 18px 0 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--rw-hairline-strong);
+  color: var(--rw-muted);
+  background: var(--rw-canvas-soft);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+.rw-settings-actions {
+  min-height: 68px;
+  padding: 15px 22px;
+  border-top: 1px solid var(--rw-hairline);
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 9px;
 }
 .rw-select {
   width: 100%;
@@ -1371,26 +1689,27 @@ const handleUserLogout = () => {
 .rw-select:focus {
   border-color: var(--rw-ink);
 }
-.rw-input:disabled {
+.rw-input:disabled,
+.rw-select:disabled {
   background: var(--rw-canvas-soft);
   color: var(--rw-muted);
   cursor: not-allowed;
 }
 .rw-settings-permission {
-  min-height: 40px;
-  border: 1px solid var(--rw-hairline);
-  border-radius: 8px;
-  padding: 0 12px;
+  margin-top: auto;
+  min-height: 38px;
+  padding: 0 8px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  color: var(--rw-body);
-  font-size: 12.5px;
+  gap: 7px;
+  color: var(--rw-muted);
+  font-size: 11px;
 }
 .rw-settings-permission strong {
   margin-left: auto;
-  color: var(--rw-ink);
-  font-size: 12.5px;
+  color: var(--rw-body);
+  font-size: 11px;
+  font-weight: 600;
 }
 .raven-workbench button.rw-save-profile-btn {
   display: inline-flex;
@@ -1481,8 +1800,72 @@ const handleUserLogout = () => {
     transition: transform .25s ease;
   }
   .rw-modal.rw-settings-modal {
-    max-height: calc(100vh - 24px);
-    overflow: auto;
+    min-height: min(620px, calc(100vh - 16px));
+    max-height: calc(100vh - 16px);
+  }
+  .rw-settings-modal > .rw-modal-head {
+    min-height: 70px;
+    padding: 15px 17px;
+  }
+  .rw-settings-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .rw-settings-sidebar {
+    padding: 9px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--rw-hairline);
+  }
+  .rw-settings-account-strip,
+  .rw-settings-permission {
+    display: none;
+  }
+  .rw-settings-nav {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+    padding: 0;
+  }
+  .raven-workbench button.rw-settings-nav-item {
+    min-height: 46px;
+    padding: 7px 9px;
+  }
+  .rw-settings-nav-icon {
+    width: 28px;
+    height: 28px;
+  }
+  .rw-settings-nav-copy small {
+    display: none;
+  }
+  .rw-settings-content {
+    padding: 24px 20px 22px;
+  }
+  .rw-settings-pane-head {
+    padding-bottom: 20px;
+  }
+  .rw-settings-actions {
+    min-height: 62px;
+    padding: 12px 16px;
+  }
+}
+
+@media (max-width: 520px) {
+  .rw-modal-backdrop {
+    padding: 8px;
+  }
+  .rw-settings-field-grid {
+    grid-template-columns: 1fr;
+    gap: 15px;
+  }
+  .rw-form-field--wide {
+    grid-column: auto;
+  }
+  .rw-setting-toggle-card {
+    padding: 14px;
+    gap: 14px;
+  }
+  .rw-settings-pane-head h4 {
+    font-size: 17px;
   }
 }
 </style>

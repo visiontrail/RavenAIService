@@ -5,7 +5,6 @@ import { useI18n } from 'vue-i18n'
 import {
   ChevronDown,
   ChevronRight,
-  Cpu,
   File as FileIcon,
   FileArchive,
   FileText,
@@ -96,9 +95,6 @@ const authForm = reactive({
 const navVisible = computed(() => appStore.adminSidebarVisible)
 const activeNavKey = computed(() => resolveAdminNavKey(route.path))
 
-const selectedAgent = computed<AgentSkillAgentInfo | undefined>(() =>
-  agents.value.find((a) => a.key === selectedAgentKey.value)
-)
 const enabledCount = computed(() => skills.value.filter((s) => s.enabled).length)
 const disabledCount = computed(() => skills.value.length - enabledCount.value)
 
@@ -580,18 +576,18 @@ onMounted(() => bootstrap())
       <section v-else class="space-y-4">
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
           <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-            <div>
+            <div class="min-w-0">
               <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.agentSkills.listTitle') }}</h2>
               <p class="text-sm text-slate-500 mt-0.5">
                 {{ t('admin.agentSkills.listDesc') }}
               </p>
             </div>
-            <div class="flex flex-wrap items-center gap-2">
-              <label class="inline-flex items-center gap-2">
-                <span class="text-xs font-semibold uppercase tracking-wide text-slate-400">Agent</span>
+            <div class="flex w-full min-w-0 flex-nowrap items-center gap-2 xl:w-auto">
+              <label class="flex min-w-0 flex-1 items-center gap-2">
+                <span class="shrink-0 text-xs font-semibold uppercase tracking-wide text-slate-400">Agent</span>
                 <select
                   v-model="selectedAgentKey"
-                  class="rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
+                  class="min-w-0 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-mono focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none sm:w-72"
                   :disabled="loadingAgents || !agents.length"
                 >
                   <option v-for="a in agents" :key="a.key" :value="a.key">
@@ -600,23 +596,13 @@ onMounted(() => bootstrap())
                 </select>
               </label>
               <button
-                class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                class="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                 :disabled="loadingSkills || !selectedAgentKey"
                 @click="fetchSkills"
               >
                 <RefreshCw :size="15" />
                 {{ loadingSkills ? t('admin.refreshing') : t('common.refresh') }}
               </button>
-            </div>
-          </div>
-          <div v-if="selectedAgent" class="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-600 flex items-start gap-3">
-            <Cpu :size="18" class="mt-0.5 text-slate-400" />
-            <div>
-              <p class="text-slate-700 font-medium">{{ selectedAgent.name }}</p>
-              <p class="text-xs text-slate-500 mt-0.5">
-                {{ t('admin.agentSkills.frameworkLabel') }}<code class="rounded bg-white px-1.5 py-0.5 text-xs text-slate-600 border border-slate-200">{{ selectedAgent.framework }}</code>
-                <span v-if="selectedAgent.description"> · {{ selectedAgent.description }}</span>
-              </p>
             </div>
           </div>
         </div>

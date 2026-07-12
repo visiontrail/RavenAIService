@@ -7,6 +7,7 @@ Read-only endpoints that expose the aggregation queries in
 - ``GET /admin/metrics/users``              — per-user ranking with pagination
 - ``GET /admin/metrics/users/{user_id}``    — single-user detail
 - ``GET /admin/metrics/events``             — raw (sanitized) event audit feed
+- ``GET /admin/metrics/events/{id}/conversation`` — admin-only linked chat detail
 - ``GET /api/v1/users/me/metrics``          — the caller's own metrics only
 
 Admin endpoints reuse the existing admin bearer auth; the self endpoint reuses
@@ -29,6 +30,9 @@ from app.api.admin import require_admin
 from app.api.users import get_current_user
 from app.models.database import get_db
 from app.models.metrics import (
+    AdminConversationDetail,
+    AdminConversationDetailResponse,
+    MetricEvent,
     RawMetricEventsData,
     RawMetricEventsResponse,
     SelfMetricsResponse,
@@ -41,8 +45,9 @@ from app.models.metrics import (
     UserMetricsListResponse,
     UserMetricsRow,
 )
-from app.models.user import ChatSession, User
+from app.models.user import ChatMessage, ChatSession, User
 from app.services import metrics_service
+from app.services.conversation_share_service import conversation_share_service
 
 # Two routers: admin endpoints under /admin, the self endpoint under /api/v1.
 admin_router = APIRouter(prefix="/admin/metrics", tags=["Metrics"])
@@ -321,10 +326,26 @@ async def list_raw_events(
     # audit feed shows who triggered the event, not just an opaque user_id.
     event_user_ids = list({e["user_id"] for e in agg["events"] if e.get("user_id")})
     users = await _fetch_users(db, event_user_ids)
+    event_session_ids = list(
+        {e["session_id"] for e in agg["events"] if e.get("session_id")}
+    )
+    available_session_ids: set[str] = set()
+    if event_session_ids:
+        session_rows = (
+            await db.execute(
+                select(ChatMessage.session_id)
+                .where(ChatMessage.session_id.in_(event_session_ids))
+                .distinct()
+            )
+        ).scalars().all()
+        available_session_ids = set(session_rows)
     for event in agg["events"]:
         user = users.get(event.get("user_id"))
         event["username"] = user.username if user else None
         event["display_name"] = user.display_name if user else None
+        event["conversation_available"] = (
+            event.get("session_id") in available_session_ids
+        )
 
     data = RawMetricEventsData(
         from_time=from_time,
@@ -335,6 +356,70 @@ async def list_raw_events(
         events=agg["events"],
     )
     return RawMetricEventsResponse(data=data)
+
+
+@admin_router.get(
+    "/events/{event_id}/conversation",
+    response_model=AdminConversationDetailResponse,
+    response_model_exclude_none=True,
+)
+async def get_event_conversation(
+    event_id: str,
+    _admin: str = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> AdminConversationDetailResponse:
+    """Return the complete live conversation linked to a metrics event.
+
+    This is intentionally an admin-authenticated, read-only surface. It does
+    not create or refresh a public share and it does not expose a reusable
+    public token. The event ID is resolved first so callers cannot use this
+    endpoint as an arbitrary session-ID lookup.
+    """
+    event = (
+        await db.execute(select(MetricEvent).where(MetricEvent.id == event_id))
+    ).scalar_one_or_none()
+    if event is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="指标事件不存在",
+        )
+    if not event.session_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="该事件未关联对话会话",
+        )
+
+    chat_session = (
+        await db.execute(
+            select(ChatSession).where(ChatSession.id == event.session_id)
+        )
+    ).scalar_one_or_none()
+    if chat_session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="关联的对话会话不存在",
+        )
+
+    messages = await conversation_share_service.build_live_snapshot(
+        db,
+        session_id=chat_session.id,
+        user_id=chat_session.user_id,
+    )
+    user = (await _fetch_users(db, [chat_session.user_id])).get(chat_session.user_id)
+    detail = AdminConversationDetail(
+        event_id=event.id,
+        session_id=chat_session.id,
+        user_id=chat_session.user_id,
+        username=user.username if user else None,
+        display_name=user.display_name if user else None,
+        title=chat_session.title,
+        message_count=len(messages),
+        created_at=chat_session.created_at,
+        last_message_at=chat_session.last_message_at,
+        is_deleted=chat_session.is_deleted,
+        messages=messages,
+    )
+    return AdminConversationDetailResponse(data=detail)
 
 
 # ==================== Self endpoint ====================

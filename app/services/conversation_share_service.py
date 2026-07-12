@@ -72,14 +72,14 @@ class ConversationShareService(BaseService):
         result = await db.execute(stmt)
         return result.scalars().first()
 
-    async def _build_snapshot(
+    async def build_live_snapshot(
         self,
         db: AsyncSession,
         *,
         session_id: str,
         user_id: str,
     ) -> list[dict]:
-        """Build the message snapshot for a session.
+        """Build a read-only message snapshot from the current session state.
 
         Each message keeps ``role`` / ``content`` / ``created_at`` (``created_at``
         serialized to an ISO-8601 string so the public read is a pure passthrough
@@ -193,7 +193,7 @@ class ConversationShareService(BaseService):
                 detail="会话不存在",
             )
 
-        snapshot = await self._build_snapshot(
+        snapshot = await self.build_live_snapshot(
             db, session_id=session_id, user_id=user_id
         )
         if not snapshot:

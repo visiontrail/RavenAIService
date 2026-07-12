@@ -17,6 +17,7 @@ overridden.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import tempfile
 import uuid
@@ -35,7 +36,7 @@ from app.api.users import get_current_user
 from app.config import settings
 from app.models.database import Base, db_manager, get_db
 from app.models.metrics import MetricEvent
-from app.models.user import ChatSession, User
+from app.models.user import ChatAgentRun, ChatMessage, ChatSession, User
 
 
 # ==================== Fixtures / seeding ====================
@@ -107,6 +108,7 @@ def _ai_event(
     occurred_at: Optional[datetime] = None,
     metadata_json: Optional[str] = None,
     project_repo_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> MetricEvent:
     total = input_tokens + output_tokens
     return MetricEvent(
@@ -116,6 +118,7 @@ def _ai_event(
         event_type="ai_usage",
         source=source,
         user_id=user_id,
+        session_id=session_id,
         project_repo_id=project_repo_id,
         agent_kind=agent_kind,
         provider=provider,
@@ -484,6 +487,135 @@ def test_raw_events_include_triggering_user(client: TestClient) -> None:
     assert event["user_id"] == user.id
     assert event["username"] == "triggerer"
     assert event["display_name"] == "Triggerer"
+
+
+def test_raw_events_mark_linked_conversation_available(client: TestClient) -> None:
+    user = _make_user("viewer")
+    chat_session = ChatSession(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        title="排障会话",
+        last_message_at=datetime.utcnow(),
+        message_count=1,
+        is_deleted=False,
+    )
+    event = _ai_event(
+        user_id=user.id,
+        session_id=chat_session.id,
+        input_tokens=10,
+    )
+    no_chat_event = _ai_event(user_id=user.id, input_tokens=5)
+    _seed([user, chat_session])
+    _seed(
+        [
+            ChatMessage(
+                id=str(uuid.uuid4()),
+                session_id=chat_session.id,
+                role="user",
+                content="为什么服务超时？",
+            ),
+            event,
+            no_chat_event,
+        ]
+    )
+
+    resp = client.get("/admin/metrics/events")
+    assert resp.status_code == 200
+    events = {item["id"]: item for item in resp.json()["data"]["events"]}
+    assert events[event.id]["conversation_available"] is True
+    assert events[no_chat_event.id]["conversation_available"] is False
+
+
+def test_admin_reads_complete_event_conversation_with_trace(
+    client: TestClient,
+) -> None:
+    user = _make_user("conversation-owner")
+    chat_session = ChatSession(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        title="数据库连接排障",
+        last_message_at=datetime.utcnow(),
+        message_count=2,
+        is_deleted=True,
+    )
+    event = _ai_event(
+        user_id=user.id,
+        session_id=chat_session.id,
+        input_tokens=25,
+        output_tokens=10,
+    )
+    answer = "连接池已耗尽，请检查未释放的连接。"
+    _seed([user, chat_session])
+    _seed(
+        [
+            ChatMessage(
+                id=str(uuid.uuid4()),
+                session_id=chat_session.id,
+                role="user",
+                content="数据库为什么连不上？",
+            ),
+            ChatMessage(
+                id=str(uuid.uuid4()),
+                session_id=chat_session.id,
+                role="ai",
+                content=answer,
+            ),
+            ChatAgentRun(
+                id=str(uuid.uuid4()),
+                session_id=chat_session.id,
+                user_id=user.id,
+                owner_scope=f"user:{user.id}",
+                agent_kind="general",
+                status="succeeded",
+                user_message="数据库为什么连不上？",
+                answer=answer,
+                trace_events_json=json.dumps(
+                    [{"type": "thinking", "content": "检查连接池状态"}],
+                    ensure_ascii=False,
+                ),
+                finished_at=datetime.utcnow(),
+            ),
+            event,
+        ]
+    )
+
+    resp = client.get(f"/admin/metrics/events/{event.id}/conversation")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["event_id"] == event.id
+    assert data["session_id"] == chat_session.id
+    assert data["user_id"] == user.id
+    assert data["username"] == "conversation-owner"
+    assert data["title"] == "数据库连接排障"
+    assert data["message_count"] == 2
+    assert data["is_deleted"] is True
+    assert [message["role"] for message in data["messages"]] == ["user", "ai"]
+    assert data["messages"][0]["content"] == "数据库为什么连不上？"
+    assert data["messages"][1]["content"] == answer
+    assert data["messages"][1]["trace_events"] == [
+        {"type": "thinking", "content": "检查连接池状态"}
+    ]
+
+
+def test_admin_event_conversation_rejects_unlinked_event(
+    client: TestClient,
+) -> None:
+    user = _make_user("no-session")
+    event = _ai_event(user_id=user.id, input_tokens=1)
+    _seed([user, event])
+
+    resp = client.get(f"/admin/metrics/events/{event.id}/conversation")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "该事件未关联对话会话"
+
+
+def test_event_conversation_requires_admin(app: FastAPI) -> None:
+    app.dependency_overrides.pop(require_admin, None)
+    unauth = TestClient(app)
+    resp = unauth.get(
+        f"/admin/metrics/events/{uuid.uuid4()}/conversation"
+    )
+    assert resp.status_code == 401
 
 
 def test_raw_events_invalid_datetime_is_400(client: TestClient) -> None:

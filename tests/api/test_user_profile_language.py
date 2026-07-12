@@ -46,7 +46,11 @@ def client(tmp_path) -> TestClient:
 def _register(client: TestClient, username: str = "lang_user") -> str:
     resp = client.post(
         "/api/v1/users/auth/register",
-        json={"username": username, "password": "secret123"},
+        json={
+            "username": username,
+            "password": "secret123",
+            "email": f"{username}@example.test",
+        },
     )
     assert resp.status_code == 201, resp.text
     return resp.json()["data"]["token"]

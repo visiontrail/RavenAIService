@@ -22,6 +22,7 @@ from sqlalchemy import DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import BaseResponse
+from .conversation_share import PublicShareMessage
 from .database import Base, TimestampMixin
 
 
@@ -364,6 +365,7 @@ class RawMetricEvent(BaseModel):
     # 触发用户（由 API 层按 user_id 关联 users 表补全，便于审计）。
     username: Optional[str] = None
     display_name: Optional[str] = None
+    conversation_available: bool = False
     owner_scope: Optional[str] = None
     session_id: Optional[str] = None
     run_id: Optional[str] = None
@@ -451,3 +453,23 @@ class RawMetricEventsData(BaseModel):
 
 class RawMetricEventsResponse(BaseResponse):
     data: RawMetricEventsData
+
+
+class AdminConversationDetail(BaseModel):
+    """Live, admin-only conversation linked to one metrics event."""
+
+    event_id: str
+    session_id: str
+    user_id: str
+    username: Optional[str] = None
+    display_name: Optional[str] = None
+    title: str
+    message_count: int
+    created_at: datetime
+    last_message_at: datetime
+    is_deleted: bool = False
+    messages: List[PublicShareMessage] = Field(default_factory=list)
+
+
+class AdminConversationDetailResponse(BaseResponse):
+    data: AdminConversationDetail

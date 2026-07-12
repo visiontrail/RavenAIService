@@ -33,6 +33,7 @@ from app.api.share import build_share_url
 from app.security.admin_auth import auth_manager as admin_auth_manager
 from app.security.admin_dependency import resolve_admin_identity
 from app.security.user_auth import user_auth_manager
+from app.services import registration_email_service
 from app.services.ai_chat_service import ai_chat_service
 from app.services.chat_history_service import chat_history_service
 from app.services.conversation_share_service import conversation_share_service
@@ -138,7 +139,7 @@ class UserRegisterRequest(BaseModel):
     username: str = Field(..., min_length=3, max_length=128)
     password: str = Field(..., min_length=6, max_length=256)
     display_name: Optional[str] = Field(None, max_length=128)
-    email: Optional[str] = Field(None, max_length=255)
+    email: str = Field(..., min_length=3, max_length=255)
 
     @field_validator("username", mode="before")
     @classmethod
@@ -152,7 +153,7 @@ class UserRegisterRequest(BaseModel):
             raise ValueError("用户名不能包含空白字符")
         return username
 
-    @field_validator("display_name", "email", mode="before")
+    @field_validator("display_name", mode="before")
     @classmethod
     def normalize_optional_text(cls, value: object) -> object:
         if value is None:
@@ -161,6 +162,16 @@ class UserRegisterRequest(BaseModel):
             return value
         normalized = value.strip()
         return normalized or None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_required_email(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("邮箱不能为空")
+        return normalized
 
 
 @router.post("/auth/login", response_model=UserAuthResponse)
@@ -193,6 +204,17 @@ async def user_register(
     locale: str = Depends(get_request_locale),
     db: AsyncSession = Depends(get_db),
 ) -> UserAuthResponse:
+    if not registration_email_service.has_basic_email_format(payload.email):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=t("auth.email_invalid", locale),
+        )
+    policy_error = registration_email_service.get_policy_validation_error(payload.email)
+    if policy_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=policy_error,
+        )
     user = await user_service.create_user(
         db,
         username=payload.username,
@@ -304,6 +326,29 @@ class UpdateUserRequest(BaseModel):
     role: Optional[str] = None
 
 
+class RegistrationEmailSettingsData(BaseModel):
+    email_regex: str
+    email_validation_message: str
+
+
+class RegistrationEmailSettingsResponse(BaseModel):
+    success: bool = True
+    data: RegistrationEmailSettingsData
+    message: str = "ok"
+
+
+class UpdateRegistrationEmailSettingsRequest(BaseModel):
+    email_regex: str = Field(
+        default="",
+        max_length=registration_email_service.MAX_REGEX_LENGTH,
+    )
+    email_validation_message: str = Field(
+        ...,
+        min_length=1,
+        max_length=registration_email_service.MAX_MESSAGE_LENGTH,
+    )
+
+
 @router.get("", response_model=UserListResponse)
 async def list_users(
     _admin: str = Depends(require_admin),
@@ -335,6 +380,50 @@ async def create_user(
     return UserDetailResponse(
         message=t("user.created", locale),
         data=UserProfile.model_validate(user, from_attributes=True),
+    )
+
+
+@router.get(
+    "/registration-email-settings",
+    response_model=RegistrationEmailSettingsResponse,
+)
+async def get_registration_email_settings(
+    _admin: str = Depends(require_admin),
+) -> RegistrationEmailSettingsResponse:
+    current = registration_email_service.get_settings()
+    return RegistrationEmailSettingsResponse(
+        data=RegistrationEmailSettingsData(
+            email_regex=current.email_regex,
+            email_validation_message=current.email_validation_message,
+        ),
+        message="读取成功",
+    )
+
+
+@router.put(
+    "/registration-email-settings",
+    response_model=RegistrationEmailSettingsResponse,
+)
+async def update_registration_email_settings(
+    payload: UpdateRegistrationEmailSettingsRequest,
+    _admin: str = Depends(require_admin),
+) -> RegistrationEmailSettingsResponse:
+    try:
+        saved = registration_email_service.save_settings(
+            email_regex=payload.email_regex,
+            email_validation_message=payload.email_validation_message,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    return RegistrationEmailSettingsResponse(
+        data=RegistrationEmailSettingsData(
+            email_regex=saved.email_regex,
+            email_validation_message=saved.email_validation_message,
+        ),
+        message="保存成功",
     )
 
 

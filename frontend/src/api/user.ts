@@ -147,7 +147,7 @@ export const userApi = {
     username: string
     password: string
     display_name?: string | null
-    email?: string | null
+    email: string
   }): Promise<ApiResponse<UserAuthPayload>> =>
     userClient.post('/api/v1/users/auth/register', payload),
 

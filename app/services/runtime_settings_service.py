@@ -23,12 +23,13 @@ logger = logging.getLogger(__name__)
 _LOCK = threading.Lock()
 _CACHE: Optional[Dict[str, Any]] = None
 _CACHE_MTIME: float = 0.0
+_CACHE_PATH: Optional[Path] = None
 
-# Keys retained for future runtime overrides. Currently empty — kept so
-# the persistence layer can still accept future additions without a
-# migration. All previously-allowed primary/light LLM override keys were
-# removed alongside the legacy ChatAgent retirement.
-_ALLOWED_KEYS: set[str] = set()
+# Only explicitly listed keys may be changed through the Admin runtime API.
+_ALLOWED_KEYS: set[str] = {
+    "registration_email_regex",
+    "registration_email_validation_message",
+}
 
 
 def _resolve_path() -> Path:
@@ -40,16 +41,17 @@ def _resolve_path() -> Path:
 
 
 def _load_unlocked() -> Dict[str, Any]:
-    global _CACHE, _CACHE_MTIME
+    global _CACHE, _CACHE_MTIME, _CACHE_PATH
     path = _resolve_path()
     if not path.exists():
         _CACHE = {}
         _CACHE_MTIME = 0.0
+        _CACHE_PATH = path
         return _CACHE
 
     try:
         mtime = path.stat().st_mtime
-        if _CACHE is not None and mtime == _CACHE_MTIME:
+        if _CACHE is not None and path == _CACHE_PATH and mtime == _CACHE_MTIME:
             return _CACHE
         with path.open("r", encoding="utf-8") as fh:
             data = json.load(fh) or {}
@@ -57,16 +59,18 @@ def _load_unlocked() -> Dict[str, Any]:
             data = {}
         _CACHE = data
         _CACHE_MTIME = mtime
+        _CACHE_PATH = path
         return _CACHE
     except Exception as exc:  # noqa: BLE001
         logger.warning("runtime_settings: 读取失败 %s: %s", path, exc)
         _CACHE = {}
         _CACHE_MTIME = 0.0
+        _CACHE_PATH = path
         return _CACHE
 
 
 def _persist_unlocked(values: Dict[str, Any]) -> None:
-    global _CACHE, _CACHE_MTIME
+    global _CACHE, _CACHE_MTIME, _CACHE_PATH
     path = _resolve_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -77,9 +81,22 @@ def _persist_unlocked(values: Dict[str, Any]) -> None:
     Path(tmp_name).replace(path)
     _CACHE = values
     _CACHE_MTIME = path.stat().st_mtime
+    _CACHE_PATH = path
 
 
 def get_all() -> Dict[str, Any]:
     """Return the current persisted overrides (may be empty)."""
     with _LOCK:
         return dict(_load_unlocked())
+
+
+def update(values: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist the allowed runtime setting keys and return the merged values."""
+    unsupported = set(values) - _ALLOWED_KEYS
+    if unsupported:
+        raise ValueError(f"Unsupported runtime settings: {sorted(unsupported)}")
+    with _LOCK:
+        merged = dict(_load_unlocked())
+        merged.update(values)
+        _persist_unlocked(merged)
+        return dict(merged)

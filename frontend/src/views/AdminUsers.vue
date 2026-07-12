@@ -25,6 +25,8 @@ const userDialogMode = ref<'create' | 'edit'>('create')
 const savingUser = ref(false)
 const editingUserId = ref<string | null>(null)
 const deletingUserId = ref('')
+const loadingRegistrationSettings = ref(false)
+const savingRegistrationSettings = ref(false)
 
 const authForm = reactive({
   username: '',
@@ -37,6 +39,11 @@ const userDialogForm = reactive({
   email: '',
   password: '',
   role: 'user' as 'user' | 'admin',
+})
+
+const registrationSettingsForm = reactive({
+  email_regex: '',
+  email_validation_message: '',
 })
 
 const navVisible = computed(() => appStore.adminSidebarVisible)
@@ -109,6 +116,61 @@ const fetchUsers = async () => {
   }
 }
 
+const fetchRegistrationSettings = async () => {
+  if (!isAuthenticated.value) return
+  loadingRegistrationSettings.value = true
+  try {
+    const resp = await adminApi.getRegistrationEmailSettings()
+    if (!resp?.success || !resp.data) {
+      throw new Error(resp?.message || t('admin.users.registrationSettingsLoadFail'))
+    }
+    registrationSettingsForm.email_regex = resp.data.email_regex || ''
+    registrationSettingsForm.email_validation_message = resp.data.email_validation_message || ''
+  } catch (err: any) {
+    appStore.showNotification({
+      title: t('admin.users.registrationSettingsLoadFail'),
+      message: parseErrorMessage(err),
+      type: 'error',
+    })
+  } finally {
+    loadingRegistrationSettings.value = false
+  }
+}
+
+const saveRegistrationSettings = async () => {
+  if (!registrationSettingsForm.email_validation_message.trim()) {
+    appStore.showNotification({
+      title: t('admin.users.validationMessageRequired'),
+      type: 'warning',
+    })
+    return
+  }
+  savingRegistrationSettings.value = true
+  try {
+    const resp = await adminApi.updateRegistrationEmailSettings({
+      email_regex: registrationSettingsForm.email_regex,
+      email_validation_message: registrationSettingsForm.email_validation_message.trim(),
+    })
+    if (!resp?.success || !resp.data) {
+      throw new Error(resp?.message || t('admin.users.registrationSettingsSaveFail'))
+    }
+    registrationSettingsForm.email_regex = resp.data.email_regex
+    registrationSettingsForm.email_validation_message = resp.data.email_validation_message
+    appStore.showNotification({
+      title: t('admin.users.registrationSettingsSaved'),
+      type: 'success',
+    })
+  } catch (err: any) {
+    appStore.showNotification({
+      title: t('admin.users.registrationSettingsSaveFail'),
+      message: parseErrorMessage(err),
+      type: 'error',
+    })
+  } finally {
+    savingRegistrationSettings.value = false
+  }
+}
+
 const handleLogin = async () => {
   if (!authForm.username || !authForm.password) {
     appStore.showNotification({
@@ -130,7 +192,7 @@ const handleLogin = async () => {
       message: t('admin.loginSuccessMsg', { username: resp.data.username }),
       type: 'success',
     })
-    await fetchUsers()
+    await Promise.all([fetchUsers(), fetchRegistrationSettings()])
   } catch (err: any) {
     appStore.showNotification({
       title: t('admin.loginFailFallback'),
@@ -336,7 +398,7 @@ const bootstrap = async () => {
     const resp = await adminApi.me()
     if (resp?.success) {
       isAuthenticated.value = true
-      await fetchUsers()
+      await Promise.all([fetchUsers(), fetchRegistrationSettings()])
     } else {
       clearAuth()
     }
@@ -481,6 +543,54 @@ onMounted(() => {
       </section>
 
       <section v-else class="space-y-4">
+        <form
+          class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4"
+          @submit.prevent="saveRegistrationSettings"
+        >
+          <div class="flex flex-col gap-1 mb-4">
+            <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.users.registrationSettingsTitle') }}</h2>
+            <p class="text-sm text-slate-500">{{ t('admin.users.registrationSettingsDesc') }}</p>
+          </div>
+          <div v-if="loadingRegistrationSettings" class="text-sm text-slate-500">
+            {{ t('admin.users.registrationSettingsLoading') }}
+          </div>
+          <div v-else class="grid gap-4 lg:grid-cols-2">
+            <label class="text-sm text-slate-700">
+              {{ t('admin.users.emailRegexLabel') }}
+              <textarea
+                v-model="registrationSettingsForm.email_regex"
+                rows="4"
+                maxlength="512"
+                spellcheck="false"
+                class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
+                :placeholder="t('admin.users.emailRegexPlaceholder')"
+              ></textarea>
+              <p class="text-xs text-slate-500 mt-1">{{ t('admin.users.emailRegexHint') }}</p>
+            </label>
+            <div class="space-y-3">
+              <label class="block text-sm text-slate-700">
+                {{ t('admin.users.emailValidationMessageLabel') }}
+                <input
+                  v-model="registrationSettingsForm.email_validation_message"
+                  type="text"
+                  required
+                  maxlength="255"
+                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
+                  :placeholder="t('admin.users.emailValidationMessagePlaceholder')"
+                />
+              </label>
+              <p class="text-xs text-slate-500">{{ t('admin.users.emailValidationMessageHint') }}</p>
+              <button
+                type="submit"
+                class="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm font-semibold hover:bg-cyan-700 transition disabled:opacity-60"
+                :disabled="savingRegistrationSettings"
+              >
+                {{ savingRegistrationSettings ? t('admin.users.registrationSettingsSaving') : t('admin.users.registrationSettingsSave') }}
+              </button>
+            </div>
+          </div>
+        </form>
+
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
           <div class="user-list-header flex items-center justify-between mb-4">
             <div>

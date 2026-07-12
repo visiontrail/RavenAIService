@@ -49,6 +49,7 @@ MESSAGES: Dict[str, Dict[str, str]] = {
         # ----- users & chat sessions (app/api/users.py) -----
         "auth.login_success": "登录成功",
         "auth.register_success": "注册成功",
+        "auth.email_invalid": "请输入有效的邮箱地址",
         "user.not_found": "用户不存在",
         "user.created": "用户创建成功",
         "user.updated": "用户已更新",
@@ -186,6 +187,7 @@ MESSAGES: Dict[str, Dict[str, str]] = {
         # ----- users & chat sessions (app/api/users.py) -----
         "auth.login_success": "Login successful",
         "auth.register_success": "Registration successful",
+        "auth.email_invalid": "Please enter a valid email address",
         "user.not_found": "User not found",
         "user.created": "User created",
         "user.updated": "User updated",

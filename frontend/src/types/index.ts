@@ -760,6 +760,7 @@ export interface MetricsRawEvent {
   user_id: string | null
   username: string | null
   display_name: string | null
+  conversation_available: boolean
   owner_scope: string | null
   session_id: string | null
   run_id: string | null
@@ -779,6 +780,20 @@ export interface MetricsRawEvent {
   total_tokens: number
   cost_microusd: number | null
   metadata: Record<string, unknown> | null
+}
+
+export interface AdminConversationDetail {
+  event_id: string
+  session_id: string
+  user_id: string
+  username: string | null
+  display_name: string | null
+  title: string
+  message_count: number
+  created_at: string
+  last_message_at: string
+  is_deleted: boolean
+  messages: PublicShareMessage[]
 }
 
 export interface MetricsUserDetail {
