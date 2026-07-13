@@ -142,7 +142,7 @@ def _extract_7z(archive_path: Path, dest: Path, max_bytes: int) -> None:
             out.write_bytes(data)
 
 
-def _validate_unar_output(dest: Path, max_bytes: int) -> None:
+def _validate_extracted_output(dest: Path, max_bytes: int) -> None:
     extracted = 0
     for path in dest.rglob("*"):
         try:
@@ -213,7 +213,59 @@ def _extract_rar_with_unar(archive_path: Path, dest: Path, max_bytes: int) -> No
         detail = f": {stderr.strip()}" if stderr.strip() else ""
         raise WorkspaceError(f"Failed to extract .rar archive with unar{detail}") from exc
 
-    _validate_unar_output(dest, max_bytes)
+    _validate_extracted_output(dest, max_bytes)
+
+
+def _extract_rar_with_bsdtar(archive_path: Path, dest: Path, max_bytes: int) -> None:
+    """Last-resort .rar backend, using libarchive's independent RAR5 reader.
+
+    unar/XADMaster has a decompression bug on some RAR5 archives with large
+    files: instead of erroring on the bad entry, it silently stops output
+    partway through (short of the header's declared size) — surfaced upstream
+    as "Failed the read enough data" (rarfile, which also shells out to unar)
+    and "Attempted to read more data than was available" (the unar fallback
+    above). bsdtar/libarchive implements RAR5 decoding independently of
+    unrar/unar and has been confirmed to extract those same entries intact,
+    so it's tried as a final fallback before giving up.
+    """
+    if shutil.which("bsdtar") is None:
+        raise WorkspaceError("bsdtar is required as a final fallback to extract this .rar archive")
+
+    try:
+        subprocess.run(
+            [
+                "bsdtar",
+                "-x",
+                "--no-same-owner",
+                "--no-same-permissions",
+                "-f",
+                str(archive_path),
+                "-C",
+                str(dest),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except subprocess.SubprocessError as exc:
+        stderr = getattr(exc, "stderr", "") or ""
+        detail = f": {stderr.strip()}" if stderr.strip() else ""
+        raise WorkspaceError(f"Failed to extract .rar archive with bsdtar{detail}") from exc
+
+    _validate_extracted_output(dest, max_bytes)
+
+
+def _reset_extract_dir(dest: Path) -> None:
+    """Clear partial output before retrying extraction with a different tool.
+
+    A failed rarfile/unar attempt can abort mid-entry and leave a truncated
+    file behind rather than cleaning up; without this the next tool's
+    (correct) output could end up mixed with leftover corrupt files instead
+    of replacing them outright.
+    """
+    shutil.rmtree(str(dest), ignore_errors=True)
+    dest.mkdir(parents=True, exist_ok=True)
 
 
 def _extract_rar(archive_path: Path, dest: Path, max_bytes: int) -> None:
@@ -258,17 +310,34 @@ def _extract_rar(archive_path: Path, dest: Path, max_bytes: int) -> None:
                 archive_path,
                 exc,
             )
+            _reset_extract_dir(dest)
 
+    unar_error: Optional[BaseException] = None
     try:
         _extract_rar_with_unar(archive_path, dest, max_bytes)
+        return
     except WorkspaceExtractTooLarge:
         raise
     except WorkspaceError as exc:
-        if rar_error is not None:
-            raise WorkspaceError(
-                f"Failed to extract .rar archive: {rar_error}; unar fallback failed: {exc}"
-            ) from exc
+        unar_error = exc
+        logger.warning(
+            "unar failed to extract %s; trying bsdtar fallback: %s",
+            archive_path,
+            exc,
+        )
+        _reset_extract_dir(dest)
+
+    try:
+        _extract_rar_with_bsdtar(archive_path, dest, max_bytes)
+    except WorkspaceExtractTooLarge:
         raise
+    except WorkspaceError as exc:
+        details = "; ".join(
+            f"{label}: {err}"
+            for label, err in (("rarfile", rar_error), ("unar", unar_error), ("bsdtar", exc))
+            if err is not None
+        )
+        raise WorkspaceError(f"Failed to extract .rar archive: {details}") from exc
 
 
 def _extract_archive(archive_path: Path, dest: Path, max_bytes: int) -> None:

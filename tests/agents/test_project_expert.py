@@ -275,6 +275,39 @@ async def test_agent_uses_expected_tools_materializes_project_skills_and_masks_t
 
 
 @pytest.mark.asyncio
+async def test_custom_provider_registers_project_discovery_tool(tmp_path):
+    """Regression for the production custom/yinhe provider capability gate."""
+    from app.agents.project_expert.agent import ProjectExpertAgent
+
+    ctx = _make_ctx(tmp_path)
+    build_options = MagicMock(return_value=MagicMock())
+    mcp_server = MagicMock()
+
+    async def fake_query(*_args, **_kwargs) -> AsyncIterator[Any]:
+        yield FakeResultMessage(result=_result_json())
+
+    with _patch_agent_common(fake_query), \
+        patch("app.agents.anthropic_client.build_options", build_options), \
+        patch("app.services.skills_service.materialize_enabled_skills", return_value=[]), \
+        patch(
+            "app.agents.log_analysis.mcp_tools.get_mcp_server",
+            return_value=mcp_server,
+        ) as get_mcp_server, \
+        patch("app.config.settings.anthropic_provider", "custom"), \
+        patch("app.config.settings.anthropic_model", "yinhe-thinking"):
+        result = await ProjectExpertAgent().run(ctx)
+
+    assert result["status"] == "ok"
+    get_mcp_server.assert_called_once_with()
+    kwargs = build_options.call_args.kwargs
+    assert kwargs["mcp_servers"] == {"project_repo": mcp_server}
+    assert "mcp__project_repo__discover_projects" in kwargs["allowed_tools"]
+    assert "mcp__project_repo__lookup_project_repo" in kwargs["allowed_tools"]
+    assert "当前 provider `custom` 不支持 MCP" not in kwargs["system_prompt"]
+    assert "必须先调用 `mcp__project_repo__discover_projects`" in kwargs["system_prompt"]
+
+
+@pytest.mark.asyncio
 async def test_agent_followup_reuses_existing_repo_without_clone(tmp_path):
     from app.agents.project_expert.agent import ProjectExpertAgent
 

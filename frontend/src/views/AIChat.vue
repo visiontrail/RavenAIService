@@ -23,6 +23,7 @@ import type { PendingClarification } from '@/types/agentTrace'
 import AgentTraceStream from '@/components/AgentTraceStream.vue'
 import ClarificationCard from '@/components/ClarificationCard.vue'
 import ShareConversationModal from '@/components/ShareConversationModal.vue'
+import ProjectRepoSelect from '@/components/ProjectRepoSelect.vue'
 import { projectRepoApi, type ProjectRepoOption } from '@/api'
 import { copyToClipboard, downloadFile } from '@/utils'
 
@@ -811,25 +812,6 @@ const visibleProjectRepoOptions = computed(() => {
   const agentKey = selectedProjectAgentKey.value
   if (!agentKey) return []
   return projectRepoOptions.value.filter((repo) => repoSupportsAgent(repo, agentKey))
-})
-const projectCardSummary = (card: string, maxLength = 64): string => {
-  const normalized = (card || '').replace(/\s+/g, ' ').trim()
-  if (normalized.length <= maxLength) return normalized
-  return `${normalized.slice(0, maxLength - 1)}…`
-}
-const projectOptionLabel = (repo: ProjectRepoOption): string =>
-  `${repo.project_name}（${repo.project_code}） — ${projectCardSummary(repo.project_card)}`
-const selectedProjectRepoOption = computed(() =>
-  visibleProjectRepoOptions.value.find((repo) => repo.id === selectedProjectRepoId.value) || null
-)
-const projectSelectTitle = computed(() => {
-  if (projectRepoOptionsLoading.value) return t('aiChat.project.loadingList')
-  if (selectedProjectRepoOption.value?.project_card) {
-    return selectedProjectRepoOption.value.project_card
-  }
-  return isProjectRepoRequired.value
-    ? t('aiChat.project.requiredTitle')
-    : t('aiChat.project.optionalTitle')
 })
 const isProjectRepoRequiredMissing = computed(() =>
   isProjectRepoRequired.value && selectedProjectRepoId.value === null
@@ -2041,28 +2023,13 @@ const openShareModal = () => {
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V6.75A2.75 2.75 0 0 1 6.75 4H20v13H6.75A2.75 2.75 0 0 0 4 19.5Z"/><path d="M8 8h8M8 12h6"/></svg>
             {{ t('aiChat.agents.projectExpert') }}
           </button>
-          <select
+          <ProjectRepoSelect
             v-if="isProjectRepoSelectVisible"
             v-model="selectedProjectRepoId"
-            class="rw-project-select"
-            :class="{ required: isProjectRepoRequiredMissing }"
-            :disabled="projectRepoOptionsLoading"
-            :title="projectSelectTitle"
-          >
-            <option :value="null">
-              {{ projectRepoOptionsLoading
-                ? t('aiChat.project.loading')
-                : isProjectRepoRequired ? t('aiChat.project.requiredPlaceholder') : t('aiChat.project.optionalPlaceholder') }}
-            </option>
-            <option
-              v-for="repo in visibleProjectRepoOptions"
-              :key="repo.id"
-              :value="repo.id"
-              :title="repo.project_card"
-            >
-              {{ projectOptionLabel(repo) }}
-            </option>
-          </select>
+            :options="visibleProjectRepoOptions"
+            :loading="projectRepoOptionsLoading"
+            :required="isProjectRepoRequired"
+          />
           <button
             class="rw-send-btn"
             :class="{ 'is-stop': canCancelCurrentRun }"
@@ -2554,21 +2521,6 @@ const openShareModal = () => {
   background: var(--rw-canvas);
   padding: 0 8px 0 8px;
 }
-
-.rw-project-select {
-  height: 28px; max-width: 220px; padding: 0 26px 0 10px;
-  border: 1px solid var(--rw-hairline-strong);
-  background: var(--rw-canvas); color: var(--rw-ink);
-  border-radius: 999px; font-size: 12.5px; font-weight: 500;
-  cursor: pointer; transition: border-color .15s;
-  appearance: none; -webkit-appearance: none; -moz-appearance: none;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23555' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
-}
-.rw-project-select:hover { border-color: var(--rw-ink); }
-.rw-project-select:disabled { opacity: .6; cursor: not-allowed; }
-.rw-project-select.required { border-color: var(--rw-danger, #b91c1c); }
 
 .rw-send-btn {
   width: 36px; height: 32px; border-radius: 8px;

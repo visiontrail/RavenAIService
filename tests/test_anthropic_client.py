@@ -98,6 +98,15 @@ class TestProviderProfiles:
         assert p.supports_document_input is True
         assert p.thinking_budget_tokens_effective is True
 
+    def test_custom_profile_supports_in_process_mcp_tools(self):
+        from app.agents.anthropic_client import PROVIDER_PROFILES
+
+        p = PROVIDER_PROFILES["custom"]
+        assert p.default_base_url == ""
+        assert p.default_model == ""
+        assert p.supports_mcp_server_tools is True
+        assert p.supports_partial_streaming is False
+
 
 class TestAssertAnthropicConfigured:
     def test_missing_api_key_raises(self, base_settings):
@@ -201,6 +210,23 @@ class TestBuildOptions:
 
         assert opts.mcp_servers == {"project_repo": mcp_mock}
         assert opts.allowed_tools == ["Bash", "mcp__project_repo__lookup_project_repo"]
+
+    def test_mcp_servers_and_allowed_tools_passthrough_on_custom(self, base_settings):
+        base_settings.anthropic_provider = "custom"
+        base_settings.anthropic_base_url = "https://custom.example.com/anthropic"
+        base_settings.anthropic_model = "custom-tool-model"
+        mcp_mock = MagicMock()
+
+        opts = self._build(
+            base_settings,
+            allowed_tools=["Read", "mcp__project_repo__discover_projects"],
+            mcp_servers={"project_repo": mcp_mock},
+        )
+
+        assert opts.model == "custom-tool-model"
+        assert opts.env["ANTHROPIC_BASE_URL"] == "https://custom.example.com/anthropic"
+        assert opts.mcp_servers == {"project_repo": mcp_mock}
+        assert opts.allowed_tools == ["Read", "mcp__project_repo__discover_projects"]
 
 
 class TestBuildOptionsExtensions:

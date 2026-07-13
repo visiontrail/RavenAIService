@@ -9,6 +9,14 @@ import { useChatSessionStore } from '@/stores/chatSession'
 import { useConversationRunsStore } from '@/stores/conversationRuns'
 import { userApi } from '@/api/user'
 import type { ChatSessionSummary, UserProfileRole } from '@/types'
+import {
+  firstRegistrationErrorField,
+  mapRegistrationServerError,
+  validateRegistration,
+  type RegistrationErrors,
+  type RegistrationInputField,
+  type RegistrationValidationMessages,
+} from '@/utils/registrationValidation'
 import brandIcon from '@/assets/icon.png'
 
 const route = useRoute()
@@ -123,6 +131,19 @@ const loginForm = reactive({
   email: '',
   confirmPassword: '',
 })
+const registerErrors = reactive<Record<RegistrationInputField | 'form', string>>({
+  username: '',
+  displayName: '',
+  email: '',
+  password: '',
+  confirmPassword: '',
+  form: '',
+})
+const usernameInputRef = ref<HTMLInputElement | null>(null)
+const displayNameInputRef = ref<HTMLInputElement | null>(null)
+const emailInputRef = ref<HTMLInputElement | null>(null)
+const passwordInputRef = ref<HTMLInputElement | null>(null)
+const confirmPasswordInputRef = ref<HTMLInputElement | null>(null)
 const isLoggingIn = ref(false)
 const showSettingsModal = ref(false)
 const activeSettingsSection = ref<'account' | 'agent'>('account')
@@ -446,6 +467,7 @@ const resetAuthForm = () => {
   loginForm.displayName = ''
   loginForm.email = ''
   loginForm.confirmPassword = ''
+  clearRegisterErrors()
 }
 
 const closeAuthModal = () => {
@@ -457,7 +479,57 @@ const switchAuthMode = (mode: 'login' | 'register') => {
   authMode.value = mode
   loginForm.password = ''
   loginForm.confirmPassword = ''
+  clearRegisterErrors()
 }
+
+const clearRegisterErrors = () => {
+  for (const field of Object.keys(registerErrors) as (RegistrationInputField | 'form')[]) {
+    registerErrors[field] = ''
+  }
+}
+
+const clearRegisterError = (field: RegistrationInputField) => {
+  if (authMode.value !== 'register') return
+  registerErrors[field] = ''
+  registerErrors.form = ''
+}
+
+const focusRegistrationError = (errors: RegistrationErrors) => {
+  const field = firstRegistrationErrorField(errors)
+  if (!field || field === 'form') return
+  const inputRefs: Record<RegistrationInputField, HTMLInputElement | null> = {
+    username: usernameInputRef.value,
+    displayName: displayNameInputRef.value,
+    email: emailInputRef.value,
+    password: passwordInputRef.value,
+    confirmPassword: confirmPasswordInputRef.value,
+  }
+  nextTick(() => inputRefs[field]?.focus())
+}
+
+const applyRegistrationErrors = (errors: RegistrationErrors) => {
+  clearRegisterErrors()
+  for (const [field, message] of Object.entries(errors)) {
+    if (message) registerErrors[field as RegistrationInputField | 'form'] = message
+  }
+  focusRegistrationError(errors)
+}
+
+const registrationValidationMessages = (): RegistrationValidationMessages => ({
+  usernameRequired: t('workbench.auth.validation.usernameRequired'),
+  usernameTooShort: t('workbench.auth.validation.usernameTooShort'),
+  usernameTooLong: t('workbench.auth.validation.usernameTooLong'),
+  usernameWhitespace: t('workbench.auth.validation.usernameWhitespace'),
+  displayNameTooLong: t('workbench.auth.validation.displayNameTooLong'),
+  emailRequired: t('workbench.auth.validation.emailRequired'),
+  emailInvalid: t('workbench.auth.validation.emailInvalid'),
+  emailTooLong: t('workbench.auth.validation.emailTooLong'),
+  passwordRequired: t('workbench.auth.validation.passwordRequired'),
+  passwordTooShort: t('workbench.auth.validation.passwordTooShort'),
+  passwordTooLong: t('workbench.auth.validation.passwordTooLong'),
+  confirmPasswordRequired: t('workbench.auth.validation.confirmPasswordRequired'),
+  passwordMismatch: t('workbench.auth.validation.passwordMismatch'),
+})
 
 const parseAuthError = (error: any, fallback: string) => {
   const detail = error?.response?.data?.detail || error?.response?.data?.message
@@ -493,22 +565,12 @@ const handleUserLogin = async () => {
 }
 
 const handleUserRegister = async () => {
-  if (!loginForm.username.trim() || !loginForm.password) {
-    appStore.showNotification({ title: t('workbench.notifications.usernamePasswordRequired'), type: 'warning' })
+  const validationErrors = validateRegistration(loginForm, registrationValidationMessages())
+  if (Object.keys(validationErrors).length) {
+    applyRegistrationErrors(validationErrors)
     return
   }
-  if (!loginForm.email.trim()) {
-    appStore.showNotification({ title: t('workbench.notifications.emailRequired'), type: 'warning' })
-    return
-  }
-  if (loginForm.password.length < 6) {
-    appStore.showNotification({ title: t('workbench.notifications.passwordTooShort'), type: 'warning' })
-    return
-  }
-  if (loginForm.password !== loginForm.confirmPassword) {
-    appStore.showNotification({ title: t('workbench.notifications.passwordMismatch'), type: 'warning' })
-    return
-  }
+  clearRegisterErrors()
   isLoggingIn.value = true
   try {
     const resp = await userApi.register({
@@ -526,11 +588,10 @@ const handleUserRegister = async () => {
     closeAuthModal()
     await sessionStore.load()
   } catch (error: any) {
-    appStore.showNotification({
-      title: t('workbench.notifications.registerFailed'),
-      message: parseAuthError(error, t('workbench.notifications.tryAgainLater')),
-      type: 'error',
-    })
+    applyRegistrationErrors(mapRegistrationServerError(
+      error,
+      t('workbench.auth.validation.registerRequestFailed'),
+    ))
   } finally {
     isLoggingIn.value = false
   }
@@ -972,10 +1033,10 @@ const handleUserLogout = () => {
 
     <!-- Login modal -->
     <div v-if="showLoginModal" class="rw-modal-backdrop" @click.self="closeAuthModal">
-      <div class="rw-modal">
+      <div class="rw-modal rw-auth-modal" role="dialog" aria-modal="true" aria-labelledby="rw-auth-title">
         <div class="rw-modal-head">
           <div>
-            <h3 class="rw-modal-title">{{ authMode === 'register' ? t('workbench.auth.registerTitle') : t('workbench.auth.loginTitle') }}</h3>
+            <h3 id="rw-auth-title" class="rw-modal-title">{{ authMode === 'register' ? t('workbench.auth.registerTitle') : t('workbench.auth.loginTitle') }}</h3>
             <p class="rw-modal-sub">{{ authMode === 'register' ? t('workbench.auth.registerSubtitle') : t('workbench.auth.loginSubtitle') }}</p>
           </div>
           <button class="rw-modal-close" @click="closeAuthModal" :aria-label="t('common.close')">
@@ -986,41 +1047,108 @@ const handleUserLogout = () => {
           <button type="button" :class="{ active: authMode === 'login' }" @click="switchAuthMode('login')">{{ t('workbench.auth.loginTab') }}</button>
           <button type="button" :class="{ active: authMode === 'register' }" @click="switchAuthMode('register')">{{ t('workbench.auth.registerTab') }}</button>
         </div>
-        <form class="rw-modal-form" @submit.prevent="handleAuthSubmit">
-          <label class="rw-form-field">
-            <span class="rw-form-label">{{ t('workbench.auth.username') }}</span>
-            <input v-model="loginForm.username" type="text" class="rw-input" :placeholder="t('workbench.auth.usernamePlaceholder')" autocomplete="username" />
-          </label>
-          <label v-if="authMode === 'register'" class="rw-form-field">
-            <span class="rw-form-label">{{ t('workbench.auth.displayName') }}</span>
-            <input v-model="loginForm.displayName" type="text" class="rw-input" :placeholder="t('workbench.auth.optional')" autocomplete="name" />
-          </label>
-          <label v-if="authMode === 'register'" class="rw-form-field">
-            <span class="rw-form-label">{{ t('workbench.auth.email') }}</span>
+        <form class="rw-modal-form" novalidate @submit.prevent="handleAuthSubmit">
+          <div class="rw-form-field" :class="{ 'has-error': authMode === 'register' && registerErrors.username }">
+            <label class="rw-form-label" for="rw-auth-username">{{ t('workbench.auth.username') }}</label>
             <input
+              id="rw-auth-username"
+              ref="usernameInputRef"
+              v-model="loginForm.username"
+              type="text"
+              class="rw-input"
+              maxlength="128"
+              :placeholder="t('workbench.auth.usernamePlaceholder')"
+              autocomplete="username"
+              autocapitalize="none"
+              :aria-invalid="authMode === 'register' && registerErrors.username ? 'true' : undefined"
+              :aria-describedby="authMode === 'register' && registerErrors.username ? 'rw-auth-username-error' : undefined"
+              @input="clearRegisterError('username')"
+            />
+            <span v-if="authMode === 'register' && registerErrors.username" id="rw-auth-username-error" class="rw-form-error" role="alert">
+              {{ registerErrors.username }}
+            </span>
+          </div>
+          <div v-if="authMode === 'register'" class="rw-form-field" :class="{ 'has-error': registerErrors.displayName }">
+            <label class="rw-form-label" for="rw-auth-display-name">{{ t('workbench.auth.displayName') }}</label>
+            <input
+              id="rw-auth-display-name"
+              ref="displayNameInputRef"
+              v-model="loginForm.displayName"
+              type="text"
+              class="rw-input"
+              maxlength="128"
+              :placeholder="t('workbench.auth.optional')"
+              autocomplete="name"
+              :aria-invalid="registerErrors.displayName ? 'true' : undefined"
+              :aria-describedby="registerErrors.displayName ? 'rw-auth-display-name-error' : undefined"
+              @input="clearRegisterError('displayName')"
+            />
+            <span v-if="registerErrors.displayName" id="rw-auth-display-name-error" class="rw-form-error" role="alert">
+              {{ registerErrors.displayName }}
+            </span>
+          </div>
+          <div v-if="authMode === 'register'" class="rw-form-field" :class="{ 'has-error': registerErrors.email }">
+            <label class="rw-form-label" for="rw-auth-email">{{ t('workbench.auth.email') }}</label>
+            <input
+              id="rw-auth-email"
+              ref="emailInputRef"
               v-model="loginForm.email"
               type="email"
               class="rw-input"
-              required
               maxlength="255"
               :placeholder="t('workbench.auth.emailPlaceholder')"
               autocomplete="email"
+              autocapitalize="none"
+              spellcheck="false"
+              :aria-invalid="registerErrors.email ? 'true' : undefined"
+              :aria-describedby="registerErrors.email ? 'rw-auth-email-error' : undefined"
+              @input="clearRegisterError('email')"
             />
-          </label>
-          <label class="rw-form-field">
-            <span class="rw-form-label">{{ t('workbench.auth.password') }}</span>
+            <span v-if="registerErrors.email" id="rw-auth-email-error" class="rw-form-error" role="alert">
+              {{ registerErrors.email }}
+            </span>
+          </div>
+          <div class="rw-form-field" :class="{ 'has-error': authMode === 'register' && registerErrors.password }">
+            <label class="rw-form-label" for="rw-auth-password">{{ t('workbench.auth.password') }}</label>
             <input
+              id="rw-auth-password"
+              ref="passwordInputRef"
               v-model="loginForm.password"
               type="password"
               class="rw-input"
+              maxlength="256"
               :placeholder="t('workbench.auth.passwordPlaceholder')"
               :autocomplete="authMode === 'register' ? 'new-password' : 'current-password'"
+              :aria-invalid="authMode === 'register' && registerErrors.password ? 'true' : undefined"
+              :aria-describedby="authMode === 'register' && registerErrors.password ? 'rw-auth-password-error' : undefined"
+              @input="clearRegisterError('password')"
             />
-          </label>
-          <label v-if="authMode === 'register'" class="rw-form-field">
-            <span class="rw-form-label">{{ t('workbench.auth.confirmPassword') }}</span>
-            <input v-model="loginForm.confirmPassword" type="password" class="rw-input" :placeholder="t('workbench.auth.confirmPasswordPlaceholder')" autocomplete="new-password" />
-          </label>
+            <span v-if="authMode === 'register' && registerErrors.password" id="rw-auth-password-error" class="rw-form-error" role="alert">
+              {{ registerErrors.password }}
+            </span>
+          </div>
+          <div v-if="authMode === 'register'" class="rw-form-field" :class="{ 'has-error': registerErrors.confirmPassword }">
+            <label class="rw-form-label" for="rw-auth-confirm-password">{{ t('workbench.auth.confirmPassword') }}</label>
+            <input
+              id="rw-auth-confirm-password"
+              ref="confirmPasswordInputRef"
+              v-model="loginForm.confirmPassword"
+              type="password"
+              class="rw-input"
+              maxlength="256"
+              :placeholder="t('workbench.auth.confirmPasswordPlaceholder')"
+              autocomplete="new-password"
+              :aria-invalid="registerErrors.confirmPassword ? 'true' : undefined"
+              :aria-describedby="registerErrors.confirmPassword ? 'rw-auth-confirm-password-error' : undefined"
+              @input="clearRegisterError('confirmPassword')"
+            />
+            <span v-if="registerErrors.confirmPassword" id="rw-auth-confirm-password-error" class="rw-form-error" role="alert">
+              {{ registerErrors.confirmPassword }}
+            </span>
+          </div>
+          <div v-if="authMode === 'register' && registerErrors.form" class="rw-form-alert" role="alert">
+            {{ registerErrors.form }}
+          </div>
           <div class="rw-modal-actions">
             <button type="submit" class="rw-btn-primary" :disabled="isLoggingIn">
               {{ isLoggingIn ? (authMode === 'register' ? t('workbench.auth.registerLoading') : t('workbench.auth.loginLoading')) : (authMode === 'register' ? t('workbench.auth.registerSubmit') : t('workbench.loginNow')) }}
@@ -1389,6 +1517,12 @@ const handleUserLogout = () => {
   padding: 22px;
   box-shadow: 0 24px 64px rgba(0,0,0,.18);
 }
+.rw-auth-modal {
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rw-hairline-strong) transparent;
+}
 .rw-modal.rw-settings-modal {
   max-width: 840px;
   min-height: 560px;
@@ -1752,6 +1886,46 @@ const handleUserLogout = () => {
   background: var(--rw-canvas);
 }
 .rw-input:focus { border-color: var(--rw-ink); }
+.rw-form-field.has-error .rw-input {
+  border-color: var(--rw-danger);
+  background: rgba(192,56,43,.025);
+}
+.rw-form-field.has-error .rw-input:focus {
+  border-color: var(--rw-danger);
+  box-shadow: 0 0 0 3px rgba(192,56,43,.09);
+}
+.rw-form-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: var(--rw-danger);
+  font-size: 11.5px;
+  line-height: 1.45;
+  animation: rw-form-error-in .14s ease-out;
+}
+.rw-form-error::before {
+  content: '';
+  width: 4px;
+  height: 4px;
+  margin-top: 6px;
+  flex: 0 0 4px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.rw-form-alert {
+  padding: 9px 11px;
+  border-left: 2px solid var(--rw-danger);
+  border-radius: 0 7px 7px 0;
+  background: rgba(192,56,43,.055);
+  color: var(--rw-danger);
+  font-size: 11.5px;
+  line-height: 1.5;
+  animation: rw-form-error-in .14s ease-out;
+}
+@keyframes rw-form-error-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .rw-modal-actions { display: flex; gap: 10px; padding-top: 4px; }
 .raven-workbench button.rw-btn-primary {
   height: 36px; padding: 0 16px;

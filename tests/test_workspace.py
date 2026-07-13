@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -298,6 +299,115 @@ class TestPrepare:
 
         assert calls == ["lsar", "unar"]
         assert (dest / "logs" / "app.log").read_text(encoding="utf-8") == "unar recovered\n"
+
+    def test_rar_extraction_falls_back_to_bsdtar_when_unar_also_fails(self, tmp_path, monkeypatch):
+        """Regression: unar/XADMaster can silently truncate large RAR5 entries
+        instead of erroring (real-world repro: a 1.86MB file decompressed to
+        exactly 1,835,008 bytes then raised "Attempted to read more data than
+        was available"). Both rarfile (which itself shells out to unar) and
+        our explicit unar fallback hit this, so bsdtar/libarchive — an
+        independent RAR5 implementation — must be tried as a third tier, and
+        any partial file unar left behind must not survive into the output.
+        """
+        from app.agents.log_analysis import workspace
+
+        class FakeRarError(Exception):
+            pass
+
+        class FakeRarInfo:
+            filename = "logs/app.log"
+            file_size = 10
+
+            def isdir(self):
+                return False
+
+        class FakeRarFile:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def infolist(self):
+                return [FakeRarInfo()]
+
+            def open(self, _info):
+                raise FakeRarError("Failed the read enough data: req=81920 got=0")
+
+        fake_rarfile = SimpleNamespace(RarFile=FakeRarFile, Error=FakeRarError)
+        monkeypatch.setitem(sys.modules, "rarfile", fake_rarfile)
+        monkeypatch.setattr(workspace.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+        calls = []
+
+        def fake_run(cmd, **_kwargs):
+            calls.append(cmd[0])
+            if cmd[0] == "lsar":
+                return SimpleNamespace(
+                    stdout=json.dumps(
+                        {
+                            "lsarContents": [
+                                {
+                                    "XADFileName": "logs/app.log",
+                                    "XADFileSize": 15,
+                                }
+                            ]
+                        }
+                    )
+                )
+            if cmd[0] == "unar":
+                # Mirror the real bug: unar writes a truncated file, then
+                # still fails the subprocess (non-zero exit).
+                out_dir = Path(cmd[cmd.index("-output-directory") + 1])
+                (out_dir / "logs").mkdir(parents=True, exist_ok=True)
+                (out_dir / "logs" / "app.log").write_text("truncat", encoding="utf-8")
+                raise subprocess.CalledProcessError(
+                    1, cmd, stderr="Attempted to read more data than was available"
+                )
+            if cmd[0] == "bsdtar":
+                out_dir = Path(cmd[cmd.index("-C") + 1])
+                (out_dir / "logs").mkdir(parents=True, exist_ok=True)
+                (out_dir / "logs" / "app.log").write_text("bsdtar recovered\n", encoding="utf-8")
+                return SimpleNamespace(stdout="")
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        monkeypatch.setattr(workspace.subprocess, "run", fake_run)
+
+        dest = tmp_path / "out"
+        dest.mkdir()
+        workspace._extract_rar(tmp_path / "sample.rar", dest, 1024)
+
+        assert calls == ["lsar", "unar", "bsdtar"]
+        # The bsdtar result must win outright, not merge with unar's leftover
+        # truncated file.
+        assert (dest / "logs" / "app.log").read_text(encoding="utf-8") == "bsdtar recovered\n"
+
+    def test_rar_extraction_all_tools_fail_reports_combined_error(self, tmp_path, monkeypatch):
+        from app.agents.log_analysis import workspace
+
+        class FakeRarError(Exception):
+            pass
+
+        class FakeRarFile:
+            def __init__(self, *_args, **_kwargs):
+                raise FakeRarError("not a rar file")
+
+        fake_rarfile = SimpleNamespace(RarFile=FakeRarFile, Error=FakeRarError)
+        monkeypatch.setitem(sys.modules, "rarfile", fake_rarfile)
+        monkeypatch.setattr(workspace.shutil, "which", lambda name: None)
+
+        dest = tmp_path / "out"
+        dest.mkdir()
+        with pytest.raises(workspace.WorkspaceError) as excinfo:
+            workspace._extract_rar(tmp_path / "sample.rar", dest, 1024)
+
+        message = str(excinfo.value)
+        assert "rarfile" in message
+        assert "unar" in message
+        assert "bsdtar" in message
 
 
 class TestPrepareTextUpload:

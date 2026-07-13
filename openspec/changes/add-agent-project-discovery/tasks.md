@@ -30,3 +30,8 @@
 - [x] 5.1 Run focused backend tests for project registry, Agents, workspace metadata, and MCP discovery
 - [x] 5.2 Run frontend type-check/tests/build and resolve regressions
 - [x] 5.3 Run OpenSpec validation and mark all implementation tasks complete
+
+## 6. Custom-provider discovery regression
+
+- [x] 6.1 Treat Anthropic-compatible custom endpoints as supporting SDK in-process MCP tools so project discovery is not removed before an Agent run
+- [x] 6.2 Add regression coverage for custom-provider option passthrough and ProjectExpertAgent project discovery, then run focused validation

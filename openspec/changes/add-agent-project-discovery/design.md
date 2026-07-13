@@ -57,6 +57,8 @@ The existing provider capability check continues to remove MCP tools for unsuppo
 
 This preserves current DeepSeek compatibility without pretending discovery occurred.
 
+The `custom` Anthropic-compatible profile is MCP-capable by default because SDK in-process MCP tools use the same standard `tool_use` loop as built-in tools such as `Read`; they are not remote MCP settings passed through to the upstream provider. This keeps project discovery available on the deployed Yinhe custom endpoint. The unsupported-provider fallback remains defensive for an explicitly incapable or unknown profile.
+
 ### 5. Surface cards in the existing selector without redesigning chat navigation
 
 The existing native selector remains, but each option label includes a bounded single-line card summary and exposes the full card as its title. The admin list and create/edit dialog use “Project Card” terminology and required validation. A full custom project-picker redesign was rejected as unnecessary for this change and would expand accessibility and interaction risk.

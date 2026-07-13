@@ -1,7 +1,8 @@
 """
 Anthropic 标准 LLM 配置层与 ClaudeAgentOptions 构建入口。
 
-支持多个上游服务商（provider），首发 `anthropic` 与 `deepseek` 两个 profile。
+支持多个上游服务商（provider），包括 `anthropic`、`deepseek` 与
+Anthropic-compatible `custom` profile。
 """
 
 from __future__ import annotations
@@ -105,6 +106,25 @@ PROVIDER_PROFILES: Dict[str, ProviderProfile] = {
         notes="DeepSeek Anthropic 兼容端点；不支持图像/文档输入与 thinking budget；"
         "支持标准 tool use（含 SDK 进程内 MCP server）",
     ),
+    "custom": ProviderProfile(
+        name="custom",
+        # custom 的地址、模型必须由 Settings 显式提供；这里的空值不会成为
+        # assert_anthropic_configured 校验后的 effective 值。
+        default_base_url="",
+        default_model="",
+        default_small_fast_model=None,
+        supports_image_input=False,
+        supports_document_input=False,
+        # create_sdk_mcp_server 创建的是本进程内工具。它和 Read/Bash 等 SDK
+        # 工具一样通过 Anthropic 标准 tool_use 协议暴露，不是把远端 MCP
+        # 配置透传给上游。因此，能够运行 Claude Agent SDK 工具循环的
+        # Anthropic-compatible custom 端点也能够使用这些工具。
+        supports_mcp_server_tools=True,
+        thinking_budget_tokens_effective=False,
+        disable_parallel_tool_use_effective=False,
+        supports_partial_streaming=False,
+        notes="自定义 Anthropic 兼容端点；支持标准 tool use（含 SDK 进程内 MCP server）",
+    ),
 }
 
 
@@ -164,7 +184,8 @@ def build_options(
 
     provider_name = settings.anthropic_provider
     profile = PROVIDER_PROFILES.get(provider_name)
-    # custom provider 不在注册表中，使用最严格的能力矩阵
+    # 防御性兜底：Settings 正常会拒绝未知 provider。若测试或调用方绕过
+    # Settings 校验，仍使用最严格的能力矩阵。
     if profile is None:
         profile = ProviderProfile(
             name="custom",

@@ -58,7 +58,7 @@ const removingMemberId = ref<string | null>(null)
 const memberSearch = ref('')
 const projectMembers = ref<ProjectMember[]>([])
 const userCandidates = ref<UserProfile[]>([])
-type RepoHelpKey = 'projectCode' | 'token' | 'members' | 'connectivity'
+type RepoHelpKey = 'projectCode' | 'token' | 'connectivity'
 const activeHelp = ref<RepoHelpKey | null>(null)
 
 const toggleHelp = (key: RepoHelpKey) => {
@@ -823,26 +823,6 @@ watch(
                 <div class="min-w-0 flex-1">
                   <div class="repo-section-title-line">
                     <h4>{{ t('admin.projectRepos.projectSectionTitle') }}</h4>
-                    <div class="repo-help">
-                      <span class="repo-help-node"><Users :size="12" />{{ t('admin.projectRepos.colMembers') }}</span>
-                      <button
-                        type="button"
-                        class="repo-help-trigger"
-                        :class="{ 'is-active': activeHelp === 'members' }"
-                        :aria-label="t('admin.projectRepos.helpAriaLabel', { label: t('admin.projectRepos.colMembers') })"
-                        :aria-expanded="activeHelp === 'members'"
-                        aria-controls="repo-help-members"
-                        @click.stop="toggleHelp('members')"
-                      >
-                        <CircleHelp :size="14" />
-                      </button>
-                      <Transition name="repo-help-popover">
-                        <div v-if="activeHelp === 'members'" id="repo-help-members" class="repo-help-popover" role="dialog" @click.stop>
-                          <strong>{{ t('admin.projectRepos.colMembers') }}</strong>
-                          <p>{{ t('admin.projectRepos.memberHint') }}</p>
-                        </div>
-                      </Transition>
-                    </div>
                   </div>
                   <p>{{ t('admin.projectRepos.projectSectionHint') }}</p>
                 </div>
@@ -1103,6 +1083,14 @@ watch(
           <button class="admin-close-btn" :title="t('admin.projectRepos.tooltipClose')" @click="closeMemberDialog">
             <X :size="17" />
           </button>
+        </div>
+
+        <div class="member-permission-note">
+          <Users :size="17" class="member-permission-note-icon" />
+          <div>
+            <p class="member-permission-note-title">{{ t('admin.projectRepos.colMembers') }}</p>
+            <p class="member-permission-note-copy">{{ t('admin.projectRepos.memberHint') }}</p>
+          </div>
         </div>
 
         <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.95fr)]">
@@ -1854,6 +1842,37 @@ watch(
   width: min(980px, 100%);
   max-height: 90vh;
   overflow-y: auto;
+}
+
+.member-permission-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  margin-bottom: 1rem;
+  border: 1px solid #bae6fd;
+  border-radius: 0.75rem;
+  background: #f0f9ff;
+  padding: 0.75rem 0.85rem;
+}
+
+.member-permission-note-icon {
+  flex: none;
+  margin-top: 0.1rem;
+  color: #0284c7;
+}
+
+.member-permission-note-title {
+  color: #0f172a;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1rem;
+}
+
+.member-permission-note-copy {
+  margin-top: 0.15rem;
+  color: #475569;
+  font-size: 0.75rem;
+  line-height: 1.2rem;
 }
 
 .member-list-scroll {
