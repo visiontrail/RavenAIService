@@ -151,6 +151,14 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/admin/announcements',
+    name: 'AdminAnnouncements',
+    component: () => import('../views/AdminAnnouncements.vue'),
+    meta: {
+      title: i18n.global.t('router.adminAnnouncements'),
+    },
+  },
+  {
     path: '/admin/releases',
     name: 'AdminReleases',
     component: () => import('../views/AdminRelease.vue'),

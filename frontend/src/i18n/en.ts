@@ -525,6 +525,13 @@ export default {
     settings: 'Settings',
     helpShortcuts: 'Help and shortcuts',
     logout: 'Sign out',
+    announcement: {
+      kicker: 'System announcement',
+      publishedBy: 'Published by {name}',
+      acknowledge: 'Got it',
+      acknowledging: 'Confirming…',
+      dismissFailed: 'Could not confirm announcement',
+    },
     sessionGroups: {
       pinned: 'Pinned',
       today: 'Today',
@@ -715,6 +722,44 @@ export default {
     loadFail: 'Load failed',
     credentialsHint: 'Credentials configured in admin_auth.yaml; change after first login',
     refreshing: 'Refreshing',
+    announcements: {
+      subtitle: 'Global announcements',
+      badgeActive: 'Announcement live',
+      badgeInactive: 'No live announcement',
+      pageTitle: 'Publish a global announcement',
+      pageDesc: 'Users see it on their first visit, refresh, or new chat. After acknowledging it, each user will not see that version again.',
+      editorTitle: 'Announcement content',
+      titleLabel: 'Title',
+      titlePlaceholder: 'For example: Maintenance tonight at 22:00',
+      contentLabel: 'Message',
+      contentPlaceholder: 'Markdown is supported. For example:\n\n## Maintenance window\nTonight from **22:00–23:00**\n\n- Save your work first\n- Service may be briefly interrupted',
+      markdownSupported: 'Markdown supported',
+      editorTabsLabel: 'Announcement message editor mode',
+      writeTab: 'Write',
+      previewTab: 'Preview',
+      previewEmpty: 'Enter a message to preview it here',
+      markdownHint: '**bold** · [link](url) · # heading · - list · `code`',
+      charCount: '{count} / 4000',
+      publish: 'Publish announcement',
+      publishing: 'Publishing…',
+      publishConfirm: 'This publishes a new announcement to every user. Continue?',
+      replaceHint: 'Publishing again creates a new version, so users who saw the previous announcement will also receive this one.',
+      publishSuccess: 'Announcement published',
+      publishFailed: 'Failed to publish announcement',
+      currentTitle: 'Current announcement',
+      currentActive: 'Live',
+      currentInactive: 'Stopped',
+      noCurrentTitle: 'No announcement published yet',
+      noCurrentDesc: 'Complete the editor and publish to notify every signed-in user once.',
+      publishedBy: 'Published by {name}',
+      deactivate: 'Stop showing',
+      deactivating: 'Stopping…',
+      deactivateConfirm: 'Users who have not seen this announcement will no longer receive it. Continue?',
+      deactivateSuccess: 'Announcement stopped',
+      deactivateFailed: 'Failed to stop announcement',
+      loadFailed: 'Failed to load announcement',
+      statusNote: 'Markdown is rendered safely; dismissal is saved to the user account and applies across devices.',
+    },
     modelSettings: {
       subtitle: 'Model settings',
       badge: 'Runtime config',
@@ -924,6 +969,86 @@ export default {
       previewTotalChars: 'Total',
       previewLayerOn: 'Configured',
       previewLayerOff: 'Empty',
+      promptKeySeparator: ', ',
+      metadata: {
+        functions: {
+          claude_agent_log_analysis: {
+            name: 'Log Analysis',
+            description: 'Claude Agent SDK-powered intelligent log analysis prompts',
+          },
+          claude_agent_device: {
+            name: 'Device Chat',
+            description: 'Claude Agent SDK-powered device interaction prompts',
+          },
+          claude_agent_project_expert: {
+            name: 'Project Expert',
+            description: 'Claude Agent SDK-powered project source Q&A prompts',
+          },
+          claude_agent_package_search: {
+            name: 'Package Search',
+            description: 'Claude Agent SDK-powered, project-scoped package search prompts',
+          },
+          claude_agent_general: {
+            name: 'General Assistant',
+            description: 'Claude Agent SDK-powered product guidance and Agent/project routing prompts',
+          },
+          chat: {
+            name: 'AI Chat',
+            description: 'Prompts used by AI chat',
+          },
+        },
+        agents: {
+          claude_agent_log_analysis: {
+            generic: {
+              name: 'General Log Analysis Agent',
+              description: 'Works with every log type, cloning the repository identified by metadata/task to analyze the issue',
+            },
+          },
+          claude_agent_device: {
+            default: {
+              name: 'Default Device Chat Agent',
+              description: 'Handles linked-device conversations and selects device MCP tools and parameters directly',
+            },
+          },
+          claude_agent_project_expert: {
+            generic: {
+              name: 'General Project Expert Agent',
+              description: 'Answers source questions for registered projects by cloning the project selected by the user',
+            },
+          },
+          claude_agent_package_search: {
+            generic: {
+              name: 'Package Configuration Manager',
+              description: 'Searches packages within the selected project, prioritizing package metadata and using Git history when needed',
+            },
+          },
+          claude_agent_general: {
+            generic: {
+              name: 'General Routing Agent',
+              description: 'Explains the product when no specialist Agent is selected and uses project cards to suggest the right Agent',
+            },
+          },
+        },
+        projectAgents: {
+          project_expert: {
+            name: 'Project Expert',
+            description: 'Answers project and source questions using project context, project prompts, and an optional code repository',
+          },
+          log_analysis: {
+            name: 'Log Analysis',
+            description: 'Analyzes log archives and uses the project repository to identify the root cause',
+          },
+          package_search: {
+            name: 'Package Configuration Manager',
+            description: 'Searches packages, version assets, and configuration clues within the selected project',
+          },
+        },
+        previewLayers: {
+          base: 'Agent base layer',
+          agent: 'Agent project layer',
+          shared: 'Project shared layer',
+        },
+      },
     },
     metrics: {
       subtitle: 'Metrics dashboard',
@@ -1437,6 +1562,10 @@ export default {
       submitting: 'Submitting…',
       requiredError: 'Please answer every question (pick an option or enter custom text).',
     },
+    table: {
+      markdownCopied: 'Table markdown copied',
+      copyFailed: 'Copy failed, please select the table content manually',
+    },
     mermaid: {
       title: 'Chart viewer',
       rendering: 'Rendering chart…',
@@ -1587,6 +1716,7 @@ export default {
     terms: 'Terms of Service',
     admin: 'Admin Console',
     adminUsers: 'User Management',
+    adminAnnouncements: 'Global Announcements',
     adminRelease: 'App Release Management',
     adminRepos: 'Project Management',
     adminAgentSkills: 'Agent Skills',
@@ -1601,6 +1731,9 @@ export default {
     promptConfigDesc: 'Edit system prompts by function and Agent',
     users: 'User Management',
     usersDesc: 'Manage conversation users, reset passwords',
+    announcements: 'Global Announcements',
+    announcementsDesc: 'Publish a one-time system notice to every user',
+    release: 'App Release',
     releaseDesc: 'Upload Linux / macOS / Windows release packages',
     repos: 'Project Management',
     reposDesc: 'Manage projects, optionally linking a code repository',
@@ -1676,6 +1809,7 @@ export default {
     noContent: 'No content',
     mermaidLoadFail: 'Failed to load Mermaid, falling back to source code:',
     copySource: 'Copy source',
+    copyTableMarkdown: 'Copy Markdown',
     mermaidRenderFail: '⚠ Chart rendering failed: {msg}'
   },
 

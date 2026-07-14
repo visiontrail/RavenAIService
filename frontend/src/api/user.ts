@@ -7,6 +7,8 @@ import type {
   UserProfileRole,
   ChatSessionSummary,
   ChatMessageRecord,
+  AnnouncementDismissData,
+  SystemAnnouncement,
 } from '@/types'
 
 export interface UserProfileUpdatePayload {
@@ -155,6 +157,14 @@ export const userApi = {
 
   updateProfile: (payload: UserProfileUpdatePayload): Promise<ApiResponse<UserProfile>> =>
     userClient.patch('/api/v1/users/auth/me', payload),
+
+  getPendingAnnouncement: (): Promise<ApiResponse<SystemAnnouncement | null>> =>
+    userClient.get('/api/v1/announcements/pending'),
+
+  dismissAnnouncement: (
+    announcementId: string
+  ): Promise<ApiResponse<AnnouncementDismissData>> =>
+    userClient.post(`/api/v1/announcements/${announcementId}/dismiss`),
 
   listSessions: (): Promise<ApiResponse<ChatSessionSummary[]>> =>
     userClient.get('/api/v1/users/chat-sessions'),

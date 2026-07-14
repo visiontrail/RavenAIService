@@ -15,6 +15,7 @@ from app.api import health, logs, tasks, admin, users, packages
 from app.api import ai_chat, device_link, metrics as metrics_api
 from app.api import share as share_api
 from app.api import admin_metrics
+from app.api import announcements as announcements_api
 from app.api import project_repos as project_repos_api
 from app.api import bug_fixes as bug_fixes_api
 from app.api.releases import admin_router as releases_admin_router, public_router as releases_public_router
@@ -303,6 +304,8 @@ def create_app() -> FastAPI:
     app.include_router(share_api.router, tags=["对话分享（公开）"])
     app.include_router(device_link.router, tags=["设备链接"])
     app.include_router(admin.router, tags=["Admin"])
+    app.include_router(announcements_api.admin_router, tags=["Admin"])
+    app.include_router(announcements_api.user_router, tags=["系统公告"])
     app.include_router(admin_metrics.admin_router, tags=["Metrics"])
     app.include_router(admin_metrics.self_router, tags=["Metrics"])
     app.include_router(releases_admin_router, tags=["Admin"])

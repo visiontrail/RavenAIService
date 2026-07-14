@@ -552,6 +552,20 @@ export interface UserAuthPayload {
   user: UserProfile
 }
 
+export interface SystemAnnouncement {
+  id: string
+  title: string
+  content: string
+  published_at: string
+  published_by: string
+  active: boolean
+}
+
+export interface AnnouncementDismissData {
+  announcement_id: string
+  dismissed: boolean
+}
+
 export interface ChatSessionSummary {
   id: string
   title: string

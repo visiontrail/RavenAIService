@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import type { AdminIdentity } from '@/types'
-import { adminNavItems, type AdminNavItem } from '@/utils/adminNav'
+import { getAdminNavItems, type AdminNavItem } from '@/utils/adminNav'
 
 // Module-level singleton holding the admin identity reported by
 // `GET /admin/auth/me`. Every admin view shares the same scope so navigation,
@@ -33,9 +33,10 @@ export const useAdminScope = () => {
   // Global admins (or callers before `me()` resolves the scope) see every nav
   // item. Project-member admins only see the keys reported by the backend.
   const visibleNavItems = computed<readonly AdminNavItem[]>(() => {
-    if (!identity.value || isGlobalAdmin.value) return adminNavItems
+    const navItems = getAdminNavItems()
+    if (!identity.value || isGlobalAdmin.value) return navItems
     const allowed = new Set(allowedNavKeys.value)
-    return adminNavItems.filter((item) => allowed.has(item.key))
+    return navItems.filter((item) => allowed.has(item.key))
   })
 
   const normalizeCode = (code: string) => (code || '').trim().toLowerCase()

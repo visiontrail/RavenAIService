@@ -26,6 +26,7 @@ import {
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
+import { localizeProjectAgent } from '@/utils/adminPromptMetadata'
 import { useAdminScope } from '@/composables/useAdminScope'
 import type { ProjectAgentInfo, ProjectMember, ProjectRepo, ProjectRepoPayload, TestConnectionResult, UserProfile } from '@/types'
 
@@ -113,9 +114,26 @@ const compatibleProjectAgents = computed(() =>
   projectAgents.value.filter((agent) => repoForm.associate_repo || !agent.requires_repo)
 )
 
+const projectAgentLabel = (agent: ProjectAgentInfo): string =>
+  localizeProjectAgent(
+    agent.key,
+    agent.display_name || agent.name || agent.key,
+    agent.description,
+  ).name
+
+const projectAgentDescription = (agent: ProjectAgentInfo): string | null | undefined =>
+  localizeProjectAgent(
+    agent.key,
+    agent.display_name || agent.name || agent.key,
+    agent.description,
+  ).description
+
 const enabledAgentLabels = (repo: ProjectRepo): string[] =>
   (repo.enabled_agent_keys || [])
-    .map((key) => projectAgentByKey.value.get(key)?.display_name || key)
+    .map((key) => {
+      const agent = projectAgentByKey.value.get(key)
+      return agent ? projectAgentLabel(agent) : key
+    })
     .filter(Boolean)
 
 const defaultAgentKeysForAssociateState = (): string[] =>
@@ -1031,8 +1049,8 @@ watch(
                       @change="toggleProjectAgent(agent.key)"
                     />
                     <span class="min-w-0">
-                      <span class="block font-semibold leading-5">{{ agent.display_name }}</span>
-                      <span class="mt-1 block text-[11px] leading-4 text-slate-500">{{ agent.description }}</span>
+                      <span class="block font-semibold leading-5">{{ projectAgentLabel(agent) }}</span>
+                      <span class="mt-1 block text-[11px] leading-4 text-slate-500">{{ projectAgentDescription(agent) }}</span>
                       <span v-if="agent.requires_repo" class="mt-1.5 inline-flex rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-500">
                         {{ t('admin.projectRepos.agentRequiresRepo') }}
                       </span>

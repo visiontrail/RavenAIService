@@ -97,6 +97,11 @@ class User(Base, TimestampMixin):
         nullable=False,
         comment="澄清提问超时(5分钟)后的行为：cancel=取消本轮 / continue=基于已知信息继续",
     )
+    last_seen_announcement_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        nullable=True,
+        comment="最近确认关闭的系统公告ID",
+    )
     last_login_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime,
         nullable=True,

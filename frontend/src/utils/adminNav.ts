@@ -1,55 +1,83 @@
 import { i18n } from '@/i18n'
 import type { AdminIdentity } from '@/types'
 
-export const adminNavItems = [
+const adminNavDefinitions = [
   {
     key: 'prompts',
-    label: i18n.global.t('adminNav.promptConfig'),
+    labelKey: 'adminNav.promptConfig',
     path: '/admin/prompts',
-    description: i18n.global.t('adminNav.promptConfigDesc'),
+    descriptionKey: 'adminNav.promptConfigDesc',
   },
   {
     key: 'users',
-    label: i18n.global.t('adminNav.users'),
+    labelKey: 'adminNav.users',
     path: '/admin/users',
-    description: i18n.global.t('adminNav.usersDesc'),
+    descriptionKey: 'adminNav.usersDesc',
+  },
+  {
+    key: 'announcements',
+    labelKey: 'adminNav.announcements',
+    path: '/admin/announcements',
+    descriptionKey: 'adminNav.announcementsDesc',
   },
   {
     key: 'releases',
-    label: 'App Release',
+    labelKey: 'adminNav.release',
     path: '/admin/releases',
-    description: i18n.global.t('adminNav.releaseDesc'),
+    descriptionKey: 'adminNav.releaseDesc',
   },
   {
     key: 'project-repos',
-    label: i18n.global.t('adminNav.repos'),
+    labelKey: 'adminNav.repos',
     path: '/admin/project-repos',
-    description: i18n.global.t('adminNav.reposDesc'),
+    descriptionKey: 'adminNav.reposDesc',
   },
   {
     key: 'agent-skills',
-    label: i18n.global.t('adminNav.agentSkills'),
+    labelKey: 'adminNav.agentSkills',
     path: '/admin/agent-skills',
-    description: i18n.global.t('adminNav.agentSkillsDesc'),
+    descriptionKey: 'adminNav.agentSkillsDesc',
   },
   {
     key: 'model-settings',
-    label: i18n.global.t('adminNav.modelSettings'),
+    labelKey: 'adminNav.modelSettings',
     path: '/admin/model-settings',
-    description: i18n.global.t('adminNav.modelSettingsDesc'),
+    descriptionKey: 'adminNav.modelSettingsDesc',
   },
   {
     key: 'metrics',
-    label: i18n.global.t('adminNav.metrics'),
+    labelKey: 'adminNav.metrics',
     path: '/admin/metrics',
-    description: i18n.global.t('adminNav.metricsDesc'),
+    descriptionKey: 'adminNav.metricsDesc',
   },
 ] as const
 
-export type AdminNavItem = (typeof adminNavItems)[number]
+export interface AdminNavItem {
+  key: (typeof adminNavDefinitions)[number]['key']
+  label: string
+  path: string
+  description: string
+}
+
+/**
+ * Resolve labels on demand so the admin sidebar follows vue-i18n locale
+ * changes instead of retaining the language active when this module loaded.
+ */
+export const getAdminNavItems = (): readonly AdminNavItem[] =>
+  adminNavDefinitions.map((item) => ({
+    key: item.key,
+    label: i18n.global.t(item.labelKey),
+    path: item.path,
+    description: i18n.global.t(item.descriptionKey),
+  }))
+
+// Stable structural export retained for route/scope callers and tests. UI
+// rendering should use getAdminNavItems() so translated labels stay reactive.
+export const adminNavItems = getAdminNavItems()
 
 export const resolveAdminNavKey = (path: string) => {
   if (path.startsWith('/admin/users')) return 'users'
+  if (path.startsWith('/admin/announcements')) return 'announcements'
   if (path.startsWith('/admin/releases')) return 'releases'
   if (path.startsWith('/admin/project-repos')) return 'project-repos'
   if (path.startsWith('/admin/project-skills')) return 'project-repos'

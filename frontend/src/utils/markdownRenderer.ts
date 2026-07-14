@@ -160,15 +160,27 @@ function cleanXmlAndMetadata(content: string): string {
 /**
  * 配置markdown-it实例
  */
-function createMarkdownRenderer(): MarkdownIt {
+interface MarkdownRendererConfig {
+  allowHtml: boolean
+  enableMermaid: boolean
+  breaks: boolean
+}
+
+const DEFAULT_RENDERER_CONFIG: MarkdownRendererConfig = {
+  allowHtml: true,
+  enableMermaid: true,
+  breaks: false,
+}
+
+function createMarkdownRenderer(config: MarkdownRendererConfig): MarkdownIt {
   const md: MarkdownIt = new MarkdownIt({
-    html: true,        // 允许HTML标签
+    html: config.allowHtml,
     linkify: true,     // 自动转换URL为链接
     typographer: true, // 启用一些语言中立的替换 + 引号美化
-    breaks: false,     // 转换段落里的 '\n' 到 <br>
+    breaks: config.breaks,
     highlight: function (str: string, lang: string): string {
       // Mermaid 代码块：输出占位容器，稍后由 processMermaidBlocks() 异步渲染为 SVG。
-      if (lang === 'mermaid') {
+      if (lang === 'mermaid' && config.enableMermaid) {
         // 容器 id 由源码哈希派生，保证同一内容多次渲染产出一致的 HTML。
         const id = `mermaid-${hashString(str)}`
         const escapedSource = escapeHtml(str)
@@ -203,9 +215,33 @@ function createMarkdownRenderer(): MarkdownIt {
     }
   })
 
-  // 自定义表格渲染规则
-  md.renderer.rules.table_open = () => '<div class="table-wrapper"><table class="markdown-table">\n'
-  md.renderer.rules.table_close = () => '</table></div>\n'
+  // 自定义表格渲染规则：
+  // 外层 .table-block 提供定位上下文与「复制 Markdown」按钮（按钮必须在
+  // .table-wrapper 的横向滚动容器之外，否则会随表格一起滚动出视野）；
+  // 表格的原始 markdown 源码通过 token.map 行号从 env.source 中切片取出，
+  // 存入 data-table-md 供点击复制使用（HTML 实体编码，dataset 读取时自动解码）。
+  md.renderer.rules.table_open = (tokens, idx, _options, env) => {
+    let source = ''
+    const map = tokens[idx].map
+    if (map && env && typeof env.source === 'string') {
+      source = env.source
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .slice(map[0], map[1])
+        .join('\n')
+        .trim()
+    }
+    if (!source) {
+      return '<div class="table-block"><div class="table-wrapper"><table class="markdown-table">\n'
+    }
+    const label = i18n.global.t('markdown.copyTableMarkdown')
+    return (
+      `<div class="table-block" data-table-md="${escapeHtml(source)}">` +
+      `<button class="table-copy-btn" type="button" aria-label="${label}">${label}</button>` +
+      `<div class="table-wrapper"><table class="markdown-table">\n`
+    )
+  }
+  md.renderer.rules.table_close = () => '</table></div></div>\n'
   
   // 自定义链接渲染规则（添加target="_blank"和安全属性）
   type LinkOpenRule = NonNullable<typeof md.renderer.rules.link_open>
@@ -231,17 +267,26 @@ function createMarkdownRenderer(): MarkdownIt {
   return md
 }
 
-// 创建单例渲染器实例
-let rendererInstance: MarkdownIt | null = null
+// 按配置复用 renderer；默认配置保持现有聊天渲染行为不变。
+const rendererInstances = new Map<string, MarkdownIt>()
 
 /**
  * 获取markdown渲染器实例（单例）
  */
-export function getMarkdownRenderer(): MarkdownIt {
-  if (!rendererInstance) {
-    rendererInstance = createMarkdownRenderer()
+export function getMarkdownRenderer(
+  options: Partial<MarkdownRendererConfig> = {},
+): MarkdownIt {
+  const config: MarkdownRendererConfig = {
+    ...DEFAULT_RENDERER_CONFIG,
+    ...options,
   }
-  return rendererInstance
+  const key = `${config.allowHtml}:${config.enableMermaid}:${config.breaks}`
+  let renderer = rendererInstances.get(key)
+  if (!renderer) {
+    renderer = createMarkdownRenderer(config)
+    rendererInstances.set(key, renderer)
+  }
+  return renderer
 }
 
 /**
@@ -276,12 +321,39 @@ export function renderMarkdown(
     return `<div class="${wrapperClass}"><p class="text-gray-500">${i18n.global.t('markdown.noContent')}</p></div>`
   }
 
-  // 渲染markdown
+  // 渲染markdown（env.source 供表格渲染规则按行号切片出原始 markdown 源码）
   const md = getMarkdownRenderer()
-  const html = md.render(cleaned)
+  const html = md.render(cleaned, { source: cleaned })
 
   // 包装在容器中
   return `<div class="${wrapperClass}">${html}</div>`
+}
+
+/**
+ * Render administrator-authored announcement Markdown for `v-html` consumers.
+ *
+ * Announcement content deliberately uses a restricted renderer:
+ * - raw HTML is escaped rather than inserted into the DOM;
+ * - Mermaid execution is disabled (the fence falls back to escaped code);
+ * - soft line breaks remain visible for short operational notices;
+ * - table copy controls are omitted because announcement surfaces do not
+ *   install the interactive Markdown toolbar used by chat messages.
+ */
+export function renderAnnouncementMarkdown(
+  content: string,
+  wrapperClass = 'announcement-markdown',
+): string {
+  const source = typeof content === 'string' ? content.trim() : ''
+  if (!source) {
+    return `<div class="${wrapperClass}"><p>${i18n.global.t('markdown.noContent')}</p></div>`
+  }
+
+  const md = getMarkdownRenderer({
+    allowHtml: false,
+    enableMermaid: false,
+    breaks: true,
+  })
+  return `<div class="${wrapperClass}">${md.render(source)}</div>`
 }
 
 /**

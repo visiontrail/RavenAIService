@@ -1314,7 +1314,9 @@ onMounted(() => bootstrap())
 .skill-content-markdown :deep(h1),
 .skill-content-markdown :deep(h2),
 .skill-content-markdown :deep(h3),
-.skill-content-markdown :deep(h4) {
+.skill-content-markdown :deep(h4),
+.skill-content-markdown :deep(h5),
+.skill-content-markdown :deep(h6) {
   font-weight: 700;
   color: #0f172a;
   margin: 1.4em 0 0.6em;
@@ -1325,6 +1327,8 @@ onMounted(() => bootstrap())
 .skill-content-markdown :deep(h2) { font-size: 1.25rem; border-bottom: 1px solid #f1f5f9; padding-bottom: 0.2em; }
 .skill-content-markdown :deep(h3) { font-size: 1.08rem; }
 .skill-content-markdown :deep(h4) { font-size: 0.98rem; }
+.skill-content-markdown :deep(h5),
+.skill-content-markdown :deep(h6) { font-size: 0.9rem; }
 
 .skill-content-markdown :deep(p) {
   margin: 0.7em 0;
@@ -1337,6 +1341,11 @@ onMounted(() => bootstrap())
   padding-left: 1.5em;
   margin: 0.7em 0;
 }
+
+.skill-content-markdown :deep(ul) { list-style-type: disc; }
+.skill-content-markdown :deep(ol) { list-style-type: decimal; }
+.skill-content-markdown :deep(ul ul) { list-style-type: circle; }
+.skill-content-markdown :deep(ul ul ul) { list-style-type: square; }
 
 .skill-content-markdown :deep(li) {
   margin: 0.25em 0;

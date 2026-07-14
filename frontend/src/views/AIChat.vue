@@ -545,6 +545,10 @@ const AI_MESSAGE_PDF_STYLES = `
 .ai-pdf-content p { margin: 0 0 10px; }
 .ai-pdf-content ul,
 .ai-pdf-content ol { margin: 8px 0 10px; padding-left: 1.6em; }
+.ai-pdf-content ul { list-style-type: disc; }
+.ai-pdf-content ol { list-style-type: decimal; }
+.ai-pdf-content ul ul { list-style-type: circle; }
+.ai-pdf-content ul ul ul { list-style-type: square; }
 .ai-pdf-content li { margin: 4px 0; }
 .ai-pdf-content a { color: #0d74ce; text-decoration: none; }
 .ai-pdf-content blockquote {
@@ -604,7 +608,8 @@ const AI_MESSAGE_PDF_STYLES = `
   page-break-inside: avoid;
 }
 .ai-pdf-content .mermaid-loading,
-.ai-pdf-content .mermaid-copy-btn { display: none; }
+.ai-pdf-content .mermaid-copy-btn,
+.ai-pdf-content .table-copy-btn { display: none; }
 `
 
 const buildAiMessagePdfFilename = (exportedAt: Date) => {
@@ -1010,10 +1015,23 @@ watch(
   { deep: true, immediate: true, flush: 'post' }
 )
 
-// 事件委托：处理 Mermaid 图表的「复制源码」与「点击放大」交互。
+// 事件委托：处理 Mermaid 图表的「复制源码」「点击放大」与表格的「复制 Markdown」交互。
 const onThreadClick = (event: MouseEvent) => {
   const target = event.target as HTMLElement | null
   if (!target) return
+
+  const tableCopyBtn = target.closest('.table-copy-btn')
+  if (tableCopyBtn) {
+    event.stopPropagation()
+    const block = tableCopyBtn.closest('.table-block') as HTMLElement | null
+    const source = block?.dataset.tableMd || ''
+    if (!source) return
+    navigator.clipboard.writeText(source).then(
+      () => ElMessage.success(t('aiChat.table.markdownCopied')),
+      () => ElMessage.error(t('aiChat.table.copyFailed'))
+    )
+    return
+  }
 
   const copyBtn = target.closest('.mermaid-copy-btn')
   if (copyBtn) {

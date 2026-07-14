@@ -6,6 +6,12 @@ import { Eye, FileText, Layers, LogOut, Menu, PanelLeftClose, RefreshCw, Save } 
 import { adminApi, adminToken } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
 import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
+import {
+  localizeProjectAgent,
+  localizePromptAgent,
+  localizePromptFunction,
+  localizePromptPreviewLayer,
+} from '@/utils/adminPromptMetadata'
 import { useAdminScope } from '@/composables/useAdminScope'
 import { processMermaidBlocks, renderMarkdown } from '@/utils/markdownRenderer'
 import type {
@@ -32,7 +38,7 @@ interface PromptFunctionGroup {
   agents: PromptAgentGroup[]
 }
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const appStore = useAppStore()
 const router = useRouter()
 const route = useRoute()
@@ -62,7 +68,10 @@ const projectRepos = ref<ProjectRepo[]>([])
 const projectAgents = ref<ProjectAgentInfo[]>([])
 const selectedPreviewProjectCode = ref('')
 const selectedPreviewAgentKey = ref('')
-const previewLocale = ref('zh')
+const activePromptLocale = computed<'zh' | 'en'>(() =>
+  locale.value.toLowerCase().startsWith('en') ? 'en' : 'zh'
+)
+const previewLocale = ref<'zh' | 'en'>(activePromptLocale.value)
 const previewMode = ref<'rendered' | 'raw'>('rendered')
 const previewData = ref<ProjectSystemPromptPreview | null>(null)
 const previewError = ref('')
@@ -94,7 +103,7 @@ const formatBytes = (size: number) => {
 const formatTimestamp = (value?: string) => {
   if (!value) return '--'
   try {
-    return new Date(value).toLocaleString('zh-CN', {
+    return new Date(value).toLocaleString(activePromptLocale.value === 'en' ? 'en-US' : 'zh-CN', {
       hour12: false,
       year: 'numeric',
       month: '2-digit',
@@ -141,6 +150,24 @@ const selectedPrompt = computed(() =>
   configState.prompts.find((prompt) => prompt.id === selectedPromptId.value) || null
 )
 
+const selectedPromptMeta = computed(() => {
+  const prompt = selectedPrompt.value
+  if (!prompt) return null
+  return {
+    function: localizePromptFunction(
+      prompt.function_key,
+      prompt.function_name,
+      prompt.function_description,
+    ),
+    agent: localizePromptAgent(
+      prompt.function_key,
+      prompt.agent_key,
+      prompt.agent_name,
+      prompt.agent_description,
+    ),
+  }
+})
+
 const selectedPromptContent = computed({
   get: () => selectedPrompt.value?.content || '',
   set: (value: string) => {
@@ -161,8 +188,8 @@ const localeVariants = computed(() => {
   )
 })
 
-const switchLocale = (locale: string) => {
-  const variant = localeVariants.value.find((p) => p.locale === locale)
+const switchLocale = (promptLocale: string) => {
+  const variant = localeVariants.value.find((p) => p.locale === promptLocale)
   if (variant) selectedPromptId.value = variant.id
 }
 
@@ -171,10 +198,15 @@ const promptGroups = computed<PromptFunctionGroup[]>(() => {
 
   configState.prompts.forEach((prompt) => {
     if (!functionMap.has(prompt.function_key)) {
+      const functionMeta = localizePromptFunction(
+        prompt.function_key,
+        prompt.function_name,
+        prompt.function_description,
+      )
       functionMap.set(prompt.function_key, {
         key: prompt.function_key,
-        name: prompt.function_name,
-        description: prompt.function_description,
+        name: functionMeta.name,
+        description: functionMeta.description,
         agents: [],
       })
     }
@@ -182,10 +214,16 @@ const promptGroups = computed<PromptFunctionGroup[]>(() => {
     const functionGroup = functionMap.get(prompt.function_key) as PromptFunctionGroup
     let agentGroup = functionGroup.agents.find((agent) => agent.key === prompt.agent_key)
     if (!agentGroup) {
+      const agentMeta = localizePromptAgent(
+        prompt.function_key,
+        prompt.agent_key,
+        prompt.agent_name,
+        prompt.agent_description,
+      )
       agentGroup = {
         key: prompt.agent_key,
-        name: prompt.agent_name,
-        description: prompt.agent_description,
+        name: agentMeta.name,
+        description: agentMeta.description,
         prompts: [],
       }
       functionGroup.agents.push(agentGroup)
@@ -280,7 +318,10 @@ const clearAuth = () => {
 
 const ensureSelectedPrompt = () => {
   if (configState.prompts.some((prompt) => prompt.id === selectedPromptId.value)) return
-  selectedPromptId.value = configState.prompts[0]?.id || ''
+  selectedPromptId.value =
+    configState.prompts.find((prompt) => prompt.locale === activePromptLocale.value)?.id ||
+    configState.prompts[0]?.id ||
+    ''
 }
 
 const projectAgentKeyForPrompt = (prompt: PromptEntry): string | null => {
@@ -301,14 +342,26 @@ const selectPrompt = (prompt: PromptEntry) => {
 }
 
 const selectAgentPrompt = (agent: PromptAgentGroup) => {
-  const prompt = agent.prompts.find((p) => p.locale === 'zh') ?? agent.prompts[0]
+  const prompt = agent.prompts.find((p) => p.locale === activePromptLocale.value) ?? agent.prompts[0]
   if (prompt) selectPrompt(prompt)
 }
 
 const agentLabel = (agentKey: string) => {
   const meta = agentMetaByKey.value.get(agentKey)
-  return meta?.display_name || meta?.name || agentKey
+  const fallback = meta?.display_name || meta?.name || agentKey
+  return localizeProjectAgent(agentKey, fallback, meta?.description).name
 }
+
+const agentDescription = (agent: ProjectAgentInfo) =>
+  localizeProjectAgent(
+    agent.key,
+    agent.display_name || agent.name || agent.key,
+    agent.description,
+  ).description
+
+const promptKeysLabel = (agent: PromptAgentGroup) =>
+  [...new Set(agent.prompts.map((prompt) => prompt.prompt_key))]
+    .join(t('admin.prompts.promptKeySeparator'))
 
 const ensurePreviewSelection = () => {
   if (!projectRepos.value.some((repo) => repo.project_code === selectedPreviewProjectCode.value)) {
@@ -574,6 +627,15 @@ watch([selectedPreviewAgentKey, previewLocale], () => {
   fetchPromptPreview()
 })
 
+watch(activePromptLocale, (nextLocale) => {
+  previewLocale.value = nextLocale
+  if (selectedPrompt.value) {
+    switchLocale(nextLocale)
+  } else {
+    ensureSelectedPrompt()
+  }
+})
+
 watch([renderedPreviewHtml, previewMode], async () => {
   if (previewMode.value !== 'rendered') return
   await nextTick()
@@ -791,7 +853,7 @@ watch([renderedPreviewHtml, previewMode], async () => {
                 <span class="prompt-agent-name">{{ agent.name }}</span>
                 <span class="prompt-agent-desc">{{ agent.description }}</span>
                 <span class="prompt-agent-foot">
-                  {{ [...new Set(agent.prompts.map((p) => p.prompt_key))].join('、') }}
+                  {{ promptKeysLabel(agent) }}
                 </span>
               </button>
             </div>
@@ -802,10 +864,10 @@ watch([renderedPreviewHtml, previewMode], async () => {
               <div class="prompt-editor-head">
                 <div>
                   <div class="prompt-breadcrumb">
-                    {{ selectedPrompt.function_name }} / {{ selectedPrompt.agent_name }}
+                    {{ selectedPromptMeta?.function.name }} / {{ selectedPromptMeta?.agent.name }}
                   </div>
                   <h3>{{ selectedPrompt.prompt_key }}</h3>
-                  <p v-if="selectedPrompt.agent_description">{{ selectedPrompt.agent_description }}</p>
+                  <p v-if="selectedPromptMeta?.agent.description">{{ selectedPromptMeta.agent.description }}</p>
                 </div>
                 <div class="prompt-editor-head-right">
                   <div v-if="localeVariants.length > 1" class="locale-tabs">
@@ -945,7 +1007,7 @@ watch([renderedPreviewHtml, previewMode], async () => {
                   :class="{ 'is-active': agent.key === selectedPreviewAgentKey }"
                   @click="selectedPreviewAgentKey = agent.key"
                 >
-                  {{ agent.display_name || agent.name }}
+                  {{ agentLabel(agent.key) }}
                 </button>
               </template>
             </div>
@@ -958,7 +1020,7 @@ watch([renderedPreviewHtml, previewMode], async () => {
                   {{ selectedPreviewProject?.project_code || '--' }} / {{ agentLabel(selectedPreviewAgentKey) }}
                 </div>
                 <h3>{{ selectedPreviewProject?.project_name || t('admin.prompts.previewEmptyTitle') }}</h3>
-                <p v-if="selectedPreviewAgent">{{ selectedPreviewAgent.description }}</p>
+                <p v-if="selectedPreviewAgent">{{ agentDescription(selectedPreviewAgent) }}</p>
               </div>
               <div class="preview-stat-row">
                 <span v-for="item in previewStats" :key="item.key">
@@ -973,7 +1035,7 @@ watch([renderedPreviewHtml, previewMode], async () => {
                 :key="layer.key"
                 :class="{ 'is-empty': !layer.exists }"
               >
-                {{ layer.label }} · {{ layer.exists ? t('admin.prompts.previewLayerOn') : t('admin.prompts.previewLayerOff') }}
+                {{ localizePromptPreviewLayer(layer.key, layer.label) }} · {{ layer.exists ? t('admin.prompts.previewLayerOn') : t('admin.prompts.previewLayerOff') }}
               </span>
             </div>
 
@@ -1729,7 +1791,10 @@ watch([renderedPreviewHtml, previewMode], async () => {
 
 .project-preview-rendered :deep(.prompt-preview-markdown h1),
 .project-preview-rendered :deep(.prompt-preview-markdown h2),
-.project-preview-rendered :deep(.prompt-preview-markdown h3) {
+.project-preview-rendered :deep(.prompt-preview-markdown h3),
+.project-preview-rendered :deep(.prompt-preview-markdown h4),
+.project-preview-rendered :deep(.prompt-preview-markdown h5),
+.project-preview-rendered :deep(.prompt-preview-markdown h6) {
   color: #0f172a;
   font-weight: 850;
   margin: 1rem 0 0.45rem;
@@ -1749,6 +1814,12 @@ watch([renderedPreviewHtml, previewMode], async () => {
   font-size: 0.95rem;
 }
 
+.project-preview-rendered :deep(.prompt-preview-markdown h4),
+.project-preview-rendered :deep(.prompt-preview-markdown h5),
+.project-preview-rendered :deep(.prompt-preview-markdown h6) {
+  font-size: 0.88rem;
+}
+
 .project-preview-rendered :deep(.prompt-preview-markdown p),
 .project-preview-rendered :deep(.prompt-preview-markdown ul),
 .project-preview-rendered :deep(.prompt-preview-markdown ol) {
@@ -1759,6 +1830,11 @@ watch([renderedPreviewHtml, previewMode], async () => {
 .project-preview-rendered :deep(.prompt-preview-markdown ol) {
   padding-left: 1.25rem;
 }
+
+.project-preview-rendered :deep(.prompt-preview-markdown ul) { list-style-type: disc; }
+.project-preview-rendered :deep(.prompt-preview-markdown ol) { list-style-type: decimal; }
+.project-preview-rendered :deep(.prompt-preview-markdown ul ul) { list-style-type: circle; }
+.project-preview-rendered :deep(.prompt-preview-markdown ul ul ul) { list-style-type: square; }
 
 .project-preview-rendered :deep(.prompt-preview-markdown li + li) {
   margin-top: 0.2rem;

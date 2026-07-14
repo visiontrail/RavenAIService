@@ -1318,6 +1318,10 @@ const PDF_EXPORT_STYLES = `
 .pdf-export-root .md th { background: #f5f5f7; }
 .pdf-export-root .md ul,
 .pdf-export-root .md ol { padding-left: 1.6em; }
+.pdf-export-root .md ul { list-style-type: disc; }
+.pdf-export-root .md ol { list-style-type: decimal; }
+.pdf-export-root .md ul ul { list-style-type: circle; }
+.pdf-export-root .md ul ul ul { list-style-type: square; }
 .pdf-export-root .md li {
   break-inside: avoid-page;
   page-break-inside: avoid;

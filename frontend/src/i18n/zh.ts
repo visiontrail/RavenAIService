@@ -524,6 +524,13 @@ export default {
     settings: '设置',
     helpShortcuts: '帮助与快捷键',
     logout: '退出登录',
+    announcement: {
+      kicker: '系统公告',
+      publishedBy: '发布人：{name}',
+      acknowledge: '我知道了',
+      acknowledging: '正在确认…',
+      dismissFailed: '公告确认失败',
+    },
     sessionGroups: {
       pinned: '置顶',
       today: '今天',
@@ -715,6 +722,44 @@ export default {
     loadFail: '加载失败',
     credentialsHint: '凭证在 admin_auth.yaml 配置，建议登录后立即更改',
     refreshing: '刷新中',
+    announcements: {
+      subtitle: '全局公告',
+      badgeActive: '公告展示中',
+      badgeInactive: '暂无生效公告',
+      pageTitle: '发布全局公告',
+      pageDesc: '公告会在用户首次访问、刷新或新建对话时展示；每位用户确认后不再重复出现。',
+      editorTitle: '公告内容',
+      titleLabel: '公告标题',
+      titlePlaceholder: '例如：今晚 22:00 系统维护',
+      contentLabel: '公告正文',
+      contentPlaceholder: '支持 Markdown，例如：\n\n## 维护时间\n今晚 **22:00–23:00**\n\n- 请提前保存工作\n- 期间服务可能短暂中断',
+      markdownSupported: '支持 Markdown',
+      editorTabsLabel: '公告正文编辑模式',
+      writeTab: '编辑',
+      previewTab: '预览',
+      previewEmpty: '输入公告正文后可在这里预览',
+      markdownHint: '**粗体** · [链接](url) · # 标题 · - 列表 · `代码`',
+      charCount: '{count} / 4000',
+      publish: '发布公告',
+      publishing: '发布中…',
+      publishConfirm: '发布后将以新公告通知所有用户，确定继续吗？',
+      replaceHint: '再次发布会生成新的公告版本，已看过上一条的用户也会收到新公告。',
+      publishSuccess: '公告发布成功',
+      publishFailed: '公告发布失败',
+      currentTitle: '当前公告',
+      currentActive: '生效中',
+      currentInactive: '已停止',
+      noCurrentTitle: '还没有发布公告',
+      noCurrentDesc: '填写左侧内容并发布后，所有已登录用户都将收到一次。',
+      publishedBy: '由 {name} 发布',
+      deactivate: '停止展示',
+      deactivating: '停止中…',
+      deactivateConfirm: '停止后，尚未看到此公告的用户也不会再收到，确定继续吗？',
+      deactivateSuccess: '公告已停止展示',
+      deactivateFailed: '停止公告失败',
+      loadFailed: '公告加载失败',
+      statusNote: 'Markdown 会经过安全渲染；用户关闭公告后，确认状态会保存在账号中并跨设备生效。',
+    },
     modelSettings: {
       subtitle: '模型设置',
       badge: '运行期配置',
@@ -924,6 +969,86 @@ export default {
       previewTotalChars: '合计',
       previewLayerOn: '已配置',
       previewLayerOff: '未配置',
+      promptKeySeparator: '、',
+      metadata: {
+        functions: {
+          claude_agent_log_analysis: {
+            name: '日志分析',
+            description: 'Claude Agent SDK 驱动的日志智能分析提示词',
+          },
+          claude_agent_device: {
+            name: '设备对话',
+            description: 'Claude Agent SDK 驱动的设备联动对话提示词',
+          },
+          claude_agent_project_expert: {
+            name: '项目专家',
+            description: 'Claude Agent SDK 驱动的项目源码问答提示词',
+          },
+          claude_agent_package_search: {
+            name: '重构包检索',
+            description: 'Claude Agent SDK 驱动的项目绑定重构包检索提示词',
+          },
+          claude_agent_general: {
+            name: '通用助手',
+            description: 'Claude Agent SDK 驱动的系统使用说明与 Agent/项目路由提示词',
+          },
+          chat: {
+            name: 'AI 对话',
+            description: 'AI 对话相关提示词',
+          },
+        },
+        agents: {
+          claude_agent_log_analysis: {
+            generic: {
+              name: '通用日志分析 Agent',
+              description: '统一适用于所有日志类型，按 metadata/task 中的代码库信息克隆代码并分析问题',
+            },
+          },
+          claude_agent_device: {
+            default: {
+              name: '默认设备对话 Agent',
+              description: '面向已链接设备的通用对话场景，模型直接选择设备 MCP 工具与参数',
+            },
+          },
+          claude_agent_project_expert: {
+            generic: {
+              name: '通用项目专家 Agent',
+              description: '面向已登记项目的源码答疑场景，按用户选择的项目仓库克隆代码并回答问题',
+            },
+          },
+          claude_agent_package_search: {
+            generic: {
+              name: '重构包配置管理员',
+              description: '面向所选项目的重构包检索场景，包元数据工具优先、必要时结合 Git 提交记录分析',
+            },
+          },
+          claude_agent_general: {
+            generic: {
+              name: '通用路由 Agent',
+              description: '未选择专业 Agent 时提供系统使用说明，并基于项目卡片引导用户切换专业 Agent',
+            },
+          },
+        },
+        projectAgents: {
+          project_expert: {
+            name: '项目专家',
+            description: '基于项目上下文、项目级提示词和可选代码仓库进行源码/项目答疑',
+          },
+          log_analysis: {
+            name: '日志分析',
+            description: '分析日志归档并结合项目代码仓库定位根因',
+          },
+          package_search: {
+            name: '重构包配置管理员',
+            description: '在项目范围内检索重构包、版本资产与配置线索',
+          },
+        },
+        previewLayers: {
+          base: 'Agent 基础层',
+          agent: 'Agent 项目层',
+          shared: '项目共享层',
+        },
+      },
     },
     metrics: {
       subtitle: '数据指标看板',
@@ -1437,6 +1562,10 @@ export default {
       submitting: '提交中…',
       requiredError: '请回答每个问题（选择选项或填写自定义内容）。',
     },
+    table: {
+      markdownCopied: '已复制表格 Markdown 源码',
+      copyFailed: '复制失败，请手动选择表格内容',
+    },
     mermaid: {
       title: '图表查看',
       rendering: '图表渲染中…',
@@ -1587,6 +1716,7 @@ export default {
     terms: '服务条款',
     admin: '后台管理',
     adminUsers: '用户管理',
+    adminAnnouncements: '全局公告',
     adminRelease: 'App Release 管理',
     adminRepos: '项目管理',
     adminAgentSkills: 'Agent Skill 管理',
@@ -1601,6 +1731,9 @@ export default {
     promptConfigDesc: '按功能和 Agent 编辑系统提示词',
     users: '用户管理',
     usersDesc: '管理对话用户、重置密码',
+    announcements: '全局公告',
+    announcementsDesc: '向所有用户发布一次性系统公告',
+    release: 'App Release',
     releaseDesc: '上传 Linux / macOS / Windows 发布包',
     repos: '项目管理',
     reposDesc: '管理项目，可选择是否关联代码仓库',
@@ -1676,6 +1809,7 @@ export default {
     noContent: '暂无内容',
     mermaidLoadFail: 'Mermaid 库加载失败，降级为源码展示:',
     copySource: '复制源码',
+    copyTableMarkdown: '复制 Markdown',
     mermaidRenderFail: '⚠ 图表渲染失败：{msg}'
   },
 

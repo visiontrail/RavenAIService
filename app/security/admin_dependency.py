@@ -24,6 +24,7 @@ from app.services.user_service import user_service
 ADMIN_NAV_KEYS_ALL: List[str] = [
     "prompts",
     "users",
+    "announcements",
     "releases",
     "project-repos",
     "agent-skills",

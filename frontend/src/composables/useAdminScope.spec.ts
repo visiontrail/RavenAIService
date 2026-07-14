@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { setAdminIdentity, clearAdminIdentity, useAdminScope } from './useAdminScope'
 import { adminNavItems } from '@/utils/adminNav'
+import { setI18nLocale } from '@/i18n'
 import type { AdminIdentity } from '@/types'
 
 const globalAdmin: AdminIdentity = {
@@ -20,11 +21,25 @@ const projectMember: AdminIdentity = {
 }
 
 describe('useAdminScope', () => {
-  afterEach(() => clearAdminIdentity())
+  afterEach(() => {
+    clearAdminIdentity()
+    setI18nLocale('zh')
+  })
 
   it('shows all nav items before the scope resolves', () => {
     const { visibleNavItems } = useAdminScope()
     expect(visibleNavItems.value.length).toBe(adminNavItems.length)
+  })
+
+  it('recomputes admin navigation labels when the locale changes', () => {
+    const { visibleNavItems } = useAdminScope()
+    setI18nLocale('zh')
+    expect(visibleNavItems.value.find((item) => item.key === 'users')?.label).toBe('用户管理')
+
+    setI18nLocale('en')
+    expect(visibleNavItems.value.find((item) => item.key === 'users')?.label).toBe('User Management')
+    expect(visibleNavItems.value.find((item) => item.key === 'prompts')?.description)
+      .toBe('Edit system prompts by function and Agent')
   })
 
   it('shows all nav items for a global admin', () => {
@@ -41,6 +56,7 @@ describe('useAdminScope', () => {
     const keys = visibleNavItems.value.map((i) => i.key)
     expect(keys).toEqual(['project-repos'])
     expect(keys).not.toContain('users')
+    expect(keys).not.toContain('announcements')
     expect(keys).not.toContain('prompts')
     expect(keys).not.toContain('metrics')
   })

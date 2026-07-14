@@ -243,8 +243,45 @@
 }
 
 /* 表格样式 */
+/* .table-block：定位上下文，承载「复制 Markdown」按钮。
+   按钮必须放在 .table-wrapper（横向滚动容器）外，避免随表格滚动。 */
+.markdown-content .table-block {
+  position: relative;
+  @apply my-6;
+}
+
 .markdown-content .table-wrapper {
-  @apply my-6 overflow-x-auto rounded-lg border border-gray-200;
+  @apply overflow-x-auto rounded-lg border border-gray-200;
+}
+
+/* 表格右上角「复制 Markdown」按钮：默认隐藏，hover 显现 */
+.markdown-content .table-copy-btn {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  z-index: 1;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  color: #57606a;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid #d0d7de;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.markdown-content .table-block:hover .table-copy-btn,
+.markdown-content .table-copy-btn:focus-visible {
+  opacity: 0.9;
+}
+
+.markdown-content .table-copy-btn:hover {
+  opacity: 1;
+  color: #0969da;
+  background: #f6f8fa;
+  border-color: #0969da;
 }
 
 .markdown-content .markdown-table {

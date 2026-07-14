@@ -7,6 +7,7 @@ import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
 import { useChatSessionStore } from '@/stores/chatSession'
 import { useConversationRunsStore } from '@/stores/conversationRuns'
+import { useAnnouncementStore } from '@/stores/announcement'
 import { userApi } from '@/api/user'
 import type { ChatSessionSummary, UserProfileRole } from '@/types'
 import {
@@ -18,6 +19,7 @@ import {
   type RegistrationValidationMessages,
 } from '@/utils/registrationValidation'
 import brandIcon from '@/assets/icon.png'
+import SystemAnnouncementDialog from '@/components/SystemAnnouncementDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -26,6 +28,7 @@ const appStore = useAppStore()
 const userStore = useUserStore()
 const sessionStore = useChatSessionStore()
 const runsStore = useConversationRunsStore()
+const announcementStore = useAnnouncementStore()
 
 const profileRoleValues = ['developer', 'tester', 'product', 'ops', 'other'] as const
 
@@ -379,6 +382,7 @@ const bootstrapUser = async () => {
   appStore.initLocale()
   if (isLoggedIn.value) {
     try { await sessionStore.load() } catch { /* notification handled below */ }
+    try { await announcementStore.checkPending() } catch { /* retry on next trigger */ }
   }
 }
 
@@ -400,8 +404,10 @@ watch(isLoggedIn, async (loggedIn) => {
     try { await sessionStore.load() } catch {
       appStore.showNotification({ title: t('workbench.notifications.syncSessionsFailed'), type: 'error' })
     }
+    try { await announcementStore.checkPending() } catch { /* retry on next trigger */ }
   } else {
     sessionStore.reset()
+    announcementStore.reset()
   }
 })
 
@@ -422,6 +428,9 @@ const handleSelectSession = (session: ChatSessionSummary) => {
 const startNewChat = () => {
   sessionStore.startNewChat()
   if (!isHomeRoute.value) router.push('/workbench')
+  if (isLoggedIn.value) {
+    announcementStore.checkPending().catch(() => { /* retry on next trigger */ })
+  }
 }
 
 const reloadSessions = async () => {
@@ -605,6 +614,7 @@ const handleAuthSubmit = () => {
 const handleUserLogout = () => {
   userStore.clear()
   sessionStore.reset()
+  announcementStore.reset()
   showUserMenu.value = false
 }
 </script>
@@ -860,6 +870,8 @@ const handleUserLogout = () => {
     <main class="rw-main">
       <router-view />
     </main>
+
+    <SystemAnnouncementDialog />
 
     <!-- Settings modal — category navigation on the left, focused settings on the right. -->
     <div v-if="showSettingsModal" class="rw-modal-backdrop" @click.self="closeSettingsModal">

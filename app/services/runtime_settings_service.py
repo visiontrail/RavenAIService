@@ -29,6 +29,7 @@ _CACHE_PATH: Optional[Path] = None
 _ALLOWED_KEYS: set[str] = {
     "registration_email_regex",
     "registration_email_validation_message",
+    "system_announcement",
 }
 
 

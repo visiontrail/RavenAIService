@@ -21,6 +21,7 @@ import type {
   ProjectSystemPromptPreview,
   SkillFileContent,
   SkillFileTree,
+  SystemAnnouncement,
   TestConnectionResult,
   UserProfile,
 } from '@/types'
@@ -92,6 +93,18 @@ export const adminApi = {
   me: (): Promise<ApiResponse<AdminIdentity>> => adminClient.get('/admin/auth/me'),
 
   logout: (): Promise<ApiResponse> => adminClient.post('/admin/auth/logout'),
+
+  getCurrentAnnouncement: (): Promise<ApiResponse<SystemAnnouncement | null>> =>
+    adminClient.get('/admin/announcements/current'),
+
+  publishAnnouncement: (payload: {
+    title: string
+    content: string
+  }): Promise<ApiResponse<SystemAnnouncement>> =>
+    adminClient.put('/admin/announcements/current', payload),
+
+  deactivateAnnouncement: (): Promise<ApiResponse<SystemAnnouncement>> =>
+    adminClient.delete('/admin/announcements/current'),
 
   fetchPromptsConfig: (): Promise<ApiResponse<PromptsConfigData>> =>
     adminClient.get('/admin/prompts/config'),

@@ -35,10 +35,16 @@ describe('resolveAdminRedirect', () => {
 
   it('blocks project-member admins from global-only admin routes', () => {
     expect(resolveAdminRedirect(projectMember, '/admin/users')).toBe(PROJECT_MEMBER_HOME)
+    expect(resolveAdminRedirect(projectMember, '/admin/announcements')).toBe(PROJECT_MEMBER_HOME)
     expect(resolveAdminRedirect(projectMember, '/admin/metrics')).toBe(PROJECT_MEMBER_HOME)
     expect(resolveAdminRedirect(projectMember, '/admin/agent-skills')).toBe(
       PROJECT_MEMBER_HOME
     )
+  })
+
+  it('registers announcements as an independent global admin tab', () => {
+    const item = adminNavItems.find((entry) => entry.key === 'announcements')
+    expect(item?.path).toBe('/admin/announcements')
   })
 
   it('allows project-member admins on the project repos area', () => {
