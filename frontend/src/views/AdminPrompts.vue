@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Eye, FileText, Layers, LogOut, Menu, PanelLeftClose, RefreshCw, Save } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAppStore } from '@/stores/app'
 import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
 import {
@@ -664,6 +665,7 @@ watch([renderedPreviewHtml, previewMode], async () => {
           </div>
         </div>
         <div class="admin-topbar-right">
+          <ThemeToggle class="admin-theme-toggle" />
           <span class="px-3 py-1 text-xs font-semibold rounded-full" :class="statusTone">
             {{ statusLabel }}
           </span>
@@ -1062,7 +1064,7 @@ watch([renderedPreviewHtml, previewMode], async () => {
   --admin-topbar-height: 72px;
   --admin-sidebar-width: 280px;
   min-height: 100vh;
-  background: linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%);
+  background: var(--admin-page-bg);
 }
 
 .admin-topbar {

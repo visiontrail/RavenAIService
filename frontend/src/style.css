@@ -1,4 +1,8 @@
 @import "tailwindcss";
+@import "./styles/theme.css";
+
+/* Class-driven dark mode: `dark:` utilities follow the `dark` class on <html>. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 :root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
@@ -11,7 +15,7 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background-color: #f8fafc;
+  background-color: var(--rw-app-bg, #f8fafc);
   overflow-x: hidden;
 }
 
@@ -47,6 +51,19 @@ body {
   --admin-success: #16a34a;
   --admin-warning: #ab6400;
   --admin-error: #dc2626;
+  --admin-dark-hairline: #2a2a2a;
+  --admin-dark-elevated: #1a1a1a;
+  --admin-topbar-bg: rgba(255, 255, 255, 0.92);
+  --admin-sidebar-bg: rgba(255, 255, 255, 0.9);
+  --admin-backdrop-bg: rgba(23, 23, 23, 0.28);
+  --admin-modal-backdrop-bg: rgba(23, 23, 23, 0.34);
+  --admin-modal-shadow: 0 24px 64px rgba(23, 23, 23, 0.18);
+  --admin-focus-ring: rgba(23, 23, 23, 0.08);
+  --admin-warning-bg: #fffaf0;
+  --admin-warning-border: #f0d6ad;
+  --admin-page-bg:
+    radial-gradient(900px 360px at 50% -120px, rgba(207, 231, 255, 0.9), rgba(207, 231, 255, 0) 72%),
+    linear-gradient(180deg, var(--admin-canvas) 0%, var(--admin-canvas) 62%, var(--admin-canvas-soft) 100%);
   --admin-font: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --admin-code-font: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
@@ -55,9 +72,7 @@ body {
   min-height: 100vh;
   color: var(--admin-ink);
   font-family: var(--admin-font);
-  background:
-    radial-gradient(900px 360px at 50% -120px, rgba(207, 231, 255, 0.9), rgba(207, 231, 255, 0) 72%),
-    linear-gradient(180deg, var(--admin-canvas) 0%, var(--admin-canvas) 62%, var(--admin-canvas-soft) 100%);
+  background: var(--admin-page-bg);
 }
 
 .admin-console.admin-console button,
@@ -74,7 +89,7 @@ body {
 
 .admin-console.admin-console .admin-topbar {
   height: var(--admin-topbar-height);
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--admin-topbar-bg);
   border-bottom: 1px solid var(--admin-hairline);
   backdrop-filter: saturate(180%) blur(16px);
   box-shadow: none;
@@ -153,7 +168,7 @@ body {
 
 .admin-console.admin-console .admin-sidebar {
   width: var(--admin-sidebar-width);
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--admin-sidebar-bg);
   border-right: 1px solid var(--admin-hairline);
   padding: calc(var(--admin-topbar-height) + 18px) 16px 20px;
   backdrop-filter: saturate(180%) blur(14px);
@@ -209,7 +224,7 @@ body {
 }
 
 .admin-console.admin-console .admin-sidebar-backdrop {
-  background: rgba(23, 23, 23, 0.28);
+  background: var(--admin-backdrop-bg);
   backdrop-filter: blur(2px);
 }
 
@@ -291,7 +306,7 @@ body {
 .admin-console.admin-console textarea:focus,
 .admin-console.admin-console select:focus {
   border-color: var(--admin-primary);
-  outline: 2px solid rgba(23, 23, 23, 0.08);
+  outline: 2px solid var(--admin-focus-ring);
   outline-offset: 0;
   box-shadow: none;
 }
@@ -372,8 +387,8 @@ body {
 
 .admin-console.admin-console .admin-command-btn.warning {
   color: var(--admin-warning);
-  background: #fffaf0;
-  border-color: #f0d6ad;
+  background: var(--admin-warning-bg);
+  border-color: var(--admin-warning-border);
 }
 
 .admin-console.admin-console .admin-action-btn.danger:hover:not(:disabled),
@@ -383,7 +398,7 @@ body {
 }
 
 .admin-console.admin-console .admin-modal-backdrop {
-  background: rgba(23, 23, 23, 0.34);
+  background: var(--admin-modal-backdrop-bg);
   backdrop-filter: blur(8px);
 }
 
@@ -391,7 +406,7 @@ body {
   border: 1px solid var(--admin-hairline-strong);
   border-radius: 16px;
   background: var(--admin-surface);
-  box-shadow: 0 24px 64px rgba(23, 23, 23, 0.18);
+  box-shadow: var(--admin-modal-shadow);
 }
 
 .admin-console.admin-console table {
@@ -480,7 +495,7 @@ body {
 
 .admin-console.admin-console .prompt-editor-head,
 .admin-console.admin-console .prompt-editor-footer {
-  border-color: #2a2a2a;
+  border-color: var(--admin-dark-hairline);
   background: var(--admin-dark);
 }
 
@@ -505,7 +520,7 @@ body {
 }
 
 .admin-console.admin-console .prompt-textarea:disabled {
-  background: #1a1a1a;
+  background: var(--admin-dark-elevated);
 }
 
 .admin-console.admin-console .prompt-dirty-badge.is-clean {

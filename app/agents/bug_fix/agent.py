@@ -357,20 +357,12 @@ class BugFixCodingAgent:
 
     def run_sync(self, ctx: BugFixWorkspaceContext) -> Dict[str, Any]:
         """同步包装供 Celery 调用。"""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                raise RuntimeError("run_sync called from a running event loop")
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(self.run(ctx))
-        finally:
-            try:
-                loop.close()
-            except Exception:
-                pass
+        # Celery 会在同一个 worker 子进程中连续执行多个任务。不要复用
+        # get_event_loop() 返回的线程当前 loop：上一次调用关闭后它仍可能留在
+        # event-loop policy 中，下一次 run_until_complete() 会直接抛出
+        # ``RuntimeError: Event loop is closed``。asyncio.run() 为每次调用创建
+        # 独立 loop，并负责 async generator/default executor 的完整收尾与解绑。
+        return asyncio.run(self.run(ctx))
 
 
 def _message_text(message: Any) -> str:

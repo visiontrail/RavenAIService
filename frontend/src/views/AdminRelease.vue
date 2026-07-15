@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { LogOut, Menu, PanelLeftClose, RefreshCw, Upload } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 import { releasesAdminApi } from '@/api/releases'
 import { useAppStore } from '@/stores/app'
 import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
@@ -266,6 +267,7 @@ onMounted(() => bootstrap())
           </div>
         </div>
         <div class="admin-topbar-right">
+          <ThemeToggle class="admin-theme-toggle" />
           <span class="px-3 py-1 text-xs font-semibold rounded-full bg-slate-700 text-slate-100">
             {{ isAuthenticated ? t('admin.release.badge', { count: releases.length }) : t('admin.badgeNotLoggedIn') }}
           </span>

@@ -162,6 +162,32 @@ def test_allowed_tools_include_write_capable_tools():
         assert tool in bf_agent.ALLOWED_TOOLS
 
 
+def test_run_sync_uses_fresh_event_loop_for_consecutive_tasks():
+    """同一 Celery 子进程连续执行任务时，不得复用上次已关闭的 event loop。"""
+    import asyncio
+
+    seen_loops = []
+
+    class _Agent(bf_agent.BugFixCodingAgent):
+        async def run(self, ctx):
+            seen_loops.append(asyncio.get_running_loop())
+            return {"status": "succeeded", "task_id": ctx.task_id}
+
+    agent = _Agent()
+    try:
+        first = agent.run_sync(_make_ctx("sync-1"))
+        second = agent.run_sync(_make_ctx("sync-2"))
+    finally:
+        # 旧实现失败时会把 closed loop 留在线程 policy 中，避免污染后续测试。
+        asyncio.set_event_loop(None)
+
+    assert first["task_id"] == "sync-1"
+    assert second["task_id"] == "sync-2"
+    assert len(seen_loops) == 2
+    assert seen_loops[0] is not seen_loops[1]
+    assert all(loop.is_closed() for loop in seen_loops)
+
+
 def test_system_prompt_defines_fix_outcomes_contract():
     """契约必须要求逐项结局，并给出 already_implemented「无需改动」的处理路径。"""
     system, _ = prompts.get_prompts()

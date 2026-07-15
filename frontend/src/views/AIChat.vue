@@ -2590,6 +2590,25 @@ const openShareModal = () => {
 .rw-composer-alert.is-login .rw-alert-link {
   font-weight: 600;
 }
+html.dark .rw-composer-alert.is-warn {
+  background: rgba(146, 64, 14, 0.18); color: #fcd34d;
+  border-color: rgba(252, 211, 77, 0.35);
+}
+html.dark .rw-composer-alert.is-error {
+  background: rgba(153, 27, 27, 0.2); color: #fca5a5;
+  border-color: rgba(252, 165, 165, 0.35);
+}
+html.dark .rw-composer-alert.is-suggest {
+  background: rgba(30, 64, 175, 0.2); color: #93c5fd;
+  border-color: rgba(147, 197, 253, 0.3);
+}
+html.dark .rw-composer-alert.is-login {
+  background: rgba(76, 29, 149, 0.22); color: #c4b5fd;
+  border-color: rgba(196, 181, 253, 0.3);
+}
+html.dark .rw-composer-alert code {
+  background: rgba(255, 255, 255, 0.08);
+}
 .rw-composer-alert code {
   font-family: var(--rw-mono); font-size: 11.5px;
   background: rgba(0,0,0,.06); border-radius: 3px; padding: 1px 4px;

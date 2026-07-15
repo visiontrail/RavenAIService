@@ -1,0 +1,185 @@
+/**
+ * Global light/dark theme tokens.
+ *
+ * Light values follow DESIGN.md (Expo style); dark values follow
+ * DESIGN-Dark.md (Nexus style: #111115 neutral foundation, #25254D accent,
+ * #9CA3AF secondary text, glassy surfaces).
+ *
+ * The active theme is driven by the `dark` class on <html>, toggled by the
+ * app store (stores/app.ts) and pre-applied by the inline script in
+ * index.html to avoid a flash of the wrong theme.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Raven Workbench tokens (single source; component styles only consume) */
+  --rw-canvas: #ffffff;
+  --rw-canvas-soft: #fafafa;
+  --rw-surface-card: #ffffff;
+  --rw-surface-strong: #f0f0f3;
+  --rw-surface-dark: #171717;
+  --rw-ink: #171717;
+  --rw-body: #60646c;
+  --rw-muted: #999999;
+  --rw-muted-soft: #cccccc;
+  --rw-hairline: #f0f0f3;
+  --rw-hairline-soft: #f5f5f7;
+  --rw-hairline-strong: #dcdee0;
+  --rw-primary: #171717;
+  --rw-primary-hover: #2e2e2e;
+  --rw-primary-active: #404040;
+  --rw-on-primary: #ffffff;
+  --rw-link: #0d74ce;
+  --rw-success: #16a34a;
+  --rw-danger: #c0382b;
+  --rw-shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --rw-app-bg: #f8fafc;
+
+  --rw-sans: 'Inter', -apple-system, system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --rw-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+}
+
+html.dark {
+  color-scheme: dark;
+
+  --rw-canvas: #111115;
+  --rw-canvas-soft: #16161c;
+  --rw-surface-card: #17171d;
+  --rw-surface-strong: #232330;
+  --rw-surface-dark: #0b0b0e;
+  --rw-ink: #ffffff;
+  --rw-body: #9ca3af;
+  --rw-muted: #6f7480;
+  --rw-muted-soft: #4b4f58;
+  --rw-hairline: #23232c;
+  --rw-hairline-soft: #1b1b22;
+  --rw-hairline-strong: #35354a;
+  --rw-primary: #25254d;
+  --rw-primary-hover: #30306a;
+  --rw-primary-active: #3a3a85;
+  --rw-on-primary: #ffffff;
+  --rw-link: #8caaff;
+  --rw-success: #22c55e;
+  --rw-danger: #f87171;
+  --rw-shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --rw-app-bg: #111115;
+}
+
+body {
+  background-color: var(--rw-app-bg);
+}
+
+/* App shell background outside workbench/admin surfaces */
+.app-bg {
+  background-color: var(--rw-app-bg);
+}
+
+/* ---------- Dark remap for common Tailwind utility classes ----------
+   Views mix design tokens with raw gray/slate utilities; remap the frequent
+   ones onto tokens so every page follows the theme without per-view edits.
+   (The admin console keeps its own higher-specificity --admin-* remaps.) */
+html.dark .text-gray-900,
+html.dark .text-gray-800,
+html.dark .text-slate-900,
+html.dark .text-slate-800 {
+  color: var(--rw-ink);
+}
+
+html.dark .text-gray-700,
+html.dark .text-gray-600,
+html.dark .text-slate-700,
+html.dark .text-slate-600 {
+  color: var(--rw-body);
+}
+
+html.dark .text-gray-500,
+html.dark .text-gray-400,
+html.dark .text-slate-500,
+html.dark .text-slate-400 {
+  color: var(--rw-muted);
+}
+
+html.dark .text-blue-600,
+html.dark .text-blue-500 {
+  color: var(--rw-link);
+}
+
+html.dark .bg-white {
+  background-color: var(--rw-surface-card);
+}
+
+html.dark .bg-white\/50,
+html.dark .bg-white\/60 {
+  background-color: rgba(35, 35, 48, 0.55);
+}
+
+html.dark .bg-gray-50,
+html.dark .bg-slate-50 {
+  background-color: var(--rw-canvas-soft);
+}
+
+html.dark .bg-gray-100,
+html.dark .bg-slate-100,
+html.dark .hover\:bg-gray-100:hover,
+html.dark .hover\:bg-slate-100:hover,
+html.dark .hover\:bg-gray-50:hover,
+html.dark .hover\:bg-slate-50:hover {
+  background-color: var(--rw-surface-strong);
+}
+
+html.dark .border-gray-200,
+html.dark .border-gray-100,
+html.dark .border-slate-200,
+html.dark .border-slate-100,
+html.dark .border-slate-50,
+html.dark .border-black\/5 {
+  border-color: var(--rw-hairline);
+}
+
+/* ---------- Shared conversation (public page) tokens ---------- */
+html.dark .shared-conversation {
+  --sc-canvas: #17171d;
+  --sc-soft: #111115;
+  --sc-ink: #ffffff;
+  --sc-body: #9ca3af;
+  --sc-muted: #6f7480;
+  --sc-hairline: #23232c;
+  --sc-hairline-strong: #35354a;
+  --sc-accent: #25254d;
+}
+
+/* ---------- Admin console dark palette ---------- */
+html.dark .admin-console {
+  --admin-primary: #25254d;
+  --admin-primary-active: #30306a;
+  --admin-ink: #ffffff;
+  --admin-body: #9ca3af;
+  --admin-muted: #6f7480;
+  --admin-link: #8caaff;
+  --admin-hairline: #23232c;
+  --admin-hairline-strong: #35354a;
+  --admin-canvas: #111115;
+  --admin-canvas-soft: #16161c;
+  --admin-surface: #17171d;
+  --admin-surface-strong: #232330;
+  --admin-dark: #1a1a22;
+  --admin-dark-hairline: #2c2c38;
+  --admin-dark-elevated: #14141a;
+  --admin-on-dark: #ffffff;
+  --admin-on-dark-soft: #9ca3af;
+  --admin-success: #22c55e;
+  --admin-warning: #f6c177;
+  --admin-error: #f87171;
+  --admin-topbar-bg: rgba(17, 17, 21, 0.88);
+  --admin-sidebar-bg: rgba(17, 17, 21, 0.85);
+  --admin-backdrop-bg: rgba(0, 0, 0, 0.45);
+  --admin-modal-backdrop-bg: rgba(0, 0, 0, 0.55);
+  --admin-modal-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  --admin-focus-ring: rgba(140, 170, 255, 0.18);
+  --admin-warning-bg: rgba(171, 100, 0, 0.16);
+  --admin-warning-border: rgba(246, 193, 119, 0.35);
+  --admin-page-bg:
+    radial-gradient(900px 360px at 50% -120px, rgba(50, 50, 150, 0.28), rgba(50, 50, 150, 0) 72%),
+    linear-gradient(180deg, var(--admin-canvas) 0%, var(--admin-canvas) 62%, var(--admin-canvas-soft) 100%);
+}

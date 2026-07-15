@@ -64,8 +64,14 @@ const mainClass = computed(() => {
   return 'container mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6 mobile-safe-bottom'
 })
 
+// 主题初始化：同步 html.dark class，并监听系统深浅色变化（跟随系统时生效）。
+let stopThemeWatch: (() => void) | null = null
 onMounted(() => {
-  // 应用初始化逻辑
+  stopThemeWatch = appStore.initTheme()
+})
+onUnmounted(() => {
+  stopThemeWatch?.()
+  stopThemeWatch = null
 })
 
 const chatViewportHeight = ref<string>('100dvh')
@@ -156,7 +162,7 @@ onUnmounted(() => {
 
 <template>
   <el-config-provider :locale="elementLocale">
-    <div id="app" class="min-h-screen bg-gray-50">
+    <div id="app" class="min-h-screen app-bg">
       <!-- 主要内容区域 -->
       <main
         :class="mainClass"

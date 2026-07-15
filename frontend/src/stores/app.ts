@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { NotificationOptions } from '../types'
 import { userApi } from '@/api/user'
 import { useUserStore } from './user'
@@ -11,6 +11,29 @@ import {
 
 const getInitialAdminSidebarVisible = () => true
 
+/** 主题偏好：明 / 暗 / 跟随系统。与 index.html 内联脚本共用同一存储键。 */
+export type ThemePreference = 'light' | 'dark' | 'system'
+
+export const THEME_STORAGE_KEY = 'raven-theme'
+
+const isThemePreference = (value: unknown): value is ThemePreference =>
+  value === 'light' || value === 'dark' || value === 'system'
+
+const getStoredTheme = (): ThemePreference => {
+  if (typeof window === 'undefined') return 'system'
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY)
+    return isThemePreference(stored) ? stored : 'system'
+  } catch {
+    return 'system'
+  }
+}
+
+const getSystemPrefersDark = (): boolean => {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
+  return window.matchMedia('(prefers-color-scheme: dark)').matches
+}
+
 export const useAppStore = defineStore('app', () => {
   // 状态
   const loading = ref(false)
@@ -21,6 +44,13 @@ export const useAppStore = defineStore('app', () => {
   // 当前激活语言。初值来自 i18n 模块（localStorage → 浏览器探测），
   // 登录后由 initLocale() 用 profile 偏好覆盖。
   const locale = ref<AppLocale>(getActiveLocale())
+  // 主题偏好与系统深色探测。html.dark class 由 applyTheme() 维护；
+  // 首屏由 index.html 内联脚本预置，避免闪烁。
+  const theme = ref<ThemePreference>(getStoredTheme())
+  const systemPrefersDark = ref(getSystemPrefersDark())
+  const resolvedTheme = computed<'light' | 'dark'>(() =>
+    theme.value === 'system' ? (systemPrefersDark.value ? 'dark' : 'light') : theme.value,
+  )
 
   // 操作
   const setLoading = (value: boolean) => {
@@ -67,6 +97,45 @@ export const useAppStore = defineStore('app', () => {
     locale.value = getActiveLocale()
   }
 
+  /** 把 resolvedTheme 同步到 <html> 的 dark/light class（部分组件依赖 light 钩子）。 */
+  const applyTheme = () => {
+    if (typeof document === 'undefined') return
+    const dark = resolvedTheme.value === 'dark'
+    document.documentElement.classList.toggle('dark', dark)
+    document.documentElement.classList.toggle('light', !dark)
+  }
+
+  /** 切换主题偏好：更新 store + localStorage + html class。 */
+  const setTheme = (next: ThemePreference) => {
+    theme.value = next
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(THEME_STORAGE_KEY, next)
+      } catch {
+        // 隐私模式等场景下写入失败，仅本次会话生效
+      }
+    }
+    applyTheme()
+  }
+
+  /**
+   * 启动期主题初始化：同步一次 html class，并在“跟随系统”时
+   * 监听系统深浅色变化。返回清理函数（App 卸载时调用）。
+   */
+  const initTheme = (): (() => void) => {
+    applyTheme()
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return () => {}
+    }
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const onChange = (event: MediaQueryListEvent) => {
+      systemPrefersDark.value = event.matches
+      applyTheme()
+    }
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }
+
   const showNotification = (options: NotificationOptions) => {
     const id = Date.now().toString()
     const notification = { ...options, id }
@@ -111,7 +180,11 @@ export const useAppStore = defineStore('app', () => {
     adminSidebarVisible,
     loginModalRequest,
     locale,
+    theme,
+    resolvedTheme,
     // 操作
+    setTheme,
+    initTheme,
     setLoading,
     showNotification,
     removeNotification,

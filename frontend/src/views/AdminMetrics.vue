@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { LogOut, Menu, PanelLeftClose, RefreshCw, X } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAppStore } from '@/stores/app'
 import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
 import { useAdminScope } from '@/composables/useAdminScope'
@@ -628,6 +629,7 @@ onMounted(() => {
           </div>
         </div>
         <div class="admin-topbar-right">
+          <ThemeToggle class="admin-theme-toggle" />
           <button v-if="isAuthenticated" class="admin-logout-btn" @click="handleLogout">
             <LogOut :size="14" />
             <span>{{ t('admin.logoutBtn') }}</span>

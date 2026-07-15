@@ -24,6 +24,7 @@ import {
   X,
 } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAppStore } from '@/stores/app'
 import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
 import { localizeProjectAgent } from '@/utils/adminPromptMetadata'
@@ -546,6 +547,7 @@ watch(
           </div>
         </div>
         <div class="admin-topbar-right">
+          <ThemeToggle class="admin-theme-toggle" />
           <span class="px-3 py-1 text-xs font-semibold rounded-full bg-slate-700 text-slate-100">
             {{ isAuthenticated ? t('admin.projectRepos.badge', { enabled: enabledCount, disabled: disabledCount }) : t('admin.badgeNotLoggedIn') }}
           </span>

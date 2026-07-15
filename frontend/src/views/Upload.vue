@@ -472,7 +472,8 @@ onMounted(() => {
 }
 
 .upload-actions {
-  @apply pt-4 border-t border-gray-200;
+  @apply pt-4 border-t;
+  border-color: var(--rw-hairline);
 }
 
 .upload-tips ul {
@@ -480,11 +481,16 @@ onMounted(() => {
 }
 
 .progress-item {
-  @apply p-4 bg-gray-50 rounded-lg;
+  @apply p-4 rounded-lg;
+  background-color: var(--rw-canvas-soft);
 }
 
 .recent-item {
-  @apply transition-colors hover:bg-gray-100;
+  @apply transition-colors;
+}
+
+.recent-item:hover {
+  background-color: var(--rw-surface-strong);
 }
 
 @media (max-width: 768px) {

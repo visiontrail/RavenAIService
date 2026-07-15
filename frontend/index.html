@@ -6,6 +6,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vite + Vue + TS</title>
     <script src="/raven-config.js"></script>
+    <script>
+      // 首屏前预置明暗主题，避免闪烁。存储键与 stores/app.ts 保持一致。
+      ;(function () {
+        try {
+          var saved = window.localStorage.getItem('raven-theme')
+          var dark =
+            saved === 'dark' ||
+            ((saved === null || saved === 'system') &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.classList.toggle('dark', !!dark)
+          document.documentElement.classList.toggle('light', !dark)
+        } catch (e) {
+          /* 忽略：无 localStorage 时按亮色渲染 */
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

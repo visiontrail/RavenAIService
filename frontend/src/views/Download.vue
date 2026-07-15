@@ -345,12 +345,16 @@ onMounted(() => fetchReleases())
 
 .download-page {
   min-height: 100%;
-  background: #f8fafc;
+  background: var(--rw-canvas-soft, #f8fafc);
 }
 
 .hero-section {
   background: linear-gradient(160deg, #ffffff 0%, #f0f9ff 50%, #e0f2fe 100%);
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--rw-hairline, #e2e8f0);
+}
+
+html.dark .hero-section {
+  background: linear-gradient(160deg, #111115 0%, #15151d 50%, #1b1b2a 100%);
 }
 
 .platform-card {
@@ -376,6 +380,18 @@ onMounted(() => fetchReleases())
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.65),
     0 8px 18px rgba(15, 23, 42, 0.06);
+}
+
+html.dark .platform-card {
+  background-image: none;
+  background-color: var(--rw-surface-card);
+  border-color: var(--rw-hairline-strong);
+}
+
+html.dark .platform-icon {
+  background: rgba(35, 35, 48, 0.8);
+  border-color: var(--rw-hairline-strong);
+  box-shadow: none;
 }
 
 .history-list {

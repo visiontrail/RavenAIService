@@ -11,6 +11,13 @@ export default {
     zh: '中文',
     en: 'English',
   },
+  theme: {
+    label: '主题',
+    switchTo: '切换主题',
+    light: '浅色',
+    dark: '深色',
+    system: '跟随系统',
+  },
   common: {
     confirm: '确定',
     cancel: '取消',

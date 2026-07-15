@@ -16,6 +16,7 @@ import {
   ShieldCheck,
 } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAdminScope } from '@/composables/useAdminScope'
 import { useAppStore } from '@/stores/app'
 import type { SystemAnnouncement } from '@/types'
@@ -249,6 +250,7 @@ onMounted(() => bootstrap())
           </div>
         </div>
         <div class="admin-topbar-right">
+          <ThemeToggle class="admin-theme-toggle" />
           <span class="admin-status-badge" :class="{ live: isActive }">
             <span class="admin-status-dot"></span>
             {{ isAuthenticated

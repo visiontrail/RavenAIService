@@ -12,6 +12,13 @@ export default {
     zh: '中文',
     en: 'English',
   },
+  theme: {
+    label: 'Theme',
+    switchTo: 'Switch theme',
+    light: 'Light',
+    dark: 'Dark',
+    system: 'System',
+  },
   common: {
     confirm: 'Confirm',
     cancel: 'Cancel',

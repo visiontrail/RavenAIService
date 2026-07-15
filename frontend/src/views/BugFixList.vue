@@ -227,21 +227,7 @@ onMounted(() => {
 
 <style scoped>
 .rw-page {
-  --rw-canvas: #ffffff;
-  --rw-canvas-soft: #fafafa;
-  --rw-surface-card: #ffffff;
-  --rw-surface-strong: #f0f0f3;
-  --rw-ink: #171717;
-  --rw-body: #60646c;
-  --rw-muted: #999999;
-  --rw-hairline: #f0f0f3;
-  --rw-hairline-strong: #dcdee0;
-  --rw-primary: #171717;
-  --rw-primary-active: #404040;
-  --rw-on-primary: #ffffff;
-  --rw-success: #16a34a;
-  --rw-danger: #c0382b;
-  --rw-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  /* --rw-* tokens come from src/styles/theme.css (light + dark). */
   height: 100%;
   display: flex;
   flex-direction: column;

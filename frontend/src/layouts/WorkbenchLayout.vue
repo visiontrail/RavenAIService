@@ -20,6 +20,7 @@ import {
 } from '@/utils/registrationValidation'
 import brandIcon from '@/assets/icon.png'
 import SystemAnnouncementDialog from '@/components/SystemAnnouncementDialog.vue'
+import ThemeToggle from '@/components/ThemeToggle.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -826,6 +827,11 @@ const handleUserLogout = () => {
                 <span class="rw-lang-opt" :class="{ active: activeLocale === 'en' }" @click="setLanguage('en')">EN</span>
               </span>
             </div>
+            <div class="rw-menu-section">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+              <span>{{ t('theme.label') }}</span>
+              <ThemeToggle />
+            </div>
             <button class="rw-user-menu-item" @click="openSettingsModal">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33 1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               {{ t('workbench.settings') }}
@@ -1175,29 +1181,8 @@ const handleUserLogout = () => {
 
 <style scoped>
 .raven-workbench {
-  /* Design tokens — Expo style */
-  --rw-canvas: #ffffff;
-  --rw-canvas-soft: #fafafa;
-  --rw-surface-card: #ffffff;
-  --rw-surface-strong: #f0f0f3;
-  --rw-surface-dark: #171717;
-  --rw-ink: #171717;
-  --rw-body: #60646c;
-  --rw-muted: #999999;
-  --rw-muted-soft: #cccccc;
-  --rw-hairline: #f0f0f3;
-  --rw-hairline-soft: #f5f5f7;
-  --rw-hairline-strong: #dcdee0;
-  --rw-primary: #171717;
-  --rw-primary-hover: #2e2e2e;
-  --rw-primary-active: #404040;
-  --rw-on-primary: #ffffff;
-  --rw-success: #16a34a;
-  --rw-danger: #c0382b;
-
-  --rw-sans: 'Inter', -apple-system, system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --rw-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
-
+  /* Design tokens (--rw-*) come from src/styles/theme.css: light values
+     follow DESIGN.md, dark values follow DESIGN-Dark.md via html.dark. */
   display: flex;
   height: 100%;
   min-height: 0;
@@ -1482,6 +1467,7 @@ const handleUserLogout = () => {
 }
 .rw-lang-opt { padding: 3px 8px; border-radius: 4px; color: var(--rw-muted); cursor: pointer; }
 .rw-lang-opt.active { background: var(--rw-canvas); color: var(--rw-ink); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.rw-menu-section .theme-toggle { margin-left: auto; }
 
 .rw-user-card {
   display: flex; align-items: center; gap: 10px;

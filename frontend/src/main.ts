@@ -15,6 +15,8 @@ import { i18n, getElementLocale } from './i18n'
 // Element Plus
 import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
+// Element Plus 官方暗色变量，同样由 html.dark class 驱动
+import 'element-plus/theme-chalk/dark/css-vars.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 
 const app = createApp(App)

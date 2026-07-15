@@ -2149,27 +2149,7 @@ onUnmounted(() => {
 
 <style scoped>
 .rw-page {
-  --rw-canvas: #ffffff;
-  --rw-canvas-soft: #fafafa;
-  --rw-surface-card: #ffffff;
-  --rw-surface-strong: #f0f0f3;
-  --rw-surface-dark: #171717;
-  --rw-ink: #171717;
-  --rw-body: #60646c;
-  --rw-muted: #999999;
-  --rw-muted-soft: #cccccc;
-  --rw-hairline: #f0f0f3;
-  --rw-hairline-soft: #f5f5f7;
-  --rw-hairline-strong: #dcdee0;
-  --rw-primary: #000000;
-  --rw-primary-active: #1a1a1a;
-  --rw-on-primary: #ffffff;
-  --rw-success: #16a34a;
-  --rw-danger: #c0382b;
-  --rw-link: #0d74ce;
-  --rw-sans: 'Inter', -apple-system, system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --rw-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
-
+  /* --rw-* tokens come from src/styles/theme.css (light + dark). */
   display: flex;
   flex-direction: column;
   min-height: 100vh;
