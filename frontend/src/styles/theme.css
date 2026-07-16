@@ -179,6 +179,20 @@ html.dark .admin-console {
   --admin-focus-ring: rgba(140, 170, 255, 0.18);
   --admin-warning-bg: rgba(171, 100, 0, 0.16);
   --admin-warning-border: rgba(246, 193, 119, 0.35);
+  --admin-accent-soft-bg: rgba(140, 170, 255, 0.12);
+  --admin-accent-soft-border: rgba(140, 170, 255, 0.3);
+  --admin-accent-soft-ink: #8caaff;
+  --admin-status-success-bg: rgba(34, 197, 94, 0.16);
+  --admin-status-error-bg: rgba(248, 113, 113, 0.16);
+  --admin-status-warning-bg: rgba(246, 193, 119, 0.16);
+  /* Bars sit on --admin-surface (#17171d): keep the cyan luminous so short
+     bars, which show only the gradient's tail, stay readable. */
+  --admin-chart-bar-from: #67e8f9;
+  --admin-chart-bar-to: #0891b2;
+  --admin-chart-grid: #2a2a38;
+  --admin-chart-axis: #3d3d52;
+  --admin-surface-translucent: rgba(23, 23, 29, 0.92);
+  --admin-drawer-shadow: -20px 0 45px rgba(0, 0, 0, 0.55);
   --admin-page-bg:
     radial-gradient(900px 360px at 50% -120px, rgba(50, 50, 150, 0.28), rgba(50, 50, 150, 0) 72%),
     linear-gradient(180deg, var(--admin-canvas) 0%, var(--admin-canvas) 62%, var(--admin-canvas-soft) 100%);

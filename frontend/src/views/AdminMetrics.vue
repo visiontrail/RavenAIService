@@ -1103,7 +1103,7 @@ onMounted(() => {
             </h3>
             <p class="text-xs text-slate-400">{{ detail?.username || detail?.user_id }}</p>
           </div>
-          <button class="admin-icon-btn !text-slate-600 !bg-slate-100 !border-slate-200" @click="closeDetail"><X :size="16" /></button>
+          <button class="admin-icon-btn" @click="closeDetail"><X :size="16" /></button>
         </div>
 
         <div v-if="loadingDetail" class="metrics-empty">{{ t('admin.metrics.loadingUsers') }}</div>
@@ -1189,7 +1189,7 @@ onMounted(() => {
               <span v-if="conversation.is_deleted"> · {{ t('admin.metrics.deletedConversation') }}</span>
             </p>
           </div>
-          <button class="admin-icon-btn !text-slate-600 !bg-slate-100 !border-slate-200" @click="closeConversation"><X :size="16" /></button>
+          <button class="admin-icon-btn" @click="closeConversation"><X :size="16" /></button>
         </div>
 
         <div v-if="loadingConversation" class="metrics-empty">{{ t('admin.metrics.loadingConversation') }}</div>
@@ -1226,7 +1226,7 @@ onMounted(() => {
   --admin-topbar-height: 72px;
   --admin-sidebar-width: 280px;
   min-height: 100vh;
-  background: linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%);
+  background: var(--admin-page-bg);
 }
 
 .admin-topbar {
@@ -1237,8 +1237,8 @@ onMounted(() => {
   width: 100%;
   height: var(--admin-topbar-height);
   z-index: 70;
-  background: rgba(15, 23, 42, 0.96);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.3);
+  background: var(--admin-topbar-bg);
+  border-bottom: 1px solid var(--admin-hairline);
   backdrop-filter: blur(10px);
 }
 
@@ -1261,10 +1261,10 @@ onMounted(() => {
 .admin-icon-btn {
   width: 2.25rem;
   height: 2.25rem;
-  border: 1px solid rgba(148, 163, 184, 0.35);
+  border: 1px solid var(--admin-hairline-strong);
   border-radius: 0.625rem;
-  color: #f8fafc;
-  background: rgba(51, 65, 85, 0.6);
+  color: var(--admin-ink);
+  background: var(--admin-surface);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1276,14 +1276,14 @@ onMounted(() => {
 }
 
 .admin-title {
-  color: #f8fafc;
+  color: var(--admin-ink);
   font-size: 0.95rem;
   font-weight: 700;
   line-height: 1.1;
 }
 
 .admin-subtitle {
-  color: #94a3b8;
+  color: var(--admin-body);
   font-size: 0.75rem;
 }
 
@@ -1294,10 +1294,10 @@ onMounted(() => {
 }
 
 .admin-logout-btn {
-  border: 1px solid rgba(148, 163, 184, 0.35);
+  border: 1px solid var(--admin-hairline-strong);
   border-radius: 0.55rem;
-  color: #e2e8f0;
-  background: rgba(51, 65, 85, 0.45);
+  color: var(--admin-ink);
+  background: var(--admin-surface);
   font-size: 0.75rem;
   font-weight: 600;
   padding: 0.45rem 0.7rem;
@@ -1313,8 +1313,8 @@ onMounted(() => {
   width: var(--admin-sidebar-width);
   height: 100vh;
   z-index: 60;
-  background: #0f172a;
-  border-right: 1px solid rgba(148, 163, 184, 0.25);
+  background: var(--admin-sidebar-bg);
+  border-right: 1px solid var(--admin-hairline);
   padding: calc(var(--admin-topbar-height) + 1rem) 1rem 1rem;
   transition: transform 0.25s ease;
   overflow-y: auto;
@@ -1329,15 +1329,15 @@ onMounted(() => {
   text-align: left;
   padding: 0.8rem;
   border-radius: 0.75rem;
-  border: 1px solid rgba(100, 116, 139, 0.45);
-  color: #cbd5e1;
-  background: rgba(30, 41, 59, 0.45);
+  border: 1px solid transparent;
+  color: var(--admin-body);
+  background: transparent;
 }
 
 .admin-side-nav-item.is-active {
-  color: #0f172a;
-  background: #22d3ee;
-  border-color: #22d3ee;
+  color: var(--admin-on-dark);
+  background: var(--admin-primary);
+  border-color: var(--admin-primary);
 }
 
 .admin-main {
@@ -1363,7 +1363,7 @@ onMounted(() => {
   position: fixed;
   inset: 0;
   z-index: 90;
-  background: rgba(2, 6, 23, 0.5);
+  background: var(--admin-modal-backdrop-bg);
   display: flex;
   align-items: stretch;
   justify-content: flex-end;
@@ -1377,8 +1377,8 @@ onMounted(() => {
   align-items: center;
   gap: 1.25rem;
   flex-wrap: wrap;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--admin-surface);
+  border: 1px solid var(--admin-hairline);
   border-radius: 1rem;
   padding: 0.75rem 1rem;
 }
@@ -1391,13 +1391,13 @@ onMounted(() => {
 
 .metrics-control-label {
   font-size: 0.75rem;
-  color: #64748b;
+  color: var(--admin-body);
   font-weight: 600;
 }
 
 .metrics-segment {
   display: inline-flex;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--admin-hairline-strong);
   border-radius: 0.6rem;
   overflow: hidden;
 }
@@ -1405,9 +1405,9 @@ onMounted(() => {
 .metrics-segment-btn {
   padding: 0.35rem 0.75rem;
   font-size: 0.8rem;
-  color: #475569;
-  background: #f8fafc;
-  border-left: 1px solid #e2e8f0;
+  color: var(--admin-body);
+  background: var(--admin-canvas-soft);
+  border-left: 1px solid var(--admin-hairline);
 }
 
 .metrics-segment-btn:first-child {
@@ -1415,8 +1415,8 @@ onMounted(() => {
 }
 
 .metrics-segment-btn.is-active {
-  background: #0891b2;
-  color: #ffffff;
+  background: var(--admin-primary);
+  color: var(--admin-on-dark);
 }
 
 .metrics-refresh-btn {
@@ -1426,41 +1426,41 @@ onMounted(() => {
   gap: 0.35rem;
   padding: 0.4rem 0.85rem;
   border-radius: 0.6rem;
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
+  border: 1px solid var(--admin-hairline-strong);
+  background: var(--admin-surface);
   font-size: 0.8rem;
-  color: #334155;
+  color: var(--admin-ink);
 }
 
 .metrics-select {
   min-width: 13rem;
   max-width: min(22rem, 72vw);
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--admin-hairline-strong);
   border-radius: 0.6rem;
-  background: #ffffff;
-  color: #334155;
+  background: var(--admin-surface);
+  color: var(--admin-ink);
   font-size: 0.8rem;
   padding: 0.4rem 2rem 0.4rem 0.7rem;
   outline: none;
 }
 
 .metrics-select:focus {
-  border-color: #0891b2;
-  box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.12);
+  border-color: var(--admin-primary);
+  box-shadow: 0 0 0 3px var(--admin-focus-ring);
 }
 
 .metrics-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--admin-surface);
+  border: 1px solid var(--admin-hairline);
   border-radius: 1rem;
   padding: 1rem 1.1rem;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-shadow: var(--rw-shadow-soft);
 }
 
 .metrics-card-title {
   font-size: 0.9rem;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--admin-ink);
   margin-bottom: 0.75rem;
 }
 
@@ -1478,19 +1478,19 @@ onMounted(() => {
 
 .metrics-kpi-label {
   font-size: 0.75rem;
-  color: #64748b;
+  color: var(--admin-body);
 }
 
 .metrics-kpi-value {
   font-size: 1.5rem;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--admin-ink);
   line-height: 1.2;
 }
 
 .metrics-kpi-sub {
   font-size: 0.72rem;
-  color: #94a3b8;
+  color: var(--admin-muted);
 }
 
 .metrics-graph {
@@ -1521,7 +1521,7 @@ onMounted(() => {
   transform: rotate(180deg);
   font-size: 0.7rem;
   font-weight: 600;
-  color: #64748b;
+  color: var(--admin-body);
 }
 
 .metrics-yaxis {
@@ -1536,7 +1536,7 @@ onMounted(() => {
   right: 0.3rem;
   transform: translateY(-50%);
   font-size: 0.62rem;
-  color: #94a3b8;
+  color: var(--admin-muted);
   white-space: nowrap;
 }
 
@@ -1553,7 +1553,7 @@ onMounted(() => {
   left: 0;
   right: 0;
   height: var(--chart-track-h);
-  border-left: 1px solid #cbd5e1;
+  border-left: 1px solid var(--admin-chart-axis);
   pointer-events: none;
 }
 
@@ -1561,11 +1561,11 @@ onMounted(() => {
   position: absolute;
   left: 0;
   right: 0;
-  border-top: 1px dashed #e2e8f0;
+  border-top: 1px dashed var(--admin-chart-grid);
 }
 
 .metrics-gridline.is-base {
-  border-top: 1px solid #cbd5e1;
+  border-top: 1px solid var(--admin-chart-axis);
 }
 
 .metrics-chart {
@@ -1597,7 +1597,7 @@ onMounted(() => {
 
 .metrics-bar-fill {
   width: 100%;
-  background: linear-gradient(180deg, #22d3ee 0%, #0891b2 100%);
+  background: linear-gradient(180deg, var(--admin-chart-bar-from) 0%, var(--admin-chart-bar-to) 100%);
   border-radius: 0.35rem 0.35rem 0 0;
   min-height: 2px;
 }
@@ -1612,7 +1612,7 @@ onMounted(() => {
 
 .metrics-bar-label span {
   font-size: 0.62rem;
-  color: #94a3b8;
+  color: var(--admin-muted);
   white-space: nowrap;
   padding-top: 2px;
 }
@@ -1626,7 +1626,7 @@ onMounted(() => {
   text-align: center;
   font-size: 0.7rem;
   font-weight: 600;
-  color: #64748b;
+  color: var(--admin-body);
 }
 
 .metrics-distribution-grid {
@@ -1656,17 +1656,17 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   font-size: 0.82rem;
-  color: #475569;
+  color: var(--admin-body);
 }
 
 .metrics-stat-list b {
-  color: #0f172a;
+  color: var(--admin-ink);
   font-weight: 600;
 }
 
 .metrics-empty,
 .metrics-empty-li {
-  color: #94a3b8;
+  color: var(--admin-muted);
   font-size: 0.85rem;
   text-align: center;
   padding: 1rem 0;
@@ -1677,23 +1677,23 @@ onMounted(() => {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.82rem;
-  color: #334155;
+  color: var(--admin-body);
 }
 
 .metrics-mini-table th,
 .metrics-table th {
   text-align: left;
   font-weight: 600;
-  color: #64748b;
+  color: var(--admin-body);
   padding: 0.4rem 0.5rem;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--admin-hairline-strong);
   font-size: 0.75rem;
 }
 
 .metrics-mini-table td,
 .metrics-table td {
   padding: 0.45rem 0.5rem;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--admin-hairline);
 }
 
 .text-right {
@@ -1705,11 +1705,11 @@ onMounted(() => {
 }
 
 .metrics-row:hover {
-  background: #f8fafc;
+  background: var(--admin-canvas-soft);
 }
 
 .metrics-link {
-  color: #0891b2;
+  color: var(--admin-link);
   font-size: 0.78rem;
   font-weight: 600;
 }
@@ -1720,25 +1720,25 @@ onMounted(() => {
   border-radius: 999px;
   font-size: 0.7rem;
   font-weight: 600;
-  background: #f1f5f9;
-  color: #64748b;
+  background: var(--admin-surface-strong);
+  color: var(--admin-body);
 }
 
 .metrics-status.is-succeeded {
-  background: #dcfce7;
-  color: #15803d;
+  background: var(--admin-status-success-bg);
+  color: var(--admin-success);
 }
 
 .metrics-status.is-failed,
 .metrics-status.is-timeout {
-  background: #fee2e2;
-  color: #b91c1c;
+  background: var(--admin-status-error-bg);
+  color: var(--admin-error);
 }
 
 .metrics-status.is-cancelled,
 .metrics-status.is-stale {
-  background: #fef3c7;
-  color: #b45309;
+  background: var(--admin-status-warning-bg);
+  color: var(--admin-warning);
 }
 
 .metrics-pager {
@@ -1748,14 +1748,15 @@ onMounted(() => {
   gap: 0.75rem;
   margin-top: 0.85rem;
   font-size: 0.8rem;
-  color: #64748b;
+  color: var(--admin-body);
 }
 
 .metrics-pager button {
   padding: 0.3rem 0.75rem;
   border-radius: 0.5rem;
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
+  border: 1px solid var(--admin-hairline-strong);
+  color: var(--admin-ink);
+  background: var(--admin-surface);
 }
 
 .metrics-pager button:disabled {
@@ -1766,48 +1767,53 @@ onMounted(() => {
 .metrics-mini-btn {
   padding: 0.35rem 0.75rem;
   border-radius: 0.5rem;
-  border: 1px solid #0891b2;
-  color: #0891b2;
-  background: #ffffff;
+  border: 1px solid var(--admin-hairline-strong);
+  color: var(--admin-ink);
+  background: var(--admin-surface);
   font-size: 0.8rem;
+}
+
+.metrics-mini-btn:hover {
+  border-color: var(--admin-ink);
+  background: var(--admin-surface-strong);
 }
 
 .metrics-conversation-btn {
   white-space: nowrap;
-  color: #0e7490;
+  color: var(--admin-accent-soft-ink);
   font-size: 0.76rem;
   font-weight: 600;
   padding: 0.28rem 0.55rem;
-  border: 1px solid #a5f3fc;
+  border: 1px solid var(--admin-accent-soft-border);
   border-radius: 0.5rem;
-  background: #ecfeff;
+  background: var(--admin-accent-soft-bg);
 }
 
 .metrics-conversation-btn:hover:not(:disabled) {
-  color: #ffffff;
-  border-color: #0891b2;
-  background: #0891b2;
+  color: var(--admin-on-dark);
+  border-color: var(--admin-primary);
+  background: var(--admin-primary);
 }
 
 .metrics-conversation-btn:disabled {
-  color: #94a3b8;
-  border-color: #e2e8f0;
-  background: #f8fafc;
+  color: var(--admin-muted);
+  border-color: var(--admin-hairline);
+  background: var(--admin-canvas-soft);
   cursor: not-allowed;
 }
 
 .metrics-drawer {
   width: min(640px, 100%);
   height: 100vh;
-  background: #f8fafc;
-  box-shadow: -20px 0 45px rgba(15, 23, 42, 0.25);
+  background: var(--admin-canvas-soft);
+  box-shadow: var(--admin-drawer-shadow);
   padding: 1.25rem;
   overflow-y: auto;
 }
 
 .conversation-drawer {
   width: min(820px, 100%);
-  background: #ffffff;
+  background: var(--admin-surface);
   padding: 0;
 }
 
@@ -1820,8 +1826,8 @@ onMounted(() => {
   justify-content: space-between;
   gap: 1rem;
   padding: 1.1rem 1.25rem;
-  background: rgba(255, 255, 255, 0.96);
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--admin-surface-translucent);
+  border-bottom: 1px solid var(--admin-hairline);
   backdrop-filter: blur(8px);
 }
 
@@ -1830,14 +1836,14 @@ onMounted(() => {
   margin-bottom: 0.35rem;
   padding: 0.15rem 0.5rem;
   border-radius: 999px;
-  color: #0e7490;
-  background: #cffafe;
+  color: var(--admin-accent-soft-ink);
+  background: var(--admin-accent-soft-bg);
   font-size: 0.68rem;
   font-weight: 700;
 }
 
 .conversation-title {
-  color: #0f172a;
+  color: var(--admin-ink);
   font-size: 1.05rem;
   font-weight: 700;
   line-height: 1.4;
@@ -1846,7 +1852,7 @@ onMounted(() => {
 
 .conversation-meta {
   margin-top: 0.25rem;
-  color: #64748b;
+  color: var(--admin-body);
   font-size: 0.75rem;
 }
 
@@ -1867,8 +1873,8 @@ onMounted(() => {
   max-width: 90%;
   padding: 0.7rem 0.95rem;
   border-radius: 0.9rem 0.9rem 0.25rem 0.9rem;
-  color: #ffffff;
-  background: #0f172a;
+  color: var(--admin-on-dark);
+  background: var(--admin-primary);
   font-size: 0.9rem;
   line-height: 1.65;
   white-space: pre-wrap;
@@ -1878,7 +1884,7 @@ onMounted(() => {
 .admin-message-label,
 .admin-ai-label {
   margin-top: 0.35rem;
-  color: #94a3b8;
+  color: var(--admin-muted);
   font-size: 0.7rem;
 }
 
@@ -1890,7 +1896,7 @@ onMounted(() => {
 
 .admin-ai-label {
   margin-top: 0;
-  color: #475569;
+  color: var(--admin-body);
   font-weight: 700;
 }
 
@@ -1899,9 +1905,93 @@ onMounted(() => {
 }
 
 .admin-ai-content {
-  color: #1e293b;
+  color: var(--admin-ink);
   font-size: 0.9rem;
   line-height: 1.7;
+}
+
+/* styles/markdown.css bakes its light colors in through @apply, which inlines
+   the declarations instead of adding the utility classes -- so the dark remaps
+   in styles/theme.css can never reach them. Restate the colour-bearing ones
+   against admin tokens for this drawer, which is genuinely dark in dark mode.
+   markdown.css itself is deliberately left alone: AIAnalysisResult pins its own
+   card light the same @apply way, so a global rule there would put white text
+   on a white card (the regression commit 155cf3e fixed). */
+html.dark .admin-ai-content :deep(.markdown-content),
+html.dark .admin-ai-content :deep(p),
+html.dark .admin-ai-content :deep(li),
+html.dark .admin-ai-content :deep(em),
+html.dark .admin-ai-content :deep(h6) {
+  color: var(--admin-body);
+}
+
+html.dark .admin-ai-content :deep(h1),
+html.dark .admin-ai-content :deep(h2),
+html.dark .admin-ai-content :deep(h3),
+html.dark .admin-ai-content :deep(h4),
+html.dark .admin-ai-content :deep(h5),
+html.dark .admin-ai-content :deep(strong) {
+  color: var(--admin-ink);
+}
+
+html.dark .admin-ai-content :deep(h1),
+html.dark .admin-ai-content :deep(h2) {
+  border-bottom-color: var(--admin-hairline);
+}
+
+html.dark .admin-ai-content :deep(del) {
+  color: var(--admin-muted);
+}
+
+html.dark .admin-ai-content :deep(code:not(.hljs code)) {
+  color: #ff7b72;
+  background-color: var(--admin-surface-strong);
+}
+
+html.dark .admin-ai-content :deep(blockquote) {
+  color: var(--admin-body);
+  border-left-color: var(--admin-link);
+  background-color: var(--admin-accent-soft-bg);
+}
+
+html.dark .admin-ai-content :deep(a) {
+  color: var(--admin-link);
+}
+
+html.dark .admin-ai-content :deep(hr) {
+  border-top-color: var(--admin-hairline);
+}
+
+html.dark .admin-ai-content :deep(.table-wrapper) {
+  border-color: var(--admin-hairline);
+}
+
+html.dark .admin-ai-content :deep(.markdown-table) {
+  background-color: var(--admin-surface);
+}
+
+html.dark .admin-ai-content :deep(.markdown-table thead) {
+  background-color: var(--admin-surface-strong);
+}
+
+html.dark .admin-ai-content :deep(.markdown-table th) {
+  color: var(--admin-ink);
+  border-bottom-color: var(--admin-hairline-strong);
+}
+
+html.dark .admin-ai-content :deep(.markdown-table td) {
+  color: var(--admin-body);
+  border-bottom-color: var(--admin-hairline);
+}
+
+html.dark .admin-ai-content :deep(.markdown-table tbody tr:hover) {
+  background-color: var(--admin-surface-strong);
+}
+
+html.dark .admin-ai-content :deep(.table-copy-btn) {
+  color: var(--admin-body);
+  background: var(--admin-surface-strong);
+  border-color: var(--admin-hairline-strong);
 }
 
 @media (max-width: 1024px) {
@@ -1936,7 +2026,7 @@ onMounted(() => {
     position: fixed;
     inset: var(--admin-topbar-height) 0 0 0;
     z-index: 55;
-    background: rgba(2, 6, 23, 0.4);
+    background: var(--admin-backdrop-bg);
   }
   .metrics-kpi-grid,
   .metrics-biz-grid {

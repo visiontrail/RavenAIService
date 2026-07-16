@@ -61,6 +61,19 @@ body {
   --admin-focus-ring: rgba(23, 23, 23, 0.08);
   --admin-warning-bg: #fffaf0;
   --admin-warning-border: #f0d6ad;
+  /* Soft accent, status pills and data-viz. Dark values in styles/theme.css. */
+  --admin-accent-soft-bg: #ecfeff;
+  --admin-accent-soft-border: #a5f3fc;
+  --admin-accent-soft-ink: #0e7490;
+  --admin-status-success-bg: #dcfce7;
+  --admin-status-error-bg: #fee2e2;
+  --admin-status-warning-bg: #fef3c7;
+  --admin-chart-bar-from: #22d3ee;
+  --admin-chart-bar-to: #0891b2;
+  --admin-chart-grid: #e2e8f0;
+  --admin-chart-axis: #cbd5e1;
+  --admin-surface-translucent: rgba(255, 255, 255, 0.96);
+  --admin-drawer-shadow: -20px 0 45px rgba(15, 23, 42, 0.25);
   --admin-page-bg:
     radial-gradient(900px 360px at 50% -120px, rgba(207, 231, 255, 0.9), rgba(207, 231, 255, 0) 72%),
     linear-gradient(180deg, var(--admin-canvas) 0%, var(--admin-canvas) 62%, var(--admin-canvas-soft) 100%);
