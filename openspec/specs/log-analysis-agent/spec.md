@@ -238,3 +238,46 @@ The system SHALL define the new agent's system and user prompt templates under a
 
 - **WHEN** Agent 因 cancel_event 退出
 - **THEN** 返回 dict MUST 包含 `trace_summary`，其 `tool_call_count` 不少于已发出 `step_end` 的次数
+
+### Requirement: Analysis result carries a structured code-fix signal
+
+The log analysis result schema SHALL be extended with two fields that drive downstream bug-fix dispatch:
+
+- `requires_code_fix` (boolean): whether the analysis concludes that source code must be changed to resolve the issue;
+- `proposed_fixes` (array): each element describing one independent proposed fix with at minimum `title`, `description`, and `rationale`, and optionally `suspected_files` and `suspected_symbols`.
+
+The agent's prompt SHALL instruct the model to set `requires_code_fix: true` and populate `proposed_fixes` only when the evidence points to a concrete code defect, and to set `requires_code_fix: false` otherwise (configuration issues, operational guidance, pure Q&A, etc.). When the model omits these fields (legacy/older responses), the system SHALL default `requires_code_fix` to `false` and `proposed_fixes` to an empty list so existing behavior is unaffected.
+
+#### Scenario: Code defect populates the signal
+
+- **WHEN** the agent concludes a null-pointer bug in the source code is the root cause
+- **THEN** the result includes `requires_code_fix: true` and a `proposed_fixes` entry describing the fix with a `rationale` tied to the root cause
+
+#### Scenario: Non-code issue clears the signal
+
+- **WHEN** the agent concludes the issue is a misconfiguration, not a code defect
+- **THEN** the result includes `requires_code_fix: false` and an empty `proposed_fixes`
+
+#### Scenario: Legacy response defaults safely
+
+- **WHEN** a model response omits `requires_code_fix` and `proposed_fixes`
+- **THEN** the persisted result defaults `requires_code_fix` to `false` and `proposed_fixes` to `[]`
+- **AND** no bug fix task is dispatched
+
+
+### Requirement: Log Analysis validates project context before project-grounded analysis
+Log Analysis workspaces resolved from a registered project SHALL include its `project_card` in `task.json.repo_info`. LogAnalysisAgent SHALL compare the log identity and user question with the selected/resolved project card and the discovered catalog. On a clear mismatch it MUST NOT attribute findings to or clone/analyze the unrelated project's repository.
+
+#### Scenario: Explicit user selection conflicts with log identity
+- **WHEN** a user-selected project's card clearly conflicts with the log metadata/question and another discovered project clearly matches
+- **THEN** LogAnalysisAgent explains that the selected project is unsuitable and recommends the matching project by name/code
+- **AND** it does not produce a repository-grounded diagnosis from the wrong project
+
+#### Scenario: No project can analyze the log
+- **WHEN** the complete catalog contains no project card suitable for the log/question
+- **THEN** LogAnalysisAgent explicitly states that no suitable project is currently registered
+- **AND** it does not force the analysis into an unrelated project
+
+#### Scenario: Resolved project is suitable
+- **WHEN** the selected or metadata-resolved project card matches the log identity/question
+- **THEN** LogAnalysisAgent continues the existing log and source-code analysis workflow
