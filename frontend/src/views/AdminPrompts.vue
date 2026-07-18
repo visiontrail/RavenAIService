@@ -24,6 +24,7 @@ import type {
 } from '@/types'
 
 type PromptSnapshot = Record<string, string>
+type PromptWorkspace = 'config' | 'preview'
 
 interface PromptAgentGroup {
   key: string
@@ -69,6 +70,7 @@ const projectRepos = ref<ProjectRepo[]>([])
 const projectAgents = ref<ProjectAgentInfo[]>([])
 const selectedPreviewProjectCode = ref('')
 const selectedPreviewAgentKey = ref('')
+const activeWorkspace = ref<PromptWorkspace>('config')
 const activePromptLocale = computed<'zh' | 'en'>(() =>
   locale.value.toLowerCase().startsWith('en') ? 'en' : 'zh'
 )
@@ -92,14 +94,6 @@ const authForm = reactive({
   username: '',
   password: '',
 })
-
-const formatBytes = (size: number) => {
-  if (Number.isNaN(size) || size === undefined || size === null) return '--'
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`
-  return `${(size / (1024 * 1024 * 1024)).toFixed(2)} GB`
-}
 
 const formatTimestamp = (value?: string) => {
   if (!value) return '--'
@@ -581,6 +575,33 @@ const toggleNavVisibility = () => {
   appStore.toggleAdminSidebar()
 }
 
+const activateWorkspace = (workspace: PromptWorkspace, focus = false) => {
+  activeWorkspace.value = workspace
+  if (focus) {
+    nextTick(() => document.getElementById(`prompt-${workspace}-tab`)?.focus())
+  }
+}
+
+const handleWorkspaceTabKeydown = (event: KeyboardEvent, current: PromptWorkspace) => {
+  const workspaces: PromptWorkspace[] = ['config', 'preview']
+  const currentIndex = workspaces.indexOf(current)
+  let nextWorkspace: PromptWorkspace | undefined
+
+  if (event.key === 'ArrowRight') {
+    nextWorkspace = workspaces[(currentIndex + 1) % workspaces.length]
+  } else if (event.key === 'ArrowLeft') {
+    nextWorkspace = workspaces[(currentIndex - 1 + workspaces.length) % workspaces.length]
+  } else if (event.key === 'Home') {
+    nextWorkspace = workspaces[0]
+  } else if (event.key === 'End') {
+    nextWorkspace = workspaces[workspaces.length - 1]
+  }
+
+  if (!nextWorkspace) return
+  event.preventDefault()
+  activateWorkspace(nextWorkspace, true)
+}
+
 const bootstrap = async () => {
   const token = adminToken.get()
   if (!token) return
@@ -601,7 +622,7 @@ const bootstrap = async () => {
 const handleKeydown = (event: KeyboardEvent) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
     event.preventDefault()
-    if (isAuthenticated.value) {
+    if (isAuthenticated.value && activeWorkspace.value === 'config') {
       handleSave()
     }
   }
@@ -642,6 +663,12 @@ watch([renderedPreviewHtml, previewMode], async () => {
   await nextTick()
   processMermaidBlocks(previewPanelRef.value)
 }, { flush: 'post' })
+
+watch(activeWorkspace, async (workspace) => {
+  if (workspace !== 'preview' || previewMode.value !== 'rendered') return
+  await nextTick()
+  processMermaidBlocks(previewPanelRef.value)
+})
 </script>
 
 <template>
@@ -775,16 +802,73 @@ watch([renderedPreviewHtml, previewMode], async () => {
         </div>
       </section>
 
-      <section v-else class="space-y-4">
-        <div class="prompt-header-panel bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
-          <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.prompts.listTitle') }}</h2>
-              <p class="text-sm text-slate-500">
-                {{ t('admin.prompts.listDesc') }}
-              </p>
+      <section v-else class="prompt-workspace">
+        <div
+          class="prompt-workspace-tabs"
+          role="tablist"
+          :aria-label="t('admin.prompts.workspaceTabsLabel')"
+        >
+          <button
+            id="prompt-config-tab"
+            type="button"
+            class="prompt-workspace-tab"
+            :class="{ 'is-active': activeWorkspace === 'config' }"
+            role="tab"
+            :aria-selected="activeWorkspace === 'config'"
+            aria-controls="prompt-config-panel"
+            :tabindex="activeWorkspace === 'config' ? 0 : -1"
+            @click="activateWorkspace('config')"
+            @keydown="handleWorkspaceTabKeydown($event, 'config')"
+          >
+            <span class="prompt-workspace-tab-icon"><Layers :size="19" /></span>
+            <span class="prompt-workspace-tab-copy">
+              <strong>{{ t('admin.prompts.configTab') }}</strong>
+              <small>{{ t('admin.prompts.configTabDesc') }}</small>
+            </span>
+            <span class="prompt-workspace-tab-count">
+              {{ t('admin.prompts.configTabCount', { count: configState.summary.editable_prompt_count || configState.prompts.length }) }}
+            </span>
+          </button>
+          <button
+            id="prompt-preview-tab"
+            type="button"
+            class="prompt-workspace-tab"
+            :class="{ 'is-active': activeWorkspace === 'preview' }"
+            role="tab"
+            :aria-selected="activeWorkspace === 'preview'"
+            aria-controls="prompt-preview-panel"
+            :tabindex="activeWorkspace === 'preview' ? 0 : -1"
+            @click="activateWorkspace('preview')"
+            @keydown="handleWorkspaceTabKeydown($event, 'preview')"
+          >
+            <span class="prompt-workspace-tab-icon"><Eye :size="19" /></span>
+            <span class="prompt-workspace-tab-copy">
+              <strong>{{ t('admin.prompts.previewTab') }}</strong>
+              <small>{{ t('admin.prompts.previewTabDesc') }}</small>
+            </span>
+            <span class="prompt-workspace-tab-count">
+              {{ t('admin.prompts.previewTabCount', { count: projectRepos.length }) }}
+            </span>
+          </button>
+        </div>
+
+        <section
+          v-show="activeWorkspace === 'config'"
+          id="prompt-config-panel"
+          class="prompt-workspace-panel"
+          role="tabpanel"
+          tabindex="0"
+          aria-labelledby="prompt-config-tab"
+        >
+          <div class="prompt-region-heading">
+            <div class="prompt-region-icon">
+              <Layers :size="18" />
             </div>
-            <div class="editor-toolbar-actions flex items-center gap-2">
+            <div>
+              <h2>{{ t('admin.prompts.baseRegionTitle') }}</h2>
+              <p>{{ t('admin.prompts.baseRegionDesc') }}</p>
+            </div>
+            <div class="editor-toolbar-actions prompt-config-actions flex items-center gap-2">
               <button
                 class="admin-command-btn"
                 :disabled="loadingConfig"
@@ -812,248 +896,241 @@ watch([renderedPreviewHtml, previewMode], async () => {
               </button>
             </div>
           </div>
-          <div class="prompt-meta-strip">
-            <span>{{ t('admin.prompts.editableCount', { count: configState.summary.editable_prompt_count || configState.prompts.length }) }}</span>
-            <span>{{ t('admin.prompts.configSize', { size: formatBytes(configState.size) }) }}</span>
-            <span>{{ t('admin.prompts.lastModifiedLabel', { time: readableUpdatedAt }) }}</span>
-            <span class="prompt-path">{{ configState.path }}</span>
-          </div>
-        </div>
 
-        <div class="prompt-region-heading">
-          <div class="prompt-region-icon">
-            <Layers :size="18" />
-          </div>
-          <div>
-            <h2>{{ t('admin.prompts.baseRegionTitle') }}</h2>
-            <p>{{ t('admin.prompts.baseRegionDesc') }}</p>
-          </div>
-        </div>
-
-        <div class="prompt-workbench">
-          <aside class="prompt-list-panel">
-            <div class="prompt-list-title">
-              <span>{{ t('admin.prompts.agentGroup') }}</span>
-              <span>{{ configState.prompts.length }}</span>
-            </div>
-            <div v-if="!promptGroups.length" class="prompt-empty">
-              {{ t('admin.prompts.noPrompts') }}
-            </div>
-            <div v-for="group in promptGroups" :key="group.key" class="prompt-function-group">
-              <div class="prompt-function-name">
-                <span>{{ group.name }}</span>
-                <small>{{ t('admin.prompts.agentCount', { count: group.agents.length }) }}</small>
+          <div class="prompt-workbench">
+            <aside class="prompt-list-panel">
+              <div class="prompt-list-title">
+                <span>{{ t('admin.prompts.agentGroup') }}</span>
+                <span>{{ configState.prompts.length }}</span>
               </div>
-              <p v-if="group.description" class="prompt-function-desc">{{ group.description }}</p>
+              <div v-if="!promptGroups.length" class="prompt-empty">
+                {{ t('admin.prompts.noPrompts') }}
+              </div>
+              <div v-for="group in promptGroups" :key="group.key" class="prompt-function-group">
+                <div class="prompt-function-name">
+                  <span>{{ group.name }}</span>
+                  <small>{{ t('admin.prompts.agentCount', { count: group.agents.length }) }}</small>
+                </div>
+                <p v-if="group.description" class="prompt-function-desc">{{ group.description }}</p>
+                <button
+                  v-for="agent in group.agents"
+                  :key="agent.key"
+                  class="prompt-agent-item"
+                  :class="{ 'is-active': agent.prompts.some((prompt) => prompt.id === selectedPromptId) }"
+                  @click="selectAgentPrompt(agent)"
+                >
+                  <span class="prompt-agent-name">{{ agent.name }}</span>
+                  <span class="prompt-agent-desc">{{ agent.description }}</span>
+                  <span class="prompt-agent-foot">
+                    {{ promptKeysLabel(agent) }}
+                  </span>
+                </button>
+              </div>
+            </aside>
+
+            <section class="prompt-editor-panel">
+              <template v-if="selectedPrompt">
+                <div class="prompt-editor-head">
+                  <div>
+                    <div class="prompt-breadcrumb">
+                      {{ selectedPromptMeta?.function.name }} / {{ selectedPromptMeta?.agent.name }}
+                    </div>
+                    <h3>{{ selectedPrompt.prompt_key }}</h3>
+                    <p v-if="selectedPromptMeta?.agent.description">{{ selectedPromptMeta.agent.description }}</p>
+                  </div>
+                  <div class="prompt-editor-head-right">
+                    <div v-if="localeVariants.length > 1" class="locale-tabs">
+                      <button
+                        v-for="variant in localeVariants"
+                        :key="variant.id"
+                        class="locale-tab"
+                        :class="{ 'is-active': variant.id === selectedPromptId }"
+                        @click="switchLocale(variant.locale!)"
+                      >
+                        {{ variant.locale }}
+                      </button>
+                    </div>
+                    <span
+                      class="prompt-dirty-badge"
+                      :class="currentPromptSnapshot[selectedPrompt.id] !== lastSavedPrompts[selectedPrompt.id] ? 'is-dirty' : 'is-clean'"
+                    >
+                      {{ currentPromptSnapshot[selectedPrompt.id] !== lastSavedPrompts[selectedPrompt.id] ? t('admin.prompts.unsavedLabel') : t('admin.prompts.syncedLabel') }}
+                    </span>
+                  </div>
+                </div>
+                <textarea
+                  v-model="selectedPromptContent"
+                  class="prompt-textarea"
+                  spellcheck="false"
+                  :disabled="loadingConfig || saving"
+                ></textarea>
+                <div class="prompt-editor-footer">
+                  <div class="flex items-center gap-3 flex-wrap">
+                    <span>{{ t('admin.prompts.promptLength', { count: selectedPromptContent.length }) }}</span>
+                    <span v-if="conflict" class="text-amber-700 font-semibold">
+                      {{ conflictMessage || t('admin.prompts.conflictNote') }}
+                    </span>
+                  </div>
+                  <span>{{ t('admin.prompts.checksumLabel', { checksum: lastChecksum || configState.checksum }) }}</span>
+                </div>
+              </template>
+              <div v-else class="prompt-empty editor-empty">
+                {{ t('admin.prompts.selectPromptHint') }}
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section
+          v-show="activeWorkspace === 'preview'"
+          id="prompt-preview-panel"
+          class="prompt-workspace-panel"
+          role="tabpanel"
+          tabindex="0"
+          aria-labelledby="prompt-preview-tab"
+        >
+          <div class="prompt-region-heading preview-heading">
+            <div class="prompt-region-icon preview">
+              <Eye :size="18" />
+            </div>
+            <div>
+              <h2>{{ t('admin.prompts.previewRegionTitle') }}</h2>
+              <p>{{ t('admin.prompts.previewRegionDesc') }}</p>
+            </div>
+            <div class="preview-heading-actions">
+              <div class="locale-tabs preview-tabs">
+                <button
+                  class="locale-tab"
+                  :class="{ 'is-active': previewLocale === 'zh' }"
+                  @click="previewLocale = 'zh'"
+                >
+                  zh
+                </button>
+                <button
+                  class="locale-tab"
+                  :class="{ 'is-active': previewLocale === 'en' }"
+                  @click="previewLocale = 'en'"
+                >
+                  en
+                </button>
+              </div>
+              <div class="preview-mode-tabs">
+                <button
+                  class="preview-mode-tab"
+                  :class="{ 'is-active': previewMode === 'rendered' }"
+                  @click="previewMode = 'rendered'"
+                >
+                  <Eye :size="14" />
+                  <span>{{ t('admin.prompts.previewRendered') }}</span>
+                </button>
+                <button
+                  class="preview-mode-tab"
+                  :class="{ 'is-active': previewMode === 'raw' }"
+                  @click="previewMode = 'raw'"
+                >
+                  <FileText :size="14" />
+                  <span>{{ t('admin.prompts.previewRaw') }}</span>
+                </button>
+              </div>
               <button
-                v-for="agent in group.agents"
-                :key="agent.key"
-                class="prompt-agent-item"
-                :class="{ 'is-active': agent.prompts.some((prompt) => prompt.id === selectedPromptId) }"
-                @click="selectAgentPrompt(agent)"
+                class="admin-command-btn"
+                :disabled="loadingPreview || loadingPreviewResources"
+                @click="fetchPromptPreview"
               >
-                <span class="prompt-agent-name">{{ agent.name }}</span>
-                <span class="prompt-agent-desc">{{ agent.description }}</span>
-                <span class="prompt-agent-foot">
-                  {{ promptKeysLabel(agent) }}
-                </span>
+                <RefreshCw :size="15" />
+                <span>{{ t('admin.prompts.previewRefresh') }}</span>
               </button>
             </div>
-          </aside>
+          </div>
 
-          <section class="prompt-editor-panel">
-            <template v-if="selectedPrompt">
-              <div class="prompt-editor-head">
+          <div class="project-preview-workbench">
+            <aside class="project-preview-selector">
+              <div class="prompt-list-title">
+                <span>{{ t('admin.prompts.previewProjects') }}</span>
+                <span>{{ projectRepos.length }}</span>
+              </div>
+              <div v-if="!projectRepos.length" class="prompt-empty">
+                {{ loadingPreviewResources ? t('admin.prompts.previewLoading') : t('admin.prompts.previewNoProjects') }}
+              </div>
+              <div v-else class="project-preview-list">
+                <button
+                  v-for="repo in projectRepos"
+                  :key="repo.id"
+                  class="project-preview-item"
+                  :class="{ 'is-active': repo.project_code === selectedPreviewProjectCode }"
+                  @click="selectedPreviewProjectCode = repo.project_code"
+                >
+                  <span class="project-preview-name">{{ repo.project_name }}</span>
+                  <span class="project-preview-code">{{ repo.project_code }}</span>
+                  <span class="project-preview-foot">
+                    {{ repo.has_repo ? t('admin.prompts.previewRepoLinked') : t('admin.prompts.previewRepoLess') }}
+                    · {{ t('admin.prompts.previewAgentCount', { count: repo.enabled_agent_keys?.length || 0 }) }}
+                  </span>
+                </button>
+              </div>
+
+              <div class="project-agent-picker">
+                <div class="prompt-list-title compact">
+                  <span>{{ t('admin.prompts.previewAgents') }}</span>
+                  <span>{{ previewProjectAgents.length }}</span>
+                </div>
+                <div v-if="!previewProjectAgents.length" class="prompt-empty">
+                  {{ t('admin.prompts.previewNoAgents') }}
+                </div>
+                <template v-else>
+                  <button
+                    v-for="agent in previewProjectAgents"
+                    :key="agent.key"
+                    class="project-agent-chip"
+                    :class="{ 'is-active': agent.key === selectedPreviewAgentKey }"
+                    @click="selectedPreviewAgentKey = agent.key"
+                  >
+                    {{ agentLabel(agent.key) }}
+                  </button>
+                </template>
+              </div>
+            </aside>
+
+            <section class="project-preview-panel">
+              <div class="project-preview-head">
                 <div>
                   <div class="prompt-breadcrumb">
-                    {{ selectedPromptMeta?.function.name }} / {{ selectedPromptMeta?.agent.name }}
+                    {{ selectedPreviewProject?.project_code || '--' }} / {{ agentLabel(selectedPreviewAgentKey) }}
                   </div>
-                  <h3>{{ selectedPrompt.prompt_key }}</h3>
-                  <p v-if="selectedPromptMeta?.agent.description">{{ selectedPromptMeta.agent.description }}</p>
+                  <h3>{{ selectedPreviewProject?.project_name || t('admin.prompts.previewEmptyTitle') }}</h3>
+                  <p v-if="selectedPreviewAgent">{{ agentDescription(selectedPreviewAgent) }}</p>
                 </div>
-                <div class="prompt-editor-head-right">
-                  <div v-if="localeVariants.length > 1" class="locale-tabs">
-                    <button
-                      v-for="variant in localeVariants"
-                      :key="variant.id"
-                      class="locale-tab"
-                      :class="{ 'is-active': variant.id === selectedPromptId }"
-                      @click="switchLocale(variant.locale!)"
-                    >
-                      {{ variant.locale }}
-                    </button>
-                  </div>
-                  <span
-                    class="prompt-dirty-badge"
-                    :class="currentPromptSnapshot[selectedPrompt.id] !== lastSavedPrompts[selectedPrompt.id] ? 'is-dirty' : 'is-clean'"
-                  >
-                    {{ currentPromptSnapshot[selectedPrompt.id] !== lastSavedPrompts[selectedPrompt.id] ? t('admin.prompts.unsavedLabel') : t('admin.prompts.syncedLabel') }}
+                <div class="preview-stat-row">
+                  <span v-for="item in previewStats" :key="item.key">
+                    {{ item.label }} {{ item.value }}
                   </span>
                 </div>
               </div>
-              <textarea
-                v-model="selectedPromptContent"
-                class="prompt-textarea"
-                spellcheck="false"
-                :disabled="loadingConfig || saving"
-              ></textarea>
-              <div class="prompt-editor-footer">
-                <div class="flex items-center gap-3 flex-wrap">
-                  <span>{{ t('admin.prompts.promptLength', { count: selectedPromptContent.length }) }}</span>
-                  <span v-if="conflict" class="text-amber-700 font-semibold">
-                    {{ conflictMessage || t('admin.prompts.conflictNote') }}
-                  </span>
-                </div>
-                <span>{{ t('admin.prompts.checksumLabel', { checksum: lastChecksum || configState.checksum }) }}</span>
-              </div>
-            </template>
-            <div v-else class="prompt-empty editor-empty">
-              {{ t('admin.prompts.selectPromptHint') }}
-            </div>
-          </section>
-        </div>
 
-        <div class="prompt-region-heading preview-heading">
-          <div class="prompt-region-icon preview">
-            <Eye :size="18" />
-          </div>
-          <div>
-            <h2>{{ t('admin.prompts.previewRegionTitle') }}</h2>
-            <p>{{ t('admin.prompts.previewRegionDesc') }}</p>
-          </div>
-          <div class="preview-heading-actions">
-            <div class="locale-tabs preview-tabs">
-              <button
-                class="locale-tab"
-                :class="{ 'is-active': previewLocale === 'zh' }"
-                @click="previewLocale = 'zh'"
-              >
-                zh
-              </button>
-              <button
-                class="locale-tab"
-                :class="{ 'is-active': previewLocale === 'en' }"
-                @click="previewLocale = 'en'"
-              >
-                en
-              </button>
-            </div>
-            <div class="preview-mode-tabs">
-              <button
-                class="preview-mode-tab"
-                :class="{ 'is-active': previewMode === 'rendered' }"
-                @click="previewMode = 'rendered'"
-              >
-                <Eye :size="14" />
-                <span>{{ t('admin.prompts.previewRendered') }}</span>
-              </button>
-              <button
-                class="preview-mode-tab"
-                :class="{ 'is-active': previewMode === 'raw' }"
-                @click="previewMode = 'raw'"
-              >
-                <FileText :size="14" />
-                <span>{{ t('admin.prompts.previewRaw') }}</span>
-              </button>
-            </div>
-            <button
-              class="admin-command-btn"
-              :disabled="loadingPreview || loadingPreviewResources"
-              @click="fetchPromptPreview"
-            >
-              <RefreshCw :size="15" />
-              <span>{{ t('admin.prompts.previewRefresh') }}</span>
-            </button>
-          </div>
-        </div>
-
-        <div class="project-preview-workbench">
-          <aside class="project-preview-selector">
-            <div class="prompt-list-title">
-              <span>{{ t('admin.prompts.previewProjects') }}</span>
-              <span>{{ projectRepos.length }}</span>
-            </div>
-            <div v-if="!projectRepos.length" class="prompt-empty">
-              {{ loadingPreviewResources ? t('admin.prompts.previewLoading') : t('admin.prompts.previewNoProjects') }}
-            </div>
-            <div v-else class="project-preview-list">
-              <button
-                v-for="repo in projectRepos"
-                :key="repo.id"
-                class="project-preview-item"
-                :class="{ 'is-active': repo.project_code === selectedPreviewProjectCode }"
-                @click="selectedPreviewProjectCode = repo.project_code"
-              >
-                <span class="project-preview-name">{{ repo.project_name }}</span>
-                <span class="project-preview-code">{{ repo.project_code }}</span>
-                <span class="project-preview-foot">
-                  {{ repo.has_repo ? t('admin.prompts.previewRepoLinked') : t('admin.prompts.previewRepoLess') }}
-                  · {{ t('admin.prompts.previewAgentCount', { count: repo.enabled_agent_keys?.length || 0 }) }}
-                </span>
-              </button>
-            </div>
-
-            <div class="project-agent-picker">
-              <div class="prompt-list-title compact">
-                <span>{{ t('admin.prompts.previewAgents') }}</span>
-                <span>{{ previewProjectAgents.length }}</span>
-              </div>
-              <div v-if="!previewProjectAgents.length" class="prompt-empty">
-                {{ t('admin.prompts.previewNoAgents') }}
-              </div>
-              <template v-else>
-                <button
-                  v-for="agent in previewProjectAgents"
-                  :key="agent.key"
-                  class="project-agent-chip"
-                  :class="{ 'is-active': agent.key === selectedPreviewAgentKey }"
-                  @click="selectedPreviewAgentKey = agent.key"
+              <div v-if="previewData?.layers?.length" class="preview-layer-strip">
+                <span
+                  v-for="layer in previewData.layers"
+                  :key="layer.key"
+                  :class="{ 'is-empty': !layer.exists }"
                 >
-                  {{ agentLabel(agent.key) }}
-                </button>
-              </template>
-            </div>
-          </aside>
-
-          <section class="project-preview-panel">
-            <div class="project-preview-head">
-              <div>
-                <div class="prompt-breadcrumb">
-                  {{ selectedPreviewProject?.project_code || '--' }} / {{ agentLabel(selectedPreviewAgentKey) }}
-                </div>
-                <h3>{{ selectedPreviewProject?.project_name || t('admin.prompts.previewEmptyTitle') }}</h3>
-                <p v-if="selectedPreviewAgent">{{ agentDescription(selectedPreviewAgent) }}</p>
-              </div>
-              <div class="preview-stat-row">
-                <span v-for="item in previewStats" :key="item.key">
-                  {{ item.label }} {{ item.value }}
+                  {{ localizePromptPreviewLayer(layer.key, layer.label) }} · {{ layer.exists ? t('admin.prompts.previewLayerOn') : t('admin.prompts.previewLayerOff') }}
                 </span>
               </div>
-            </div>
 
-            <div v-if="previewData?.layers?.length" class="preview-layer-strip">
-              <span
-                v-for="layer in previewData.layers"
-                :key="layer.key"
-                :class="{ 'is-empty': !layer.exists }"
-              >
-                {{ localizePromptPreviewLayer(layer.key, layer.label) }} · {{ layer.exists ? t('admin.prompts.previewLayerOn') : t('admin.prompts.previewLayerOff') }}
-              </span>
-            </div>
-
-            <div v-if="loadingPreview || loadingPreviewResources" class="prompt-empty preview-state">
-              {{ t('admin.prompts.previewLoading') }}
-            </div>
-            <div v-else-if="previewError" class="prompt-empty preview-state is-error">
-              {{ previewError }}
-            </div>
-            <div v-else-if="!previewData" class="prompt-empty preview-state">
-              {{ t('admin.prompts.previewEmpty') }}
-            </div>
-            <div v-else-if="previewMode === 'rendered'" ref="previewPanelRef" class="project-preview-rendered" v-html="renderedPreviewHtml"></div>
-            <pre v-else class="project-preview-raw">{{ previewData.content }}</pre>
-          </section>
-        </div>
+              <div v-if="loadingPreview || loadingPreviewResources" class="prompt-empty preview-state">
+                {{ t('admin.prompts.previewLoading') }}
+              </div>
+              <div v-else-if="previewError" class="prompt-empty preview-state is-error">
+                {{ previewError }}
+              </div>
+              <div v-else-if="!previewData" class="prompt-empty preview-state">
+                {{ t('admin.prompts.previewEmpty') }}
+              </div>
+              <div v-else-if="previewMode === 'rendered'" ref="previewPanelRef" class="project-preview-rendered" v-html="renderedPreviewHtml"></div>
+              <pre v-else class="project-preview-raw">{{ previewData.content }}</pre>
+            </section>
+          </div>
+        </section>
       </section>
     </main>
   </div>
@@ -1188,9 +1265,28 @@ watch([renderedPreviewHtml, previewMode], async () => {
   padding-left: 1rem;
 }
 
+/* Fixed app-shell so the workspace tabs and left selectors stay pinned while
+   only the editor / preview content scrolls. Higher specificity than the
+   global `.admin-console.admin-console .admin-main` rule so it wins reliably. */
+.admin-console.admin-prompts-page .admin-main {
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.prompt-workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .admin-login-wrap {
   max-width: 960px;
   margin: 1.25rem auto 0;
+  max-height: 100%;
+  overflow-y: auto;
 }
 
 .admin-sidebar-backdrop {
@@ -1237,35 +1333,158 @@ watch([renderedPreviewHtml, previewMode], async () => {
   cursor: not-allowed;
 }
 
-.prompt-meta-strip {
-  margin-top: 0.9rem;
+.prompt-workspace-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+  border: 1px solid var(--admin-hairline);
+  border-radius: 0.85rem;
+  background: var(--admin-surface);
+  padding: 0.4rem;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+}
+
+.prompt-workspace-tab {
+  position: relative;
+  min-width: 0;
+  min-height: 4.5rem;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  color: #475569;
-  font-size: 0.75rem;
+  gap: 0.75rem;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 0.65rem;
+  color: var(--admin-body);
+  background: transparent;
+  padding: 0.72rem 0.85rem;
+  text-align: left;
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
 }
 
-.prompt-meta-strip span {
-  border: 1px solid #e2e8f0;
-  border-radius: 0.5rem;
-  background: #f8fafc;
-  padding: 0.35rem 0.55rem;
+.prompt-workspace-tab:hover:not(.is-active) {
+  border-color: var(--admin-hairline);
+  background: var(--admin-canvas-soft);
 }
 
-.prompt-meta-strip .prompt-path {
-  max-width: 100%;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  word-break: break-all;
+.prompt-workspace-tab.is-active {
+  color: var(--admin-on-dark-soft);
+  border-color: var(--admin-dark);
+  background: var(--admin-dark);
+}
+
+.prompt-workspace-tab:focus-visible {
+  outline: 3px solid var(--admin-focus-ring);
+  outline-offset: 2px;
+}
+
+.prompt-workspace-tab-icon {
+  width: 2.35rem;
+  height: 2.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 1px solid var(--admin-hairline);
+  border-radius: 0.6rem;
+  color: var(--admin-link);
+  background: var(--admin-surface);
+}
+
+.prompt-workspace-tab.is-active .prompt-workspace-tab-icon {
+  color: #67e8f9;
+  border-color: rgba(103, 232, 249, 0.24);
+  background: rgba(103, 232, 249, 0.09);
+}
+
+.prompt-workspace-tab-copy {
+  min-width: 0;
+  display: grid;
+  gap: 0.12rem;
+}
+
+.prompt-workspace-tab-copy strong {
+  color: var(--admin-ink);
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.prompt-workspace-tab-copy small {
+  overflow: hidden;
+  color: var(--admin-muted);
+  font-size: 0.74rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-workspace-tab.is-active .prompt-workspace-tab-copy strong {
+  color: var(--admin-on-dark);
+}
+
+.prompt-workspace-tab.is-active .prompt-workspace-tab-copy small {
+  color: var(--admin-on-dark-soft);
+}
+
+.prompt-workspace-tab-count {
+  flex: 0 0 auto;
+  margin-left: auto;
+  border: 1px solid var(--admin-hairline);
+  border-radius: 999px;
+  color: var(--admin-body);
+  background: var(--admin-surface);
+  font-size: 0.7rem;
+  font-weight: 750;
+  padding: 0.25rem 0.55rem;
+  white-space: nowrap;
+}
+
+.prompt-workspace-tab.is-active .prompt-workspace-tab-count {
+  color: var(--admin-on-dark-soft);
+  border-color: var(--admin-dark-hairline);
+  background: var(--admin-dark-elevated);
+}
+
+.prompt-workspace-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  animation: prompt-workspace-enter 0.2s ease-out;
+}
+
+.prompt-workspace-panel:focus {
+  outline: none;
+}
+
+.prompt-workspace-panel:focus-visible {
+  outline: 3px solid var(--admin-focus-ring);
+  outline-offset: 4px;
+  border-radius: 0.85rem;
+}
+
+@keyframes prompt-workspace-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .prompt-region-heading {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.75rem;
+  flex: 0 0 auto;
   margin: 1.1rem 0 0.75rem;
-  color: #0f172a;
+  color: var(--admin-ink);
+}
+
+.prompt-config-actions {
+  margin-left: auto;
 }
 
 .prompt-region-heading h2 {
@@ -1276,7 +1495,7 @@ watch([renderedPreviewHtml, previewMode], async () => {
 
 .prompt-region-heading p {
   margin-top: 0.12rem;
-  color: #64748b;
+  color: var(--admin-body);
   font-size: 0.78rem;
 }
 
@@ -1287,16 +1506,16 @@ watch([renderedPreviewHtml, previewMode], async () => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  border: 1px solid #bae6fd;
+  border: 1px solid var(--admin-accent-soft-border);
   border-radius: 0.65rem;
-  color: #0369a1;
-  background: #f0f9ff;
+  color: var(--admin-accent-soft-ink);
+  background: var(--admin-accent-soft-bg);
 }
 
 .prompt-region-icon.preview {
-  color: #0f766e;
-  border-color: #99f6e4;
-  background: #f0fdfa;
+  color: var(--admin-accent-soft-ink);
+  border-color: var(--admin-accent-soft-border);
+  background: var(--admin-accent-soft-bg);
 }
 
 .preview-heading {
@@ -1320,10 +1539,10 @@ watch([renderedPreviewHtml, previewMode], async () => {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  border: 1px solid #dbe3ea;
+  border: 1px solid var(--admin-hairline-strong);
   border-radius: 0.55rem;
   padding: 0.2rem;
-  background: #ffffff;
+  background: var(--admin-surface);
 }
 
 .preview-mode-tab {
@@ -1332,7 +1551,7 @@ watch([renderedPreviewHtml, previewMode], async () => {
   align-items: center;
   gap: 0.35rem;
   border-radius: 0.4rem;
-  color: #64748b;
+  color: var(--admin-body);
   font-size: 0.75rem;
   font-weight: 800;
   padding: 0.25rem 0.55rem;
@@ -1340,34 +1559,38 @@ watch([renderedPreviewHtml, previewMode], async () => {
 }
 
 .preview-mode-tab.is-active {
-  color: #ffffff;
-  background: #0f766e;
+  color: var(--admin-on-dark);
+  background: var(--admin-primary);
 }
 
 .prompt-workbench {
   display: grid;
   grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
   gap: 1rem;
+  flex: 1;
+  min-height: 0;
 }
 
 .prompt-list-panel,
 .prompt-editor-panel {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--admin-hairline);
   border-radius: 1rem;
-  background: #ffffff;
+  background: var(--admin-surface);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
 }
 
 .prompt-list-panel {
   padding: 0.85rem;
-  align-self: start;
+  align-self: stretch;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .prompt-list-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: #0f172a;
+  color: var(--admin-ink);
   font-size: 0.85rem;
   font-weight: 800;
   margin-bottom: 0.75rem;
@@ -1376,9 +1599,9 @@ watch([renderedPreviewHtml, previewMode], async () => {
 .prompt-list-title span:last-child {
   min-width: 1.5rem;
   text-align: center;
-  color: #0e7490;
-  background: #ecfeff;
-  border: 1px solid #a5f3fc;
+  color: var(--admin-accent-soft-ink);
+  background: var(--admin-accent-soft-bg);
+  border: 1px solid var(--admin-accent-soft-border);
   border-radius: 999px;
   padding: 0.1rem 0.45rem;
 }
@@ -1391,19 +1614,19 @@ watch([renderedPreviewHtml, previewMode], async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: #0f172a;
+  color: var(--admin-ink);
   font-size: 0.82rem;
   font-weight: 800;
   margin-bottom: 0.25rem;
 }
 
 .prompt-function-name small {
-  color: #64748b;
+  color: var(--admin-body);
   font-weight: 600;
 }
 
 .prompt-function-desc {
-  color: #64748b;
+  color: var(--admin-body);
   font-size: 0.75rem;
   line-height: 1.45;
   margin-bottom: 0.55rem;
@@ -1414,9 +1637,9 @@ watch([renderedPreviewHtml, previewMode], async () => {
   text-align: left;
   display: grid;
   gap: 0.25rem;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--admin-hairline);
   border-radius: 0.75rem;
-  background: #f8fafc;
+  background: var(--admin-canvas-soft);
   padding: 0.75rem;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
@@ -1427,31 +1650,31 @@ watch([renderedPreviewHtml, previewMode], async () => {
 
 .prompt-agent-item:hover,
 .prompt-agent-item.is-active {
-  border-color: #06b6d4;
-  background: #ecfeff;
+  border-color: var(--admin-accent-soft-border);
+  background: var(--admin-accent-soft-bg);
 }
 
 .prompt-agent-name {
-  color: #0f172a;
+  color: var(--admin-ink);
   font-size: 0.85rem;
   font-weight: 800;
 }
 
 .prompt-agent-desc {
   min-height: 2.45rem;
-  color: #64748b;
+  color: var(--admin-body);
   font-size: 0.75rem;
   line-height: 1.35;
 }
 
 .prompt-agent-foot {
-  color: #0e7490;
+  color: var(--admin-link);
   font-size: 0.72rem;
   font-weight: 700;
 }
 
 .prompt-editor-panel {
-  min-height: 640px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1543,7 +1766,7 @@ watch([renderedPreviewHtml, previewMode], async () => {
 
 .prompt-textarea {
   flex: 1;
-  min-height: 500px;
+  min-height: 0;
   width: 100%;
   resize: vertical;
   border: 0;
@@ -1590,18 +1813,22 @@ watch([renderedPreviewHtml, previewMode], async () => {
   display: grid;
   grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
   gap: 1rem;
+  flex: 1;
+  min-height: 0;
 }
 
 .project-preview-selector,
 .project-preview-panel {
-  border: 1px solid #dbe3ea;
+  border: 1px solid var(--admin-hairline);
   border-radius: 0.85rem;
-  background: #ffffff;
+  background: var(--admin-surface);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
 }
 
 .project-preview-selector {
-  align-self: start;
+  align-self: stretch;
+  min-height: 0;
+  overflow-y: auto;
   padding: 0.85rem;
 }
 
@@ -1618,35 +1845,35 @@ watch([renderedPreviewHtml, previewMode], async () => {
   text-align: left;
   display: grid;
   gap: 0.22rem;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--admin-hairline);
   border-radius: 0.7rem;
-  background: #fbfdff;
+  background: var(--admin-canvas-soft);
   padding: 0.72rem;
   transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .project-preview-item:hover,
 .project-preview-item.is-active {
-  border-color: #14b8a6;
-  background: #f0fdfa;
-  box-shadow: inset 3px 0 0 #14b8a6;
+  border-color: var(--admin-accent-soft-border);
+  background: var(--admin-accent-soft-bg);
+  box-shadow: inset 3px 0 0 var(--admin-accent-soft-ink);
 }
 
 .project-preview-name {
-  color: #0f172a;
+  color: var(--admin-ink);
   font-size: 0.86rem;
   font-weight: 850;
 }
 
 .project-preview-code {
-  color: #475569;
+  color: var(--admin-body);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.72rem;
   word-break: break-all;
 }
 
 .project-preview-foot {
-  color: #0f766e;
+  color: var(--admin-link);
   font-size: 0.72rem;
   font-weight: 750;
 }
@@ -1665,10 +1892,10 @@ watch([renderedPreviewHtml, previewMode], async () => {
 
 .project-agent-chip {
   min-height: 2rem;
-  border: 1px solid #dbe3ea;
+  border: 1px solid var(--admin-hairline-strong);
   border-radius: 999px;
-  color: #475569;
-  background: #ffffff;
+  color: var(--admin-body);
+  background: var(--admin-surface);
   font-size: 0.78rem;
   font-weight: 800;
   padding: 0.35rem 0.7rem;
@@ -1677,13 +1904,13 @@ watch([renderedPreviewHtml, previewMode], async () => {
 
 .project-agent-chip:hover,
 .project-agent-chip.is-active {
-  color: #064e3b;
-  border-color: #5eead4;
-  background: #ccfbf1;
+  color: var(--admin-accent-soft-ink);
+  border-color: var(--admin-accent-soft-border);
+  background: var(--admin-accent-soft-bg);
 }
 
 .project-preview-panel {
-  min-height: 640px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1695,18 +1922,18 @@ watch([renderedPreviewHtml, previewMode], async () => {
   justify-content: space-between;
   gap: 1rem;
   padding: 1rem;
-  border-bottom: 1px solid #e2e8f0;
-  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  border-bottom: 1px solid var(--admin-hairline);
+  background: linear-gradient(180deg, var(--admin-canvas-soft) 0%, var(--admin-surface) 100%);
 }
 
 .project-preview-head h3 {
-  color: #0f172a;
+  color: var(--admin-ink);
   font-size: 1rem;
   font-weight: 850;
 }
 
 .project-preview-head p {
-  color: #64748b;
+  color: var(--admin-body);
   font-size: 0.78rem;
   margin-top: 0.25rem;
 }
@@ -1721,10 +1948,10 @@ watch([renderedPreviewHtml, previewMode], async () => {
 
 .preview-stat-row span,
 .preview-layer-strip span {
-  border: 1px solid #dbe3ea;
+  border: 1px solid var(--admin-hairline-strong);
   border-radius: 999px;
-  color: #334155;
-  background: #ffffff;
+  color: var(--admin-body);
+  background: var(--admin-surface);
   font-size: 0.72rem;
   font-weight: 800;
   padding: 0.25rem 0.55rem;
@@ -1735,19 +1962,19 @@ watch([renderedPreviewHtml, previewMode], async () => {
   flex-wrap: wrap;
   gap: 0.45rem;
   padding: 0.65rem 1rem;
-  border-bottom: 1px solid #e2e8f0;
-  background: #fbfdff;
+  border-bottom: 1px solid var(--admin-hairline);
+  background: var(--admin-canvas-soft);
 }
 
 .preview-layer-strip span:not(.is-empty) {
-  color: #0f766e;
-  border-color: #99f6e4;
-  background: #f0fdfa;
+  color: var(--admin-accent-soft-ink);
+  border-color: var(--admin-accent-soft-border);
+  background: var(--admin-accent-soft-bg);
 }
 
 .preview-layer-strip span.is-empty {
-  color: #64748b;
-  background: #f8fafc;
+  color: var(--admin-muted);
+  background: var(--admin-canvas-soft);
 }
 
 .preview-state {
@@ -1766,8 +1993,8 @@ watch([renderedPreviewHtml, previewMode], async () => {
   min-height: 0;
   overflow: auto;
   padding: 1rem;
-  color: #1e293b;
-  background: #ffffff;
+  color: var(--admin-body);
+  background: var(--admin-surface);
 }
 
 .project-preview-raw {
@@ -1775,8 +2002,8 @@ watch([renderedPreviewHtml, previewMode], async () => {
   min-height: 0;
   overflow: auto;
   margin: 0;
-  color: #1e293b;
-  background: #ffffff;
+  color: var(--admin-ink);
+  background: var(--admin-surface);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.78rem;
   line-height: 1.65;
@@ -1797,7 +2024,7 @@ watch([renderedPreviewHtml, previewMode], async () => {
 .project-preview-rendered :deep(.prompt-preview-markdown h4),
 .project-preview-rendered :deep(.prompt-preview-markdown h5),
 .project-preview-rendered :deep(.prompt-preview-markdown h6) {
-  color: #0f172a;
+  color: var(--admin-ink);
   font-weight: 850;
   margin: 1rem 0 0.45rem;
 }
@@ -1809,7 +2036,7 @@ watch([renderedPreviewHtml, previewMode], async () => {
 .project-preview-rendered :deep(.prompt-preview-markdown h2) {
   font-size: 1.08rem;
   padding-bottom: 0.25rem;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--admin-hairline);
 }
 
 .project-preview-rendered :deep(.prompt-preview-markdown h3) {
@@ -1843,17 +2070,17 @@ watch([renderedPreviewHtml, previewMode], async () => {
 }
 
 .project-preview-rendered :deep(.prompt-preview-markdown code) {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--admin-hairline);
   border-radius: 0.35rem;
-  color: #0f766e;
-  background: #f8fafc;
+  color: var(--admin-link);
+  background: var(--admin-canvas-soft);
   font-size: 0.82em;
   padding: 0.05rem 0.25rem;
 }
 
 .project-preview-rendered :deep(.prompt-preview-markdown pre) {
   overflow: auto;
-  border: 1px solid #dbe3ea;
+  border: 1px solid var(--admin-dark-hairline);
   border-radius: 0.6rem;
   background: #0f172a;
   padding: 0.9rem;
@@ -1868,9 +2095,9 @@ watch([renderedPreviewHtml, previewMode], async () => {
 
 .project-preview-rendered :deep(.prompt-preview-markdown blockquote) {
   margin: 0.75rem 0;
-  border-left: 3px solid #14b8a6;
-  color: #475569;
-  background: #f8fafc;
+  border-left: 3px solid var(--admin-accent-soft-ink);
+  color: var(--admin-body);
+  background: var(--admin-canvas-soft);
   padding: 0.45rem 0.75rem;
 }
 
@@ -1887,7 +2114,7 @@ watch([renderedPreviewHtml, previewMode], async () => {
 
 .project-preview-rendered :deep(.markdown-table th),
 .project-preview-rendered :deep(.markdown-table td) {
-  border: 1px solid #dbe3ea;
+  border: 1px solid var(--admin-hairline-strong);
   padding: 0.4rem 0.55rem;
   text-align: left;
 }
@@ -1913,6 +2140,39 @@ watch([renderedPreviewHtml, previewMode], async () => {
     width: 100%;
     margin-left: 0;
     justify-content: flex-start;
+  }
+
+  /* Columns stack here, so drop the fixed app-shell and let the page scroll. */
+  .admin-console.admin-prompts-page .admin-main {
+    height: auto;
+    overflow: visible;
+    display: block;
+  }
+
+  .prompt-workspace,
+  .prompt-workspace-panel {
+    display: block;
+    min-height: 0;
+  }
+
+  .prompt-workbench,
+  .project-preview-workbench {
+    min-height: 0;
+  }
+
+  .prompt-list-panel,
+  .project-preview-selector {
+    align-self: start;
+    overflow: visible;
+  }
+
+  .prompt-editor-panel,
+  .project-preview-panel {
+    min-height: 560px;
+  }
+
+  .prompt-textarea {
+    min-height: 420px;
   }
 }
 
@@ -1965,8 +2225,22 @@ watch([renderedPreviewHtml, previewMode], async () => {
     width: 100%;
   }
 
-  .prompt-header-panel {
-    border-radius: 0.85rem;
+  .prompt-workspace-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .prompt-workspace-tab {
+    min-height: 4rem;
+    gap: 0.55rem;
+    padding: 0.6rem;
+  }
+
+  .prompt-workspace-tab-copy small {
+    display: none;
+  }
+
+  .prompt-workspace-tab-count {
+    display: none;
   }
 
   .prompt-editor-panel {
@@ -1997,6 +2271,14 @@ watch([renderedPreviewHtml, previewMode], async () => {
 
   .project-preview-panel {
     min-height: 560px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prompt-workspace-tab,
+  .prompt-workspace-panel {
+    animation: none;
+    transition: none;
   }
 }
 </style>
