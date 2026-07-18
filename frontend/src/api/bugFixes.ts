@@ -33,6 +33,9 @@ export const bugFixApi = {
 
   detail: (id: string): Promise<BugFixTaskDetailResponse> =>
     bugFixClient.get(`/api/v1/bug-fixes/${id}`),
+
+  retry: (id: string): Promise<BugFixTaskDetailResponse> =>
+    bugFixClient.post(`/api/v1/bug-fixes/${id}/retry`),
 }
 
 export default bugFixApi

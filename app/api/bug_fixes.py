@@ -1,8 +1,8 @@
-"""Bug 修复任务只读 API。
+"""Bug 修复任务 API。
 
-供已登录用户查看其所属项目的 Bug 修复任务列表与详情。可见范围严格按
-项目成员资格过滤；``role == "admin"`` 的用户可见全部任务。任何字段都不含
-git token —— ``mr_url`` 仅为可点击的平台地址（不含凭据）。
+供已登录用户查看其所属项目的 Bug 修复任务列表与详情，并允许对失败任务发起
+重试。访问范围严格按项目成员资格过滤；``role == "admin"`` 的用户可访问全部
+任务。任何字段都不含 git token —— ``mr_url`` 仅为可点击的平台地址（不含凭据）。
 
 读取型分页/详情查询走独立的 async 实现（不在面向 Celery 的同步
 ``bug_fix_service`` 中）。
@@ -12,16 +12,17 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.users import get_current_user, get_request_locale
 from app.i18n.messages import t
-from app.models.bug_fix import BugFixMergeRequest, BugFixTask
+from app.models.bug_fix import BugFixMergeRequest, BugFixTask, BugFixTaskStatus
 from app.models.database import get_db
 from app.models.project_repo import ProjectRepo
 from app.services import project_repo_member_service
@@ -107,6 +108,17 @@ def _parse_json(raw: Optional[str], default):
 
 def _is_admin(user) -> bool:
     return getattr(user, "role", None) == "admin"
+
+
+def _enqueue_bug_fix_retry(task_id: str):
+    """把重试任务提交给 Bug Fix 专用 Celery 队列。
+
+    延迟导入避免只读 API 启动时提前加载写入型 Agent；独立函数也让队列失败路径
+    可以在 API 测试中稳定替换。
+    """
+    from app.tasks.bug_fix import run_bug_fix_task
+
+    return run_bug_fix_task.delay(task_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -259,6 +271,125 @@ async def get_bug_fix(
         merge_requests=merge_requests,
     )
     return BugFixTaskDetailResponse(data=detail)
+
+
+@router.post(
+    "/{task_id}/retry",
+    response_model=BugFixTaskDetailResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_bug_fix(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+    locale: str = Depends(get_request_locale),
+) -> BugFixTaskDetailResponse:
+    """重新派发一个失败的 Bug 修复任务。
+
+    仅项目成员或管理员可操作。状态更新使用 ``failed`` 条件作为一次性 claim，
+    因而并发双击只有一个请求能成功入队；提交 Celery 失败时会恢复成可重试的
+    ``failed`` 状态，避免任务永久停留在 ``pending``。
+    """
+    stmt = select(BugFixTask).where(BugFixTask.id == task_id)
+    task = (await db.execute(stmt)).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=t("task.not_found", locale),
+        )
+
+    if not _is_admin(current_user):
+        member = await project_repo_member_service.is_member(
+            db, task.project_repo_id, current_user.id
+        )
+        if not member:
+            # 与详情读取一致，不向非成员泄露任务是否存在。
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=t("task.not_found", locale),
+            )
+
+    if _status_value(task.status) != BugFixTaskStatus.FAILED.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=t("task.retry_only_failed", locale),
+        )
+
+    # 条件更新同时承担并发 claim：第一个请求将状态改为 pending 后，后续请求的
+    # rowcount 会是 0，因而不会重复启动 Agent。
+    claim_stmt = (
+        update(BugFixTask)
+        .where(
+            BugFixTask.id == task_id,
+            BugFixTask.status == BugFixTaskStatus.FAILED,
+        )
+        .values(
+            status=BugFixTaskStatus.PENDING,
+            error=None,
+            celery_task_id=None,
+            started_at=None,
+            finished_at=None,
+            fix_outcomes_json=None,
+        )
+    )
+    claim_result = await db.execute(claim_stmt)
+    if claim_result.rowcount != 1:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=t("task.retry_in_progress", locale),
+        )
+
+    # 必须先提交 pending，worker 才能看到可执行状态；run_bug_fix_task 会跳过终态。
+    await db.commit()
+
+    try:
+        async_result = _enqueue_bug_fix_retry(task_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "Failed to enqueue bug fix retry task=%s error_type=%s",
+            task_id,
+            type(exc).__name__,
+        )
+        restore_stmt = (
+            update(BugFixTask)
+            .where(
+                BugFixTask.id == task_id,
+                BugFixTask.status == BugFixTaskStatus.PENDING,
+            )
+            .values(
+                status=BugFixTaskStatus.FAILED,
+                error="retry_enqueue_failed",
+                finished_at=datetime.utcnow(),
+            )
+        )
+        await db.execute(restore_stmt)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=t("task.retry_enqueue_failed", locale),
+        ) from exc
+
+    celery_task_id = getattr(async_result, "id", None)
+    if celery_task_id:
+        # worker 可能已经抢先进入 running，因此只补写仍处于 pending 的任务；
+        # running 时 mark_running 已经写入真实 celery id。
+        await db.execute(
+            update(BugFixTask)
+            .where(
+                BugFixTask.id == task_id,
+                BugFixTask.status == BugFixTaskStatus.PENDING,
+            )
+            .values(celery_task_id=str(celery_task_id))
+        )
+        await db.commit()
+
+    # expire_on_commit=False 会保留 claim 前的 ORM 状态；清理 identity map 后复用
+    # 详情构建逻辑，确保响应中的状态是最新值。
+    db.expire_all()
+    response = await get_bug_fix(task_id, db, current_user, locale)
+    response.message = t("task.retry_queued", locale)
+    return response
 
 
 async def _merge_request_counts(

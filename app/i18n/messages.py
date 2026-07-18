@@ -81,6 +81,10 @@ MESSAGES: Dict[str, Dict[str, str]] = {
         "share.revoked": "已取消分享",
         # ----- bug fixes (app/api/bug_fixes.py) -----
         "task.not_found": "任务不存在",
+        "task.retry_only_failed": "只有失败的 Bug 修复任务可以重试",
+        "task.retry_in_progress": "任务已被重试或正在执行，请刷新后查看",
+        "task.retry_enqueue_failed": "重试提交失败，请稍后再试",
+        "task.retry_queued": "已重新提交 Bug 修复任务",
         # ----- app releases (app/api/releases.py) -----
         "release.invalid_platform": "platform 必须是以下之一: {platforms}",
         "release.version_empty": "version 不能为空",
@@ -219,6 +223,10 @@ MESSAGES: Dict[str, Dict[str, str]] = {
         "share.revoked": "Sharing revoked",
         # ----- bug fixes (app/api/bug_fixes.py) -----
         "task.not_found": "Task not found",
+        "task.retry_only_failed": "Only failed bug fix tasks can be retried",
+        "task.retry_in_progress": "The task has already been retried or is running; refresh to view its status",
+        "task.retry_enqueue_failed": "Failed to submit the retry; please try again later",
+        "task.retry_queued": "Bug fix task resubmitted",
         # ----- app releases (app/api/releases.py) -----
         "release.invalid_platform": "platform must be one of: {platforms}",
         "release.version_empty": "version cannot be empty",

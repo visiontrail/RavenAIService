@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from fastapi import FastAPI
@@ -100,6 +103,12 @@ def client(tmp_path) -> TestClient:
                 source_log_id="log-b",
                 title="Fix B",
                 status=BugFixTaskStatus.FAILED,
+                error="old_failure",
+                fix_outcomes_json=json.dumps(
+                    [{"fix_index": 1, "outcome": "failed"}]
+                ),
+                started_at=datetime(2026, 7, 17, 10, 0, 0),
+                finished_at=datetime(2026, 7, 17, 10, 1, 0),
             )
             session.add_all([task_a, task_b])
             await session.flush()
@@ -232,3 +241,66 @@ def test_missing_task_returns_404(client: TestClient) -> None:
     _as_user(client, "user-admin", role="admin")
     resp = client.get("/api/v1/bug-fixes/does-not-exist")
     assert resp.status_code == 404
+
+
+def test_admin_can_retry_failed_task_once(client: TestClient, monkeypatch) -> None:
+    _as_user(client, "user-admin", role="admin")
+    enqueue = Mock(return_value=SimpleNamespace(id="celery-retry-1"))
+    monkeypatch.setattr(bug_fixes_api, "_enqueue_bug_fix_retry", enqueue)
+
+    resp = client.post("/api/v1/bug-fixes/task-b/retry")
+
+    assert resp.status_code == 202, resp.text
+    data = resp.json()["data"]
+    assert data["id"] == "task-b"
+    assert data["status"] == "pending"
+    assert data["error"] is None
+    assert data["started_at"] is None
+    assert data["finished_at"] is None
+    assert data["fix_outcomes"] == []
+    enqueue.assert_called_once_with("task-b")
+
+    # failed -> pending 的条件更新是一次性 claim，重复点击不得再次启动 Agent。
+    duplicate = client.post("/api/v1/bug-fixes/task-b/retry")
+    assert duplicate.status_code == 409
+    enqueue.assert_called_once_with("task-b")
+
+
+def test_retry_rejects_non_failed_task(client: TestClient, monkeypatch) -> None:
+    _as_user(client, "user-member")
+    enqueue = Mock(return_value=SimpleNamespace(id="should-not-run"))
+    monkeypatch.setattr(bug_fixes_api, "_enqueue_bug_fix_retry", enqueue)
+
+    resp = client.post("/api/v1/bug-fixes/task-a/retry")
+
+    assert resp.status_code == 409
+    enqueue.assert_not_called()
+
+
+def test_non_member_cannot_retry_task(client: TestClient, monkeypatch) -> None:
+    _as_user(client, "user-member")
+    enqueue = Mock(return_value=SimpleNamespace(id="should-not-run"))
+    monkeypatch.setattr(bug_fixes_api, "_enqueue_bug_fix_retry", enqueue)
+
+    resp = client.post("/api/v1/bug-fixes/task-b/retry")
+
+    assert resp.status_code == 404
+    enqueue.assert_not_called()
+
+
+def test_retry_queue_failure_restores_failed_state(client: TestClient, monkeypatch) -> None:
+    _as_user(client, "user-admin", role="admin")
+
+    def _fail_enqueue(_task_id: str):
+        raise RuntimeError("broker unavailable")
+
+    monkeypatch.setattr(bug_fixes_api, "_enqueue_bug_fix_retry", _fail_enqueue)
+
+    resp = client.post("/api/v1/bug-fixes/task-b/retry")
+
+    assert resp.status_code == 503
+    detail = client.get("/api/v1/bug-fixes/task-b")
+    assert detail.status_code == 200
+    data = detail.json()["data"]
+    assert data["status"] == "failed"
+    assert data["error"] == "retry_enqueue_failed"

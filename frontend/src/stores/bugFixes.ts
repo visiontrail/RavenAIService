@@ -9,6 +9,7 @@ export const useBugFixStore = defineStore('bugFixes', () => {
   const currentTask = ref<BugFixTaskDetail | null>(null)
   const loading = ref(false)
   const detailLoading = ref(false)
+  const retrying = ref(false)
   const error = ref<string | null>(null)
   const pagination = ref({
     total: 0,
@@ -68,6 +69,32 @@ export const useBugFixStore = defineStore('bugFixes', () => {
     }
   }
 
+  const retryTask = async (id: string) => {
+    retrying.value = true
+    error.value = null
+    try {
+      const response = await bugFixApi.retry(id)
+      if (!response?.success || !response.data) {
+        throw new Error(response?.message || i18n.global.t('bugFix.retryFail'))
+      }
+      currentTask.value = response.data
+      const index = tasks.value.findIndex((task) => task.id === id)
+      if (index >= 0) {
+        tasks.value[index] = {
+          ...tasks.value[index],
+          status: response.data.status,
+          finished_at: response.data.finished_at,
+        }
+      }
+      return response.data
+    } catch (err: any) {
+      error.value = parseError(err, i18n.global.t('bugFix.retryFail'))
+      throw err
+    } finally {
+      retrying.value = false
+    }
+  }
+
   const resetCurrent = () => {
     currentTask.value = null
   }
@@ -77,10 +104,12 @@ export const useBugFixStore = defineStore('bugFixes', () => {
     currentTask,
     loading,
     detailLoading,
+    retrying,
     error,
     pagination,
     fetchTasks,
     fetchDetail,
+    retryTask,
     resetCurrent,
   }
 })

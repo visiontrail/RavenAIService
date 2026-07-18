@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, ExternalLink, GitBranch, RefreshCw } from 'lucide-vue-next'
+import { ArrowLeft, ExternalLink, GitBranch, RefreshCw, RotateCcw } from 'lucide-vue-next'
 import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'
 import { useBugFixStore } from '@/stores/bugFixes'
 import type {
@@ -23,6 +23,7 @@ const { t } = useI18n()
 
 const taskId = computed(() => String(route.params.id || ''))
 const task = computed(() => bugFixStore.currentTask)
+const canRetry = computed(() => String(task.value?.status || '') === 'failed')
 const topbarMeta = computed(() => {
   if (!task.value) return t('bugFix.loading')
   const project = task.value.project_name || task.value.project_code || t('bugFix.noProject')
@@ -154,6 +155,16 @@ const loadDetail = async () => {
   }
 }
 
+const retryTask = async () => {
+  if (!taskId.value || !canRetry.value || bugFixStore.retrying) return
+  try {
+    await bugFixStore.retryTask(taskId.value)
+    ElMessage.success(t('bugFix.retrySuccess'))
+  } catch (error: any) {
+    ElMessage.error(bugFixStore.error || error?.message || t('bugFix.retryFail'))
+  }
+}
+
 onMounted(() => {
   bugFixStore.resetCurrent()
   loadDetail()
@@ -171,6 +182,15 @@ onUnmounted(() => {
         <button class="rw-btn-secondary" @click="router.push('/bug-fixes')">
           <ArrowLeft :size="14" />
           <span>{{ $t('bugFix.backToList') }}</span>
+        </button>
+        <button
+          v-if="canRetry"
+          class="rw-btn-primary"
+          :disabled="bugFixStore.retrying"
+          @click="retryTask"
+        >
+          <RotateCcw :size="14" :class="{ spin: bugFixStore.retrying }" />
+          <span>{{ $t(bugFixStore.retrying ? 'bugFix.retrying' : 'bugFix.retry') }}</span>
         </button>
         <button class="rw-btn-secondary" :disabled="bugFixStore.detailLoading" @click="loadDetail">
           <RefreshCw :size="14" :class="{ spin: bugFixStore.detailLoading }" />
@@ -408,11 +428,35 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
+.rw-btn-primary {
+  min-height: 32px;
+  padding: 0 13px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--rw-primary);
+  color: var(--rw-on-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 650;
+  box-shadow: var(--rw-shadow-soft);
+}
+
+.rw-btn-primary:hover:not(:disabled) {
+  background: var(--rw-primary-hover);
+}
+
+.rw-btn-primary:active:not(:disabled) {
+  background: var(--rw-primary-active);
+}
+
 .rw-btn-secondary:hover:not(:disabled) {
   background: var(--rw-surface-strong);
 }
 
-.rw-btn-secondary:disabled {
+.rw-btn-secondary:disabled,
+.rw-btn-primary:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
