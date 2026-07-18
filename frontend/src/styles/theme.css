@@ -197,3 +197,10 @@ html.dark .admin-console {
     radial-gradient(900px 360px at 50% -120px, rgba(50, 50, 150, 0.28), rgba(50, 50, 150, 0) 72%),
     linear-gradient(180deg, var(--admin-canvas) 0%, var(--admin-canvas) 62%, var(--admin-canvas-soft) 100%);
 }
+
+/* Legacy admin views still declare a scoped light gradient on their root.
+   The extra specificity keeps the shared dark canvas authoritative without
+   requiring every page to duplicate the theme switch. */
+html.dark .admin-console.admin-console {
+  background: var(--admin-page-bg);
+}
