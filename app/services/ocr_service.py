@@ -169,6 +169,7 @@ async def _record_ocr_usage(
     duration_seconds: float,
     user_id: Optional[str],
     session_id: Optional[str],
+    project_repo_id: Optional[str],
 ) -> None:
     """Best-effort ``source="ocr"`` AI-usage metric. Never raises.
 
@@ -191,6 +192,7 @@ async def _record_ocr_usage(
             session_id=session_id,
             duration_ms=max(0, int(duration_seconds * 1000)),
             idempotency_key=f"ai_usage:ocr:{uuid.uuid4()}",
+            project_repo_id=project_repo_id,
         )
     except Exception as exc:  # noqa: BLE001
         logger.debug("ocr: metrics record skipped: %s", exc)
@@ -203,6 +205,7 @@ async def extract_text(
     locale: Optional[str] = None,
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
+    project_repo_id: Optional[str] = None,
 ) -> OcrResult:
     """Transcribe the given images into text via one OpenAI-compatible call.
 
@@ -265,6 +268,7 @@ async def extract_text(
             duration_seconds=time.monotonic() - start_ts,
             user_id=user_id,
             session_id=session_id,
+            project_repo_id=project_repo_id,
         )
         return OcrResult(
             text="", status="failed", error_kind="timeout", image_count=image_count
@@ -293,6 +297,7 @@ async def extract_text(
             duration_seconds=time.monotonic() - start_ts,
             user_id=user_id,
             session_id=session_id,
+            project_repo_id=project_repo_id,
         )
         return OcrResult(
             text="", status="failed", error_kind=error_kind, image_count=image_count
@@ -307,6 +312,7 @@ async def extract_text(
             duration_seconds=time.monotonic() - start_ts,
             user_id=user_id,
             session_id=session_id,
+            project_repo_id=project_repo_id,
         )
         return OcrResult(
             text="", status="failed", error_kind=error_kind, image_count=image_count
@@ -332,6 +338,7 @@ async def extract_text(
         duration_seconds=time.monotonic() - start_ts,
         user_id=user_id,
         session_id=session_id,
+        project_repo_id=project_repo_id,
     )
     return OcrResult(
         text=text,
@@ -372,6 +379,7 @@ async def enrich_message(
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
     locale: Optional[str] = None,
+    project_repo_id: Optional[str] = None,
 ) -> Tuple[str, OcrMeta]:
     """Validate → OCR → merge. Returns ``(enriched_message, OcrMeta)``.
 
@@ -405,6 +413,7 @@ async def enrich_message(
         locale=locale,
         user_id=user_id,
         session_id=session_id,
+        project_repo_id=project_repo_id,
     )
     if result.status != "succeeded" or not (result.text or "").strip():
         status = result.status if result.status == "unconfigured" else "failed"

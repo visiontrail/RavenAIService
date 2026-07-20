@@ -1135,7 +1135,7 @@ const pillKindForStatus = (status?: string) => {
 }
 :deep(.el-pagination .el-pager li.is-active) {
   background: var(--rw-ink);
-  color: var(--rw-on-primary);
+  color: var(--rw-on-ink);
   border-color: var(--rw-ink);
 }
 :deep(.el-pagination .el-pager li:hover:not(.is-active)) {

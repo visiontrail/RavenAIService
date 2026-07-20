@@ -30,6 +30,10 @@
   --rw-primary-hover: #2e2e2e;
   --rw-primary-active: #404040;
   --rw-on-primary: #ffffff;
+  /* Foreground for anything painted on a --rw-ink background. Distinct from
+     --rw-on-primary because --rw-ink inverts between themes while --rw-primary
+     does not; reusing --rw-on-primary here goes white-on-white in dark. */
+  --rw-on-ink: #ffffff;
   --rw-link: #0d74ce;
   --rw-success: #16a34a;
   --rw-danger: #c0382b;
@@ -59,6 +63,7 @@ html.dark {
   --rw-primary-hover: #30306a;
   --rw-primary-active: #3a3a85;
   --rw-on-primary: #ffffff;
+  --rw-on-ink: #111115;
   --rw-link: #8caaff;
   --rw-success: #22c55e;
   --rw-danger: #f87171;

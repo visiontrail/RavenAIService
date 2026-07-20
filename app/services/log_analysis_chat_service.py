@@ -269,12 +269,18 @@ class LogAnalysisChatService:
             images_json = chat_image_store.to_meta_json(stored_images)
             chat_image_store.materialize_into_workspace(stored_images, ctx.temp_dir)
 
+            _ocr_project_repo_id = context_meta.get("project_repo_id") or context_meta.get(
+                "project_id"
+            )
             question, ocr_meta = await ocr_service.enrich_message(
                 question,
                 images,
                 user_id=str(getattr(user, "id", None)) if getattr(user, "id", None) else None,
                 session_id=effective_session_id,
                 locale=locale,
+                project_repo_id=str(_ocr_project_repo_id)
+                if _ocr_project_repo_id is not None
+                else None,
             )
             if ocr_meta.image_count > 0 and ocr_meta.status in ("unconfigured", "failed"):
                 yield self._sse_event(

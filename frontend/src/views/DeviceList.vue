@@ -519,7 +519,7 @@ onBeforeUnmount(() => {
 }
 .rw-toggle.is-active .rw-toggle-dot {
   left: 18px;
-  background: #fff;
+  background: var(--rw-on-ink);
 }
 .rw-toggle-label {
   font-size: 12px;

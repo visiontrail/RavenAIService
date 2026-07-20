@@ -2800,7 +2800,7 @@ const openShareModal = () => {
   cursor: pointer; transition: all .15s;
 }
 .rw-tool-chip:hover { border-color: var(--rw-ink); }
-.rw-tool-chip.active { background: var(--rw-ink); color: var(--rw-on-primary); border-color: var(--rw-ink); }
+.rw-tool-chip.active { background: var(--rw-ink); color: var(--rw-on-ink); border-color: var(--rw-ink); }
 .rw-file-chip {
   min-width: 0; max-width: 260px; height: 28px; padding: 0 8px 0 10px;
   display: inline-flex; align-items: center; gap: 7px;

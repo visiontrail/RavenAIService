@@ -400,7 +400,7 @@ onUnmounted(() => {
 .rw-project-help:hover {
   border-color: var(--rw-ink);
   background: var(--rw-ink);
-  color: var(--rw-on-primary);
+  color: var(--rw-on-ink);
   transform: scale(1.06);
 }
 .rw-project-option.active { background: var(--rw-surface-strong); }

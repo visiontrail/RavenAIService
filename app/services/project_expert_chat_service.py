@@ -283,6 +283,9 @@ class ProjectExpertChatService:
                 user_id=str(getattr(user, "id", None)) if getattr(user, "id", None) else None,
                 session_id=effective_session_id,
                 locale=locale,
+                project_repo_id=str(context_meta.get("project_repo_id"))
+                if context_meta.get("project_repo_id") is not None
+                else None,
             )
             if ocr_meta.image_count > 0 and ocr_meta.status in ("unconfigured", "failed"):
                 yield self._sse_event(
