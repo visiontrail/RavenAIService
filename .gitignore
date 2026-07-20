@@ -193,3 +193,6 @@ bin/tool_log_decompress
 .npm_install_cache
 .env.example.bak_*
 certs/
+
+# Patent docs kept local only
+Patent/
