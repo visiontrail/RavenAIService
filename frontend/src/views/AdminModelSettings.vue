@@ -228,6 +228,23 @@ onMounted(() => {
             </ul>
           </div>
 
+          <div class="bg-slate-50 border border-slate-200 rounded-lg px-4 py-3 mt-3">
+            <div class="text-sm font-semibold text-slate-800 mb-2">{{ t('admin.modelSettings.ocrVarsTitle') }}</div>
+            <p class="text-sm text-slate-600 mb-2">{{ t('admin.modelSettings.ocrVarsDesc') }}</p>
+            <ul class="space-y-1 text-sm text-slate-700">
+              <li><code>OCR_ENABLED</code> — {{ t('admin.modelSettings.varOcrEnabledDesc') }}</li>
+              <li><code>OCR_API_KEY</code> — {{ t('admin.modelSettings.varOcrApiKeyDesc') }}</li>
+              <li><code>OCR_BASE_URL</code> — {{ t('admin.modelSettings.varOcrBaseUrlDesc') }}</li>
+              <li><code>OCR_MODEL</code> — {{ t('admin.modelSettings.varOcrModelDesc') }}</li>
+              <li><code>OCR_PROVIDER</code> — {{ t('admin.modelSettings.varOcrProviderDesc') }}</li>
+              <li><code>OCR_MAX_TOKENS</code> — {{ t('admin.modelSettings.varOcrMaxTokensDesc') }}</li>
+              <li><code>OCR_REQUEST_TIMEOUT_SECONDS</code> — {{ t('admin.modelSettings.varOcrTimeoutDesc') }}</li>
+              <li><code>OCR_MAX_IMAGES</code> — {{ t('admin.modelSettings.varOcrMaxImagesDesc') }}</li>
+              <li><code>OCR_MAX_IMAGE_MB</code> — {{ t('admin.modelSettings.varOcrMaxImageMbDesc') }}</li>
+            </ul>
+            <p class="text-xs text-slate-500 mt-2">{{ t('admin.modelSettings.ocrComplianceNote') }}</p>
+          </div>
+
           <div class="text-sm text-slate-500 mt-3 space-y-1">
             <p>{{ t('admin.modelSettings.restartNote') }}</p>
             <p>{{ t('admin.modelSettings.deepseekNote') }}</p>

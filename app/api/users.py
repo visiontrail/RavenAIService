@@ -33,7 +33,7 @@ from app.api.share import build_share_url
 from app.security.admin_auth import auth_manager as admin_auth_manager
 from app.security.admin_dependency import resolve_admin_identity
 from app.security.user_auth import user_auth_manager
-from app.services import registration_email_service
+from app.services import chat_image_store, registration_email_service
 from app.services.ai_chat_service import ai_chat_service
 from app.services.chat_history_service import chat_history_service
 from app.services.conversation_share_service import conversation_share_service
@@ -566,6 +566,10 @@ async def get_chat_messages(
     messages: list[ChatMessageRecord] = []
     for record in records:
         message = ChatMessageRecord.model_validate(record, from_attributes=True)
+        # Attached-image metadata for user turns; the frontend fetches the bytes
+        # from the authorized chat-images endpoint to re-render thumbnails.
+        images = chat_image_store.parse_meta_json(getattr(record, "images_json", None))
+        message.images = images or None
         if record.role == "ai" and record.content:
             matched_index: int | None = None
             for idx, run in enumerate(unmatched_runs):

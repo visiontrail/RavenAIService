@@ -604,6 +604,16 @@ export interface ChatMessageRecord {
   run_status?: string | null
   run_agent_kind?: string | null
   trace_events?: unknown[] | null
+  /** Metadata for images attached to a user turn; bytes come from the chat-images endpoint. */
+  images?: ChatMessageImage[] | null
+}
+
+/** One image attached to a user turn, as returned by the history endpoint. */
+export interface ChatMessageImage {
+  id: string
+  media_type: string
+  name: string
+  size: number
 }
 
 // ===== 对话分享（owner 侧分享状态 + 公开只读快照）=====

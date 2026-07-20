@@ -314,6 +314,11 @@ class ChatMessage(Base, TimestampMixin):
         nullable=False,
         comment="消息内容",
     )
+    images_json: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="随该轮附带图片的元数据 JSON [{id,media_type,name,size}]；字节存磁盘",
+    )
 
     session: Mapped["ChatSession"] = relationship("ChatSession", back_populates="messages")
 
@@ -397,6 +402,9 @@ class ChatMessageRecord(BaseModel):
     run_status: Optional[str] = None
     run_agent_kind: Optional[str] = None
     trace_events: Optional[list[dict[str, Any]]] = None
+    # Attached-image metadata for a user turn; bytes are fetched separately via
+    # the authorized chat-images endpoint. Empty/absent for image-free turns.
+    images: Optional[list[dict[str, Any]]] = None
 
 
 class UserAuthResponse(BaseResponse):

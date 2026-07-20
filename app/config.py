@@ -99,6 +99,29 @@ class Settings(BaseSettings):
     general_agent_max_turns: int = 6
     ai_analysis_max_extract_bytes: int = 2 * 1024 * 1024 * 1024  # 2 GiB
 
+    # OCR / 视觉理解模型（独立于主力 Anthropic 模型，走 OpenAI 兼容端点，默认
+    # 对接阿里云百炼 DashScope Qwen-VL）。用户粘贴的图片先由此模型转成文字，再
+    # 以 <user_image_ocr> 段合并进用户提示，下游各 Agent 零改动。全部可选、带
+    # 安全默认；未配置 OCR_API_KEY 时对图片自动降级。
+    ocr_enabled: bool = True                          # 总开关；False 时无条件降级
+    ocr_provider: str = "dashscope"                   # 计量/日志标签
+    ocr_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    ocr_api_key: Optional[str] = None                 # 未设置即视为「未配置」→ 降级
+    ocr_model: str = "qwen3.5-ocr"                    # 可设 qwen-vl-ocr-latest / qwen-vl-ocr
+    ocr_max_tokens: int = 2048                        # 单次输出上限
+    ocr_request_timeout_seconds: int = 30             # 单次请求超时
+    ocr_max_images: int = 6                           # 单轮图片数上限
+    ocr_max_image_mb: int = 5                         # 单图大小上限（MB）
+
+    # 用户随消息附带图片的原图存储。图片按 <session_id>/<image_id>.<ext> 落盘，
+    # chat_messages.images_json 只存元数据，历史回显经鉴权端点回图。目录随会话
+    # 删除而清理（见 chat_image_store）。相对路径按 base_dir 解析。
+    chat_image_store_dir: str = "temp/chat_images"
+    # 是否把原图物化到 Agent 工作区 <workspace>/images/（为后续多模态铺路）。
+    # 仅在 provider 的 supports_image_input 为真时生效——非视觉上游若 Read 到
+    # 图片文件会导致整个 run 报错。
+    chat_image_workspace_materialize: bool = True
+
     # Bug Fix Coding Agent（分析判定需要代码修复时自动派发的写入型 Agent）
     bug_fix_auto_dispatch: bool = False             # 自动派发总开关，默认关闭，灰度可控
     bug_fix_agent_model: Optional[str] = None       # None 时复用 anthropic_model / provider 默认

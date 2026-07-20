@@ -7,6 +7,7 @@ import {
   projectExpertStream,
   resolveChatPermission,
   resolveChatClarification,
+  type ChatImageAttachment,
 } from '@/api/chat'
 import { i18n } from '@/i18n'
 import { getActiveLocale, LOCALE_HEADER } from '@/i18n/runtime'
@@ -24,6 +25,28 @@ import type { ChatMessageRecord } from '@/types'
 
 export type ChatRole = 'user' | 'ai' | 'system'
 
+/** OCR degradation surfaced for an image-bearing turn (see backend ocr_status event). */
+export type OcrStatusInfo = {
+  status: 'unconfigured' | 'failed' | string
+  imageCount: number
+  errorKind?: string | null
+}
+
+/**
+ * One image shown in a user bubble.
+ *
+ * ``url`` is a local ``data:`` URL on the optimistic send path (instant, no
+ * round-trip) and a blob object URL after a history reload — the chat-images
+ * endpoint is Bearer-authenticated, so bytes cannot be fetched by putting the
+ * endpoint straight into ``<img src>``.
+ */
+export type ChatEntryImage = {
+  id?: string
+  name: string
+  mediaType: string
+  url: string
+}
+
 export type ChatEntry = {
   id: string
   role: ChatRole
@@ -31,6 +54,10 @@ export type ChatEntry = {
   kind?: 'plan' | 'device_action' | 'answer' | 'user'
   traceEvents?: AgentTraceEvent[]
   traceRunning?: boolean
+  /** Set when this turn attached images but OCR was unconfigured/failed. */
+  ocrStatus?: OcrStatusInfo
+  /** Images the user attached to this turn, rendered as thumbnails in the bubble. */
+  images?: ChatEntryImage[]
 }
 
 export type PendingPermission = {
@@ -91,6 +118,9 @@ export type StartDeviceRunPayload = {
   target_device_id?: string | null
   target_device_name?: string | null
   remember?: boolean
+  images?: ChatImageAttachment[]
+  /** Local previews for the optimistic user bubble (data: URLs, no round-trip). */
+  imagePreviews?: ChatEntryImage[]
 }
 
 export type StartLogAnalysisPayload = {
@@ -99,6 +129,9 @@ export type StartLogAnalysisPayload = {
   file?: File | null
   project_repo_id?: number | null
   remember?: boolean
+  images?: ChatImageAttachment[]
+  /** Local previews for the optimistic user bubble (data: URLs, no round-trip). */
+  imagePreviews?: ChatEntryImage[]
 }
 
 export type StartProjectExpertPayload = {
@@ -106,6 +139,9 @@ export type StartProjectExpertPayload = {
   history?: { role: string; content: string }[]
   project_repo_id: number
   remember?: boolean
+  images?: ChatImageAttachment[]
+  /** Local previews for the optimistic user bubble (data: URLs, no round-trip). */
+  imagePreviews?: ChatEntryImage[]
 }
 
 export type StartPackageSearchPayload = StartProjectExpertPayload
@@ -187,6 +223,86 @@ const getServiceUrl = (path: string) => {
     return `http://${window.location.hostname}:8085${path}`
   }
   return path
+}
+
+/**
+ * Blob object URLs for history images, keyed by `${sessionId}/${imageId}`.
+ *
+ * The chat-images endpoint requires a Bearer token, so bytes are fetched with
+ * `fetch` and wrapped in an object URL rather than pointing `<img src>` at the
+ * endpoint. Cached for the page's lifetime: the same thumbnail is re-rendered
+ * every time the user switches back to a session, and re-fetching each time
+ * would be pure waste. URLs are revoked in `resetImageCache` (session delete).
+ */
+const historyImageUrls = new Map<string, string>()
+
+const loadHistoryImage = async (
+  sessionId: string,
+  imageId: string,
+  authToken?: string | null,
+): Promise<string | null> => {
+  const cacheKey = `${sessionId}/${imageId}`
+  const cached = historyImageUrls.get(cacheKey)
+  if (cached) return cached
+  try {
+    const resp = await fetch(
+      getServiceUrl(
+        `/api/v1/ai-chat/chat-images/${encodeURIComponent(sessionId)}/${encodeURIComponent(imageId)}`,
+      ),
+      {
+        headers: authToken
+          ? { [LOCALE_HEADER]: getActiveLocale(), Authorization: `Bearer ${authToken}` }
+          : { [LOCALE_HEADER]: getActiveLocale() },
+        credentials: 'include',
+      },
+    )
+    if (!resp.ok) return null
+    const url = URL.createObjectURL(await resp.blob())
+    historyImageUrls.set(cacheKey, url)
+    return url
+  } catch (err) {
+    console.debug('chat image load failed', err)
+    return null
+  }
+}
+
+/**
+ * Attach thumbnails to already-rendered history messages.
+ *
+ * Runs detached from the initial paint: the message list is shown from text
+ * alone, then each image is filled in as its bytes arrive. A message whose
+ * images all fail to load simply keeps no `images` array, which renders the
+ * same as an image-free turn.
+ */
+const hydrateHistoryImages = async (
+  state: { messages: ChatEntry[] },
+  records: ChatMessageRecord[],
+  sessionId: string,
+  authToken?: string | null,
+) => {
+  for (const record of records) {
+    const metas = Array.isArray(record.images) ? record.images : []
+    if (!metas.length) continue
+    const resolved: ChatEntryImage[] = []
+    for (const meta of metas) {
+      const url = await loadHistoryImage(sessionId, meta.id, authToken)
+      if (url) {
+        resolved.push({ id: meta.id, name: meta.name, mediaType: meta.media_type, url })
+      }
+    }
+    if (!resolved.length) continue
+    const target = state.messages.find((m) => m.id === record.id)
+    if (target) target.images = resolved
+  }
+}
+
+/** Revoke and drop cached object URLs for a session (used when it is deleted). */
+export const resetImageCache = (sessionId?: string) => {
+  for (const [key, url] of historyImageUrls.entries()) {
+    if (sessionId && !key.startsWith(`${sessionId}/`)) continue
+    URL.revokeObjectURL(url)
+    historyImageUrls.delete(key)
+  }
 }
 
 const formatPlan = (steps: any[]) => {
@@ -348,6 +464,19 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       return
     }
     if (type === 'log_analysis_context') return
+
+    // OCR degradation for an image-bearing turn: attach to the assistant bubble
+    // so the UI can show an "images not recognized" hint. The turn still answers
+    // on text only, so we do not change run status here.
+    if (type === 'ocr_status') {
+      const target = ensureAnswerMessage(state, answerId)
+      target.ocrStatus = {
+        status: String(payload?.status || 'failed'),
+        imageCount: Number(payload?.image_count || 0),
+        errorKind: payload?.error_kind ?? null,
+      }
+      return
+    }
 
     if (type === 'agent_trace') {
       const target = ensureAnswerMessage(state, answerId)
@@ -749,6 +878,9 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
                 : undefined,
               traceRunning: item.run_status === 'running',
             }))
+            // Resolve attached-image bytes in the background so the message
+            // list paints immediately; each thumbnail appears as it arrives.
+            void hydrateHistoryImages(state, records, sessionId, opts.authToken)
             const lastWithAgent = [...records].reverse().find((m) => m.run_agent_kind)
             if (lastWithAgent?.run_agent_kind) {
               state.lastAgentKind = lastWithAgent.run_agent_kind as AgentKind
@@ -852,6 +984,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       role: 'user',
       content: userDisplay,
       kind: 'user',
+      images: payload.imagePreviews?.length ? payload.imagePreviews : undefined,
     })
     const pendingAnswerId = `run:pending:${generateUUID()}:assistant`
     state.currentAnswerId = pendingAnswerId
@@ -878,6 +1011,8 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       remember: payload.remember ?? true,
       target_device_id: payload.target_device_id || undefined,
       target_device_name: payload.target_device_name || undefined,
+      // Only include when non-empty so image-free requests are unchanged.
+      images: payload.images && payload.images.length ? payload.images : undefined,
     }
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -1011,6 +1146,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       role: 'user',
       content: userDisplay,
       kind: 'user',
+      images: payload.imagePreviews?.length ? payload.imagePreviews : undefined,
     })
     const pendingAnswerId = `run:pending:${generateUUID()}:assistant`
     state.currentAnswerId = pendingAnswerId
@@ -1038,6 +1174,9 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     if (payload.file) formData.append('file', payload.file)
     if (payload.project_repo_id != null) {
       formData.append('project_repo_id', String(payload.project_repo_id))
+    }
+    if (payload.images && payload.images.length) {
+      formData.append('images', JSON.stringify(payload.images))
     }
 
     try {
@@ -1149,6 +1288,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       role: 'user',
       content: payload.message,
       kind: 'user',
+      images: payload.imagePreviews?.length ? payload.imagePreviews : undefined,
     })
     const pendingAnswerId = `run:pending:${generateUUID()}:assistant`
     state.currentAnswerId = pendingAnswerId
@@ -1175,6 +1315,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         history: payload.history,
         remember: payload.remember ?? true,
         projectRepoId: payload.project_repo_id,
+        images: payload.images,
         authToken: opts.authToken || null,
         signal: ac.signal,
       })

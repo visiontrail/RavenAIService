@@ -416,6 +416,7 @@ class ChatRunService:
         system_prompt_override: Optional[str] = None,
         remember: bool = True,
         locale: Optional[str] = None,
+        images_json: Optional[str] = None,
     ) -> ChatRunJob:
         """Create a new DeviceAgent run and start its background task.
 
@@ -458,6 +459,7 @@ class ChatRunService:
                     session_id=session_id,
                     role="user",
                     content=user_message,
+                    images_json=images_json,
                 )
                 row = ChatAgentRun(
                     id=run_id,
@@ -823,6 +825,7 @@ class ChatRunService:
         system_prompt_override: Optional[str] = None,
         remember: bool = True,
         locale: Optional[str] = None,
+        images_json: Optional[str] = None,
     ) -> ChatRunJob:
         """Create a new GeneralAgent run and start its background task."""
         from app.services.chat_history_service import chat_history_service
@@ -853,6 +856,7 @@ class ChatRunService:
                     session_id=session_id,
                     role="user",
                     content=user_message,
+                    images_json=images_json,
                 )
                 row = ChatAgentRun(
                     id=run_id,

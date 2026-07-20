@@ -41,8 +41,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.package_search.agent import PackageSearchAgent
 from app.agents.package_search.workspace import WorkspaceContext, cleanup, prepare
 from app.config import settings
-from app.models.chat import ChatMessage
+from app.models.chat import ChatMessage, ImageAttachment
 from app.models.user import User
+from app.services import chat_image_store, ocr_service
 from app.services.chat_history_service import chat_history_service
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,9 @@ class AgentJob:
     run_id: str = ""
     owner_scope: str = ""
     project_repo_id: Optional[int] = None
+    # Metadata for images attached to this turn; persisted with the user
+    # message so history reloads can re-render the thumbnails.
+    images_json: Optional[str] = None
     events: List[Dict[str, Any]] = field(default_factory=list)
     # Raw AgentTraceEvent payloads (no SSE wrapper) for late-subscriber
     # full-history replay and for the final `done` frame to carry the
@@ -131,6 +135,7 @@ class PackageSearchChatService:
         db: Optional[AsyncSession],
         user: Optional[User],
         owner_scope: Optional[str] = None,
+        images: Optional[List[ImageAttachment]] = None,
         locale: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """SSE stream for one package-search turn.
@@ -262,6 +267,35 @@ class PackageSearchChatService:
                     }
                 )
 
+            # OCR-merge any attached images into the question before the agent
+            # runs; degrade to text-only when OCR is unconfigured/failed.
+            # Persist the originals so history reloads can re-render the
+            # thumbnails, and materialize them into the agent workspace as
+            # groundwork for a future multimodal path (no-op unless the
+            # provider supports image input — see chat_image_store).
+            stored_images = chat_image_store.save_turn_images(
+                images, session_id=effective_session_id
+            )
+            images_json = chat_image_store.to_meta_json(stored_images)
+            chat_image_store.materialize_into_workspace(stored_images, ctx.temp_dir)
+
+            question, ocr_meta = await ocr_service.enrich_message(
+                question,
+                images,
+                user_id=str(getattr(user, "id", None)) if getattr(user, "id", None) else None,
+                session_id=effective_session_id,
+                locale=locale,
+            )
+            if ocr_meta.image_count > 0 and ocr_meta.status in ("unconfigured", "failed"):
+                yield self._sse_event(
+                    {
+                        "event": "ocr_status",
+                        "status": ocr_meta.status,
+                        "image_count": ocr_meta.image_count,
+                        "error_kind": ocr_meta.error_kind,
+                    }
+                )
+
             history_hint = await self._build_history_hint(
                 db=db,
                 user=user,
@@ -295,6 +329,7 @@ class PackageSearchChatService:
                 question=question,
                 user_id=getattr(user, "id", None),
                 remember=bool(remember),
+                images_json=images_json,
                 started_at=time.monotonic(),
                 run_id=run_id,
                 owner_scope=effective_owner_scope,
@@ -612,6 +647,7 @@ class PackageSearchChatService:
                         session_id=job.session_id,
                         question=job.question,
                         answer=answer_text,
+                        images_json=job.images_json,
                         project_code=job.context_meta.get("project_code"),
                     )
                     await db.commit()
@@ -871,6 +907,7 @@ class PackageSearchChatService:
         question: str,
         answer: str,
         project_code: Optional[str],
+        images_json: Optional[str] = None,
     ) -> None:
         """Persist the user / assistant exchange. Caller owns commit/rollback."""
         user_content = question
@@ -883,6 +920,7 @@ class PackageSearchChatService:
             user_content=user_content,
             ai_content=answer,
             title_hint=question,
+            user_images_json=images_json,
         )
         if (session.message_count or 0) <= 2:
             try:

@@ -12,8 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.users import get_current_user, get_optional_user, get_request_locale
 from app.i18n.messages import t
-from app.models.chat import ChatRequest, ChatResponse
+from app.models.chat import (
+    ChatRequest,
+    ChatResponse,
+    ImageValidationError,
+    parse_images_form,
+    validate_images,
+)
 from app.models.database import get_db
+from app.services import chat_image_store, ocr_service
 from app.services.ai_chat_service import ai_chat_service
 from app.services.chat_history_service import chat_history_service
 from app.services.chat_run_service import chat_run_service
@@ -216,6 +223,34 @@ async def chat_stream_endpoint(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         ))
 
+    # Image attachments (optional): validate at the boundary (4xx before
+    # streaming), then run OCR and merge the recognized text into the user
+    # message so the agent receives richer text with no protocol change. The
+    # originals are also stored on disk so the frontend can re-render the
+    # thumbnails when this conversation is reloaded from history.
+    try:
+        validate_images(request.images)
+    except ImageValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": exc.reason, "message": exc.message},
+        ) from exc
+
+    enriched_message = request.message
+    ocr_meta = None
+    stored_images: list = []
+    if request.images:
+        stored_images = chat_image_store.save_turn_images(
+            request.images, session_id=session_id
+        )
+        enriched_message, ocr_meta = await ocr_service.enrich_message(
+            request.message,
+            request.images,
+            user_id=str(current_user.id) if getattr(current_user, "id", None) else None,
+            session_id=session_id,
+            locale=locale,
+        )
+
     # Create path: build history from DB (when authenticated) or request payload.
     history = await ai_chat_service._prepare_history(  # noqa: SLF001
         request, session_id, db, current_user
@@ -230,7 +265,8 @@ async def chat_stream_endpoint(
                 user=current_user,
                 owner_scope=owner_scope,
                 session_id=session_id,
-                user_message=request.message,
+                user_message=enriched_message,
+                images_json=chat_image_store.to_meta_json(stored_images),
                 target_device_id=request.target_device_id or "",
                 target_device_name=request.target_device_name,
                 history=history,
@@ -244,7 +280,8 @@ async def chat_stream_endpoint(
                 user=current_user,
                 owner_scope=owner_scope,
                 session_id=session_id,
-                user_message=request.message,
+                user_message=enriched_message,
+                images_json=chat_image_store.to_meta_json(stored_images),
                 history=history,
                 system_prompt_override=request.system_prompt,
                 remember=request.remember,
@@ -265,6 +302,20 @@ async def chat_stream_endpoint(
         yield ai_chat_service._sse_event(  # noqa: SLF001
             {"event": "session", "session_id": job.session_id, "run_id": job.run_id}
         )
+        # Surface OCR degradation so the frontend can show "images not recognized".
+        if (
+            ocr_meta is not None
+            and ocr_meta.image_count > 0
+            and ocr_meta.status in ("unconfigured", "failed")
+        ):
+            yield ai_chat_service._sse_event(  # noqa: SLF001
+                {
+                    "event": "ocr_status",
+                    "status": ocr_meta.status,
+                    "image_count": ocr_meta.image_count,
+                    "error_kind": ocr_meta.error_kind,
+                }
+            )
         async for chunk in chat_run_service.subscribe(job.run_id, owner_scope=owner_scope):
             yield chunk
 
@@ -472,6 +523,51 @@ async def chat_clarification_resolve_endpoint(
     )
 
 
+# ──────────────────────── Chat image attachments ────────────────────────
+
+
+@router.get(
+    "/chat-images/{session_id}/{image_id}",
+    summary="读取会话中某张用户附带图片的原图",
+)
+async def chat_image_endpoint(
+    session_id: str,
+    image_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Serve one stored attachment, scoped to the caller's own session.
+
+    Authorization is by session ownership: only the user the session belongs to
+    can read its images. ``chat_image_store.resolve_path`` refuses any id that
+    is not a bare alphanumeric stem, so a crafted ``image_id`` cannot traverse
+    outside the store.
+    """
+    from fastapi.responses import FileResponse
+    from sqlalchemy import select
+
+    from app.models.user import ChatSession
+
+    result = await db.execute(
+        select(ChatSession.id).where(
+            ChatSession.id == session_id,
+            ChatSession.user_id == current_user.id,
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="会话不存在或无权访问")
+
+    path = chat_image_store.resolve_path(session_id, image_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="图片不存在或已被清理")
+
+    return FileResponse(
+        str(path),
+        # Private user content: never let a shared cache hold on to it.
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
 # ──────────────────────── Chat Agent Run endpoints ────────────────────────
 
 
@@ -610,6 +706,9 @@ async def log_analysis_stream_endpoint(
         description="可选：项目仓库注册表 ID。提供时跳过 metadata.json 校验，直接使用该项目的仓库信息。",
     ),
     file: Optional[UploadFile] = File(None, description="可选日志包附件"),
+    images: Optional[str] = Form(
+        None, description="可选：随消息附带图片的 JSON 数组字符串 [{media_type,data}]"
+    ),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -631,11 +730,20 @@ async def log_analysis_stream_endpoint(
         user=current_user,
     )
     try:
+        parsed_images = parse_images_form(images)
+        validate_images(parsed_images)
+    except ImageValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": exc.reason, "message": exc.message},
+        ) from exc
+    try:
         generator = log_analysis_chat_service.stream(
             message=message,
             session_id=session_id,
             history_json=history,
             file=file,
+            images=parsed_images,
             remember=remember,
             project_repo_id=project_repo_id,
             db=db,
@@ -703,6 +811,9 @@ async def project_expert_stream_endpoint(
         None,
         description="项目仓库注册表 ID。新会话必填，用作权威项目身份来源。",
     ),
+    images: Optional[str] = Form(
+        None, description="可选：随消息附带图片的 JSON 数组字符串 [{media_type,data}]"
+    ),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -733,6 +844,15 @@ async def project_expert_stream_endpoint(
             },
         )
 
+    try:
+        parsed_images = parse_images_form(images)
+        validate_images(parsed_images)
+    except ImageValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": exc.reason, "message": exc.message},
+        ) from exc
+
     cookie_carrier = Response()
     owner_scope = resolve_owner_scope(http_request, cookie_carrier, current_user)
     try:
@@ -742,6 +862,7 @@ async def project_expert_stream_endpoint(
             history_json=history,
             remember=remember,
             project_repo_id=project_repo_id,
+            images=parsed_images,
             db=db,
             user=current_user,
             owner_scope=owner_scope,
@@ -809,6 +930,9 @@ async def package_search_stream_endpoint(
         None,
         description="项目仓库注册表 ID。新会话必填，用作权威项目身份来源。",
     ),
+    images: Optional[str] = Form(
+        None, description="可选：随消息附带图片的 JSON 数组字符串 [{media_type,data}]"
+    ),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -840,6 +964,15 @@ async def package_search_stream_endpoint(
             },
         )
 
+    try:
+        parsed_images = parse_images_form(images)
+        validate_images(parsed_images)
+    except ImageValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": exc.reason, "message": exc.message},
+        ) from exc
+
     cookie_carrier = Response()
     owner_scope = resolve_owner_scope(http_request, cookie_carrier, current_user)
     try:
@@ -849,6 +982,7 @@ async def package_search_stream_endpoint(
             history_json=history,
             remember=remember,
             project_repo_id=project_repo_id,
+            images=parsed_images,
             db=db,
             user=current_user,
             owner_scope=owner_scope,

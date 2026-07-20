@@ -4,6 +4,16 @@ import { getActiveLocale, LOCALE_HEADER } from '@/i18n/runtime'
 
 export type ChatPermissionDecision = 'allow' | 'deny'
 
+/**
+ * One image attachment sent alongside a chat turn. ``data`` is a base64 string
+ * (may include a ``data:<mime>;base64,`` prefix); the backend OCR service turns
+ * it into text and merges it into the user prompt. Raw bytes are never persisted.
+ */
+export interface ChatImageAttachment {
+  media_type: string
+  data: string
+}
+
 export interface ChatPermissionResolvePayload {
   decision: ChatPermissionDecision
   updated_args?: Record<string, unknown> | null
@@ -79,6 +89,7 @@ export interface ProjectExpertStreamPayload {
   history?: { role: string; content: string }[]
   remember?: boolean
   projectRepoId: number
+  images?: ChatImageAttachment[]
   authToken?: string | null
   signal?: AbortSignal
 }
@@ -169,6 +180,7 @@ export const projectExpertStream = (payload: ProjectExpertStreamPayload): Promis
   formData.append('remember', String(payload.remember ?? true))
   formData.append('project_repo_id', String(payload.projectRepoId))
   if (payload.history) formData.append('history', JSON.stringify(payload.history))
+  if (payload.images && payload.images.length) formData.append('images', JSON.stringify(payload.images))
 
   const headers: Record<string, string> = { [LOCALE_HEADER]: getActiveLocale() }
   if (payload.authToken) headers.Authorization = `Bearer ${payload.authToken}`
@@ -224,6 +236,7 @@ export const packageSearchStream = (payload: PackageSearchStreamPayload): Promis
   formData.append('remember', String(payload.remember ?? true))
   formData.append('project_repo_id', String(payload.projectRepoId))
   if (payload.history) formData.append('history', JSON.stringify(payload.history))
+  if (payload.images && payload.images.length) formData.append('images', JSON.stringify(payload.images))
 
   const headers: Record<string, string> = { [LOCALE_HEADER]: getActiveLocale() }
   if (payload.authToken) headers.Authorization = `Bearer ${payload.authToken}`

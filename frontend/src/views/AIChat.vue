@@ -17,6 +17,8 @@ import {
   useConversationRunsStore,
   THINKING_PLACEHOLDER,
   type ChatEntry,
+  type ChatEntryImage,
+  type OcrStatusInfo,
   type PendingPermission,
 } from '@/stores/conversationRuns'
 import type { PendingClarification } from '@/types/agentTrace'
@@ -25,6 +27,7 @@ import ClarificationCard from '@/components/ClarificationCard.vue'
 import ShareConversationModal from '@/components/ShareConversationModal.vue'
 import ProjectRepoSelect from '@/components/ProjectRepoSelect.vue'
 import { projectRepoApi, type ProjectRepoOption } from '@/api'
+import type { ChatImageAttachment } from '@/api/chat'
 import { copyToClipboard, downloadFile } from '@/utils'
 
 type AgentOption = {
@@ -63,6 +66,20 @@ const acceptedLogArchiveTypes = [...acceptedLogArchiveExtensions, ...acceptedLog
 function isArchiveLogFile(file: File): boolean {
   const name = file.name.toLowerCase()
   return acceptedLogArchiveExtensions.some((ext) => name.endsWith(ext))
+}
+
+// Image attachments (OCR): available for ANY agent, independent of log files.
+// Keep these limits in lock-step with the backend OCR_* defaults.
+const ACCEPTED_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+const MAX_IMAGE_COUNT = 6
+const MAX_IMAGE_SIZE_MB = 5
+
+type PendingImage = {
+  id: string
+  name: string
+  mediaType: string
+  /** data: URL from FileReader; used both as thumbnail src and as the sent payload. */
+  dataUrl: string
 }
 
 const userStore = useUserStore()
@@ -105,6 +122,11 @@ const targetAgent = ref<AgentOption | null>(null)
 const selectedLogFile = ref<File | null>(null)
 const isLogFileDragOver = ref(false)
 let logFileDragDepth = 0
+
+// Pending image attachments (paste / pick / drop). Independent of log files and
+// available under any agent. Sent as base64 with the turn; cleared after send.
+const pendingImages = ref<PendingImage[]>([])
+const imageFileInputRef = ref<HTMLInputElement | null>(null)
 
 const showTopMoreMenu = ref(false)
 const showShareModal = ref(false)
@@ -895,7 +917,7 @@ const logAnalysisMetadataError = computed(() => {
 const sendDisabled = computed(() =>
   !isLoggedIn.value ||
   isSending.value ||
-  (!inputMessage.value.trim() && !selectedLogFile.value) ||
+  (!inputMessage.value.trim() && !selectedLogFile.value && !pendingImages.value.length) ||
   isProjectRepoRequiredMissing.value ||
   logAnalysisMetadataError.value
 )
@@ -985,6 +1007,31 @@ const renderAiMessage = (content: string) => {
   }
   aiMessageHtmlCache.set(key, html)
   return html
+}
+
+// The persisted user message carries the merged <user_image_ocr> block so
+// follow-up turns keep the context, but it is machine-facing material — the
+// bubble shows the user's own words, with the images themselves rendered as
+// thumbnails above.
+const OCR_BLOCK_RE = /\n*<user_image_ocr\b[^>]*>[\s\S]*?<\/user_image_ocr>\s*/g
+const userBubbleText = (content: string) => (content || '').replace(OCR_BLOCK_RE, '').trim()
+
+// Full-size preview overlay for an attached image.
+const viewerImage = ref<ChatEntryImage | null>(null)
+const openImageViewer = (img: ChatEntryImage) => {
+  viewerImage.value = img
+}
+const closeImageViewer = () => {
+  viewerImage.value = null
+}
+
+// Human-readable "images not recognized" hint for a degraded OCR turn.
+const ocrDegradedText = (info: OcrStatusInfo) => {
+  const count = info.imageCount || 0
+  if (info.status === 'unconfigured') {
+    return t('aiChat.image.degradedUnconfigured', { count })
+  }
+  return t('aiChat.image.degradedFailed', { count })
 }
 
 // ─── Mermaid 图表渲染 ───────────────────────────────────────────────
@@ -1298,14 +1345,15 @@ const isFileDragEvent = (event: DragEvent) =>
   Array.from(event.dataTransfer?.types || []).includes('Files')
 
 const handleLogFileDragEnter = (event: DragEvent) => {
-  if (isSending.value || isLogFileUploadDisabled.value || !isFileDragEvent(event)) return
+  // Images are droppable under any agent, so gate only on isSending here.
+  if (isSending.value || !isFileDragEvent(event)) return
   logFileDragDepth += 1
   isLogFileDragOver.value = true
 }
 
 const handleLogFileDragOver = (event: DragEvent) => {
   if (!isFileDragEvent(event) || !event.dataTransfer) return
-  if (isSending.value || isLogFileUploadDisabled.value) {
+  if (isSending.value) {
     event.dataTransfer.dropEffect = 'none'
     return
   }
@@ -1321,9 +1369,105 @@ const handleLogFileDragLeave = (event: DragEvent) => {
 const handleLogFileDrop = (event: DragEvent) => {
   logFileDragDepth = 0
   isLogFileDragOver.value = false
-  if (isSending.value || isLogFileUploadDisabled.value) return
-  const file = event.dataTransfer?.files?.[0] || null
-  if (file) selectLogFile(file)
+  if (isSending.value) return
+  const files = Array.from(event.dataTransfer?.files || [])
+  if (!files.length) return
+  const imageFiles = files.filter((f) => (f.type || '').startsWith('image/'))
+  const otherFiles = files.filter((f) => !(f.type || '').startsWith('image/'))
+  // Images attach under any agent, independent of the log-file restrictions.
+  if (imageFiles.length) void addImageFiles(imageFiles)
+  // A dropped non-image follows the existing log-attachment rules.
+  if (otherFiles.length && !isLogFileUploadDisabled.value) {
+    selectLogFile(otherFiles[0])
+  }
+}
+
+// ── Image attachments (paste / pick / drop) — available for any agent ──
+
+const readImageAsDataUrl = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error || new Error('read failed'))
+    reader.readAsDataURL(file)
+  })
+
+const addImageFiles = async (files: File[] | FileList | null) => {
+  const list = files ? Array.from(files) : []
+  const images = list.filter((f) => f && (f.type || '').startsWith('image/'))
+  if (!images.length) return
+  for (const file of images) {
+    const mime = (file.type || '').toLowerCase()
+    if (!ACCEPTED_IMAGE_MIME_TYPES.includes(mime)) {
+      appStore.showNotification({
+        title: t('aiChat.image.unsupportedType', { name: file.name || 'image' }),
+        type: 'warning',
+      })
+      continue
+    }
+    if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
+      appStore.showNotification({
+        title: t('aiChat.image.tooLarge', { name: file.name || 'image', mb: MAX_IMAGE_SIZE_MB }),
+        type: 'warning',
+      })
+      continue
+    }
+    if (pendingImages.value.length >= MAX_IMAGE_COUNT) {
+      appStore.showNotification({
+        title: t('aiChat.image.tooMany', { max: MAX_IMAGE_COUNT }),
+        type: 'warning',
+      })
+      break
+    }
+    try {
+      const dataUrl = await readImageAsDataUrl(file)
+      if (!dataUrl) continue
+      pendingImages.value.push({
+        id: generateUUID(),
+        name: file.name || 'image',
+        mediaType: mime,
+        dataUrl,
+      })
+    } catch {
+      appStore.showNotification({
+        title: t('aiChat.image.readFailed', { name: file.name || 'image' }),
+        type: 'error',
+      })
+    }
+  }
+}
+
+const removePendingImage = (id: string) => {
+  pendingImages.value = pendingImages.value.filter((img) => img.id !== id)
+}
+
+const triggerImagePicker = () => {
+  if (isSending.value) return
+  imageFileInputRef.value?.click()
+}
+
+const handleImageFileChange = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  void addImageFiles(input.files)
+  input.value = ''
+}
+
+const handleComposerPaste = (event: ClipboardEvent) => {
+  const items = event.clipboardData?.items
+  if (!items) return
+  const files: File[] = []
+  for (const item of Array.from(items)) {
+    if (item.kind === 'file' && (item.type || '').startsWith('image/')) {
+      const f = item.getAsFile()
+      if (f) files.push(f)
+    }
+  }
+  if (files.length) {
+    // Clipboard carries an image: attach it instead of pasting raw content.
+    // Plain-text paste (no image items) falls through to default behavior.
+    event.preventDefault()
+    void addImageFiles(files)
+  }
 }
 
 const togglePackageAgent = () => {
@@ -1464,7 +1608,18 @@ const sendMessage = async () => {
   if (currentConversation.value?.isSending) return
   const content = inputMessage.value.trim()
   const fileForRequest = selectedLogFile.value
-  if (!content && !fileForRequest) return
+  const imagesForRequest: ChatImageAttachment[] = pendingImages.value.map((img) => ({
+    media_type: img.mediaType,
+    data: img.dataUrl,
+  }))
+  // Local previews for the optimistic user bubble: the same data: URLs already
+  // in memory, so the thumbnails appear the instant the message is sent.
+  const imagePreviewsForRequest: ChatEntryImage[] = pendingImages.value.map((img) => ({
+    name: img.name,
+    mediaType: img.mediaType,
+    url: img.dataUrl,
+  }))
+  if (!content && !fileForRequest && !imagesForRequest.length) return
 
   const authToken = (userStore.token as unknown as string) || null
   if (authToken && userToken.isExpired(authToken)) {
@@ -1532,7 +1687,13 @@ const sendMessage = async () => {
     : state.messages.map((msg) => ({ role: msg.role, content: msg.content }))
 
   inputMessage.value = ''
+  // Images are sent with this turn; clear the composer chips now (a snapshot
+  // was taken in ``imagesForRequest``).
+  pendingImages.value = []
   deviceMenuVisible.value = false
+
+  const images = imagesForRequest.length ? imagesForRequest : undefined
+  const imagePreviews = imagePreviewsForRequest.length ? imagePreviewsForRequest : undefined
 
   try {
     if (shouldUseProjectExpertAgent) {
@@ -1544,6 +1705,8 @@ const sendMessage = async () => {
           history: historyPayload,
           project_repo_id: selectedProjectRepoId.value as number,
           remember: true,
+          images,
+          imagePreviews,
         },
         { authToken },
       )
@@ -1561,6 +1724,8 @@ const sendMessage = async () => {
             file: fileSnapshot,
             project_repo_id: selectedProjectRepoId.value,
             remember: true,
+            images,
+            imagePreviews,
           },
           { authToken },
         )
@@ -1579,6 +1744,8 @@ const sendMessage = async () => {
           history: historyPayload,
           project_repo_id: selectedProjectRepoId.value as number,
           remember: true,
+          images,
+          imagePreviews,
         },
         { authToken },
       )
@@ -1592,6 +1759,8 @@ const sendMessage = async () => {
           target_device_id: targetDeviceId.value,
           target_device_name: targetDeviceName.value,
           remember: true,
+          images,
+          imagePreviews,
         },
         { authToken },
       )
@@ -1809,7 +1978,22 @@ const openShareModal = () => {
           :class="['rw-msg', msg.role === 'user' ? 'is-user' : 'is-ai']"
         >
           <template v-if="msg.role === 'user'">
-            <div class="rw-user-bubble">{{ msg.content }}</div>
+            <div v-if="msg.images && msg.images.length" class="rw-user-images">
+              <button
+                v-for="(img, imgIndex) in msg.images"
+                :key="img.id || `${msg.id}-${imgIndex}`"
+                type="button"
+                class="rw-user-image"
+                :title="img.name"
+                :aria-label="t('aiChat.image.preview', { name: img.name })"
+                @click="openImageViewer(img)"
+              >
+                <img :src="img.url" :alt="img.name" loading="lazy" />
+              </button>
+            </div>
+            <div v-if="userBubbleText(msg.content)" class="rw-user-bubble">
+              {{ userBubbleText(msg.content) }}
+            </div>
             <div class="rw-user-meta-line">{{ currentUserName }}</div>
           </template>
           <template v-else>
@@ -1822,6 +2006,13 @@ const openShareModal = () => {
             </div>
             <div class="rw-ai-body">
               <div class="rw-ai-name">RAVENAI</div>
+              <div
+                v-if="msg.ocrStatus && msg.ocrStatus.imageCount > 0"
+                class="rw-ocr-degraded"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+                <span>{{ ocrDegradedText(msg.ocrStatus) }}</span>
+              </div>
               <AgentTraceStream
                 v-if="msg.traceEvents && msg.traceEvents.length > 0 || msg.traceRunning"
                 class="rw-ai-trace"
@@ -1935,6 +2126,20 @@ const openShareModal = () => {
           </button>
         </div>
 
+        <div v-if="pendingImages.length" class="rw-image-strip">
+          <div v-for="img in pendingImages" :key="img.id" class="rw-image-thumb" :title="img.name">
+            <img :src="img.dataUrl" :alt="img.name" />
+            <button
+              type="button"
+              class="rw-image-thumb-remove"
+              :aria-label="t('aiChat.image.remove')"
+              @click="removePendingImage(img.id)"
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+            </button>
+          </div>
+        </div>
+
         <textarea
           v-model="inputMessage"
           ref="textareaRef"
@@ -1943,6 +2148,7 @@ const openShareModal = () => {
           rows="2"
           :readonly="!isLoggedIn"
           @keydown="handleKeydown"
+          @paste="handleComposerPaste"
           @click="!isLoggedIn && appStore.requestLoginModal('login')"
         ></textarea>
 
@@ -1962,6 +2168,22 @@ const openShareModal = () => {
             type="file"
             :accept="acceptedLogArchiveTypes"
             @change="handleLogFileChange"
+          />
+          <button
+            class="rw-mini-btn"
+            :title="t('aiChat.image.attach')"
+            :aria-label="t('aiChat.image.attach')"
+            @click="triggerImagePicker"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+          </button>
+          <input
+            ref="imageFileInputRef"
+            class="rw-file-input"
+            type="file"
+            accept="image/*"
+            multiple
+            @change="handleImageFileChange"
           />
           <div class="rw-device-wrap">
             <button
@@ -2177,6 +2399,26 @@ const openShareModal = () => {
       </div>
     </div>
 
+    <!-- 附带图片放大查看 -->
+    <div
+      v-if="viewerImage"
+      class="rw-image-viewer"
+      role="dialog"
+      :aria-label="t('aiChat.image.preview', { name: viewerImage.name })"
+      @click="closeImageViewer"
+      @keydown.esc="closeImageViewer"
+    >
+      <img :src="viewerImage.url" :alt="viewerImage.name" @click.stop />
+      <button
+        type="button"
+        class="rw-image-viewer-close"
+        :aria-label="t('common.close')"
+        @click="closeImageViewer"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+
     <!-- Mermaid 图表放大查看 -->
     <el-dialog
       v-model="mermaidDialogVisible"
@@ -2338,6 +2580,36 @@ const openShareModal = () => {
   display: flex; flex-direction: column; gap: 28px;
 }
 .rw-msg.is-user { display: flex; flex-direction: column; align-items: flex-end; }
+
+/* Thumbnails for images attached to a user turn (send + history reload). */
+.rw-user-images {
+  display: flex; flex-wrap: wrap; justify-content: flex-end;
+  gap: 6px; margin-bottom: 6px; max-width: 100%;
+}
+.rw-user-image {
+  width: 96px; height: 96px; padding: 0; cursor: zoom-in;
+  border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--rw-hairline-strong); background: var(--rw-surface-strong);
+}
+.rw-user-image img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rw-user-image:hover { border-color: var(--rw-ink); }
+
+.rw-image-viewer {
+  position: fixed; inset: 0; z-index: 3000;
+  display: grid; place-items: center; padding: 40px;
+  background: rgba(0, 0, 0, 0.72); cursor: zoom-out;
+}
+.rw-image-viewer img {
+  max-width: 100%; max-height: 100%;
+  object-fit: contain; border-radius: 8px; cursor: default;
+}
+.rw-image-viewer-close {
+  position: absolute; top: 16px; right: 16px;
+  width: 34px; height: 34px; border-radius: 999px;
+  display: grid; place-items: center; cursor: pointer;
+  color: #fff; background: rgba(255, 255, 255, 0.16); border: none;
+}
+.rw-image-viewer-close:hover { background: rgba(255, 255, 255, 0.28); }
 .rw-user-bubble {
   background: var(--rw-surface-strong); color: var(--rw-ink);
   padding: 12px 16px; border-radius: 12px;
@@ -2359,6 +2631,15 @@ const openShareModal = () => {
   margin-bottom: 6px; letter-spacing: 0.2px; text-transform: uppercase;
 }
 .rw-ai-trace { margin-bottom: 12px; }
+.rw-ocr-degraded {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-bottom: 10px; padding: 5px 10px;
+  border-radius: 8px; font-size: 12.5px; line-height: 1.4;
+  color: var(--rw-warn, #92400e);
+  background: color-mix(in srgb, var(--rw-warn, #f59e0b) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--rw-warn, #f59e0b) 30%, transparent);
+}
+.rw-ocr-degraded svg { flex-shrink: 0; }
 .rw-ai-text { font-size: 14.5px; color: var(--rw-ink); line-height: 1.62; }
 .rw-ai-actions {
   display: flex;
@@ -2469,7 +2750,7 @@ const openShareModal = () => {
 .rw-ai-text :deep(ul),
 .rw-ai-text :deep(ol) { padding-left: 22px; margin: 8px 0; }
 .rw-ai-text :deep(li) { margin: 4px 0; }
-.rw-ai-text :deep(a) { color: #0d74ce; text-decoration: none; }
+.rw-ai-text :deep(a) { color: var(--rw-link); text-decoration: none; }
 .rw-ai-text :deep(a:hover) { text-decoration: underline; }
 
 /* Composer */
@@ -2539,6 +2820,26 @@ const openShareModal = () => {
   background: var(--rw-canvas);
   padding: 0 8px 0 8px;
 }
+
+/* Pending image attachment thumbnails (paste / pick / drop). */
+.rw-image-strip {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  align-self: flex-start; max-width: 100%;
+  margin-bottom: 2px;
+}
+.rw-image-thumb {
+  position: relative; width: 56px; height: 56px;
+  border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--rw-hairline-strong); background: var(--rw-surface-strong);
+}
+.rw-image-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rw-image-thumb-remove {
+  position: absolute; top: 2px; right: 2px;
+  width: 16px; height: 16px; border-radius: 999px;
+  display: grid; place-items: center;
+  color: #fff; background: rgba(0, 0, 0, 0.55); border: none; cursor: pointer;
+}
+.rw-image-thumb-remove:hover { background: rgba(0, 0, 0, 0.75); }
 
 .rw-send-btn {
   width: 36px; height: 32px; border-radius: 8px;

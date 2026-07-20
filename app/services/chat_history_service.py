@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat import ChatMessage as ChatMessageSchema
 from app.models.user import ChatMessage, ChatSession
+from app.services import chat_image_store
 from app.services.base import BaseService
 
 
@@ -106,6 +107,7 @@ class ChatHistoryService(BaseService):
         role: str,
         content: str,
         title_hint: Optional[str] = None,
+        images_json: Optional[str] = None,
     ) -> tuple[ChatSession, ChatMessage]:
         """Append a single message to a session, creating the session if needed.
 
@@ -113,6 +115,10 @@ class ChatHistoryService(BaseService):
         and the assistant message at run terminal, instead of writing both at
         once. Maintains `message_count` / `last_message_at` and revives any
         soft-deleted session.
+
+        ``images_json`` carries the metadata for images attached to a user turn
+        (bytes live on disk, see ``chat_image_store``) so history reloads can
+        re-render the thumbnails.
         """
         session = await self.ensure_session(db, user_id, session_id=session_id)
         if (
@@ -124,7 +130,9 @@ class ChatHistoryService(BaseService):
             if preferred_title:
                 session.title = self._title_from_hint(preferred_title, fallback=session.title)
 
-        record = ChatMessage(session_id=session.id, role=role, content=content)
+        record = ChatMessage(
+            session_id=session.id, role=role, content=content, images_json=images_json
+        )
         db.add(record)
         session.message_count = (session.message_count or 0) + 1
         session.last_message_at = datetime.utcnow()
@@ -143,6 +151,7 @@ class ChatHistoryService(BaseService):
         ai_content: str,
         title_hint: Optional[str] = None,
         session_title: Optional[str] = None,
+        user_images_json: Optional[str] = None,
     ) -> ChatSession:
         session, _ = await self.append_message(
             db,
@@ -151,6 +160,7 @@ class ChatHistoryService(BaseService):
             role="user",
             content=user_content,
             title_hint=session_title or title_hint,
+            images_json=user_images_json,
         )
         session, _ = await self.append_message(
             db,
@@ -200,6 +210,10 @@ class ChatHistoryService(BaseService):
             return False
         session.is_deleted = True
         await db.flush()
+        # Attached-image bytes follow the conversation: drop them with the
+        # session so retention needs no separate sweeper. Best-effort — a
+        # failure here must not fail the delete.
+        chat_image_store.delete_session_images(session_id)
         return True
 
     async def update_session_title(

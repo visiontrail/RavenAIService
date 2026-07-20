@@ -37,9 +37,10 @@ from app.agents.log_analysis.workspace import (
 from app.config import settings
 from app.i18n import DEFAULT as I18N_DEFAULT, normalize as normalize_locale
 from app.i18n.prompts import response_language_directive
-from app.models.chat import ChatMessage
+from app.models.chat import ChatMessage, ImageAttachment
 from app.models.log import LogLevel, LogMetadata, LogStatus, LogUploadRequest
 from app.models.user import User
+from app.services import chat_image_store, ocr_service
 from app.services.chat_history_service import chat_history_service
 from app.services.log_service import log_service
 
@@ -80,6 +81,9 @@ class AgentJob:
     # alongside DeviceAgent runs.
     run_id: str = ""
     owner_scope: str = ""
+    # Metadata for images attached to this turn; persisted with the user
+    # message so history reloads can re-render the thumbnails.
+    images_json: Optional[str] = None
     events: List[Dict[str, Any]] = field(default_factory=list)
     # Raw AgentTraceEvent payloads (no SSE wrapper) for late-subscriber
     # full-history replay and for the final `done` frame to carry the
@@ -117,6 +121,7 @@ class LogAnalysisChatService:
         user: Optional[User],
         owner_scope: Optional[str] = None,
         project_repo_id: Optional[int] = None,
+        images: Optional[List[ImageAttachment]] = None,
         locale: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """SSE stream for one log-analysis turn.
@@ -251,6 +256,36 @@ class LogAnalysisChatService:
             if not question:
                 question = "请分析这个日志包，给出概览、可疑异常和下一步建议。"
 
+            # OCR-merge any attached images into the question before the agent
+            # runs; degrade to text-only when OCR is unconfigured/failed. The
+            # merged text is what gets bound to the agent and persisted.
+            # Persist the originals so history reloads can re-render the
+            # thumbnails, and materialize them into the agent workspace as
+            # groundwork for a future multimodal path (no-op unless the
+            # provider supports image input — see chat_image_store).
+            stored_images = chat_image_store.save_turn_images(
+                images, session_id=effective_session_id
+            )
+            images_json = chat_image_store.to_meta_json(stored_images)
+            chat_image_store.materialize_into_workspace(stored_images, ctx.temp_dir)
+
+            question, ocr_meta = await ocr_service.enrich_message(
+                question,
+                images,
+                user_id=str(getattr(user, "id", None)) if getattr(user, "id", None) else None,
+                session_id=effective_session_id,
+                locale=locale,
+            )
+            if ocr_meta.image_count > 0 and ocr_meta.status in ("unconfigured", "failed"):
+                yield self._sse_event(
+                    {
+                        "event": "ocr_status",
+                        "status": ocr_meta.status,
+                        "image_count": ocr_meta.image_count,
+                        "error_kind": ocr_meta.error_kind,
+                    }
+                )
+
             history_hint = await self._build_history_hint(
                 db=db,
                 user=user,
@@ -287,6 +322,7 @@ class LogAnalysisChatService:
                 user_id=getattr(user, "id", None),
                 user_snapshot=self._user_snapshot(user),
                 remember=bool(remember),
+                images_json=images_json,
                 filename=context_meta.get("filename"),
                 started_at=time.monotonic(),
                 started_at_utc=datetime.utcnow().isoformat(),
@@ -790,6 +826,7 @@ class LogAnalysisChatService:
                             session_id=job.session_id,
                             question=job.question,
                             answer=answer_text,
+                            images_json=job.images_json,
                             filename=job.filename,
                             locale=job.locale,
                         )
@@ -1153,6 +1190,7 @@ class LogAnalysisChatService:
         answer: str,
         filename: Optional[str],
         locale: Optional[str] = None,
+        images_json: Optional[str] = None,
     ) -> None:
         """Persist the user / assistant exchange. Caller owns commit/rollback."""
         user_content = question
@@ -1165,6 +1203,7 @@ class LogAnalysisChatService:
             user_content=user_content,
             ai_content=answer,
             title_hint=question,
+            user_images_json=images_json,
         )
         if (session.message_count or 0) <= 2:
             try:

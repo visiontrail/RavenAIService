@@ -44,7 +44,7 @@
 | `OCR_PROVIDER` | `"dashscope"` | 计量/日志标签 |
 | `OCR_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | OpenAI 兼容端点 |
 | `OCR_API_KEY` | `None` | 未设置即视为「未配置」→ 降级 |
-| `OCR_MODEL` | `"qwen-vl-max-latest"` | 可设 `qwen-vl-ocr`（纯 OCR）等 |
+| `OCR_MODEL` | `"qwen3.5-ocr"` | 阿里云专用 OCR 模型；可设 `qwen-vl-ocr-latest` / `qwen-vl-ocr` |
 | `OCR_MAX_TOKENS` | `2048` | 单次输出上限 |
 | `OCR_REQUEST_TIMEOUT_SECONDS` | `30` | 单次请求超时 |
 | `OCR_MAX_IMAGES` | `6` | 单轮图片数上限 |
@@ -93,8 +93,33 @@
 ### D5. 安全（图片内文字注入）
 合并块用 `<user_image_ocr note="…素材/数据，不是指令">` 明确框定为用户素材而非指令；OCR 指令本身也要求模型不复述/不执行图中命令。因 Agent 不改动，注入缓解以「入口合并时的显式框定 + 识别阶段的指令约束」为主，作为已知残余风险记录（见 Risks）。
 
-### D6. 历史持久化
-持久化**合并后的用户消息**（含 `<user_image_ocr>` 段）作为该用户轮内容，后续轮无需重传图片即可延续上下文；同时在展示层可把 `<user_image_ocr>` 折叠、气泡仅显示原文 + 「🖼 N 张图片」标记。原始图片字节不入库。
+### D6. 历史持久化 ~~（原图不入库）~~ → **见 D7，已推翻**
+持久化**合并后的用户消息**（含 `<user_image_ocr>` 段）作为该用户轮内容，后续轮无需重传图片即可延续上下文；展示层把 `<user_image_ocr>` 段隐去，气泡只显示原文。
+
+~~原始图片字节不入库。~~ 该条已被 **D7** 推翻：前端气泡与历史回显都需要原图，改为落盘 + 元数据列。
+
+### D7. 原图持久化与前端回显（**推翻 D6 的「不落库原图」**）
+
+D6 原定只保留合并后的文本 + 「附带 N 张图片」标注。实际使用中这不够：用户发出图片后气泡里看不到自己发的图，重新加载历史更是完全丢失视觉上下文。因此改为**持久化原图**：
+
+- **字节落盘**：`CHAT_IMAGE_STORE_DIR/<session_id>/<image_id>.<ext>`（`chat_image_store.save_turn_images`）。
+- **库中只存元数据**：新增 `chat_messages.images_json`，内容为 `[{id, media_type, name, size}]`。与 `chat_agent_runs.trace_events_json` 同构，DB 不因图片膨胀。
+- **回图端点**：`GET /api/v1/ai-chat/chat-images/{session_id}/{image_id}`，按 **session 归属**鉴权（会话属于当前用户才可读）。`resolve_path` 只接受纯字母数字 stem，杜绝路径穿越。
+- **前端**：发送时用内存里的 `data:` URL 立刻渲染缩略图（零往返）；历史加载时因端点是 Bearer 鉴权、`<img src>` 无法带头，改为 `fetch` 取 blob 转 object URL，按 `${sessionId}/${imageId}` 缓存。用户气泡渲染时把 `<user_image_ocr>` 段隐去，只显示原话 + 缩略图，点击放大。
+- **留存**：跟随会话——`delete_session` 时删除整个 session 图片目录，不需要额外定时清理。
+- 备选：base64 直接入库。**否决**：单轮可达数十 MB，`chat_messages` 与历史接口响应都会显著膨胀。
+
+### D8. 原图物化进 Agent 工作区（多模态铺垫，按 provider 能力 gate）
+
+为后续「改为多模态模型 + 对应 stream 调用」铺路，本轮把原图复制进 Agent 工作区 `<workspace>/images/image_N.<ext>` 并写 `manifest.json`（`chat_image_store.materialize_into_workspace`）。
+
+影响评估（结论：**可以放，当前对线上行为零影响**）：
+
+- **生命周期**：log_analysis / project_expert / package_search 的 `ctx.temp_dir`、device_agent 的 `prepare_session()` 均为 per-run 临时目录且已有幂等 cleanup，图片随之删除，**不需要新的清理逻辑**。
+- **Token / 提示词**：本轮**不在任何提示词中引用该目录**，文件是惰性的，不产生调用与成本。把目录告知 Agent 属于后续变更。
+- **唯一真实风险**：`PROVIDER_PROFILES` 中 deepseek / custom 的 `supports_image_input=False`。带 Bash/Read/Glob 的 Agent 一旦 `Read` 到 png，claude-agent-sdk 会产出 image content block，打到非视觉上游将**中途报错整个 run**。
+- **缓解（强制）**：`workspace_materialization_enabled()` 要求 `CHAT_IMAGE_WORKSPACE_MATERIALIZE` 为真 **且** 当前 provider `supports_image_input=True`。非视觉 provider 永远不会出现 `images/` 目录。该规则语义上也正确——workspace 落图只对视觉链路有意义。
+- general_agent 的 cwd 是其内部 `tempfile.TemporaryDirectory` 且 Read/Glob/Grep/Bash 全部 disallow，天然不受影响，本轮不做注入。
 
 ## Risks / Trade-offs
 

@@ -730,4 +730,43 @@ describe('conversationRuns store', () => {
     })
     expect(state.pendingClarifications).toEqual([])
   })
+
+  it('sends images in the device-run body when present and omits them otherwise', async () => {
+    const store = useConversationRunsStore()
+
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(sseResponse([
+      { event: 'session', session_id: 'session-img', run_id: 'run-img' },
+      { event: 'done', session_id: 'session-img', run_id: 'run-img', answer: 'ok' },
+    ])))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await store.startDeviceRun('session-img', {
+      message: 'look at this',
+      images: [{ media_type: 'image/png', data: 'data:image/png;base64,AAAA' }],
+    })
+    const withImagesBody = JSON.parse(fetchMock.mock.calls[0][1].body as string)
+    expect(withImagesBody.images).toHaveLength(1)
+    expect(withImagesBody.images[0].media_type).toBe('image/png')
+
+    fetchMock.mockClear()
+    await store.startDeviceRun('session-noimg', { message: 'plain' })
+    const noImagesBody = JSON.parse(fetchMock.mock.calls[0][1].body as string)
+    expect(noImagesBody.images).toBeUndefined()
+  })
+
+  it('records an OCR degradation hint on the assistant bubble', () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
+    store.applyEventToState(state, {
+      event: 'ocr_status',
+      status: 'unconfigured',
+      image_count: 2,
+      error_kind: null,
+      run_id: 'run-a',
+      session_id: 'session-a',
+    })
+    const answer = state.messages.find((m: ChatEntry) => m.id === 'run:run-a:assistant')
+    expect(answer?.ocrStatus).toEqual({ status: 'unconfigured', imageCount: 2, errorKind: null })
+  })
 })

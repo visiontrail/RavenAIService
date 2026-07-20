@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { userApi } from '@/api/user'
+import { resetImageCache } from '@/stores/conversationRuns'
 import type { ChatSessionSummary } from '@/types'
 
 export const useChatSessionStore = defineStore('chatSession', () => {
@@ -66,6 +67,9 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     const resp = await userApi.deleteSession(id)
     if (resp?.success && Array.isArray(resp.data)) {
       sessions.value = resp.data
+      // The backend drops this session's image files; release the blob object
+      // URLs we were holding for them so they do not leak for the page's life.
+      resetImageCache(id)
       if (selectedSessionId.value === id) startNewChat()
       return true
     }
