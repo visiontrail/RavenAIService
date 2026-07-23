@@ -38,6 +38,43 @@ export interface RegistrationEmailSettings {
   email_validation_message: string
 }
 
+export interface ModelSettingFieldEntry {
+  group: 'anthropic' | 'ocr'
+  source: 'override' | 'env' | 'unset'
+  value?: string | number | boolean
+  env_default?: string | number | boolean
+  is_set?: boolean
+}
+
+export interface ModelProviderProfile {
+  name: string
+  default_base_url: string
+  default_model: string
+  default_small_fast_model: string | null
+  supports_image_input: boolean
+  supports_mcp_server_tools: boolean
+}
+
+export interface ModelSettingsData {
+  fields: Record<string, ModelSettingFieldEntry>
+  provider_options: string[]
+  provider_profiles: ModelProviderProfile[]
+}
+
+export interface UpdateModelSettingsPayload {
+  anthropic_provider?: string
+  anthropic_api_key?: string | null
+  anthropic_base_url?: string
+  anthropic_model?: string
+  anthropic_small_fast_model?: string
+  anthropic_max_tokens?: number
+  ocr_enabled?: boolean
+  ocr_api_key?: string | null
+  ocr_base_url?: string
+  ocr_model?: string
+  ocr_provider?: string
+}
+
 const ADMIN_TOKEN_KEY = 'raven_admin_token'
 
 const getStorage = () => {
@@ -125,6 +162,17 @@ export const adminApi = {
     payload: RegistrationEmailSettings
   ): Promise<ApiResponse<RegistrationEmailSettings>> =>
     adminClient.put('/api/v1/users/registration-email-settings', payload),
+
+  getModelSettings: (): Promise<ApiResponse<ModelSettingsData>> =>
+    adminClient.get('/admin/model-settings'),
+
+  updateModelSettings: (
+    payload: UpdateModelSettingsPayload
+  ): Promise<ApiResponse<ModelSettingsData>> =>
+    adminClient.put('/admin/model-settings', payload),
+
+  resetModelSettings: (): Promise<ApiResponse<ModelSettingsData>> =>
+    adminClient.delete('/admin/model-settings'),
 
   createUser: (payload: {
     username: string

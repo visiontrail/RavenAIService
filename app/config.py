@@ -14,8 +14,56 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=".env", override=True)
 
 
+# 运行期可由后台「模型设置」覆盖的键。.env / 下面的字段默认值仅作为
+# 引导默认值（bootstrap default）；一旦 Admin 在后台保存了同名覆盖，读取
+# 这些属性时会透明地返回后台持久化的值（见 Settings.__getattribute__），
+# 无需重启即可生效。未被覆盖的键仍回退到 .env / 字段默认值，保证向后兼容。
+# 该集合是「唯一真源」在 app.services.model_settings_service 定义处的镜像；
+# 两处必须保持一致（model_settings_service 在导入时会断言校验）。
+OVERRIDABLE_MODEL_KEYS: frozenset = frozenset(
+    {
+        # 主力 Anthropic 兼容模型
+        "anthropic_provider",
+        "anthropic_api_key",
+        "anthropic_base_url",
+        "anthropic_model",
+        "anthropic_small_fast_model",
+        "anthropic_max_tokens",
+        # OCR / 视觉模型
+        "ocr_enabled",
+        "ocr_api_key",
+        "ocr_base_url",
+        "ocr_model",
+        "ocr_provider",
+    }
+)
+
+
 class Settings(BaseSettings):
     """应用配置类"""
+
+    def __getattribute__(self, name: str):
+        """Overlay Admin runtime overrides on top of the .env-loaded value.
+
+        Only the whitelisted model keys are intercepted; every other attribute
+        access (including all pydantic internals) falls straight through to the
+        normal lookup. When the backing runtime store holds an override for the
+        requested key, that value wins; otherwise the .env / field default is
+        returned unchanged — so behaviour is identical to before when Admin has
+        not configured anything.
+        """
+        if name in OVERRIDABLE_MODEL_KEYS:
+            # 延迟导入打破循环依赖：model_settings_service → runtime_settings_service
+            # → app.config。此分支只在运行期读取受控键时触发，此时模块已完成加载。
+            try:
+                from app.services.model_settings_service import get_override
+
+                found, value = get_override(name)
+                if found:
+                    return value
+            except Exception:  # noqa: BLE001 — 覆盖层永不能让配置读取失败
+                pass
+        return super().__getattribute__(name)
     
     # 环境配置
     environment: str = "development"

@@ -20,6 +20,7 @@ from app.security.admin_dependency import (
     resolve_admin_principal,
 )
 from app.services import (
+    model_settings_service,
     project_prompt_service,
     project_repo_member_service,
     project_repo_service,
@@ -250,6 +251,66 @@ async def save_prompts_config(
         data=PromptsConfigData(**data),
         message="保存成功",
     )
+
+
+# ─────────────────── Model Settings (runtime, Admin-editable) ──────────────
+
+class ModelSettingsResponse(BaseModel):
+    success: bool = True
+    data: Dict[str, Any]
+    message: str = "ok"
+
+
+class UpdateModelSettingsRequest(BaseModel):
+    """Partial update — omitted / null fields are left unchanged.
+
+    Secrets (``*_api_key``) are only updated when a non-empty value is sent;
+    an empty string keeps the existing key. Non-secret text fields may be set
+    to an empty string to fall back to the provider default.
+    """
+
+    anthropic_provider: Optional[str] = None
+    anthropic_api_key: Optional[str] = None
+    anthropic_base_url: Optional[str] = None
+    anthropic_model: Optional[str] = None
+    anthropic_small_fast_model: Optional[str] = None
+    anthropic_max_tokens: Optional[int] = None
+    ocr_enabled: Optional[bool] = None
+    ocr_api_key: Optional[str] = None
+    ocr_base_url: Optional[str] = None
+    ocr_model: Optional[str] = None
+    ocr_provider: Optional[str] = None
+
+
+@router.get("/model-settings", response_model=ModelSettingsResponse)
+async def get_model_settings(
+    _username: str = Depends(require_admin),
+) -> ModelSettingsResponse:
+    return ModelSettingsResponse(data=model_settings_service.describe(), message="读取成功")
+
+
+@router.put("/model-settings", response_model=ModelSettingsResponse)
+async def update_model_settings(
+    payload: UpdateModelSettingsRequest,
+    _username: str = Depends(require_admin),
+) -> ModelSettingsResponse:
+    try:
+        data = model_settings_service.save(payload.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    return ModelSettingsResponse(data=data, message="保存成功")
+
+
+@router.delete("/model-settings", response_model=ModelSettingsResponse)
+async def reset_model_settings(
+    _username: str = Depends(require_admin),
+) -> ModelSettingsResponse:
+    """Clear all Admin overrides; every model key reverts to its ``.env`` value."""
+    data = model_settings_service.reset()
+    return ModelSettingsResponse(data=data, message="已恢复为环境变量默认值")
 
 
 # ─────────────────── Project Repo Registry ────────────────────────

@@ -1518,6 +1518,10 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   writing-mode: vertical-rl;
+  /* CJK glyphs default to upright in vertical writing mode; force them sideways
+     so the rotate(180deg) below reads bottom-to-top instead of upside down. */
+  -webkit-text-orientation: sideways;
+  text-orientation: sideways;
   transform: rotate(180deg);
   font-size: 0.7rem;
   font-weight: 600;

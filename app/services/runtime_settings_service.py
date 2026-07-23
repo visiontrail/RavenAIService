@@ -14,7 +14,7 @@ import os
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 from app.config import settings
 
@@ -26,11 +26,22 @@ _CACHE_MTIME: float = 0.0
 _CACHE_PATH: Optional[Path] = None
 
 # Only explicitly listed keys may be changed through the Admin runtime API.
+# Domain services (e.g. ``model_settings_service``) extend this set at import
+# time via :func:`register_allowed_keys` so each domain owns its own key list.
 _ALLOWED_KEYS: set[str] = {
     "registration_email_regex",
     "registration_email_validation_message",
     "system_announcement",
 }
+
+
+def register_allowed_keys(keys: Iterable[str]) -> None:
+    """Whitelist additional keys for :func:`update` / :func:`delete_keys`.
+
+    Idempotent — safe to call from a domain service's module import so the
+    service stays the single source of truth for the keys it owns.
+    """
+    _ALLOWED_KEYS.update(keys)
 
 
 def _resolve_path() -> Path:
@@ -99,5 +110,27 @@ def update(values: Dict[str, Any]) -> Dict[str, Any]:
     with _LOCK:
         merged = dict(_load_unlocked())
         merged.update(values)
+        _persist_unlocked(merged)
+        return dict(merged)
+
+
+def delete_keys(keys: Iterable[str]) -> Dict[str, Any]:
+    """Remove the given keys from the store (revert them to their defaults).
+
+    Only whitelisted keys may be removed; unknown keys are rejected so callers
+    cannot silently clear settings they do not own. Missing keys are a no-op.
+    Returns the remaining persisted values.
+    """
+    target = set(keys)
+    unsupported = target - _ALLOWED_KEYS
+    if unsupported:
+        raise ValueError(f"Unsupported runtime settings: {sorted(unsupported)}")
+    with _LOCK:
+        merged = dict(_load_unlocked())
+        removed = [k for k in target if k in merged]
+        if not removed:
+            return dict(merged)
+        for key in removed:
+            merged.pop(key, None)
         _persist_unlocked(merged)
         return dict(merged)
