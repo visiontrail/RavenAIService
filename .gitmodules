@@ -1,0 +1,3 @@
+[submodule "GalaxySpace-CostMatrix"]
+	path = GalaxySpace-CostMatrix
+	url = git@github.com:visiontrail/GalaxySpace-CostMatrix.git
