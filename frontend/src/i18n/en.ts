@@ -590,6 +590,7 @@ export default {
       loginLoading: 'Signing in…',
       registerLoading: 'Registering…',
       registerSubmit: 'Register and sign in',
+      accountDisabledTitle: 'Account disabled',
       validation: {
         usernameRequired: 'Enter a username',
         usernameTooShort: 'Username must be at least 3 characters',
@@ -678,6 +679,9 @@ export default {
     cancelling: 'Cancelling…',
     cancel: 'Cancel',
     loadedSkillsTitle: 'Skills loaded by this agent run',
+    runSummary: 'Run summary',
+    completed: 'AI completed this run',
+    visualAnalysis: 'Visual analysis · {count} images',
   },
   aiAnalysis: {
     loadingTitle: 'AI is analyzing the log',
@@ -803,10 +807,16 @@ export default {
       apiKeyHint: 'Only fill this in to rotate the key; leave blank to keep the current key.',
       apiKeySetPlaceholder: 'Configured — leave blank to keep',
       apiKeyUnsetPlaceholder: 'Not configured — enter an API key',
+      providerHint:
+        'Switching provider fills in that vendor’s default Base URL and models; you can still edit them.',
       baseUrlHint: 'Leave blank to use the selected provider’s default endpoint.',
       baseUrlCustomHint: 'Required for custom provider: the Anthropic-compatible endpoint URL.',
+      // Braces are vue-i18n interpolation syntax — name placeholders literally.
+      baseUrlPlaceholderHint:
+        '⚠ This endpoint is a template: replace placeholders such as WorkspaceId (braces included) with real values before saving.',
       modelHint: 'Leave blank to use the selected provider’s default model.',
       modelCustomHint: 'Required for custom provider: the primary model id.',
+      modelCustomOption: 'Custom (type it below)',
       customRequiredPlaceholder: 'required for custom provider',
       smallFastModelHint:
         'Small / fast model for lightweight tasks like title generation; leave blank to use the provider default.',
@@ -825,13 +835,24 @@ export default {
       savingBtn: 'Saving…',
       resetBtn: 'Reset to defaults',
       resettingBtn: 'Resetting…',
+      testBtn: 'Test connection',
+      testOcrBtn: 'Test OCR connection',
+      testingBtn: 'Testing…',
+      testHint:
+        'Sends one minimal request using the current form values (no need to save first; a blank API key uses the stored one).',
+      testOcrHint:
+        'Sends a text-only request to verify the OCR endpoint / key / model. No image is uploaded.',
+      testOk: 'Connection OK ({ms} ms)',
+      testFailed: 'Connection failed',
+      testFail: 'Test request failed',
+      testReply: 'Model reply',
       effectiveNote: '· Changes take effect immediately — no service restart required.',
       envFallbackNote:
         '· Fields not configured here (shown as “env”) fall back to the .env / app/config.py defaults. Finer-grained tuning params (history turns, timeouts, byte caps) remain env-controlled.',
       ocrComplianceNote:
         '· Compliance note: images are sent to the upstream OCR provider (Alibaba Cloud Beijing region by default). Raw image bytes are never stored — only the recognized text is persisted; region/compliance is the deployer’s responsibility per provider.',
-      deepseekNote:
-        '· The DeepSeek profile supports MCP server tools but not image / document input; rely on the OCR model above for image recognition.',
+      providerCapabilityNote:
+        '· Third-party Anthropic-compatible gateways (DeepSeek, Bailian, Zhipu, Kimi, MiniMax, StepFun, MiMo, Hunyuan, internal Yinhe) all support standard tool use and MCP tools, but extensions such as thinking budget and document input do not apply; image recognition always goes through the OCR model above.',
     },
     users: {
       subtitle: 'User management',
@@ -869,6 +890,16 @@ export default {
       colActions: 'Actions',
       toggleDisableBtn: 'Disable',
       toggleEnableBtn: 'Enable',
+      disableDialogTitle: 'Disable user and leave a note',
+      disableMessageDialogTitle: 'Edit disable note',
+      disableDialogDesc: 'User {username} will no longer be able to sign in. The note below is shown verbatim the next time their login is rejected — use it to ask for a missing email or other details.',
+      disableMessageLabel: 'Note for the user',
+      disableMessagePlaceholder: 'Example: Your account has no company email. Contact the administrator to add one and restore access.',
+      disableMessageHint: 'Up to 1000 characters. Leave blank to show the default disabled notice. The note is cleared automatically when the account is re-enabled.',
+      disableMessageDefault: 'Your account details are incomplete (for example, a missing email) and it has been temporarily disabled. Contact the administrator to complete them and restore access.',
+      disableMessageBtn: 'Note',
+      disableMessageSaved: 'Note updated',
+      disableConfirmBtn: 'Confirm disable',
       editBtn: 'Edit',
       resetPasswordBtn: 'Reset password',
       deletingBtn: 'Deleting…',
@@ -1188,6 +1219,11 @@ export default {
       viewConversation: 'View chat',
       noConversation: 'No chat',
       noLinkedConversation: 'This event has no conversation available',
+      ocrMerged: '+ OCR',
+      ocrMergedWithImages: '+ OCR · {count} images',
+      ocrModelHint: 'Image OCR for this same request, merged into this row',
+      attachedImage: 'Attached image',
+      imageUnavailable: 'Image unavailable',
       adminConversationBadge: 'Admin only · Read-only',
       conversationTitle: 'Full conversation',
       conversationMessageCount: '{count} messages',
@@ -1494,6 +1530,8 @@ export default {
       canvasCtxFail: 'Canvas 2D context unavailable',
       pdfDownloadStarted: 'PDF download started',
       pdfExportFailed: 'Failed to export PDF, please try again',
+      modelMeta: 'Model: {model}',
+      durationMeta: 'Duration: {duration}',
     },
     menu: {
       conversation: 'Conversation',

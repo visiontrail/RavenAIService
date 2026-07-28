@@ -29,6 +29,12 @@ import ProjectRepoSelect from '@/components/ProjectRepoSelect.vue'
 import { projectRepoApi, type ProjectRepoOption } from '@/api'
 import type { ChatImageAttachment } from '@/api/chat'
 import { copyToClipboard, downloadFile } from '@/utils'
+import {
+  extractVisualAnalysis,
+  parseAgentMessage,
+  type AgentMessageView,
+  type VisualAnalysis,
+} from '@/utils/agentResultSummary'
 
 type AgentOption = {
   id: string
@@ -481,7 +487,11 @@ const buildConversationMarkdown = (exportedAt: Date) => {
   ]
 
   chatHistory.value.forEach((message, index) => {
-    const content = (message.content || '').trim() || t('aiChat.export.emptyMessage')
+    const visibleContent =
+      message.role === 'ai'
+        ? getAgentMessageView(message.content).displayMarkdown
+        : message.content
+    const content = (visibleContent || '').trim() || t('aiChat.export.emptyMessage')
     lines.push(
       '',
       `## ${index + 1}. ${messageSpeakerName(message.role)}`,
@@ -509,7 +519,7 @@ const exportCurrentConversationMarkdown = () => {
 }
 
 const copyAiMessageMarkdown = async (message: ChatEntry) => {
-  const content = (message.content || '').trim()
+  const content = getAgentMessageView(message.content).displayMarkdown.trim()
   if (!content || content === THINKING_PLACEHOLDER) return
   const ok = await copyToClipboard(content)
   if (ok) {
@@ -653,7 +663,7 @@ const AI_PDF_PAGE = {
 // 导出本次回复为 PDF：使用内置渲染（html2canvas-pro 光栅化 + jsPDF 直接生成），
 // 与日志详情的「导出报告（PDF）」一致，不再依赖浏览器打印对话框。
 const exportAiMessagePdf = async (message: ChatEntry) => {
-  const content = (message.content || '').trim()
+  const content = getAgentMessageView(message.content).displayMarkdown.trim()
   if (!content || content === THINKING_PLACEHOLDER) return
 
   // 离屏容器：渲染回复 DOM，供 html2canvas 光栅化后切片成 PDF。
@@ -993,10 +1003,24 @@ const chooseSuggestedAgent = () => {
 // mermaid 容器 id，导致 v-html 字符串变化、Vue 重新 patch innerHTML，
 // 从而抹掉 processMermaidBlocks() 异步插入的 SVG（表现为图表一直“渲染中…”）。
 const aiMessageHtmlCache = new Map<string, string>()
+const agentMessageViewCache = new Map<string, AgentMessageView>()
 const AI_MESSAGE_CACHE_LIMIT = 200
 
-const renderAiMessage = (content: string) => {
+const getAgentMessageView = (content: string): AgentMessageView => {
   const key = content || ''
+  const cached = agentMessageViewCache.get(key)
+  if (cached !== undefined) return cached
+  const view = parseAgentMessage(key)
+  if (agentMessageViewCache.size >= AI_MESSAGE_CACHE_LIMIT) {
+    const oldest = agentMessageViewCache.keys().next().value
+    if (oldest !== undefined) agentMessageViewCache.delete(oldest)
+  }
+  agentMessageViewCache.set(key, view)
+  return view
+}
+
+const renderAiMessage = (content: string) => {
+  const key = getAgentMessageView(content).displayMarkdown
   const cached = aiMessageHtmlCache.get(key)
   if (cached !== undefined) return cached
   const html = renderMarkdown(key, { wrapperClass: 'markdown-content text-ink' })
@@ -1007,6 +1031,16 @@ const renderAiMessage = (content: string) => {
   }
   aiMessageHtmlCache.set(key, html)
   return html
+}
+
+const visualAnalysisForMessage = (message: ChatEntry, messageIndex: number): VisualAnalysis | null => {
+  if (message.role !== 'ai' || (message.kind && message.kind !== 'answer')) return null
+  if (message.visualAnalysis?.text) return message.visualAnalysis
+  for (let index = messageIndex - 1; index >= 0; index -= 1) {
+    const candidate = chatHistory.value[index]
+    if (candidate.role === 'user') return extractVisualAnalysis(candidate.content)
+  }
+  return null
 }
 
 // The persisted user message carries the merged <user_image_ocr> block so
@@ -1973,7 +2007,7 @@ const openShareModal = () => {
       <!-- Thread -->
       <div v-else class="rw-thread">
         <div
-          v-for="msg in chatHistory"
+          v-for="(msg, msgIndex) in chatHistory"
           :key="msg.id"
           :class="['rw-msg', msg.role === 'user' ? 'is-user' : 'is-ai']"
         >
@@ -2014,10 +2048,18 @@ const openShareModal = () => {
                 <span>{{ ocrDegradedText(msg.ocrStatus) }}</span>
               </div>
               <AgentTraceStream
-                v-if="msg.traceEvents && msg.traceEvents.length > 0 || msg.traceRunning"
+                v-if="
+                  (msg.traceEvents && msg.traceEvents.length > 0) ||
+                  msg.traceRunning ||
+                  getAgentMessageView(msg.content).completionSummary ||
+                  visualAnalysisForMessage(msg, msgIndex)
+                "
                 class="rw-ai-trace"
                 :events="msg.traceEvents || []"
                 :running="!!msg.traceRunning"
+                :completion-summary="getAgentMessageView(msg.content).completionSummary"
+                :visual-analysis="visualAnalysisForMessage(msg, msgIndex)?.text"
+                :visual-image-count="visualAnalysisForMessage(msg, msgIndex)?.imageCount"
               />
               <template v-if="msg.content === THINKING_PLACEHOLDER">
                 <div v-if="!msg.traceRunning" class="rw-thinking">{{ t('aiChat.thinking') }}</div>
@@ -2028,24 +2070,44 @@ const openShareModal = () => {
                   v-if="msg.content && msg.content.trim()"
                   class="rw-ai-actions"
                 >
-                  <button
-                    class="rw-ai-action-btn"
-                    type="button"
-                    :aria-label="t('aiChat.export.copyMarkdownAction')"
-                    :data-tooltip="t('aiChat.export.copyMarkdownAction')"
-                    @click="copyAiMessageMarkdown(msg)"
+                  <div class="rw-ai-action-group">
+                    <button
+                      class="rw-ai-action-btn"
+                      type="button"
+                      :aria-label="t('aiChat.export.copyMarkdownAction')"
+                      :data-tooltip="t('aiChat.export.copyMarkdownAction')"
+                      @click="copyAiMessageMarkdown(msg)"
+                    >
+                      <Copy :size="17" :stroke-width="1.8" aria-hidden="true" />
+                    </button>
+                    <button
+                      class="rw-ai-action-btn"
+                      type="button"
+                      :aria-label="t('aiChat.export.singlePdfAction')"
+                      :data-tooltip="t('aiChat.export.singlePdfAction')"
+                      @click="exportAiMessagePdf(msg)"
+                    >
+                      <FileDown :size="17" :stroke-width="1.8" aria-hidden="true" />
+                    </button>
+                  </div>
+                  <div
+                    v-if="getAgentMessageView(msg.content).completionSummary?.model"
+                    class="rw-ai-run-meta"
                   >
-                    <Copy :size="17" :stroke-width="1.8" aria-hidden="true" />
-                  </button>
-                  <button
-                    class="rw-ai-action-btn"
-                    type="button"
-                    :aria-label="t('aiChat.export.singlePdfAction')"
-                    :data-tooltip="t('aiChat.export.singlePdfAction')"
-                    @click="exportAiMessagePdf(msg)"
-                  >
-                    <FileDown :size="17" :stroke-width="1.8" aria-hidden="true" />
-                  </button>
+                    <span class="rw-ai-run-model">
+                      {{ t('aiChat.export.modelMeta', {
+                        model: getAgentMessageView(msg.content).completionSummary?.model,
+                      }) }}
+                    </span>
+                    <template v-if="getAgentMessageView(msg.content).completionSummary?.duration">
+                      <span class="rw-ai-run-separator" aria-hidden="true"></span>
+                      <span>
+                        {{ t('aiChat.export.durationMeta', {
+                          duration: getAgentMessageView(msg.content).completionSummary?.duration,
+                        }) }}
+                      </span>
+                    </template>
+                  </div>
                 </div>
               </template>
             </div>
@@ -2644,8 +2706,17 @@ const openShareModal = () => {
 .rw-ai-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 10px;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  margin-top: 14px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rw-hairline);
+}
+.rw-ai-action-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 .rw-ai-action-btn {
   position: relative;
@@ -2663,8 +2734,8 @@ const openShareModal = () => {
 }
 .rw-ai-action-btn:hover,
 .rw-ai-action-btn:focus-visible {
-  background: #f1f1f1;
-  color: #111827;
+  background: var(--rw-surface-strong);
+  color: var(--rw-ink);
 }
 .rw-ai-action-btn:focus-visible { outline: none; }
 .rw-ai-action-btn::after {
@@ -2709,6 +2780,46 @@ const openShareModal = () => {
   opacity: 1;
   visibility: visible;
   transform: translateX(-50%) translateY(0);
+}
+.rw-ai-run-meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  color: var(--rw-muted);
+  font-family: var(--rw-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+  letter-spacing: .01em;
+}
+.rw-ai-run-model {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rw-ai-run-separator {
+  width: 3px;
+  height: 3px;
+  flex: 0 0 3px;
+  border-radius: 50%;
+  background: var(--rw-hairline-strong);
+}
+@media (max-width: 560px) {
+  .rw-ai-actions {
+    align-items: flex-start;
+    flex-direction: column-reverse;
+    gap: 4px;
+  }
+  .rw-ai-run-meta {
+    justify-content: flex-start;
+    width: 100%;
+  }
+  .rw-ai-run-model {
+    max-width: min(70vw, 280px);
+  }
 }
 .rw-thinking {
   display: inline-block;

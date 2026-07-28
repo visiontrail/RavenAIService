@@ -239,6 +239,10 @@ async def chat_stream_endpoint(
     enriched_message = request.message
     ocr_meta = None
     stored_images: list = []
+    # Minted here rather than inside ``start_*_run`` so the OCR usage event can
+    # carry the same run_id as the agent run it preprocesses for; the admin
+    # audit feed uses that pairing to show them as one invocation.
+    run_id = str(uuid.uuid4())
     if request.images:
         stored_images = chat_image_store.save_turn_images(
             request.images, session_id=session_id
@@ -248,6 +252,7 @@ async def chat_stream_endpoint(
             request.images,
             user_id=str(current_user.id) if getattr(current_user, "id", None) else None,
             session_id=session_id,
+            run_id=run_id,
             locale=locale,
         )
 
@@ -267,6 +272,7 @@ async def chat_stream_endpoint(
                 session_id=session_id,
                 user_message=enriched_message,
                 images_json=chat_image_store.to_meta_json(stored_images),
+                run_id=run_id,
                 target_device_id=request.target_device_id or "",
                 target_device_name=request.target_device_name,
                 history=history,
@@ -282,6 +288,7 @@ async def chat_stream_endpoint(
                 session_id=session_id,
                 user_message=enriched_message,
                 images_json=chat_image_store.to_meta_json(stored_images),
+                run_id=run_id,
                 history=history,
                 system_prompt_override=request.system_prompt,
                 remember=request.remember,
@@ -314,6 +321,20 @@ async def chat_stream_endpoint(
                     "status": ocr_meta.status,
                     "image_count": ocr_meta.image_count,
                     "error_kind": ocr_meta.error_kind,
+                }
+            )
+        elif (
+            ocr_meta is not None
+            and ocr_meta.image_count > 0
+            and ocr_meta.status == "succeeded"
+            and ocr_meta.text
+        ):
+            yield ai_chat_service._sse_event(  # noqa: SLF001
+                {
+                    "event": "ocr_result",
+                    "status": ocr_meta.status,
+                    "image_count": ocr_meta.image_count,
+                    "text": ocr_meta.text,
                 }
             )
         async for chunk in chat_run_service.subscribe(job.run_id, owner_scope=owner_scope):

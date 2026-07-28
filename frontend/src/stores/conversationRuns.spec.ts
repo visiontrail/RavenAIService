@@ -769,4 +769,23 @@ describe('conversationRuns store', () => {
     const answer = state.messages.find((m: ChatEntry) => m.id === 'run:run-a:assistant')
     expect(answer?.ocrStatus).toEqual({ status: 'unconfigured', imageCount: 2, errorKind: null })
   })
+
+  it('records successful visual analysis on the assistant bubble', () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
+    store.applyEventToState(state, {
+      event: 'ocr_result',
+      status: 'succeeded',
+      image_count: 2,
+      text: '[图片 1]\nError: timeout',
+      run_id: 'run-a',
+      session_id: 'session-a',
+    })
+    const answer = state.messages.find((m: ChatEntry) => m.id === 'run:run-a:assistant')
+    expect(answer?.visualAnalysis).toEqual({
+      text: '[图片 1]\nError: timeout',
+      imageCount: 2,
+    })
+  })
 })

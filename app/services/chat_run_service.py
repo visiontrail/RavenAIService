@@ -417,6 +417,7 @@ class ChatRunService:
         remember: bool = True,
         locale: Optional[str] = None,
         images_json: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> ChatRunJob:
         """Create a new DeviceAgent run and start its background task.
 
@@ -425,6 +426,8 @@ class ChatRunService:
         - Persists the user message immediately (if ``remember`` and ``user``).
         - Creates the ``chat_agent_runs`` row in ``status=running`` so the
           sidebar overlay can show a spinner.
+        - Accepts a caller-supplied ``run_id`` so pre-run work (image OCR) can
+          be metered under the same run; mints one when omitted.
         - Returns the in-memory ``ChatRunJob`` ready for subscription.
         """
         from app.services.chat_history_service import chat_history_service
@@ -442,7 +445,7 @@ class ChatRunService:
                 },
             )
 
-        run_id = str(uuid.uuid4())
+        run_id = run_id or str(uuid.uuid4())
         request_payload = {
             "target_device_id": target_device_id,
             "target_device_name": target_device_name,
@@ -826,8 +829,15 @@ class ChatRunService:
         remember: bool = True,
         locale: Optional[str] = None,
         images_json: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> ChatRunJob:
-        """Create a new GeneralAgent run and start its background task."""
+        """Create a new GeneralAgent run and start its background task.
+
+        ``run_id`` lets the caller pre-mint the id so work done *before* the run
+        starts (image OCR, for one) can be metered under the same run and shown
+        as a single invocation in the admin audit feed. Omitted, one is minted
+        here as before.
+        """
         from app.services.chat_history_service import chat_history_service
 
         self._evict_finished()
@@ -842,7 +852,7 @@ class ChatRunService:
                 },
             )
 
-        run_id = str(uuid.uuid4())
+        run_id = run_id or str(uuid.uuid4())
         request_payload = {
             "system_prompt_override": system_prompt_override,
             "remember": remember,

@@ -94,6 +94,16 @@ const loadingConversation = ref(false)
 const conversation = ref<AdminConversationDetail | null>(null)
 const conversationThreadRef = ref<HTMLElement | null>(null)
 
+/**
+ * Blob object URLs for the images attached to the open conversation, keyed by
+ * image id. The bytes endpoint needs the admin bearer token, so `<img src>`
+ * cannot point at it directly. Revoked when the drawer closes — a different
+ * event means a different conversation, so nothing here is worth keeping.
+ */
+const conversationImageUrls = ref<Record<string, string>>({})
+/** The image the admin clicked to enlarge, or null while none is open. */
+const previewImageUrl = ref<string | null>(null)
+
 // ==================== Helpers ====================
 
 const parseErrorMessage = (err: any) => {
@@ -171,6 +181,25 @@ const formatNumber = (value?: number | null) => {
   if (value === null || value === undefined) return '0'
   return value.toLocaleString('en-US')
 }
+
+// ==================== Merged OCR sub-events ====================
+//
+// Image OCR is a preprocessing step for the agent run it shares a `run_id`
+// with, so the backend folds those events into the parent row. These read that
+// merged payload for the events table.
+
+const mergedOcrEvents = (event: MetricsRawEvent) => event.ocr_events || []
+
+/** Images OCR'd across this request; 0 when the sub-events predate the count. */
+const ocrImageCount = (event: MetricsRawEvent) =>
+  mergedOcrEvents(event).reduce((sum, ocr) => sum + (ocr.image_count || 0), 0)
+
+const ocrTokens = (event: MetricsRawEvent) =>
+  mergedOcrEvents(event).reduce((sum, ocr) => sum + (ocr.total_tokens || 0), 0)
+
+/** What the whole request cost: the agent run plus the OCR it triggered. */
+const combinedTokens = (event: MetricsRawEvent) =>
+  (event.total_tokens || 0) + ocrTokens(event)
 
 const renderConversationAi = (content: string) =>
   renderMarkdown(content || '', { wrapperClass: 'markdown-content text-ink' })
@@ -311,7 +340,10 @@ const setChartRef = (el: unknown) => {
     chartInnerWidth.value = el.clientWidth
   }
 }
-onBeforeUnmount(() => chartResizeObserver?.disconnect())
+onBeforeUnmount(() => {
+  chartResizeObserver?.disconnect()
+  releaseConversationImages()
+})
 
 const rotateBucketLabels = computed(() => {
   const series = overview.value?.time_series || []
@@ -455,11 +487,44 @@ const closeDetail = () => {
   detail.value = null
 }
 
+/**
+ * Fill in the thumbnails for a conversation, detached from its first paint.
+ *
+ * The thread renders from text alone and each image appears as its bytes land,
+ * so one slow or missing attachment never holds up the transcript. A failed
+ * image just keeps no URL, which renders as the "unavailable" placeholder.
+ */
+const loadConversationImages = async (detail: AdminConversationDetail) => {
+  const ids = detail.messages.flatMap((message) =>
+    (message.images || []).map((image) => image.id)
+  )
+  await Promise.all(
+    ids.map(async (imageId) => {
+      try {
+        const blob = await adminApi.metricsEventChatImage(detail.event_id, imageId)
+        // The drawer may have been closed (or reopened on another event) while
+        // this was in flight; dropping the bytes avoids a leaked object URL.
+        if (conversation.value?.event_id !== detail.event_id) return
+        conversationImageUrls.value[imageId] = URL.createObjectURL(blob)
+      } catch {
+        // Cleaned-up or unreadable image: leave it out, the template covers it.
+      }
+    })
+  )
+}
+
+const releaseConversationImages = () => {
+  Object.values(conversationImageUrls.value).forEach((url) => URL.revokeObjectURL(url))
+  conversationImageUrls.value = {}
+  previewImageUrl.value = null
+}
+
 const openEventConversation = async (event: MetricsRawEvent) => {
   if (!event.conversation_available) return
   conversationVisible.value = true
   loadingConversation.value = true
   conversation.value = null
+  releaseConversationImages()
   try {
     const resp = await adminApi.metricsEventConversation(event.id)
     if (!resp?.success || !resp.data) {
@@ -470,6 +535,8 @@ const openEventConversation = async (event: MetricsRawEvent) => {
     if (conversationThreadRef.value) {
       await processMermaidBlocks(conversationThreadRef.value)
     }
+    // Not awaited: thumbnails stream in behind the already-rendered transcript.
+    void loadConversationImages(resp.data)
   } catch (err: any) {
     appStore.showNotification({
       title: t('admin.loadFail'),
@@ -485,6 +552,7 @@ const openEventConversation = async (event: MetricsRawEvent) => {
 const closeConversation = () => {
   conversationVisible.value = false
   conversation.value = null
+  releaseConversationImages()
 }
 
 const refreshAll = async () => {
@@ -1064,12 +1132,37 @@ onMounted(() => {
                 <tr v-for="ev in events" :key="ev.id">
                   <td class="text-xs text-slate-500">{{ formatTimestamp(ev.occurred_at) }}</td>
                   <td class="text-xs">{{ ev.event_type }}</td>
-                  <td class="text-xs">{{ ev.source }}</td>
+                  <td class="text-xs">
+                    <div>{{ ev.source }}</div>
+                    <!-- OCR shares this run's id, so it is one request, not two rows. -->
+                    <span v-if="mergedOcrEvents(ev).length" class="metrics-ocr-chip">
+                      {{
+                        ocrImageCount(ev)
+                          ? t('admin.metrics.ocrMergedWithImages', { count: ocrImageCount(ev) })
+                          : t('admin.metrics.ocrMerged')
+                      }}
+                    </span>
+                  </td>
                   <td class="text-xs">{{ formatProjectGroupLabel(ev.project_repo_id) }}</td>
                   <td class="text-xs">{{ ev.display_name || ev.username || ev.user_id || '--' }}</td>
-                  <td class="text-xs">{{ ev.model || '--' }}</td>
+                  <td class="text-xs">
+                    <div>{{ ev.model || '--' }}</div>
+                    <div
+                      v-for="ocr in mergedOcrEvents(ev)"
+                      :key="ocr.id"
+                      class="metrics-ocr-sub"
+                      :title="t('admin.metrics.ocrModelHint')"
+                    >
+                      OCR · {{ ocr.model || '--' }}
+                    </div>
+                  </td>
                   <td><span class="metrics-status" :class="`is-${ev.status || 'unknown'}`">{{ ev.status || '--' }}</span></td>
-                  <td class="text-right">{{ formatNumber(ev.total_tokens) }}</td>
+                  <td class="text-right">
+                    <div>{{ formatNumber(combinedTokens(ev)) }}</div>
+                    <div v-if="mergedOcrEvents(ev).length" class="metrics-ocr-sub">
+                      {{ formatNumber(ev.total_tokens) }} + {{ formatNumber(ocrTokens(ev)) }} OCR
+                    </div>
+                  </td>
                   <td class="text-right">
                     <button
                       class="metrics-conversation-btn"
@@ -1200,6 +1293,26 @@ onMounted(() => {
             :class="['admin-conversation-message', message.role === 'user' ? 'is-user' : 'is-ai']"
           >
             <template v-if="message.role === 'user'">
+              <!-- The originals behind the OCR text the agent actually saw. -->
+              <div v-if="message.images?.length" class="admin-user-images">
+                <button
+                  v-for="image in message.images"
+                  :key="image.id"
+                  type="button"
+                  class="admin-user-image"
+                  :class="{ 'is-missing': !conversationImageUrls[image.id] }"
+                  :title="image.name || t('admin.metrics.attachedImage')"
+                  :disabled="!conversationImageUrls[image.id]"
+                  @click="previewImageUrl = conversationImageUrls[image.id] || null"
+                >
+                  <img
+                    v-if="conversationImageUrls[image.id]"
+                    :src="conversationImageUrls[image.id]"
+                    :alt="image.name || t('admin.metrics.attachedImage')"
+                  />
+                  <span v-else>{{ t('admin.metrics.imageUnavailable') }}</span>
+                </button>
+              </div>
               <div class="admin-user-bubble">{{ message.content }}</div>
               <div class="admin-message-label">{{ t('sharedConversation.userLabel') }}</div>
             </template>
@@ -1217,6 +1330,17 @@ onMounted(() => {
           <div v-if="!conversation.messages.length" class="metrics-empty">{{ t('admin.metrics.emptyConversation') }}</div>
         </div>
       </div>
+    </div>
+
+    <!-- Full-size view of a clicked attachment; screenshots are unreadable as thumbnails. -->
+    <div
+      v-if="previewImageUrl"
+      class="admin-image-preview"
+      role="dialog"
+      :aria-label="t('admin.metrics.attachedImage')"
+      @click="previewImageUrl = null"
+    >
+      <img :src="previewImageUrl" :alt="t('admin.metrics.attachedImage')" />
     </div>
   </div>
 </template>
@@ -1782,6 +1906,26 @@ onMounted(() => {
   background: var(--admin-surface-strong);
 }
 
+/* Marks a row whose request also spent an OCR call, folded in from its own event. */
+.metrics-ocr-chip {
+  display: inline-flex;
+  margin-top: 0.2rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  color: var(--admin-accent-soft-ink);
+  background: var(--admin-accent-soft-bg);
+  font-size: 0.66rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.metrics-ocr-sub {
+  margin-top: 0.15rem;
+  color: var(--admin-muted);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
 .metrics-conversation-btn {
   white-space: nowrap;
   color: var(--admin-accent-soft-ink);
@@ -1883,6 +2027,64 @@ onMounted(() => {
   line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Attachments sit above the bubble and share its right alignment. */
+.admin-user-images {
+  max-width: 90%;
+  margin-bottom: 0.4rem;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.admin-user-image {
+  width: 7.5rem;
+  height: 7.5rem;
+  padding: 0;
+  border: 1px solid var(--admin-hairline-strong);
+  border-radius: 0.6rem;
+  background: var(--admin-canvas-soft);
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.admin-user-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.admin-user-image.is-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem;
+  color: var(--admin-muted);
+  font-size: 0.68rem;
+  text-align: center;
+  cursor: default;
+}
+
+.admin-image-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  background: var(--admin-modal-backdrop-bg);
+  cursor: zoom-out;
+}
+
+.admin-image-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 0.5rem;
+  box-shadow: var(--admin-drawer-shadow);
 }
 
 .admin-message-label,

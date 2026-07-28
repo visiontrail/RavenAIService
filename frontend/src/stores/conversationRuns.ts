@@ -58,6 +58,11 @@ export type ChatEntry = {
   ocrStatus?: OcrStatusInfo
   /** Images the user attached to this turn, rendered as thumbnails in the bubble. */
   images?: ChatEntryImage[]
+  /** Successful OCR/vision description for images attached to this turn. */
+  visualAnalysis?: {
+    text: string
+    imageCount: number
+  }
 }
 
 export type PendingPermission = {
@@ -474,6 +479,18 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         status: String(payload?.status || 'failed'),
         imageCount: Number(payload?.image_count || 0),
         errorKind: payload?.error_kind ?? null,
+      }
+      return
+    }
+
+    if (type === 'ocr_result') {
+      const target = ensureAnswerMessage(state, answerId)
+      const text = typeof payload?.text === 'string' ? payload.text.trim() : ''
+      if (text) {
+        target.visualAnalysis = {
+          text,
+          imageCount: Number(payload?.image_count || 0),
+        }
       }
       return
     }

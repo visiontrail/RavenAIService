@@ -535,6 +535,10 @@ export interface UserProfile {
   display_name?: string | null
   email?: string | null
   is_active: boolean
+  // Admin note left when the account was disabled; shown to the user when
+  // their login is rejected. Cleared as soon as the account is re-enabled.
+  disabled_message?: string | null
+  disabled_at?: string | null
   role?: UserRole | string
   profile_role?: UserProfileRole | null
   language?: string | null
@@ -775,6 +779,32 @@ export interface MetricsUserListData {
   rows: MetricsUserRow[]
 }
 
+/**
+ * An OCR sub-event folded into its parent agent event.
+ *
+ * Image OCR preprocesses a project-expert / log-analysis / package-search turn
+ * and shares that run's `run_id`, so the audit feed merges it into the parent
+ * row instead of listing it separately.
+ */
+export interface MetricsMergedOcrEvent {
+  id: string
+  occurred_at: string
+  source: string
+  agent_kind: string | null
+  provider: string | null
+  model: string | null
+  status: string | null
+  error_kind: string | null
+  duration_ms: number | null
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  total_tokens: number
+  cost_microusd: number | null
+  image_count: number | null
+}
+
 export interface MetricsRawEvent {
   id: string
   idempotency_key: string
@@ -804,6 +834,21 @@ export interface MetricsRawEvent {
   total_tokens: number
   cost_microusd: number | null
   metadata: Record<string, unknown> | null
+  /** OCR calls that belong to this same request; empty for image-free turns. */
+  ocr_events?: MetricsMergedOcrEvent[]
+}
+
+/** Metadata for one image a user attached; bytes come from the admin endpoint. */
+export interface AdminConversationImage {
+  id: string
+  media_type: string | null
+  name: string | null
+  size: number | null
+}
+
+/** The admin view of a message: the public shape plus the turn's attachments. */
+export interface AdminConversationMessage extends PublicShareMessage {
+  images?: AdminConversationImage[]
 }
 
 export interface AdminConversationDetail {
@@ -817,7 +862,7 @@ export interface AdminConversationDetail {
   created_at: string
   last_message_at: string
   is_deleted: boolean
-  messages: PublicShareMessage[]
+  messages: AdminConversationMessage[]
 }
 
 export interface MetricsUserDetail {

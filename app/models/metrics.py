@@ -351,6 +351,35 @@ class UserMetricsListResponse(BaseResponse):
     data: UserMetricsListData
 
 
+class MergedOcrEvent(BaseModel):
+    """折叠进父事件的 OCR 子事件。
+
+    图片 OCR 是专家模型 / 日志分析等 agent run 的预处理步骤，与父事件共享
+    ``run_id``（见 ``metrics_service._not_merged_ocr_filter``），因此在审计列表里
+    不单独占一行，而是挂在父事件的 ``ocr_events`` 下。
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    occurred_at: datetime
+    source: str
+    agent_kind: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    status: Optional[str] = None
+    error_kind: Optional[str] = None
+    duration_ms: Optional[int] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    total_tokens: int = 0
+    cost_microusd: Optional[int] = None
+    # 本次 OCR 处理的图片张数（由 ocr_service 写入 metadata）。
+    image_count: Optional[int] = None
+
+
 class RawMetricEvent(BaseModel):
     """原始事件（已 sanitize），供 admin 审计。"""
 
@@ -385,6 +414,9 @@ class RawMetricEvent(BaseModel):
     total_tokens: int = 0
     cost_microusd: Optional[int] = None
     metadata: Optional[Dict[str, Any]] = None
+    # 与本事件同属一次请求的 OCR 子事件（见 MergedOcrEvent）。恒为列表，
+    # 无图片附件的普通请求为空。
+    ocr_events: List[MergedOcrEvent] = Field(default_factory=list)
 
 
 class UserMetricsDetail(BaseModel):
@@ -455,6 +487,28 @@ class RawMetricEventsResponse(BaseResponse):
     data: RawMetricEventsData
 
 
+class AdminConversationImage(BaseModel):
+    """一张用户附带图片的元数据；原图字节由 admin 专属接口按需返回。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    media_type: Optional[str] = None
+    name: Optional[str] = None
+    size: Optional[int] = None
+
+
+class AdminConversationMessage(PublicShareMessage):
+    """管理员视角的单条消息。
+
+    在公开分享的消息形状之上补充用户轮次的图片附件元数据。之所以另立一个模型而
+    不是直接扩展 ``PublicShareMessage``：公开快照没有可用的取图接口，带上图片元
+    数据只会渲染出一堆坏图。
+    """
+
+    images: List[AdminConversationImage] = Field(default_factory=list)
+
+
 class AdminConversationDetail(BaseModel):
     """Live, admin-only conversation linked to one metrics event."""
 
@@ -468,7 +522,7 @@ class AdminConversationDetail(BaseModel):
     created_at: datetime
     last_message_at: datetime
     is_deleted: bool = False
-    messages: List[PublicShareMessage] = Field(default_factory=list)
+    messages: List[AdminConversationMessage] = Field(default_factory=list)
 
 
 class AdminConversationDetailResponse(BaseResponse):

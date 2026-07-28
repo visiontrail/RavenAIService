@@ -78,6 +78,7 @@ class ConversationShareService(BaseService):
         *,
         session_id: str,
         user_id: str,
+        include_images: bool = False,
     ) -> list[dict]:
         """Build a read-only message snapshot from the current session state.
 
@@ -88,6 +89,12 @@ class ConversationShareService(BaseService):
         to runs the same way the owner-side message read does, so the public page
         renders an identical reasoning trace. Owner identity, ``session_id`` and
         run ids are never persisted.
+
+        ``include_images`` adds the metadata for images attached to a user turn.
+        It defaults off and must stay off for public shares: the bytes are only
+        served by authenticated endpoints, so a public snapshot carrying image
+        metadata would render nothing but broken thumbnails. The admin audit read
+        opts in — it has an authenticated bytes endpoint of its own.
         """
         result = await db.execute(
             select(ChatMessage)
@@ -125,8 +132,29 @@ class ConversationShareService(BaseService):
                 trace_events = self._pop_trace_events(unmatched_runs, record.content)
                 if trace_events:
                     message["trace_events"] = trace_events
+            if include_images and role == "user":
+                images = self._parse_images(record.images_json)
+                if images:
+                    message["images"] = images
             snapshot.append(message)
         return snapshot
+
+    @staticmethod
+    def _parse_images(images_json: Optional[str]) -> list[dict]:
+        """Parse ``chat_messages.images_json`` into attachment metadata.
+
+        Best-effort by design: unusable JSON degrades to "no thumbnails" rather
+        than failing the whole read, matching how the store treats write errors.
+        """
+        if not images_json:
+            return []
+        try:
+            parsed = json.loads(images_json)
+        except (ValueError, TypeError):
+            return []
+        if not isinstance(parsed, list):
+            return []
+        return [item for item in parsed if isinstance(item, dict) and item.get("id")]
 
     @staticmethod
     def _pop_trace_events(

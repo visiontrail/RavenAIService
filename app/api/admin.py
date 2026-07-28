@@ -313,6 +313,46 @@ async def reset_model_settings(
     return ModelSettingsResponse(data=data, message="已恢复为环境变量默认值")
 
 
+class TestModelSettingsRequest(BaseModel):
+    """Probe an endpoint with the form's current values.
+
+    Every field is optional: omitted values fall back to the saved effective
+    config, which is how the API key can stay server-side while the admin tests
+    a new base URL or model.
+    """
+
+    target: str = "anthropic"  # "anthropic" | "ocr"
+    provider: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+
+
+@router.post("/model-settings/test", response_model=ModelSettingsResponse)
+async def test_model_settings(
+    payload: TestModelSettingsRequest,
+    _username: str = Depends(require_admin),
+) -> ModelSettingsResponse:
+    """Send one minimal completion request and report the outcome.
+
+    A failing upstream is a successful *test* (HTTP 200 with ``ok: false``) —
+    only a malformed request is a 400.
+    """
+    try:
+        data = await model_settings_service.test_connection(
+            payload.model_dump(exclude_none=True)
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    return ModelSettingsResponse(
+        data=data,
+        message="连接测试通过" if data.get("ok") else "连接测试失败",
+    )
+
+
 # ─────────────────── Project Repo Registry ────────────────────────
 
 class ProjectRepoData(BaseModel):

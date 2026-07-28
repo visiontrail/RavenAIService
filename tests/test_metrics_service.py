@@ -111,6 +111,7 @@ def test_sanitize_metadata_keeps_only_allowlisted_keys():
         "project_code": "abc",
         "error_kind": "timeout",
         "historical": True,
+        "image_count": 2,
     }
     clean = ms.sanitize_metadata(md)
     assert clean == md

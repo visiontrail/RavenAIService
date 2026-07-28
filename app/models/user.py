@@ -61,6 +61,16 @@ class User(Base, TimestampMixin):
         nullable=False,
         comment="用户角色（user/admin）",
     )
+    disabled_message: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="管理员禁用该账号时留给用户的留言，登录被拒时原样展示",
+    )
+    disabled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime,
+        nullable=True,
+        comment="账号被禁用的时间；重新启用时清空",
+    )
     profile_role: Mapped[str] = mapped_column(
         String(64),
         default="developer",
@@ -339,6 +349,8 @@ class UserProfile(BaseModel):
     display_name: Optional[str] = None
     email: Optional[str] = None
     is_active: bool = True
+    disabled_message: Optional[str] = None
+    disabled_at: Optional[datetime] = None
     role: str = "user"
     profile_role: str = "developer"
     language: str = "zh"

@@ -28,7 +28,8 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 
-from sqlalchemy import and_, case, false, func, select
+from sqlalchemy import and_, case, false, func, literal, or_, select
+from sqlalchemy.orm import aliased
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -52,6 +53,9 @@ METADATA_ALLOWLIST = frozenset(
         "project_code",
         "error_kind",
         "historical",
+        # How many images one OCR call transcribed. A bare count — the images
+        # and their recognized text never go near a metric event.
+        "image_count",
     }
 )
 
@@ -1308,6 +1312,91 @@ async def _recent_events(
     return [_event_to_dict(e) for e in events]
 
 
+_OCR_AGENT_KIND = "ocr"
+
+
+def _not_merged_ocr_filter() -> ColumnElement:
+    """Keep out OCR events that belong to a listed agent run.
+
+    Image OCR is a preprocessing step for a project-expert / log-analysis /
+    package-search / general turn, never something a user invokes on its own, so
+    listing it as a separate row splits one request across two lines of the audit
+    feed. ``ocr_service`` meters the OCR call under the run's ``run_id``, which
+    lets this drop the OCR row and :func:`_attach_ocr_events` fold it into the
+    parent instead.
+
+    An OCR event with no ``run_id`` (rows written before the ids were paired) or
+    whose run has no other event still lists on its own — the merge hides
+    duplicates, it never drops usage from the audit trail.
+    """
+    sibling = aliased(MetricEvent)
+    has_parent_run = (
+        select(literal(1))
+        .where(
+            sibling.run_id == MetricEvent.run_id,
+            sibling.id != MetricEvent.id,
+            sibling.agent_kind.is_not(None),
+            sibling.agent_kind != _OCR_AGENT_KIND,
+        )
+        .exists()
+    )
+    return or_(
+        MetricEvent.agent_kind.is_(None),
+        MetricEvent.agent_kind != _OCR_AGENT_KIND,
+        MetricEvent.run_id.is_(None),
+        ~has_parent_run,
+    )
+
+
+def _ocr_child_to_dict(event: MetricEvent) -> Dict[str, Any]:
+    """Map an OCR ``MetricEvent`` to the compact shape nested under its parent."""
+    child = _event_to_dict(event)
+    metadata = child.get("metadata") or {}
+    image_count = metadata.get("image_count") if isinstance(metadata, dict) else None
+    child["image_count"] = image_count if isinstance(image_count, int) else None
+    return child
+
+
+async def _attach_ocr_events(session, events: Sequence[MetricEvent]) -> Dict[str, list]:
+    """Return the merged OCR children of ``events``, keyed by parent event id.
+
+    Parents are matched by ``run_id``; a run with several parent events (a retry,
+    say) attaches the same OCR children to each so no row silently loses the
+    tokens its request actually spent.
+    """
+    run_ids = {
+        e.run_id
+        for e in events
+        if e.run_id and (e.agent_kind or None) != _OCR_AGENT_KIND
+    }
+    if not run_ids:
+        return {}
+    children = (
+        (
+            await session.execute(
+                select(MetricEvent)
+                .where(
+                    MetricEvent.run_id.in_(run_ids),
+                    MetricEvent.agent_kind == _OCR_AGENT_KIND,
+                )
+                .order_by(MetricEvent.occurred_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not children:
+        return {}
+    by_run: Dict[str, list] = {}
+    for child in children:
+        by_run.setdefault(child.run_id, []).append(_ocr_child_to_dict(child))
+    return {
+        e.id: by_run[e.run_id]
+        for e in events
+        if e.run_id in by_run and (e.agent_kind or None) != _OCR_AGENT_KIND
+    }
+
+
 async def list_metric_events(
     *,
     from_time: datetime,
@@ -1324,15 +1413,24 @@ async def list_metric_events(
     Log-upload activity events are intentionally excluded because they are not
     AI/agent invocations. Internal AI helper events are also excluded because they
     are paired with user-facing agent runs and would duplicate request activity.
+
+    Image-OCR events are folded into the agent run they preprocess for (see
+    :func:`_not_merged_ocr_filter`) so one user request is one row; the merged
+    children ride along under the parent's ``ocr_events``. Filtering explicitly
+    for ``source="ocr"`` turns the merge off, so an admin who wants to audit OCR
+    on its own still can.
     """
     page = max(1, page)
     per_page = max(1, per_page)
+    merge_ocr = (source or "").strip().lower() != _OCR_AGENT_KIND
     filters: List[ColumnElement] = [
         MetricEvent.occurred_at >= from_time,
         MetricEvent.occurred_at < to_time,
         MetricEvent.source != "log_upload",
         MetricEvent.source.not_in(_INTERNAL_AI_SOURCES),
     ]
+    if merge_ocr:
+        filters.append(_not_merged_ocr_filter())
     if event_type:
         filters.append(MetricEvent.event_type == event_type)
     if source:
@@ -1345,7 +1443,11 @@ async def list_metric_events(
 
     async with _read_session() as session:
         total = int(
-            (await session.execute(select(func.count()).where(and_(*filters)))).scalar()
+            (
+                await session.execute(
+                    select(func.count()).select_from(MetricEvent).where(and_(*filters))
+                )
+            ).scalar()
             or 0
         )
         events = (
@@ -1361,11 +1463,18 @@ async def list_metric_events(
             .scalars()
             .all()
         )
+        ocr_by_parent = await _attach_ocr_events(session, events) if merge_ocr else {}
+
+    rows = []
+    for event in events:
+        row = _event_to_dict(event)
+        row["ocr_events"] = ocr_by_parent.get(event.id, [])
+        rows.append(row)
     return {
         "total": total,
         "page": page,
         "per_page": per_page,
-        "events": [_event_to_dict(e) for e in events],
+        "events": rows,
     }
 
 

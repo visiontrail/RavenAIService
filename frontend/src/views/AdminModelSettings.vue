@@ -2,11 +2,22 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { LogOut, Menu, PanelLeftClose, RotateCcw, Save } from 'lucide-vue-next'
+import {
+  CheckCircle2,
+  LogOut,
+  Menu,
+  PanelLeftClose,
+  PlugZap,
+  RotateCcw,
+  Save,
+  XCircle,
+} from 'lucide-vue-next'
 import {
   adminApi,
   adminToken,
   type ModelSettingsData,
+  type ModelSettingsTestResult,
+  type TestModelSettingsPayload,
   type UpdateModelSettingsPayload,
 } from '@/api/admin'
 import ThemeToggle from '@/components/ThemeToggle.vue'
@@ -51,13 +62,87 @@ const anthropicKeySet = ref(false)
 const ocrKeySet = ref(false)
 
 const providerOptions = computed(() => settingsData.value?.provider_options ?? [])
-const selectedProfile = computed(
-  () =>
-    settingsData.value?.provider_profiles.find(
-      (p) => p.name === form.anthropic_provider
-    ) ?? null
-)
+const profileOf = (name: string) =>
+  settingsData.value?.provider_profiles.find((p) => p.name === name) ?? null
+const selectedProfile = computed(() => profileOf(form.anthropic_provider))
 const isCustomProvider = computed(() => form.anthropic_provider === 'custom')
+
+const providerLabel = (name: string) => {
+  const label = profileOf(name)?.label
+  return label ? `${label} · ${name}` : name
+}
+
+const testing = reactive({ anthropic: false, ocr: false })
+const testResults = reactive<{
+  anthropic: ModelSettingsTestResult | null
+  ocr: ModelSettingsTestResult | null
+}>({ anthropic: null, ocr: null })
+
+// ── Model presets ─────────────────────────────────────────────────────────
+// The text inputs stay the source of truth (a provider may ship a model newer
+// than this table); the selects are shortcuts that write into them.
+const CUSTOM_MODEL = '__custom__'
+const modelPresets = computed(() => selectedProfile.value?.models ?? [])
+const presetValue = (current: string) =>
+  modelPresets.value.includes(current) ? current : CUSTOM_MODEL
+const applyPreset = (key: 'anthropic_model' | 'anthropic_small_fast_model', event: Event) => {
+  const value = (event.target as HTMLSelectElement).value
+  if (value !== CUSTOM_MODEL) form[key] = value
+}
+
+/**
+ * Switching provider re-points Base URL / models at that vendor's defaults —
+ * the whole purpose of the dropdown. Any hand-typed value is replaced, so the
+ * form always describes one coherent upstream.
+ */
+const handleProviderChange = () => {
+  testResults.anthropic = null
+  const profile = selectedProfile.value
+  if (!profile) return
+  form.anthropic_base_url = profile.default_base_url
+  form.anthropic_model = profile.default_model
+  form.anthropic_small_fast_model = profile.default_small_fast_model ?? ''
+}
+
+// ── Connectivity test ─────────────────────────────────────────────────────
+const runTest = async (target: 'anthropic' | 'ocr') => {
+  testing[target] = true
+  testResults[target] = null
+  try {
+    // Send the form's current values so a config can be verified before it is
+    // saved; the API key is omitted unless it is being changed, in which case
+    // the backend tests the stored one.
+    const payload: TestModelSettingsPayload =
+      target === 'anthropic'
+        ? {
+            target,
+            provider: form.anthropic_provider,
+            base_url: form.anthropic_base_url.trim(),
+            model: form.anthropic_model.trim(),
+          }
+        : {
+            target,
+            base_url: form.ocr_base_url.trim(),
+            model: form.ocr_model.trim(),
+          }
+    const typedKey =
+      target === 'anthropic' ? form.anthropic_api_key.trim() : form.ocr_api_key.trim()
+    if (typedKey) payload.api_key = typedKey
+
+    const resp = await adminApi.testModelSettings(payload)
+    if (!resp?.data) throw new Error(resp?.message || t('admin.modelSettings.testFail'))
+    testResults[target] = resp.data
+  } catch (err: any) {
+    testResults[target] = {
+      ok: false,
+      target,
+      error_kind: 'request_failed',
+      detail: parseErrorMessage(err),
+    }
+  } finally {
+    testing[target] = false
+  }
+}
 
 const sourceOf = (key: string) => settingsData.value?.fields?.[key]?.source ?? 'env'
 const sourceLabel = (key: string) => {
@@ -150,6 +235,9 @@ const handleResetSettings = async () => {
       throw new Error(resp?.message || t('admin.modelSettings.resetFail'))
     }
     populateForm(resp.data)
+    // The form now describes a different upstream; any earlier probe is stale.
+    testResults.anthropic = null
+    testResults.ocr = null
     appStore.showNotification({ title: t('admin.modelSettings.resetDone'), type: 'success' })
   } catch (err: any) {
     appStore.showNotification({
@@ -360,9 +448,13 @@ onMounted(() => {
                 <select
                   v-model="form.anthropic_provider"
                   class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none bg-white"
+                  @change="handleProviderChange"
                 >
-                  <option v-for="opt in providerOptions" :key="opt" :value="opt">{{ opt }}</option>
+                  <option v-for="opt in providerOptions" :key="opt" :value="opt">
+                    {{ providerLabel(opt) }}
+                  </option>
                 </select>
+                <p class="text-xs text-slate-500 mt-1">{{ t('admin.modelSettings.providerHint') }}</p>
                 <p v-if="selectedProfile" class="text-xs text-slate-500 mt-1">
                   {{ t('admin.modelSettings.capabilities') }}:
                   <span :class="selectedProfile.supports_image_input ? 'text-emerald-600' : 'text-slate-400'">
@@ -372,6 +464,9 @@ onMounted(() => {
                   <span :class="selectedProfile.supports_mcp_server_tools ? 'text-emerald-600' : 'text-slate-400'">
                     {{ selectedProfile.supports_mcp_server_tools ? t('admin.modelSettings.capMcpYes') : t('admin.modelSettings.capMcpNo') }}
                   </span>
+                </p>
+                <p v-if="selectedProfile?.notes" class="text-xs text-slate-500 mt-1">
+                  {{ selectedProfile.notes }}
                 </p>
               </label>
 
@@ -402,6 +497,9 @@ onMounted(() => {
                   class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
                   :placeholder="selectedProfile?.default_base_url || t('admin.modelSettings.customRequiredPlaceholder')"
                 />
+                <p v-if="selectedProfile?.base_url_needs_input" class="ms-warn text-xs mt-1">
+                  {{ t('admin.modelSettings.baseUrlPlaceholderHint') }}
+                </p>
                 <p class="text-xs text-slate-500 mt-1">
                   {{ isCustomProvider ? t('admin.modelSettings.baseUrlCustomHint') : t('admin.modelSettings.baseUrlHint') }}
                 </p>
@@ -412,6 +510,15 @@ onMounted(() => {
                   {{ t('admin.modelSettings.modelLabel') }}
                   <span class="ms-badge" :class="`ms-badge--${sourceOf('anthropic_model')}`">{{ sourceLabel('anthropic_model') }}</span>
                 </span>
+                <select
+                  v-if="modelPresets.length"
+                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none bg-white"
+                  :value="presetValue(form.anthropic_model)"
+                  @change="applyPreset('anthropic_model', $event)"
+                >
+                  <option v-for="m in modelPresets" :key="m" :value="m">{{ m }}</option>
+                  <option :value="CUSTOM_MODEL">{{ t('admin.modelSettings.modelCustomOption') }}</option>
+                </select>
                 <input
                   v-model="form.anthropic_model"
                   type="text"
@@ -429,6 +536,15 @@ onMounted(() => {
                   {{ t('admin.modelSettings.smallFastModelLabel') }}
                   <span class="ms-badge" :class="`ms-badge--${sourceOf('anthropic_small_fast_model')}`">{{ sourceLabel('anthropic_small_fast_model') }}</span>
                 </span>
+                <select
+                  v-if="modelPresets.length"
+                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none bg-white"
+                  :value="presetValue(form.anthropic_small_fast_model)"
+                  @change="applyPreset('anthropic_small_fast_model', $event)"
+                >
+                  <option v-for="m in modelPresets" :key="m" :value="m">{{ m }}</option>
+                  <option :value="CUSTOM_MODEL">{{ t('admin.modelSettings.modelCustomOption') }}</option>
+                </select>
                 <input
                   v-model="form.anthropic_small_fast_model"
                   type="text"
@@ -453,6 +569,51 @@ onMounted(() => {
                 />
                 <p class="text-xs text-slate-500 mt-1">{{ t('admin.modelSettings.maxTokensHint') }}</p>
               </label>
+            </div>
+
+            <div class="mt-4 pt-4 border-t border-slate-200">
+              <div class="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  class="ms-test-btn"
+                  :disabled="testing.anthropic"
+                  @click="runTest('anthropic')"
+                >
+                  <PlugZap :size="15" />
+                  {{ testing.anthropic ? t('admin.modelSettings.testingBtn') : t('admin.modelSettings.testBtn') }}
+                </button>
+                <span class="text-xs text-slate-500">{{ t('admin.modelSettings.testHint') }}</span>
+              </div>
+
+              <div
+                v-if="testResults.anthropic"
+                class="ms-test-result"
+                :class="testResults.anthropic.ok ? 'is-ok' : 'is-fail'"
+              >
+                <component
+                  :is="testResults.anthropic.ok ? CheckCircle2 : XCircle"
+                  :size="16"
+                  class="ms-test-icon"
+                />
+                <div class="min-w-0">
+                  <p class="ms-test-title">
+                    {{
+                      testResults.anthropic.ok
+                        ? t('admin.modelSettings.testOk', { ms: testResults.anthropic.latency_ms ?? 0 })
+                        : t('admin.modelSettings.testFailed')
+                    }}
+                  </p>
+                  <p class="ms-test-meta">
+                    {{ testResults.anthropic.model }} · {{ testResults.anthropic.base_url }}
+                  </p>
+                  <p v-if="testResults.anthropic.ok && testResults.anthropic.reply" class="ms-test-meta">
+                    {{ t('admin.modelSettings.testReply') }}: {{ testResults.anthropic.reply }}
+                  </p>
+                  <p v-if="!testResults.anthropic.ok" class="ms-test-meta">
+                    [{{ testResults.anthropic.error_kind }}] {{ testResults.anthropic.detail }}
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -531,6 +692,49 @@ onMounted(() => {
               </label>
             </div>
 
+            <div class="mt-4 pt-4 border-t border-slate-200" :class="{ 'opacity-50 pointer-events-none': !form.ocr_enabled }">
+              <div class="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  class="ms-test-btn"
+                  :disabled="testing.ocr || !form.ocr_enabled"
+                  @click="runTest('ocr')"
+                >
+                  <PlugZap :size="15" />
+                  {{ testing.ocr ? t('admin.modelSettings.testingBtn') : t('admin.modelSettings.testOcrBtn') }}
+                </button>
+                <span class="text-xs text-slate-500">{{ t('admin.modelSettings.testOcrHint') }}</span>
+              </div>
+
+              <div
+                v-if="testResults.ocr"
+                class="ms-test-result"
+                :class="testResults.ocr.ok ? 'is-ok' : 'is-fail'"
+              >
+                <component
+                  :is="testResults.ocr.ok ? CheckCircle2 : XCircle"
+                  :size="16"
+                  class="ms-test-icon"
+                />
+                <div class="min-w-0">
+                  <p class="ms-test-title">
+                    {{
+                      testResults.ocr.ok
+                        ? t('admin.modelSettings.testOk', { ms: testResults.ocr.latency_ms ?? 0 })
+                        : t('admin.modelSettings.testFailed')
+                    }}
+                  </p>
+                  <p class="ms-test-meta">{{ testResults.ocr.model }} · {{ testResults.ocr.base_url }}</p>
+                  <p v-if="testResults.ocr.ok && testResults.ocr.reply" class="ms-test-meta">
+                    {{ t('admin.modelSettings.testReply') }}: {{ testResults.ocr.reply }}
+                  </p>
+                  <p v-if="!testResults.ocr.ok" class="ms-test-meta">
+                    [{{ testResults.ocr.error_kind }}] {{ testResults.ocr.detail }}
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <p class="text-xs text-slate-500 mt-3">{{ t('admin.modelSettings.ocrComplianceNote') }}</p>
           </div>
 
@@ -539,7 +743,7 @@ onMounted(() => {
             <div class="text-sm text-slate-500 space-y-1 mb-4">
               <p>{{ t('admin.modelSettings.effectiveNote') }}</p>
               <p>{{ t('admin.modelSettings.envFallbackNote') }}</p>
-              <p>{{ t('admin.modelSettings.deepseekNote') }}</p>
+              <p>{{ t('admin.modelSettings.providerCapabilityNote') }}</p>
             </div>
             <div class="flex flex-wrap items-center gap-3">
               <button
@@ -733,6 +937,76 @@ onMounted(() => {
   color: #b45309;
   background: #fef3c7;
   border-color: #fde68a;
+}
+
+/* Warning hint for endpoint templates that still need a deployer value. */
+.ms-warn {
+  color: var(--admin-warning, #b45309);
+}
+
+.ms-test-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--admin-hairline-strong, #cbd5e1);
+  background: var(--admin-surface, #fff);
+  color: var(--admin-ink, #0f172a);
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: background 0.15s ease;
+}
+
+.ms-test-btn:hover:not(:disabled) {
+  background: var(--admin-canvas-soft, #f8fafc);
+}
+
+.ms-test-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ms-test-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 0.65rem;
+  border: 1px solid transparent;
+  font-size: 0.8rem;
+}
+
+.ms-test-result.is-ok {
+  color: var(--admin-success, #16a34a);
+  background: var(--admin-status-success-bg, #dcfce7);
+  border-color: var(--admin-success, #16a34a);
+}
+
+.ms-test-result.is-fail {
+  color: var(--admin-error, #dc2626);
+  background: var(--admin-status-error-bg, #fee2e2);
+  border-color: var(--admin-error, #dc2626);
+}
+
+.ms-test-icon {
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.ms-test-title {
+  font-weight: 600;
+}
+
+/* Endpoint / model ids and upstream error bodies: monospace, wrap anywhere so
+   a long URL cannot push the card into horizontal scroll. */
+.ms-test-meta {
+  margin-top: 0.15rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  opacity: 0.9;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 768px) {

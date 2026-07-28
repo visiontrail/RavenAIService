@@ -57,6 +57,40 @@
         </span>
       </div>
 
+      <section
+        v-if="!running && (completionSummary || visualAnalysis)"
+        class="agent-trace__completion"
+        :aria-label="t('agentTrace.runSummary')"
+      >
+        <div class="agent-trace__completion-head">
+          <span class="agent-trace__completion-mark" aria-hidden="true"><Check /></span>
+          <div>
+            <div class="agent-trace__completion-eyebrow">{{ t('agentTrace.runSummary') }}</div>
+            <div class="agent-trace__completion-title">
+              {{ completionSummary?.title || t('agentTrace.completed') }}
+            </div>
+          </div>
+        </div>
+
+        <dl v-if="completionSummary?.fields.length" class="agent-trace__completion-grid">
+          <div
+            v-for="field in completionSummary.fields"
+            :key="`${field.label}:${field.value}`"
+            class="agent-trace__completion-field"
+          >
+            <dt>{{ field.label }}</dt>
+            <dd>{{ field.value }}</dd>
+          </div>
+        </dl>
+
+        <div v-if="visualAnalysis" class="agent-trace__visual">
+          <div class="agent-trace__visual-label">
+            {{ t('agentTrace.visualAnalysis', { count: visualImageCount || 1 }) }}
+          </div>
+          <div class="agent-trace__visual-content">{{ visualAnalysis }}</div>
+        </div>
+      </section>
+
       <div v-if="running && props.onCancel" class="agent-trace__actions">
         <button
           type="button"
@@ -76,6 +110,7 @@ import { computed, ref, toRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { AlertTriangle, Ban, Check, ChevronDown } from 'lucide-vue-next'
 import type { AgentTraceEvent, TraceSummary } from '@/types/agentTrace'
+import type { AgentCompletionSummary } from '@/utils/agentResultSummary'
 import { useAgentTraceStream } from '@/composables/useAgentTraceStream'
 import { useToolDisplayName, type ToolNameMap } from '@/composables/useToolDisplayName'
 import TraceStepCard from './TraceStepCard.vue'
@@ -87,6 +122,9 @@ const props = defineProps<{
   running?: boolean
   toolNameMap?: ToolNameMap
   onCancel?: () => void | Promise<void>
+  completionSummary?: AgentCompletionSummary | null
+  visualAnalysis?: string | null
+  visualImageCount?: number
 }>()
 
 const eventsRef = toRef(props, 'events')
@@ -100,7 +138,14 @@ const running = computed(() => {
   return streamRunning.value
 })
 
-const hasContent = computed(() => cards.value.length > 0 || running.value || !!terminal.value)
+const hasContent = computed(
+  () =>
+    cards.value.length > 0 ||
+    running.value ||
+    !!terminal.value ||
+    !!props.completionSummary ||
+    !!props.visualAnalysis,
+)
 
 const summaryExpanded = ref(false)
 
@@ -274,6 +319,137 @@ const summaryLine = computed(() => {
 
 .agent-trace__placeholder-label {
   font-weight: 500;
+}
+
+.agent-trace__completion {
+  position: relative;
+  overflow: hidden;
+  margin-top: 2px;
+  padding: 14px;
+  border: 1px solid var(--el-border-color-lighter, #e5e7eb);
+  border-radius: 10px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--el-color-success, #16a34a) 7%, transparent), transparent 42%),
+    var(--el-bg-color, #fff);
+}
+
+.agent-trace__completion::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 72px;
+  height: 72px;
+  border-radius: 0 0 0 72px;
+  background: color-mix(in srgb, var(--el-color-success, #16a34a) 5%, transparent);
+  pointer-events: none;
+}
+
+.agent-trace__completion-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.agent-trace__completion-mark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  border-radius: 8px;
+  color: var(--el-color-success-dark-2, #15803d);
+  background: color-mix(in srgb, var(--el-color-success, #16a34a) 13%, transparent);
+}
+
+.agent-trace__completion-mark svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2.2;
+}
+
+.agent-trace__completion-eyebrow {
+  margin-bottom: 2px;
+  color: var(--el-text-color-secondary, #6b7280);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.agent-trace__completion-title {
+  color: var(--el-text-color-primary, #111827);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.agent-trace__completion-grid {
+  display: grid;
+  grid-template-columns: minmax(82px, .32fr) minmax(0, 1fr);
+  gap: 0;
+  margin: 12px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--el-border-color-lighter, #e5e7eb);
+}
+
+.agent-trace__completion-field {
+  display: contents;
+}
+
+.agent-trace__completion-field dt,
+.agent-trace__completion-field dd {
+  margin: 0;
+  padding: 4px 0;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.agent-trace__completion-field dt {
+  padding-right: 12px;
+  color: var(--el-text-color-secondary, #6b7280);
+  font-size: 11.5px;
+}
+
+.agent-trace__completion-field dd {
+  color: var(--el-text-color-regular, #374151);
+  font-size: 12px;
+}
+
+.agent-trace__visual {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--el-border-color-lighter, #e5e7eb);
+}
+
+.agent-trace__visual-label {
+  margin-bottom: 6px;
+  color: var(--el-text-color-secondary, #6b7280);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.agent-trace__visual-content {
+  max-height: 220px;
+  overflow: auto;
+  padding: 9px 10px;
+  border-radius: 7px;
+  background: var(--el-fill-color-light, #f5f7fa);
+  color: var(--el-text-color-regular, #374151);
+  font-family: var(--rw-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 560px) {
+  .agent-trace__completion-grid {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
 }
 
 .agent-trace__placeholder-dots {

@@ -8,6 +8,7 @@ Read-only endpoints that expose the aggregation queries in
 - ``GET /admin/metrics/users/{user_id}``    — single-user detail
 - ``GET /admin/metrics/events``             — raw (sanitized) event audit feed
 - ``GET /admin/metrics/events/{id}/conversation`` — admin-only linked chat detail
+- ``GET /admin/metrics/events/{id}/chat-images/{image_id}`` — an attached original
 - ``GET /api/v1/users/me/metrics``          — the caller's own metrics only
 
 Admin endpoints reuse the existing admin bearer auth; the self endpoint reuses
@@ -404,6 +405,10 @@ async def get_event_conversation(
         db,
         session_id=chat_session.id,
         user_id=chat_session.user_id,
+        # Admins audit turns that were driven by pasted screenshots (OCR feeds
+        # the agent text, not the picture), so the originals have to be part of
+        # what they see. Bytes come from ``get_event_chat_image`` below.
+        include_images=True,
     )
     user = (await _fetch_users(db, [chat_session.user_id])).get(chat_session.user_id)
     detail = AdminConversationDetail(
@@ -420,6 +425,54 @@ async def get_event_conversation(
         messages=messages,
     )
     return AdminConversationDetailResponse(data=detail)
+
+
+@admin_router.get(
+    "/events/{event_id}/chat-images/{image_id}",
+    summary="读取某指标事件所属会话中的一张原始图片（admin 只读）",
+)
+async def get_event_chat_image(
+    event_id: str,
+    image_id: str,
+    _admin: str = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Serve one attached image from the conversation linked to a metrics event.
+
+    The admin counterpart of the owner-scoped ``/ai-chat/chat-images`` endpoint,
+    and it is scoped the same way ``get_event_conversation`` is: the session is
+    reached *through* the event, never named directly, so this cannot be used as
+    an arbitrary session-ID lookup. ``chat_image_store.resolve_path`` rejects any
+    ``image_id`` that is not a bare alphanumeric stem, so a crafted id cannot
+    traverse outside the store.
+    """
+    from fastapi.responses import FileResponse
+
+    from app.services import chat_image_store
+
+    session_id = (
+        await db.execute(
+            select(MetricEvent.session_id).where(MetricEvent.id == event_id)
+        )
+    ).scalar_one_or_none()
+    if not session_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="指标事件不存在或未关联对话会话",
+        )
+
+    path = chat_image_store.resolve_path(session_id, image_id)
+    if path is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="图片不存在或已被清理",
+        )
+
+    return FileResponse(
+        str(path),
+        # Private user content: never let a shared cache hold on to it.
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 # ==================== Self endpoint ====================

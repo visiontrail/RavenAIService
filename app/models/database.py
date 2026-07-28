@@ -258,6 +258,53 @@ class DatabaseManager:
                     )
             logger.info("已完成 project_repo.project_card 约束同步")
 
+    @staticmethod
+    def _prepare_column_drop(conn, inspector, table_name: str, column: str) -> bool:
+        """删除引用废弃列的旧索引，返回该列现在能否安全 DROP。
+
+        旧库里的索引来自历史 alembic 迁移（如 ``idx_log_records_log_type``），
+        模型里已经没有对应定义，因此不会被重建。SQLite 不会随列一起清理这些
+        索引：``DROP COLUMN`` 会以 "error in index ... after drop column" 失败，
+        而整个 schema 同步跑在一个事务里，一次失败就会让服务起不来——旧版本
+        升级到新版本时正是这种情况。PostgreSQL 虽然会自动级联删除，显式先删
+        同样安全。
+
+        UNIQUE 约束产生的隐式索引删不掉，遇到时放弃删列并告警：留一个无用的
+        旧列，好过让升级中断（ALTER 语句一旦报错，PostgreSQL 会作废整个事务）。
+        """
+        referencing = [
+            index
+            for index in inspector.get_indexes(table_name)
+            if column in (index.get("column_names") or [])
+        ]
+        # 先判定阻塞项再执行删除，避免删掉一半索引后才放弃删列。
+        blockers = [
+            constraint.get("name") or "<unnamed>"
+            for constraint in inspector.get_unique_constraints(table_name)
+            if column in (constraint.get("column_names") or [])
+        ]
+        blockers += [
+            index.get("name") or "<unnamed>"
+            for index in referencing
+            if index.get("unique") or not index.get("name")
+        ]
+        if blockers:
+            logger.warning(
+                "表 %s 的废弃列 %s 仍被唯一约束/索引 %s 引用，跳过删除，请人工迁移",
+                table_name,
+                column,
+                ", ".join(blockers),
+            )
+            return False
+
+        for index in referencing:
+            index_name = index["name"]
+            conn.execute(text(f'DROP INDEX IF EXISTS "{index_name}"'))
+            logger.info(
+                "已删除引用废弃列 %s.%s 的旧索引: %s", table_name, column, index_name
+            )
+        return True
+
     @classmethod
     def _sync_columns_from_models(cls, conn) -> None:
         """自动将已存在表的列结构同步到 ORM 模型定义。
@@ -314,8 +361,11 @@ class DatabaseManager:
             for column in columns:
                 if column not in present:
                     continue
+                if not cls._prepare_column_drop(conn, inspector, table_name, column):
+                    continue
                 conn.execute(text(f"ALTER TABLE {table_name} DROP COLUMN {column}"))
                 logger.info("已从表 %s 删除废弃列: %s", table_name, column)
+                inspector.clear_cache()
 
     async def drop_tables(self):
         """删除所有表"""

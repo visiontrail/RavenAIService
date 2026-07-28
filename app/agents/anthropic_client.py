@@ -72,14 +72,34 @@ class ProviderProfile:
     # ``run_complete.final_text``.
     supports_partial_streaming: bool = False
     notes: str = ""
+    # Human-readable vendor name for the Admin「模型设置」provider dropdown.
+    label: str = ""
+    # Known model ids for this upstream, offered as presets in the Admin form.
+    # Never a whitelist — ``anthropic_model`` stays free-text so a newly shipped
+    # model can be used before this table catches up.
+    models: tuple = ()
 
 
+# 除 anthropic 官方端点外，其余均为 Anthropic-compatible 第三方网关：它们实现
+# Messages API（/v1/messages + SSE），因此 Claude Agent SDK 的工具循环、进程内
+# MCP server 与增量流式均可用；但扩展能力（thinking budget、文档输入、并行工具
+# 调用开关）通常不生效，故一律置 False，由 build_options 静默降级。
+#
+# supports_image_input 以该 provider 的**默认旗舰模型**为准（决定是否把原图物化
+# 进 Agent 工作区，见 chat_image_store）。若在同一 provider 下改选纯文本模型
+# （如 qwen3-coder-*），请依赖上方 OCR 链路而不是主力模型读图。
 PROVIDER_PROFILES: Dict[str, ProviderProfile] = {
     "anthropic": ProviderProfile(
         name="anthropic",
+        label="Anthropic 官方",
         default_base_url="https://api.anthropic.com",
         default_model="claude-sonnet-4-6",
         default_small_fast_model="claude-haiku-4-5-20251001",
+        models=(
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+        ),
         supports_image_input=True,
         supports_document_input=True,
         supports_mcp_server_tools=True,
@@ -90,9 +110,11 @@ PROVIDER_PROFILES: Dict[str, ProviderProfile] = {
     ),
     "deepseek": ProviderProfile(
         name="deepseek",
+        label="DeepSeek 深度求索",
         default_base_url="https://api.deepseek.com/anthropic",
         default_model="deepseek-v4-pro",
         default_small_fast_model="deepseek-v4-flash",
+        models=("deepseek-v4-pro", "deepseek-v4-flash"),
         supports_image_input=False,
         supports_document_input=False,
         # SDK 进程内 MCP server（create_sdk_mcp_server）通过标准 tool_use 协议
@@ -106,8 +128,153 @@ PROVIDER_PROFILES: Dict[str, ProviderProfile] = {
         notes="DeepSeek Anthropic 兼容端点；不支持图像/文档输入与 thinking budget；"
         "支持标准 tool use（含 SDK 进程内 MCP server）",
     ),
+    "aliyun": ProviderProfile(
+        name="aliyun",
+        label="阿里云百炼 / 通义千问",
+        # {WorkspaceId} 必须由管理员替换为自己的百炼工作空间 ID，否则请求打到
+        # 不存在的域名。model_settings_service.save 会拒绝残留占位符的地址。
+        default_base_url="https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+        default_model="qwen3.7-max",
+        default_small_fast_model="qwen3.7-flash",
+        models=(
+            "qwen3.7-max",
+            "qwen3.7-plus",
+            "qwen3.7-flash",
+            "qwen3-coder-next",
+            "qwen3-coder-plus",
+            "qwen3-coder-flash",
+            "qwen3-vl-plus",
+            "qwen3-vl-flash",
+            "qwen3.6-27b",
+        ),
+        supports_image_input=True,
+        supports_document_input=False,
+        supports_mcp_server_tools=True,
+        thinking_budget_tokens_effective=False,
+        disable_parallel_tool_use_effective=False,
+        supports_partial_streaming=True,
+        notes="阿里云百炼 Anthropic 兼容端点（北京地域，按量付费）；Base URL 中的 "
+        "{WorkspaceId} 需替换为百炼工作空间 ID；旗舰 qwen3.7-max 支持多模态输入，"
+        "qwen3-coder-* 为纯文本编程模型",
+    ),
+    "zhipu": ProviderProfile(
+        name="zhipu",
+        label="智谱 AI / GLM",
+        default_base_url="https://open.bigmodel.cn/api/anthropic",
+        default_model="glm-5.2",
+        default_small_fast_model="glm-5.2",
+        models=("glm-5.2",),
+        supports_image_input=False,
+        supports_document_input=False,
+        supports_mcp_server_tools=True,
+        thinking_budget_tokens_effective=False,
+        disable_parallel_tool_use_effective=False,
+        supports_partial_streaming=True,
+        notes="智谱 GLM Anthropic 兼容端点；当前旗舰 glm-5.2",
+    ),
+    "moonshot": ProviderProfile(
+        name="moonshot",
+        label="月之暗面 / Kimi",
+        default_base_url="https://api.moonshot.cn/anthropic",
+        default_model="kimi-k3",
+        default_small_fast_model="kimi-k2.7-code-highspeed",
+        models=(
+            "kimi-k3",
+            "kimi-k2.7-code",
+            "kimi-k2.7-code-highspeed",
+            "kimi-k2.6",
+        ),
+        supports_image_input=False,
+        supports_document_input=False,
+        supports_mcp_server_tools=True,
+        thinking_budget_tokens_effective=False,
+        disable_parallel_tool_use_effective=False,
+        supports_partial_streaming=True,
+        notes="Kimi Anthropic 兼容端点；K3 为旗舰，K2.7 Code 面向编程，"
+        "K2.6 支持可选思考模式",
+    ),
+    "minimax": ProviderProfile(
+        name="minimax",
+        label="MiniMax 稀宇科技",
+        default_base_url="https://api.minimaxi.com/anthropic",
+        default_model="MiniMax-M3",
+        default_small_fast_model="MiniMax-M2.5",
+        models=("MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"),
+        supports_image_input=False,
+        supports_document_input=False,
+        supports_mcp_server_tools=True,
+        thinking_budget_tokens_effective=False,
+        disable_parallel_tool_use_effective=False,
+        supports_partial_streaming=True,
+        notes="MiniMax Anthropic 兼容端点；M3 为最新旗舰",
+    ),
+    "stepfun": ProviderProfile(
+        name="stepfun",
+        label="阶跃星辰 StepFun",
+        default_base_url="https://api.stepfun.com",
+        default_model="step-3.7-flash",
+        default_small_fast_model="step-3.5-flash",
+        models=("step-3.7-flash", "step-3.5-flash-2603", "step-3.5-flash"),
+        supports_image_input=True,
+        supports_document_input=False,
+        supports_mcp_server_tools=True,
+        thinking_budget_tokens_effective=False,
+        disable_parallel_tool_use_effective=False,
+        supports_partial_streaming=True,
+        notes="阶跃星辰 Anthropic 兼容端点（按量付费）；3.7 Flash 为多模态旗舰，"
+        "3.5 Flash 系列偏 Agent / Coding / 工具调用",
+    ),
+    "mimo": ProviderProfile(
+        name="mimo",
+        label="小米 MiMo",
+        default_base_url="https://api.xiaomimimo.com/anthropic",
+        default_model="mimo-v2.5-pro",
+        default_small_fast_model="mimo-v2.5",
+        models=("mimo-v2.5-pro", "mimo-v2.5"),
+        supports_image_input=True,
+        supports_document_input=False,
+        supports_mcp_server_tools=True,
+        thinking_budget_tokens_effective=False,
+        disable_parallel_tool_use_effective=False,
+        supports_partial_streaming=True,
+        notes="小米 MiMo Anthropic 兼容端点；V2.5 Pro 为旗舰 Agent 模型，"
+        "V2.5 原生支持文本 / 图片 / 视频 / 音频理解",
+    ),
+    "hunyuan": ProviderProfile(
+        name="hunyuan",
+        label="腾讯混元",
+        default_base_url="https://api.hunyuan.cloud.tencent.com/anthropic",
+        default_model="hunyuan-2.0-thinking-20251109",
+        default_small_fast_model="hunyuan-2.0-instruct-20251111",
+        models=("hunyuan-2.0-thinking-20251109", "hunyuan-2.0-instruct-20251111"),
+        supports_image_input=False,
+        supports_document_input=False,
+        supports_mcp_server_tools=True,
+        thinking_budget_tokens_effective=False,
+        disable_parallel_tool_use_effective=False,
+        supports_partial_streaming=True,
+        notes="腾讯混元直连平台 Anthropic 兼容端点；仅保留两款兼容模型，"
+        "平台正迁移至 TokenHub，不再新增模型",
+    ),
+    "yinhe": ProviderProfile(
+        name="yinhe",
+        label="银河内部模型（OneAPI）",
+        default_base_url="http://oneapi.yhroot.com",
+        default_model="yinhe-thinking",
+        default_small_fast_model="yinhe-chat",
+        models=("yinhe-thinking", "yinhe-chat"),
+        supports_image_input=False,
+        supports_document_input=False,
+        supports_mcp_server_tools=True,
+        thinking_budget_tokens_effective=False,
+        disable_parallel_tool_use_effective=False,
+        supports_partial_streaming=True,
+        notes="公司内部 OneAPI 网关（内网 HTTP，无需公网出口）；"
+        "yinhe-thinking 带思考，yinhe-chat 为快速对话模型",
+    ),
     "custom": ProviderProfile(
         name="custom",
+        label="自定义 Anthropic 兼容端点",
         # custom 的地址、模型必须由 Settings 显式提供；这里的空值不会成为
         # assert_anthropic_configured 校验后的 effective 值。
         default_base_url="",

@@ -256,6 +256,11 @@ class LogAnalysisChatService:
             if not question:
                 question = "请分析这个日志包，给出概览、可疑异常和下一步建议。"
 
+            # Minted before OCR so the OCR usage event carries the same run_id as
+            # the agent run it preprocesses for — that pairing is what lets the
+            # admin audit feed show them as one invocation.
+            run_id = str(uuid.uuid4())
+
             # OCR-merge any attached images into the question before the agent
             # runs; degrade to text-only when OCR is unconfigured/failed. The
             # merged text is what gets bound to the agent and persisted.
@@ -277,6 +282,7 @@ class LogAnalysisChatService:
                 images,
                 user_id=str(getattr(user, "id", None)) if getattr(user, "id", None) else None,
                 session_id=effective_session_id,
+                run_id=run_id,
                 locale=locale,
                 project_repo_id=str(_ocr_project_repo_id)
                 if _ocr_project_repo_id is not None
@@ -289,6 +295,19 @@ class LogAnalysisChatService:
                         "status": ocr_meta.status,
                         "image_count": ocr_meta.image_count,
                         "error_kind": ocr_meta.error_kind,
+                    }
+                )
+            elif (
+                ocr_meta.image_count > 0
+                and ocr_meta.status == "succeeded"
+                and ocr_meta.text
+            ):
+                yield self._sse_event(
+                    {
+                        "event": "ocr_result",
+                        "status": ocr_meta.status,
+                        "image_count": ocr_meta.image_count,
+                        "text": ocr_meta.text,
                     }
                 )
 
@@ -316,7 +335,6 @@ class LogAnalysisChatService:
                 }
             )
 
-            run_id = str(uuid.uuid4())
             effective_owner_scope = owner_scope or (
                 f"user:{user.id}" if getattr(user, "id", None) else "anon:legacy"
             )

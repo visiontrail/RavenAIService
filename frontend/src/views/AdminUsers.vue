@@ -26,6 +26,11 @@ const userDialogMode = ref<'create' | 'edit'>('create')
 const savingUser = ref(false)
 const editingUserId = ref<string | null>(null)
 const deletingUserId = ref('')
+const disableDialogVisible = ref(false)
+const disableDialogMode = ref<'disable' | 'editMessage'>('disable')
+const disableDialogUser = ref<UserProfile | null>(null)
+const disableDialogMessage = ref('')
+const savingDisable = ref(false)
 const loadingRegistrationSettings = ref(false)
 const savingRegistrationSettings = ref(false)
 
@@ -322,16 +327,74 @@ const submitUserDialog = async () => {
   }
 }
 
-const toggleActive = async (user: UserProfile) => {
-  const nextStatus = !user.is_active
+// Disabling is the only channel left to reach a user whose contact details are
+// incomplete: the note is replayed verbatim when their next login is rejected.
+const openDisableDialog = (user: UserProfile, mode: 'disable' | 'editMessage') => {
+  disableDialogMode.value = mode
+  disableDialogUser.value = user
+  disableDialogMessage.value =
+    user.disabled_message || (mode === 'disable' ? t('admin.users.disableMessageDefault') : '')
+  disableDialogVisible.value = true
+}
+
+const closeDisableDialog = () => {
+  if (savingDisable.value) return
+  disableDialogVisible.value = false
+  disableDialogUser.value = null
+  disableDialogMessage.value = ''
+}
+
+const submitDisableDialog = async () => {
+  const user = disableDialogUser.value
+  if (!user) return
+  savingDisable.value = true
   try {
-    const resp = await adminApi.updateUser(user.id, { is_active: nextStatus })
+    const payload: { is_active?: boolean; disabled_message: string | null } = {
+      disabled_message: disableDialogMessage.value.trim() || null,
+    }
+    if (disableDialogMode.value === 'disable') {
+      payload.is_active = false
+    }
+    const resp = await adminApi.updateUser(user.id, payload)
+    if (!resp?.success || !resp.data) {
+      throw new Error(resp?.message || t('admin.users.updateFailFallback'))
+    }
+    users.value = users.value.map((u) => (u.id === user.id ? (resp.data as UserProfile) : u))
+    appStore.showNotification({
+      title:
+        disableDialogMode.value === 'disable'
+          ? t('admin.users.disabledTitle')
+          : t('admin.users.disableMessageSaved'),
+      message: resp.data.username,
+      type: 'success',
+    })
+    disableDialogVisible.value = false
+    disableDialogUser.value = null
+    disableDialogMessage.value = ''
+  } catch (err: any) {
+    appStore.showNotification({
+      title: t('admin.users.statusUpdateFail'),
+      message: parseErrorMessage(err),
+      type: 'error',
+    })
+  } finally {
+    savingDisable.value = false
+  }
+}
+
+const toggleActive = async (user: UserProfile) => {
+  if (user.is_active) {
+    openDisableDialog(user, 'disable')
+    return
+  }
+  try {
+    const resp = await adminApi.updateUser(user.id, { is_active: true })
     if (!resp?.success || !resp.data) {
       throw new Error(resp?.message || t('admin.users.updateFailFallback'))
     }
     users.value = users.value.map((u) => (u.id === user.id ? resp.data as UserProfile : u))
     appStore.showNotification({
-      title: nextStatus ? t('admin.users.enabledTitle') : t('admin.users.disabledTitle'),
+      title: t('admin.users.enabledTitle'),
       message: resp.data.username,
       type: 'success',
     })
@@ -651,6 +714,13 @@ onMounted(() => {
                     >
                       {{ user.is_active ? t('admin.users.statusEnabled') : t('admin.users.statusDisabled') }}
                     </span>
+                    <p
+                      v-if="!user.is_active && user.disabled_message"
+                      class="disabled-message-preview"
+                      :title="user.disabled_message"
+                    >
+                      {{ user.disabled_message }}
+                    </p>
                   </td>
                   <td class="py-2 pr-4 text-slate-500">{{ formatTimestamp(getLastLoginTimestamp(user)) }}</td>
                   <td class="py-2 pr-4 space-x-2">
@@ -659,6 +729,13 @@ onMounted(() => {
                       @click="toggleActive(user)"
                     >
                       {{ user.is_active ? t('admin.users.toggleDisableBtn') : t('admin.users.toggleEnableBtn') }}
+                    </button>
+                    <button
+                      v-if="!user.is_active"
+                      class="text-xs px-3 py-1 rounded-lg border border-slate-200 hover:bg-slate-50"
+                      @click="openDisableDialog(user, 'editMessage')"
+                    >
+                      {{ t('admin.users.disableMessageBtn') }}
                     </button>
                     <button
                       class="text-xs px-3 py-1 rounded-lg border border-cyan-200 text-cyan-700 hover:bg-cyan-50"
@@ -770,6 +847,61 @@ onMounted(() => {
                 @click="submitUserDialog"
               >
                 {{ savingUser ? t('admin.users.submittingBtn') : (userDialogMode === 'create' ? t('admin.users.createUserBtn') : t('admin.users.saveChangesBtn')) }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div
+          v-if="disableDialogVisible"
+          class="admin-modal-backdrop"
+          @click="closeDisableDialog"
+        >
+          <div class="admin-modal-card admin-modal-card-narrow" @click.stop>
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-base font-semibold text-slate-900">
+                {{ disableDialogMode === 'disable' ? t('admin.users.disableDialogTitle') : t('admin.users.disableMessageDialogTitle') }}
+              </h3>
+              <button
+                class="text-sm text-slate-500 hover:text-slate-800"
+                :disabled="savingDisable"
+                @click="closeDisableDialog"
+              >
+                {{ t('admin.users.closeBtn') }}
+              </button>
+            </div>
+
+            <p class="text-sm text-slate-600">
+              {{ t('admin.users.disableDialogDesc', { username: disableDialogUser?.username || '' }) }}
+            </p>
+
+            <label class="block mt-3 text-sm text-slate-700">
+              {{ t('admin.users.disableMessageLabel') }}
+              <textarea
+                v-model="disableDialogMessage"
+                rows="5"
+                maxlength="1000"
+                class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
+                :placeholder="t('admin.users.disableMessagePlaceholder')"
+              ></textarea>
+            </label>
+            <p class="text-xs text-slate-500 mt-1">{{ t('admin.users.disableMessageHint') }}</p>
+
+            <div class="mt-4 flex justify-end gap-2">
+              <button
+                class="px-4 py-2 rounded-lg border border-slate-200 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                :disabled="savingDisable"
+                @click="closeDisableDialog"
+              >
+                {{ t('admin.users.cancelBtn') }}
+              </button>
+              <button
+                class="px-4 py-2 text-white rounded-lg text-sm font-semibold transition disabled:opacity-60"
+                :class="disableDialogMode === 'disable' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-cyan-600 hover:bg-cyan-700'"
+                :disabled="savingDisable"
+                @click="submitDisableDialog"
+              >
+                {{ savingDisable ? t('admin.users.submittingBtn') : (disableDialogMode === 'disable' ? t('admin.users.disableConfirmBtn') : t('admin.users.saveChangesBtn')) }}
               </button>
             </div>
           </div>
@@ -922,6 +1054,18 @@ onMounted(() => {
   padding: 1rem;
 }
 
+.disabled-message-preview {
+  margin-top: 0.35rem;
+  max-width: 18rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: #64748b;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .admin-modal-card {
   width: min(760px, 100%);
   border-radius: 1rem;
@@ -929,6 +1073,10 @@ onMounted(() => {
   background: #ffffff;
   box-shadow: 0 20px 45px rgba(15, 23, 42, 0.25);
   padding: 1rem;
+}
+
+.admin-modal-card-narrow {
+  width: min(520px, 100%);
 }
 
 @media (max-width: 1024px) {

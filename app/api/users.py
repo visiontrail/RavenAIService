@@ -37,6 +37,7 @@ from app.services import chat_image_store, registration_email_service
 from app.services.ai_chat_service import ai_chat_service
 from app.services.chat_history_service import chat_history_service
 from app.services.conversation_share_service import conversation_share_service
+from app.services import user_service as user_service_module
 from app.services.user_service import user_service
 
 router = APIRouter(prefix="/api/v1/users", tags=["用户与会话"])
@@ -174,6 +175,26 @@ class UserRegisterRequest(BaseModel):
         return normalized
 
 
+def _ensure_email_allowed(email: str, locale: str) -> None:
+    """Apply the admin's registration email policy to a submitted address.
+
+    Shared by self-service registration and self-service profile updates so a
+    restricted address cannot be introduced through the back door of an email
+    change.
+    """
+    if not registration_email_service.has_basic_email_format(email):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=t("auth.email_invalid", locale),
+        )
+    policy_error = registration_email_service.get_policy_validation_error(email)
+    if policy_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=policy_error,
+        )
+
+
 @router.post("/auth/login", response_model=UserAuthResponse)
 async def user_login(
     payload: UserLoginRequest,
@@ -186,7 +207,12 @@ async def user_login(
         await user_service.ensure_admin_users(db, admin_auth_manager.list_config_users())
     except Exception:
         pass
-    user = await user_service.authenticate(db, username=payload.username, password=payload.password)
+    user = await user_service.authenticate(
+        db,
+        username=payload.username,
+        password=payload.password,
+        locale=locale,
+    )
     token, expires_at = user_auth_manager.issue_token(user.id, user.username)
     return UserAuthResponse(
         message=t("auth.login_success", locale),
@@ -204,17 +230,7 @@ async def user_register(
     locale: str = Depends(get_request_locale),
     db: AsyncSession = Depends(get_db),
 ) -> UserAuthResponse:
-    if not registration_email_service.has_basic_email_format(payload.email):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=t("auth.email_invalid", locale),
-        )
-    policy_error = registration_email_service.get_policy_validation_error(payload.email)
-    if policy_error:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=policy_error,
-        )
+    _ensure_email_allowed(payload.email, locale)
     user = await user_service.create_user(
         db,
         username=payload.username,
@@ -278,6 +294,11 @@ async def update_profile(
     service layer rather than rejected, so the UI never gets stuck.
     """
     fields = payload.model_fields_set
+    # A profile edit is the other way an address enters the system, so it has
+    # to clear the same bar as registration. Clearing the address (null) stays
+    # allowed — accounts created before the policy may have no email at all.
+    if "email" in fields and payload.email:
+        _ensure_email_allowed(payload.email, locale)
     user = await user_service.update_profile(
         db,
         current_user.id,
@@ -324,6 +345,10 @@ class UpdateUserRequest(BaseModel):
     is_active: Optional[bool] = None
     password: Optional[str] = None
     role: Optional[str] = None
+    disabled_message: Optional[str] = Field(
+        None,
+        max_length=user_service_module.MAX_DISABLED_MESSAGE_LENGTH,
+    )
 
 
 class RegistrationEmailSettingsData(BaseModel):
@@ -442,6 +467,8 @@ async def update_user(
         email=payload.email,
         is_active=payload.is_active,
         role=payload.role,
+        disabled_message=payload.disabled_message,
+        update_disabled_message="disabled_message" in payload.model_fields_set,
     )
     if user is None:
         raise HTTPException(

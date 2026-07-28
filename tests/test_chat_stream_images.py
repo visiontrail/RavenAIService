@@ -140,6 +140,12 @@ async def test_log_analysis_merges_images_into_agent_question(monkeypatch, tmp_p
     assert "CODE 42" in captured["question"]
     # Success path emits no degradation frame.
     assert not any(e.get("event") == "ocr_status" for e in events)
+    assert any(
+        e.get("event") == "ocr_result"
+        and e.get("image_count") == 1
+        and "CODE 42" in e.get("text", "")
+        for e in events
+    )
 
 
 async def test_log_analysis_without_images_is_unchanged(monkeypatch, tmp_path):
@@ -264,3 +270,4 @@ async def test_project_expert_merges_images_into_agent_question(monkeypatch, tmp
     assert "<user_image_ocr" in captured["question"]
     assert "CODE 42" in captured["question"]
     assert not any(e.get("event") == "ocr_status" for e in events)
+    assert any(e.get("event") == "ocr_result" for e in events)

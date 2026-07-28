@@ -48,17 +48,47 @@ export interface ModelSettingFieldEntry {
 
 export interface ModelProviderProfile {
   name: string
+  /** Human-readable vendor name, e.g. '阿里云百炼 / 通义千问'. */
+  label: string
   default_base_url: string
   default_model: string
   default_small_fast_model: string | null
+  /** Known model ids offered as presets; the model field stays free-text. */
+  models: string[]
   supports_image_input: boolean
   supports_mcp_server_tools: boolean
+  notes: string
+  /** default_base_url is a template (e.g. {WorkspaceId}) needing a real value. */
+  base_url_needs_input: boolean
 }
 
 export interface ModelSettingsData {
   fields: Record<string, ModelSettingFieldEntry>
   provider_options: string[]
   provider_profiles: ModelProviderProfile[]
+}
+
+export interface TestModelSettingsPayload {
+  target: 'anthropic' | 'ocr'
+  /** Omitted fields fall back to the saved effective config (e.g. the API key). */
+  provider?: string
+  base_url?: string
+  model?: string
+  api_key?: string
+}
+
+export interface ModelSettingsTestResult {
+  ok: boolean
+  target: 'anthropic' | 'ocr'
+  provider?: string
+  base_url?: string
+  model?: string
+  latency_ms?: number
+  status_code?: number
+  reply?: string
+  usage?: Record<string, unknown> | null
+  error_kind?: string
+  detail?: string
 }
 
 export interface UpdateModelSettingsPayload {
@@ -174,6 +204,13 @@ export const adminApi = {
   resetModelSettings: (): Promise<ApiResponse<ModelSettingsData>> =>
     adminClient.delete('/admin/model-settings'),
 
+  testModelSettings: (
+    payload: TestModelSettingsPayload
+  ): Promise<ApiResponse<ModelSettingsTestResult>> =>
+    // The probe waits on an upstream completion; allow more than the 20s
+    // client default so a slow-but-working endpoint still reports success.
+    adminClient.post('/admin/model-settings/test', payload, { timeout: 40000 }),
+
   createUser: (payload: {
     username: string
     password: string
@@ -190,6 +227,7 @@ export const adminApi = {
       is_active?: boolean
       password?: string
       role?: 'user' | 'admin'
+      disabled_message?: string | null
     }
   ): Promise<ApiResponse<UserProfile>> => adminClient.patch(`/api/v1/users/${userId}`, payload),
 
@@ -404,6 +442,19 @@ export const adminApi = {
     eventId: string
   ): Promise<ApiResponse<AdminConversationDetail>> =>
     adminClient.get(`/admin/metrics/events/${encodeURIComponent(eventId)}/conversation`),
+
+  /**
+   * Raw bytes of one image attached to the conversation behind `eventId`.
+   *
+   * The endpoint needs the admin bearer token, so the bytes are fetched here
+   * (the client's request interceptor attaches it) and the caller wraps the Blob
+   * in an object URL rather than pointing `<img src>` straight at the endpoint.
+   */
+  metricsEventChatImage: (eventId: string, imageId: string): Promise<Blob> =>
+    adminClient.get(
+      `/admin/metrics/events/${encodeURIComponent(eventId)}/chat-images/${encodeURIComponent(imageId)}`,
+      { responseType: 'blob' }
+    ) as unknown as Promise<Blob>,
 }
 
 export default adminApi

@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.i18n import normalize as normalize_locale
+from app.i18n.messages import t
 from app.models.user import User
 from app.security.admin_auth import AdminUser
 from app.security.user_auth import hash_password, verify_password
@@ -23,6 +24,7 @@ from app.services.base import BaseService
 
 VALID_ROLES = ("user", "admin")
 DEFAULT_PROFILE_ROLE = "developer"
+MAX_DISABLED_MESSAGE_LENGTH = 1000
 PROFILE_ROLE_ALIASES = {
     "dev": "developer",
     "develop": "developer",
@@ -51,6 +53,16 @@ def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _normalize_disabled_message(message: Optional[str]) -> Optional[str]:
+    """Trim the admin's disable note, storing blanks as null."""
+    if message is None:
+        return None
+    normalized = str(message).strip()
+    if not normalized:
+        return None
+    return normalized[:MAX_DISABLED_MESSAGE_LENGTH]
 
 
 def _normalize_profile_role(role: Optional[str]) -> str:
@@ -145,12 +157,22 @@ class UserService(BaseService):
         *,
         username: str,
         password: str,
+        locale: str = "zh",
     ) -> User:
         user = await self.get_by_username(db, username)
-        if not user or not user.is_active or not verify_password(password, user.password_hash):
+        if not user or not verify_password(password, user.password_hash):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="用户名或密码错误",
+            )
+        if not user.is_active:
+            # Only surface the disabled state (and the admin's note) once the
+            # password checks out, so this never becomes an account-probing
+            # oracle for someone guessing usernames.
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(user.disabled_message or "").strip()
+                or t("auth.account_disabled", locale),
             )
         user.last_login_at = datetime.utcnow()
         await db.flush()
@@ -211,6 +233,8 @@ class UserService(BaseService):
         is_active: Optional[bool] = None,
         role: Optional[str] = None,
         language: Optional[str] = None,
+        disabled_message: Optional[str] = None,
+        update_disabled_message: bool = False,
     ) -> Optional[User]:
         user = await self.get_by_id(db, user_id)
         if not user:
@@ -220,7 +244,17 @@ class UserService(BaseService):
         if email is not None:
             user.email = email
         if is_active is not None:
+            if is_active:
+                # Re-enabling retires the note: it only describes why the
+                # account was locked, and a stale note would resurface on a
+                # later disable.
+                user.disabled_message = None
+                user.disabled_at = None
+            elif user.is_active:
+                user.disabled_at = datetime.utcnow()
             user.is_active = is_active
+        if update_disabled_message and not user.is_active:
+            user.disabled_message = _normalize_disabled_message(disabled_message)
         if role is not None:
             user.role = _normalize_role(role)
         if language is not None:

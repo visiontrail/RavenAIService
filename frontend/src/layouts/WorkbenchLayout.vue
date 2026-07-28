@@ -135,6 +135,9 @@ const loginForm = reactive({
   email: '',
   confirmPassword: '',
 })
+// The admin's note for a disabled account: a toast is too short-lived for
+// instructions the user has to act on, so it stays pinned inside the modal.
+const loginNotice = ref('')
 const registerErrors = reactive<Record<RegistrationInputField | 'form', string>>({
   username: '',
   displayName: '',
@@ -477,6 +480,7 @@ const resetAuthForm = () => {
   loginForm.displayName = ''
   loginForm.email = ''
   loginForm.confirmPassword = ''
+  loginNotice.value = ''
   clearRegisterErrors()
 }
 
@@ -489,6 +493,7 @@ const switchAuthMode = (mode: 'login' | 'register') => {
   authMode.value = mode
   loginForm.password = ''
   loginForm.confirmPassword = ''
+  loginNotice.value = ''
   clearRegisterErrors()
 }
 
@@ -553,6 +558,7 @@ const handleUserLogin = async () => {
     return
   }
   isLoggingIn.value = true
+  loginNotice.value = ''
   try {
     const resp = await userApi.login(loginForm.username.trim(), loginForm.password)
     if (!resp?.success || !resp.data) throw new Error(resp?.message || t('workbench.notifications.loginFailed'))
@@ -564,9 +570,17 @@ const handleUserLogin = async () => {
     closeAuthModal()
     await sessionStore.load()
   } catch (error: any) {
+    const detail = parseAuthError(error, t('workbench.notifications.checkCredentials'))
+    // 403 是账号被停用：把管理员留言留在弹窗里，用户可以照着做。
+    if (error?.response?.status === 403) {
+      loginNotice.value = detail
+      loginForm.password = ''
+    }
     appStore.showNotification({
-      title: t('workbench.notifications.loginFailed'),
-      message: parseAuthError(error, t('workbench.notifications.checkCredentials')),
+      title: error?.response?.status === 403
+        ? t('workbench.auth.accountDisabledTitle')
+        : t('workbench.notifications.loginFailed'),
+      message: detail,
       type: 'error',
     })
   } finally {
@@ -1166,6 +1180,10 @@ const handleUserLogout = () => {
           </div>
           <div v-if="authMode === 'register' && registerErrors.form" class="rw-form-alert" role="alert">
             {{ registerErrors.form }}
+          </div>
+          <div v-if="authMode === 'login' && loginNotice" class="rw-form-alert rw-login-notice" role="alert">
+            <strong class="rw-login-notice-title">{{ t('workbench.auth.accountDisabledTitle') }}</strong>
+            <span class="rw-login-notice-body">{{ loginNotice }}</span>
           </div>
           <div class="rw-modal-actions">
             <button type="submit" class="rw-btn-primary" :disabled="isLoggingIn">
@@ -1919,6 +1937,18 @@ const handleUserLogout = () => {
   font-size: 11.5px;
   line-height: 1.5;
   animation: rw-form-error-in .14s ease-out;
+}
+.rw-login-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.rw-login-notice-title {
+  font-weight: 600;
+}
+.rw-login-notice-body {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 @keyframes rw-form-error-in {
   from { opacity: 0; transform: translateY(-2px); }

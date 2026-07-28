@@ -190,6 +190,161 @@ def test_duplicate_does_not_double_count_prometheus(metrics_db):
     assert invocations() == before + 1
 
 
+# ==================== OCR sub-event merging ====================
+#
+# Image OCR preprocesses an agent run and is metered under that run's ``run_id``.
+# ``list_metric_events`` folds it into the parent row so the admin audit feed
+# shows one user request as one line.
+
+
+def _record_pair(*, run_id: str, agent_kind: str, ocr_images: int = 2) -> None:
+    """Record an agent-run event plus the OCR call that preprocessed it."""
+
+    async def _run() -> None:
+        await ms.record_ai_usage(
+            source="ocr",
+            agent_kind="ocr",
+            provider="dashscope",
+            model="qwen-vl-max",
+            status="succeeded",
+            usage={"input_tokens": 80, "output_tokens": 40},
+            run_id=run_id,
+            session_id=f"sess-{run_id}",
+            idempotency_key=f"ai_usage:ocr:{run_id}",
+            metadata={"image_count": ocr_images},
+        )
+        await ms.record_ai_usage(
+            source="project_expert",
+            agent_kind=agent_kind,
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            status="succeeded",
+            usage={"input_tokens": 400, "output_tokens": 100},
+            run_id=run_id,
+            session_id=f"sess-{run_id}",
+            idempotency_key=f"ai_usage:{agent_kind}:{run_id}",
+        )
+
+    asyncio.run(_run())
+
+
+def _list_events(**kwargs):
+    from datetime import datetime, timedelta
+
+    now = datetime.utcnow()
+    return asyncio.run(
+        ms.list_metric_events(
+            from_time=now - timedelta(hours=1),
+            to_time=now + timedelta(hours=1),
+            **kwargs,
+        )
+    )
+
+
+def test_ocr_event_folds_into_its_parent_run(metrics_db):
+    _record_pair(run_id="run-ocr-1", agent_kind="project_expert")
+
+    result = _list_events()
+
+    # One request, one row — the OCR event does not get its own line.
+    assert result["total"] == 1
+    (row,) = result["events"]
+    assert row["agent_kind"] == "project_expert"
+    assert row["total_tokens"] == 500
+    (ocr,) = row["ocr_events"]
+    assert ocr["agent_kind"] == "ocr"
+    assert ocr["total_tokens"] == 120
+    assert ocr["image_count"] == 2
+
+
+def test_ocr_event_without_a_parent_run_still_lists(metrics_db):
+    """An unpaired OCR event stays visible: merging must not drop usage."""
+
+    async def _run() -> None:
+        await ms.record_ai_usage(
+            source="ocr",
+            agent_kind="ocr",
+            provider="dashscope",
+            model="qwen-vl-max",
+            status="failed",
+            error_kind="timeout",
+            usage=None,
+            run_id="run-orphan",
+            idempotency_key="ai_usage:ocr:run-orphan",
+        )
+
+    asyncio.run(_run())
+
+    result = _list_events()
+    assert result["total"] == 1
+    assert result["events"][0]["agent_kind"] == "ocr"
+    assert result["events"][0]["ocr_events"] == []
+
+
+def test_legacy_ocr_event_without_run_id_still_lists(metrics_db):
+    """Rows written before OCR and its run shared an id have no ``run_id``."""
+
+    async def _run() -> None:
+        await ms.record_ai_usage(
+            source="ocr",
+            agent_kind="ocr",
+            provider="dashscope",
+            model="qwen-vl-max",
+            status="succeeded",
+            usage={"input_tokens": 10, "output_tokens": 5},
+            idempotency_key="ai_usage:ocr:legacy",
+        )
+
+    asyncio.run(_run())
+
+    result = _list_events()
+    assert result["total"] == 1
+    assert result["events"][0]["agent_kind"] == "ocr"
+
+
+def test_source_ocr_filter_turns_merging_off(metrics_db):
+    """Filtering for ``source="ocr"`` audits OCR on its own, merged or not."""
+    _record_pair(run_id="run-ocr-2", agent_kind="log_analysis")
+
+    result = _list_events(source="ocr")
+
+    assert result["total"] == 1
+    assert result["events"][0]["agent_kind"] == "ocr"
+
+
+def test_event_without_images_has_no_ocr_children(metrics_db):
+    async def _run() -> None:
+        await ms.record_ai_usage(
+            source="general_agent",
+            agent_kind="general",
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            status="succeeded",
+            usage={"input_tokens": 20, "output_tokens": 10},
+            run_id="run-plain",
+            idempotency_key="ai_usage:general:run-plain",
+        )
+
+    asyncio.run(_run())
+
+    result = _list_events()
+    assert result["total"] == 1
+    assert result["events"][0]["ocr_events"] == []
+
+
+def test_merged_total_reflects_pagination(metrics_db):
+    """The hidden OCR rows must not inflate ``total`` or skew page offsets."""
+    for index in range(3):
+        _record_pair(run_id=f"run-page-{index}", agent_kind="project_expert")
+
+    result = _list_events(page=1, per_page=2)
+
+    # 6 rows exist; 3 are merged away, so the feed pages over 3.
+    assert result["total"] == 3
+    assert len(result["events"]) == 2
+    assert all(len(e["ocr_events"]) == 1 for e in result["events"])
+
+
 # ==================== 7.7 resilience ====================
 
 

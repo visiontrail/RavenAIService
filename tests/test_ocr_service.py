@@ -252,6 +252,7 @@ async def test_enrich_message_merges_ocr_block_on_success(monkeypatch):
     merged, meta = await ocr_service.enrich_message("原始问题", [_img()])
     assert meta.status == "succeeded"
     assert meta.image_count == 1
+    assert meta.text == "[图片 1]\nCODE 42"
     assert merged.startswith("原始问题")
     assert "<user_image_ocr" in merged
     assert 'note="' in merged
@@ -288,3 +289,68 @@ async def test_enrich_message_failed_degrades(monkeypatch):
     assert merged == "问题"
     assert meta.status == "failed"
     assert meta.error_kind == "timeout"
+
+
+# ──────────────── run correlation (admin audit merging) ────────────────
+
+
+async def test_ocr_usage_carries_the_callers_run_id(monkeypatch):
+    """The OCR event is metered under the run it preprocesses for.
+
+    Sharing ``run_id`` with the agent event is what lets the admin audit feed
+    fold the two into one row instead of showing OCR as its own invocation.
+    """
+    _configure_ocr(monkeypatch)
+    metrics = _capture_metrics(monkeypatch)
+
+    async def _post(url, json, headers):
+        return _FakeResponse(
+            json_data={
+                "choices": [{"message": {"content": "[图片 1]\nERROR 500"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            }
+        )
+
+    _patch_httpx(monkeypatch, post=_post)
+
+    merged, meta = await ocr_service.enrich_message(
+        "看看这个报错", [_img()], run_id="run-abc", session_id="sess-1"
+    )
+    assert meta.status == "succeeded"
+    assert "ERROR 500" in merged
+    assert metrics[0]["run_id"] == "run-abc"
+    assert metrics[0]["metadata"] == {"image_count": 1}
+
+
+async def test_ocr_failure_still_carries_run_id_and_image_count(monkeypatch):
+    """A failed OCR call must stay attached to its run, not orphan itself."""
+    _configure_ocr(monkeypatch)
+    metrics = _capture_metrics(monkeypatch)
+
+    async def _post(url, json, headers):
+        raise httpx.TimeoutException("timed out")
+
+    _patch_httpx(monkeypatch, post=_post)
+
+    result = await ocr_service.extract_text(
+        [_img(), _img()], user_text="q", run_id="run-xyz"
+    )
+    assert result.status == "failed"
+    assert metrics[0]["run_id"] == "run-xyz"
+    assert metrics[0]["metadata"] == {"image_count": 2}
+
+
+async def test_ocr_usage_without_a_run_id_is_unattached(monkeypatch):
+    """Callers with no run to attach to still meter, with a null run_id."""
+    _configure_ocr(monkeypatch)
+    metrics = _capture_metrics(monkeypatch)
+
+    async def _post(url, json, headers):
+        return _FakeResponse(
+            json_data={"choices": [{"message": {"content": "text"}}], "usage": {}}
+        )
+
+    _patch_httpx(monkeypatch, post=_post)
+
+    await ocr_service.extract_text([_img()], user_text="q")
+    assert metrics[0]["run_id"] is None

@@ -97,6 +97,72 @@ async def test_snapshot_redacts_to_three_fields(session: AsyncSession, user: Use
 
 
 @pytest.mark.asyncio
+async def test_snapshot_omits_images_by_default(session: AsyncSession, user: User):
+    """A public snapshot must not carry image metadata.
+
+    The bytes are only served by authenticated endpoints, so shipping the
+    metadata to a public page would render broken thumbnails and needlessly
+    disclose the attachments' names and sizes.
+    """
+    sid = await _seed_session_with_messages(session, user_id=user.id)
+    message = (
+        await session.execute(
+            ChatMessage.__table__.select().where(ChatMessage.session_id == sid)
+        )
+    ).first()
+    await session.execute(
+        ChatMessage.__table__.update()
+        .where(ChatMessage.id == message.id)
+        .values(images_json=json.dumps([{"id": "abc123", "media_type": "image/png"}]))
+    )
+    await session.commit()
+
+    snapshot = await conversation_share_service.build_live_snapshot(
+        session, session_id=sid, user_id=user.id
+    )
+    assert all("images" not in m for m in snapshot)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_includes_images_when_opted_in(session: AsyncSession, user: User):
+    """The admin audit read opts in and gets the user turn's attachments."""
+    sid = await _seed_session_with_messages(session, user_id=user.id)
+    images = [{"id": "abc123", "media_type": "image/png", "name": "err.png", "size": 42}]
+    await session.execute(
+        ChatMessage.__table__.update()
+        .where(ChatMessage.session_id == sid, ChatMessage.role == "user")
+        .values(images_json=json.dumps(images))
+    )
+    await session.commit()
+
+    snapshot = await conversation_share_service.build_live_snapshot(
+        session, session_id=sid, user_id=user.id, include_images=True
+    )
+    user_turn = next(m for m in snapshot if m["role"] == "user")
+    assert user_turn["images"] == images
+    # AI turns never carry attachments.
+    assert all("images" not in m for m in snapshot if m["role"] != "user")
+
+
+@pytest.mark.asyncio
+async def test_snapshot_tolerates_unusable_images_json(session: AsyncSession, user: User):
+    """Bad stored JSON degrades to "no thumbnails", never a failed read."""
+    sid = await _seed_session_with_messages(session, user_id=user.id)
+    await session.execute(
+        ChatMessage.__table__.update()
+        .where(ChatMessage.session_id == sid, ChatMessage.role == "user")
+        .values(images_json="{not json")
+    )
+    await session.commit()
+
+    snapshot = await conversation_share_service.build_live_snapshot(
+        session, session_id=sid, user_id=user.id, include_images=True
+    )
+    assert len(snapshot) == 2
+    assert all("images" not in m for m in snapshot)
+
+
+@pytest.mark.asyncio
 async def test_snapshot_captures_ai_trace_events(session: AsyncSession, user: User):
     """AI turns carry the agent trace (thinking + tool calls) at share time,
     matched to the run by answer text, while owner/run identity never leaks."""
