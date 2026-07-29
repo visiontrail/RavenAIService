@@ -125,7 +125,7 @@ const deviceKeyword = ref('')
 const targetDeviceId = ref<string | null>(null)
 const targetDeviceName = ref<string | null>(null)
 const targetAgent = ref<AgentOption | null>(null)
-const selectedLogFile = ref<File | null>(null)
+const selectedLogFiles = ref<File[]>([])
 const isLogFileDragOver = ref(false)
 let logFileDragDepth = 0
 
@@ -350,7 +350,7 @@ const resetPanel = () => {
   targetDeviceId.value = null
   targetDeviceName.value = null
   selectedProjectRepoId.value = null
-  selectedLogFile.value = null
+  selectedLogFiles.value = []
   deviceMenuVisible.value = false
   nextTick(() => textareaRef.value?.focus())
 }
@@ -815,7 +815,7 @@ const targetAgentName = computed(() => targetAgent.value ? agentName(targetAgent
 const isPackageAgentSelected = computed(() => targetAgent.value?.agentType === 'package-manager')
 const isProjectExpertAgentSelected = computed(() => targetAgent.value?.agentType === 'project-expert')
 const isLogAnalysisAgentSelected = computed(() =>
-  targetAgent.value?.agentType === 'log-analysis' || !!selectedLogFile.value
+  targetAgent.value?.agentType === 'log-analysis' || selectedLogFiles.value.length > 0
 )
 const isProjectRepoSelectVisible = computed(() =>
   isLogAnalysisAgentSelected.value || isProjectExpertAgentSelected.value || isPackageAgentSelected.value
@@ -862,7 +862,7 @@ watch(visibleProjectRepoOptions, (options) => {
 })
 
 // ZIP inspection: read central directory to check if metadata.json is present
-const zipMetadataCheckResult = ref<boolean | null>(null) // null=unknown/non-zip, true=present, false=absent
+const zipMetadataCheckResults = ref<(boolean | null)[]>([])
 
 async function checkZipForMetadata(file: File): Promise<boolean | null> {
   if (!file.name.toLowerCase().endsWith('.zip')) return null
@@ -896,9 +896,10 @@ async function checkZipForMetadata(file: File): Promise<boolean | null> {
   } catch { return null }
 }
 
-watch(selectedLogFile, async (file) => {
-  zipMetadataCheckResult.value = null
-  if (file) zipMetadataCheckResult.value = await checkZipForMetadata(file)
+watch(selectedLogFiles, async (files) => {
+  zipMetadataCheckResults.value = []
+  const results = await Promise.all(files.map((file) => checkZipForMetadata(file)))
+  if (selectedLogFiles.value === files) zipMetadataCheckResults.value = results
 })
 
 // Warning: log-analysis agent active but no file attached in the composer.
@@ -908,7 +909,7 @@ watch(selectedLogFile, async (file) => {
 // re-appearing after send, when the composer's file selection is cleared.
 const logAnalysisNoAttachmentWarning = computed(() =>
   targetAgent.value?.agentType === 'log-analysis' &&
-  !selectedLogFile.value &&
+  selectedLogFiles.value.length === 0 &&
   chatHistory.value.length === 0
 )
 
@@ -917,17 +918,20 @@ const logAnalysisNoAttachmentWarning = computed(() =>
 // log (which can never carry metadata.json) was attached.
 const logAnalysisMetadataError = computed(() => {
   if (!isLogAnalysisAgentSelected.value) return false
-  const file = selectedLogFile.value
-  if (!file) return false
+  const files = selectedLogFiles.value
+  if (!files.length) return false
   if (selectedProjectRepoId.value !== null) return false
-  if (!isArchiveLogFile(file)) return true
-  return zipMetadataCheckResult.value === false
+  return files.every((file, index) => {
+    if (!isArchiveLogFile(file)) return true
+    if (!file.name.toLowerCase().endsWith('.zip')) return false
+    return zipMetadataCheckResults.value[index] === false
+  })
 })
 
 const sendDisabled = computed(() =>
   !isLoggedIn.value ||
   isSending.value ||
-  (!inputMessage.value.trim() && !selectedLogFile.value && !pendingImages.value.length) ||
+  (!inputMessage.value.trim() && !selectedLogFiles.value.length && !pendingImages.value.length) ||
   isProjectRepoRequiredMissing.value ||
   logAnalysisMetadataError.value
 )
@@ -1340,7 +1344,7 @@ const selectDevice = (device: DeviceInfo) => {
   targetDeviceName.value = device.name || device.id
   // 设备操作与重构包 / 日志分析 Agent 互斥
   clearTargetAgent()
-  selectedLogFile.value = null
+  selectedLogFiles.value = []
   deviceMenuVisible.value = false
 }
 
@@ -1351,7 +1355,11 @@ const clearTargetAgent = () => {
   selectedProjectRepoId.value = null
   saveAgentSelectionToState()
 }
-const clearSelectedLogFile = () => { selectedLogFile.value = null }
+const clearSelectedLogFile = (file: File) => {
+  selectedLogFiles.value = selectedLogFiles.value.filter(
+    (candidate) => candidate !== file,
+  )
+}
 
 const triggerLogFilePicker = () => {
   if (isSending.value || isLogFileUploadDisabled.value) return
@@ -1360,18 +1368,27 @@ const triggerLogFilePicker = () => {
   logFileInputRef.value?.click()
 }
 
-const selectLogFile = (file: File) => {
-  selectedLogFile.value = file
+const selectLogFiles = (files: File[]) => {
+  if (!files.length) return
+  const existing = new Set(
+    selectedLogFiles.value.map(
+      (file) => `${file.name}:${file.size}:${file.lastModified}`,
+    ),
+  )
+  const additions = files.filter((file) => {
+    const signature = `${file.name}:${file.size}:${file.lastModified}`
+    if (existing.has(signature)) return false
+    existing.add(signature)
+    return true
+  })
+  selectedLogFiles.value = [...selectedLogFiles.value, ...additions]
   setTargetAgent(logAnalysisAgentOption)
   ensureProjectRepoOptions()
 }
 
 const handleLogFileChange = (event: Event) => {
   const input = event.target as HTMLInputElement
-  const file = input.files?.[0] || null
-  if (file) {
-    selectLogFile(file)
-  }
+  selectLogFiles(Array.from(input.files || []))
   input.value = ''
 }
 
@@ -1412,7 +1429,7 @@ const handleLogFileDrop = (event: DragEvent) => {
   if (imageFiles.length) void addImageFiles(imageFiles)
   // A dropped non-image follows the existing log-attachment rules.
   if (otherFiles.length && !isLogFileUploadDisabled.value) {
-    selectLogFile(otherFiles[0])
+    selectLogFiles(otherFiles)
   }
 }
 
@@ -1509,12 +1526,15 @@ const togglePackageAgent = () => {
     clearTargetAgent()
     return
   }
-  selectedLogFile.value = null
+  selectedLogFiles.value = []
   setTargetAgent(packageAgentOption)
 }
 
 const toggleLogAnalysisAgent = () => {
-  if (targetAgent.value?.agentType === 'log-analysis' && !selectedLogFile.value) {
+  if (
+    targetAgent.value?.agentType === 'log-analysis'
+    && selectedLogFiles.value.length === 0
+  ) {
     clearTargetAgent()
     return
   }
@@ -1527,7 +1547,7 @@ const toggleProjectExpertAgent = () => {
     clearTargetAgent()
     return
   }
-  selectedLogFile.value = null
+  selectedLogFiles.value = []
   setTargetAgent(projectExpertAgentOption)
   ensureProjectRepoOptions()
 }
@@ -1641,7 +1661,7 @@ const sendMessage = async () => {
   // background do not affect this one.
   if (currentConversation.value?.isSending) return
   const content = inputMessage.value.trim()
-  const fileForRequest = selectedLogFile.value
+  const filesForRequest = [...selectedLogFiles.value]
   const imagesForRequest: ChatImageAttachment[] = pendingImages.value.map((img) => ({
     media_type: img.mediaType,
     data: img.dataUrl,
@@ -1653,7 +1673,7 @@ const sendMessage = async () => {
     mediaType: img.mediaType,
     url: img.dataUrl,
   }))
-  if (!content && !fileForRequest && !imagesForRequest.length) return
+  if (!content && !filesForRequest.length && !imagesForRequest.length) return
 
   const authToken = (userStore.token as unknown as string) || null
   if (authToken && userToken.isExpired(authToken)) {
@@ -1688,7 +1708,11 @@ const sendMessage = async () => {
 
   const shouldUseLogAnalysisAgent =
     !shouldUseProjectExpertAgent &&
-    (isLogAnalysisAgentSelected.value || content.includes(`@${agentName(logAnalysisAgentOption)}`) || !!fileForRequest)
+    (
+      isLogAnalysisAgentSelected.value
+      || content.includes(`@${agentName(logAnalysisAgentOption)}`)
+      || filesForRequest.length > 0
+    )
 
   const shouldUsePackageAgent =
     !shouldUseProjectExpertAgent &&
@@ -1731,7 +1755,7 @@ const sendMessage = async () => {
 
   try {
     if (shouldUseProjectExpertAgent) {
-      selectedLogFile.value = null
+      selectedLogFiles.value = []
       await runsStore.startProjectExpertRun(
         sid,
         {
@@ -1745,17 +1769,17 @@ const sendMessage = async () => {
         { authToken },
       )
     } else if (shouldUseLogAnalysisAgent) {
-      const fileSnapshot = fileForRequest
-      // Clear the file from the composer; runLogAnalysisRun will append the
+      const filesSnapshot = filesForRequest
+      // Clear the files from the composer; startLogAnalysisRun will append the
       // user message with attachment info.
-      if (fileSnapshot) selectedLogFile.value = null
+      if (filesSnapshot.length) selectedLogFiles.value = []
       try {
         await runsStore.startLogAnalysisRun(
           sid,
           {
             message: outgoingContent,
             history: historyPayload,
-            file: fileSnapshot,
+            files: filesSnapshot,
             project_repo_id: selectedProjectRepoId.value,
             remember: true,
             images,
@@ -1764,13 +1788,13 @@ const sendMessage = async () => {
           { authToken },
         )
       } catch (err) {
-        if (fileSnapshot) selectedLogFile.value = fileSnapshot
+        if (filesSnapshot.length) selectedLogFiles.value = filesSnapshot
         throw err
       }
     } else if (shouldUsePackageAgent) {
       // Package search agent — session-scoped run via the unified runs store
       // pipeline (same start/cancel/resume contract as the project expert).
-      selectedLogFile.value = null
+      selectedLogFiles.value = []
       await runsStore.startPackageSearchRun(
         sid,
         {
@@ -2180,12 +2204,26 @@ const openShareModal = () => {
           </button>
         </div>
 
-        <div v-if="selectedLogFile" class="rw-file-chip rw-file-chip--above">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11.5-9.5 9.5a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5L9.5 18.5a2 2 0 0 1-3-3L15 7"/></svg>
-          <span>{{ selectedLogFile.name }}</span>
-          <button type="button" :aria-label="t('aiChat.removeAttachment')" @click="clearSelectedLogFile">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
-          </button>
+        <div v-if="selectedLogFiles.length" class="rw-file-strip">
+          <span class="rw-file-count">
+            {{ t('aiChat.logAttachmentsSelected', { count: selectedLogFiles.length }) }}
+          </span>
+          <div
+            v-for="file in selectedLogFiles"
+            :key="`${file.name}:${file.size}:${file.lastModified}`"
+            class="rw-file-chip rw-file-chip--above"
+            :title="file.name"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11.5-9.5 9.5a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5L9.5 18.5a2 2 0 0 1-3-3L15 7"/></svg>
+            <span>{{ file.name }}</span>
+            <button
+              type="button"
+              :aria-label="t('aiChat.removeNamedAttachment', { name: file.name })"
+              @click="clearSelectedLogFile(file)"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+            </button>
+          </div>
         </div>
 
         <div v-if="pendingImages.length" class="rw-image-strip">
@@ -2229,6 +2267,7 @@ const openShareModal = () => {
             class="rw-file-input"
             type="file"
             :accept="acceptedLogArchiveTypes"
+            multiple
             @change="handleLogFileChange"
           />
           <button
@@ -2912,6 +2951,14 @@ const openShareModal = () => {
 }
 .rw-tool-chip:hover { border-color: var(--rw-ink); }
 .rw-tool-chip.active { background: var(--rw-ink); color: var(--rw-on-ink); border-color: var(--rw-ink); }
+.rw-file-strip {
+  width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 2px 0 1px;
+}
+.rw-file-count {
+  flex: none; color: var(--rw-muted); font-size: 11px; font-weight: 650;
+  letter-spacing: .02em;
+}
 .rw-file-chip {
   min-width: 0; max-width: 260px; height: 28px; padding: 0 8px 0 10px;
   display: inline-flex; align-items: center; gap: 7px;

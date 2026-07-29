@@ -131,6 +131,8 @@ export type StartDeviceRunPayload = {
 export type StartLogAnalysisPayload = {
   message: string
   history?: { role: string; content: string }[]
+  files?: File[]
+  /** @deprecated Compatibility for callers that still submit one attachment. */
   file?: File | null
   project_repo_id?: number | null
   remember?: boolean
@@ -1155,8 +1157,18 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     const state = ensureState(sessionId)
     if (state.isSending) return
 
-    const userDisplay = payload.file
-      ? `${payload.message || t('aiChat.defaultLogAnalysisMessage')}\n\n${t('aiChat.runs.attachment')}: ${payload.file.name}`
+    const logFiles = payload.files?.length
+      ? payload.files
+      : payload.file
+        ? [payload.file]
+        : []
+    const userDisplay = logFiles.length
+      ? [
+          payload.message || t('aiChat.defaultLogAnalysisMessage'),
+          '',
+          `${t('aiChat.runs.attachment')} (${logFiles.length}):`,
+          ...logFiles.map((file) => `- ${file.name}`),
+        ].join('\n')
       : payload.message
     state.messages.push({
       id: generateUUID(),
@@ -1188,7 +1200,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     formData.append('session_id', sessionId)
     formData.append('remember', String(payload.remember ?? true))
     if (payload.history) formData.append('history', JSON.stringify(payload.history))
-    if (payload.file) formData.append('file', payload.file)
+    logFiles.forEach((file) => formData.append('files', file))
     if (payload.project_repo_id != null) {
       formData.append('project_repo_id', String(payload.project_repo_id))
     }

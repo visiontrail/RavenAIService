@@ -726,7 +726,12 @@ async def log_analysis_stream_endpoint(
         None,
         description="可选：项目仓库注册表 ID。提供时跳过 metadata.json 校验，直接使用该项目的仓库信息。",
     ),
-    file: Optional[UploadFile] = File(None, description="可选日志包附件"),
+    files: Optional[List[UploadFile]] = File(
+        None, description="可选：多份日志附件（重复 files 字段）"
+    ),
+    file: Optional[UploadFile] = File(
+        None, description="兼容旧客户端：单份日志附件"
+    ),
     images: Optional[str] = Form(
         None, description="可选：随消息附带图片的 JSON 数组字符串 [{media_type,data}]"
     ),
@@ -737,8 +742,10 @@ async def log_analysis_stream_endpoint(
     logger.info("接收到主对话日志分析请求")
     logger.info("message: %s...", message[:100])
     logger.info(
-        "session_id: %s, has_file=%s, project_repo_id=%s",
-        session_id, bool(file and file.filename), project_repo_id,
+        "session_id: %s, attachment_count=%d, project_repo_id=%s",
+        session_id,
+        len(files or []) + int(bool(file and file.filename)),
+        project_repo_id,
     )
     logger.info("=" * 80)
     cookie_carrier = Response()
@@ -764,6 +771,7 @@ async def log_analysis_stream_endpoint(
             session_id=session_id,
             history_json=history,
             file=file,
+            files=files,
             images=parsed_images,
             remember=remember,
             project_repo_id=project_repo_id,

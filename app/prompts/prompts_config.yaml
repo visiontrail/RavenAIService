@@ -89,6 +89,8 @@ claude_agent_log_analysis:
         ### 第 1 步 —— 读取 task.json（必须）
         首先读取当前工作目录下的 `task.json`。Read 工具的第一次调用应为 `{"file_path":"task.json"}`。不要读取`/data/task/task.json`，也不要读取`temp/code_repos/<task_id>/task.json`。如果运行时提示提供了`Workspace root`，也可以读取 `<Workspace root>/task.json`这个完整绝对路径。
 
+        如果 `task.json.attachments` 中列出了多份附件，必须把每一项都纳入调查范围。各附件位于其 `path` 指向的独立子目录或文件中；不要只分析第一份附件，也不要假定不同附件中的同名文件可以互相替代。
+
         如果 `task.json` 中存在 `repo_info`，尤其是`source: "user_selected_project_repo"`，请将其视为权威仓库来源，不要再为了仓库解析去搜索 metadata.json，直接进入第 2 步的仓库信息提取与第 4 步克隆。
 
         如果 `task.json` 中没有权威 `repo_info`，再定位 metadata.json （尽力而为）：优先读取 `logs/metadata.json`；若不存在，再使用`find logs -name metadata.json -print -quit` 或`Glob("logs/**/metadata.json")` 定位并读取。没有 metadata.json 也没关系 —— 可能仍可从 `task.json` 其他字段解析仓库信息。
@@ -265,6 +267,8 @@ claude_agent_log_analysis:
 
         ### Step 1 — Read task.json (required)
         First read `task.json` in the current working directory. The first Read tool call should be `{"file_path":"task.json"}`. Do not read `/data/task/task.json` or `temp/code_repos/<task_id>/task.json`. If the runtime hint provides a `Workspace root`, you may also read `<Workspace root>/task.json` as a full absolute path.
+
+        If `task.json.attachments` lists multiple uploads, every item must be included in the investigation. Each upload lives at the independent directory or file named by its `path`; do not analyze only the first attachment, and do not assume identically-named files from different uploads are interchangeable.
 
         If `task.json` contains `repo_info`, especially with `source: "user_selected_project_repo"`, treat it as the authoritative repo source — do not search for metadata.json for repo resolution; proceed directly to Step 2 repo-info extraction and Step 4 cloning.
 

@@ -538,6 +538,116 @@ class TestPrepareTextUpload:
                 prepare(record, require_metadata=False)
 
 
+class TestPrepareMany:
+    def test_multiple_logs_are_isolated_and_manifested(
+        self, tmp_path, mock_settings
+    ):
+        from app.agents.log_analysis.workspace import prepare_many
+
+        first = tmp_path / "stored_first.log"
+        second = tmp_path / "stored_second.log"
+        first.write_text("first attachment\n", encoding="utf-8")
+        second.write_text("second attachment\n", encoding="utf-8")
+        records = [
+            _make_log_record(
+                archive_path=str(first), original_filename="service.log"
+            ),
+            _make_log_record(
+                archive_path=str(second), original_filename="service.log"
+            ),
+        ]
+        records[0].id = "log-1"
+        records[1].id = "log-2"
+
+        with patch("app.agents.log_analysis.workspace.settings", mock_settings):
+            ctx = prepare_many(records, require_metadata=False)
+
+        placed = sorted(Path(ctx.logs_dir).rglob("service.log"))
+        assert len(placed) == 2
+        assert placed[0].parent != placed[1].parent
+        assert {path.read_text(encoding="utf-8") for path in placed} == {
+            "first attachment\n",
+            "second attachment\n",
+        }
+
+        task_data = json.loads(Path(ctx.task_json_path).read_text(encoding="utf-8"))
+        assert task_data["log_ids"] == ["log-1", "log-2"]
+        assert task_data["upload_kind"] == "multiple"
+        assert [item["log_id"] for item in task_data["attachments"]] == [
+            "log-1",
+            "log-2",
+        ]
+        assert all(
+            item["path"].startswith("logs/") for item in task_data["attachments"]
+        )
+        assert ctx.metadata["attachments"] == task_data["attachments"]
+
+    def test_metadata_can_come_from_one_of_multiple_attachments(
+        self, tmp_path, mock_settings
+    ):
+        from app.agents.log_analysis.workspace import prepare_many
+
+        archive = _create_zip(
+            tmp_path,
+            {
+                "capture/metadata.json": json.dumps(
+                    {"project_code": "demo"}
+                ).encode(),
+                "capture/main.log": b"archive log\n",
+            },
+        )
+        companion = tmp_path / "companion.log"
+        companion.write_text("companion log\n", encoding="utf-8")
+        records = [
+            _make_log_record(
+                archive_path=str(archive), original_filename="capture.zip"
+            ),
+            _make_log_record(
+                archive_path=str(companion),
+                original_filename="companion.log",
+            ),
+        ]
+        records[0].id = "archive-id"
+        records[1].id = "companion-id"
+
+        with patch("app.agents.log_analysis.workspace.settings", mock_settings):
+            ctx = prepare_many(records, require_metadata=True)
+
+        assert len(list(Path(ctx.logs_dir).rglob("metadata.json"))) == 1
+        assert len(list(Path(ctx.logs_dir).rglob("main.log"))) == 1
+        assert len(list(Path(ctx.logs_dir).rglob("companion.log"))) == 1
+
+    def test_combined_extract_size_limit_applies_across_attachments(
+        self, tmp_path, mock_settings
+    ):
+        from app.agents.log_analysis.workspace import (
+            WorkspaceExtractTooLarge,
+            prepare_many,
+        )
+
+        mock_settings.ai_analysis_max_extract_bytes = 12
+        first = tmp_path / "first.log"
+        second = tmp_path / "second.log"
+        first.write_bytes(b"12345678")
+        second.write_bytes(b"abcdefgh")
+        records = [
+            _make_log_record(
+                archive_path=str(first), original_filename="first.log"
+            ),
+            _make_log_record(
+                archive_path=str(second), original_filename="second.log"
+            ),
+        ]
+        records[0].id = "log-1"
+        records[1].id = "log-2"
+
+        with patch("app.agents.log_analysis.workspace.settings", mock_settings):
+            with pytest.raises(WorkspaceExtractTooLarge):
+                prepare_many(records, require_metadata=False)
+
+        assert not any(Path(mock_settings.code_repo_clone_base_dir).iterdir())
+
+
 class TestDetectUploadKind:
     def test_detects_plain_text(self, tmp_path):
         from app.tools.archive_tool import detect_upload_kind

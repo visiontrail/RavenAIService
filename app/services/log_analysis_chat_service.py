@@ -33,6 +33,7 @@ from app.agents.log_analysis.workspace import (
     WorkspaceExtractTooLarge,
     cleanup,
     prepare,
+    prepare_many,
 )
 from app.config import settings
 from app.i18n import DEFAULT as I18N_DEFAULT, normalize as normalize_locale
@@ -116,6 +117,7 @@ class LogAnalysisChatService:
         session_id: Optional[str],
         history_json: Optional[str],
         file: Optional[UploadFile],
+        files: Optional[List[UploadFile]] = None,
         remember: bool,
         db: Optional[AsyncSession],
         user: Optional[User],
@@ -139,28 +141,37 @@ class LogAnalysisChatService:
         """
         effective_session_id = session_id or str(uuid.uuid4())
         question = (message or "").strip()
-        uploaded_filename = self._uploaded_filename(file)
+        uploaded_files = self._uploaded_files(files, legacy_file=file)
+        uploaded_filenames = [
+            filename
+            for filename in (
+                self._uploaded_filename(upload_file)
+                for upload_file in uploaded_files
+            )
+            if filename
+        ]
 
         self._evict_old_jobs()
 
         yield self._sse_event({"event": "session", "session_id": effective_session_id})
 
         logger.info(
-            "log-analysis chat: stream started session_id=%s has_file=%s filename=%s",
+            "log-analysis chat: stream started session_id=%s "
+            "attachment_count=%d filenames=%s",
             effective_session_id,
-            bool(uploaded_filename),
-            uploaded_filename or "-",
+            len(uploaded_filenames),
+            uploaded_filenames or "-",
         )
 
         existing_job = self._jobs.get(effective_session_id)
 
         # Subscribe path: in-flight Job already exists for this session.
         if existing_job is not None and not existing_job.done:
-            if uploaded_filename:
+            if uploaded_filenames:
                 yield self._sse_event(
                     {
                         "event": "error",
-                        "message": "本会话已有正在进行的分析任务，请先取消或等待完成后再上传新日志包。",
+                        "message": "本会话已有正在进行的分析任务，请先取消或等待完成后再上传新日志附件。",
                     }
                 )
                 return
@@ -176,7 +187,12 @@ class LogAnalysisChatService:
             return
 
         # Re-subscribe path: Job already done and still cached; replay terminal events.
-        if existing_job is not None and existing_job.done and not uploaded_filename and not question:
+        if (
+            existing_job is not None
+            and existing_job.done
+            and not uploaded_filenames
+            and not question
+        ):
             async for chunk in self._subscribe(existing_job):
                 yield chunk
             return
@@ -212,18 +228,25 @@ class LogAnalysisChatService:
 
         # Start a new Job.
         try:
-            if uploaded_filename:
+            if uploaded_filenames:
+                attachment_summary = "、".join(
+                    f"`{filename}`" for filename in uploaded_filenames
+                )
                 yield self._sse_event(
                     {
                         "event": "log_analysis_status",
-                        "message": f"已接收附件 `{uploaded_filename}`，正在建立分析工作区...",
+                        "message": (
+                            f"已接收 {len(uploaded_filenames)} 份日志附件："
+                            f"{attachment_summary}，正在建立分析工作区..."
+                        ),
                     }
                 )
                 ctx, context_meta = await self._create_context_from_upload(
                     db=db,
                     session_id=effective_session_id,
-                    question=question or "请分析这个日志包，给出概览、可疑异常和下一步建议。",
-                    file=file,
+                    question=question
+                    or "请分析这些日志附件，给出概览、可疑异常和下一步建议。",
+                    files=uploaded_files,
                     user=user,
                     project_repo_id=project_repo_id,
                 )
@@ -232,7 +255,10 @@ class LogAnalysisChatService:
                         "event": "log_analysis_context",
                         "session_id": effective_session_id,
                         "log_id": context_meta.get("log_id"),
+                        "log_ids": context_meta.get("log_ids", []),
                         "filename": context_meta.get("filename"),
+                        "filenames": context_meta.get("filenames", []),
+                        "attachments": context_meta.get("attachments", []),
                     }
                 )
             else:
@@ -254,7 +280,7 @@ class LogAnalysisChatService:
                 )
 
             if not question:
-                question = "请分析这个日志包，给出概览、可疑异常和下一步建议。"
+                question = "请分析这些日志附件，给出概览、可疑异常和下一步建议。"
 
             # Minted before OCR so the OCR usage event carries the same run_id as
             # the agent run it preprocesses for — that pairing is what lets the
@@ -347,7 +373,7 @@ class LogAnalysisChatService:
                 user_snapshot=self._user_snapshot(user),
                 remember=bool(remember),
                 images_json=images_json,
-                filename=context_meta.get("filename"),
+                filename=self._display_filenames(context_meta),
                 started_at=time.monotonic(),
                 started_at_utc=datetime.utcnow().isoformat(),
                 run_id=run_id,
@@ -627,7 +653,10 @@ class LogAnalysisChatService:
 
         request_payload: Dict[str, Any] = {
             "filename": job.filename,
+            "filenames": job.context_meta.get("filenames", []),
             "log_id": job.context_meta.get("log_id"),
+            "log_ids": job.context_meta.get("log_ids", []),
+            "attachments": job.context_meta.get("attachments", []),
             "project_id": job.context_meta.get("project_id"),
             "project_repo_id": job.context_meta.get("project_repo_id")
             or job.context_meta.get("project_id"),
@@ -950,6 +979,9 @@ class LogAnalysisChatService:
             "finished_at": job.finished_at,
             "elapsed_seconds": elapsed,
             "filename": job.filename,
+            "filenames": job.context_meta.get("filenames", []),
+            "log_ids": job.context_meta.get("log_ids", []),
+            "attachments": job.context_meta.get("attachments", []),
             "events": list(job.events),
             "result": job.result,
             "answer": job.answer or "",
@@ -976,12 +1008,14 @@ class LogAnalysisChatService:
         db: Optional[AsyncSession],
         session_id: str,
         question: str,
-        file: UploadFile,
+        files: List[UploadFile],
         user: Optional[User],
         project_repo_id: Optional[int] = None,
     ) -> Tuple[WorkspaceContext, Dict[str, Any]]:
         if db is None:
-            raise RuntimeError("数据库会话不可用，无法保存日志包")
+            raise RuntimeError("数据库会话不可用，无法保存日志附件")
+        if not files:
+            raise MissingArchiveError("没有收到可用的日志附件")
 
         old_context = self._load_context(session_id, user=user)
         old_ctx = old_context[0] if old_context else None
@@ -1006,15 +1040,20 @@ class LogAnalysisChatService:
             ),
             issue_description=question,
         )
-        log_info = await log_service.upload_log(db, file, upload_request)
-        log_record = await log_service.get_by_id(db, log_info.id)
-        if log_record is None:
-            raise RuntimeError("日志包已上传但未找到数据库记录")
+        log_records = []
+        for upload_file in files:
+            log_info = await log_service.upload_log(db, upload_file, upload_request)
+            log_record = await log_service.get_by_id(db, log_info.id)
+            if log_record is None:
+                raise RuntimeError(
+                    f"日志附件 {upload_file.filename!r} 已上传但未找到数据库记录"
+                )
+            log_record.project_id = effective_project_id
+            log_record.status = LogStatus.COMPLETED
+            log_record.progress = 100.0
+            log_record.issue_description = question
+            log_records.append(log_record)
 
-        log_record.project_id = effective_project_id
-        log_record.status = LogStatus.COMPLETED
-        log_record.progress = 100.0
-        log_record.issue_description = question
         # 立即提交：SSE 流会持有 request 的 AsyncSession 很久（一次 Agent 运行常
         # 达数分钟）；只 flush 不 commit 会让 SQLite 的写锁一直被持有，导致并发
         # 上传/重构包检索触发 "database is locked"。
@@ -1023,7 +1062,14 @@ class LogAnalysisChatService:
         # When the user explicitly chose a project, skip metadata.json
         # extraction validation in the workspace and resolve repo_info
         # directly from the registry.
-        ctx = prepare(log_record, require_metadata=project_repo_id is None)
+        if len(log_records) == 1:
+            ctx = prepare(
+                log_records[0], require_metadata=project_repo_id is None
+            )
+        else:
+            ctx = prepare_many(
+                log_records, require_metadata=project_repo_id is None
+            )
         ctx.metadata.update(
             {
                 "question": question,
@@ -1036,6 +1082,10 @@ class LogAnalysisChatService:
         else:
             self._inject_repo_info(ctx)
 
+        filenames = [
+            record.original_filename or record.filename for record in log_records
+        ]
+        log_ids = [record.id for record in log_records]
         context_meta = {
             "session_id": session_id,
             "owner_user_id": getattr(user, "id", None),
@@ -1045,8 +1095,12 @@ class LogAnalysisChatService:
             "logs_dir": ctx.logs_dir,
             "repo_dir": ctx.repo_dir,
             "task_json_path": ctx.task_json_path,
-            "log_id": log_record.id,
-            "filename": log_record.original_filename or log_record.filename,
+            # Singular fields are retained for older result/metrics readers.
+            "log_id": log_ids[0],
+            "log_ids": log_ids,
+            "filename": filenames[0],
+            "filenames": filenames,
+            "attachment_count": len(filenames),
             "upload_kind": ctx.metadata.get("upload_kind"),
             "attachments": ctx.metadata.get("attachments", []),
             "project_id": effective_project_id,
@@ -1376,6 +1430,39 @@ class LogAnalysisChatService:
         if isinstance(filename, str) and filename.strip():
             return filename.strip()
         return None
+
+    @classmethod
+    def _uploaded_files(
+        cls,
+        files: Optional[List[UploadFile]],
+        *,
+        legacy_file: Optional[UploadFile] = None,
+    ) -> List[UploadFile]:
+        """Normalize the repeated ``files`` field plus the legacy ``file``."""
+        normalized = [
+            upload_file
+            for upload_file in (files or [])
+            if cls._uploaded_filename(upload_file)
+        ]
+        if cls._uploaded_filename(legacy_file) and all(
+            upload_file is not legacy_file for upload_file in normalized
+        ):
+            normalized.append(legacy_file)
+        return normalized
+
+    @staticmethod
+    def _display_filenames(context_meta: Dict[str, Any]) -> Optional[str]:
+        filenames = context_meta.get("filenames")
+        if isinstance(filenames, list):
+            cleaned = [
+                str(filename).strip()
+                for filename in filenames
+                if str(filename).strip()
+            ]
+            if cleaned:
+                return "、".join(cleaned)
+        filename = context_meta.get("filename")
+        return str(filename).strip() if filename else None
 
     @staticmethod
     def _format_agent_result(

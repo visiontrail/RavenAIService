@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { LogOut, Menu, PanelLeftClose, RefreshCw, X } from 'lucide-vue-next'
+import { ArrowLeft, LogOut, Menu, PanelLeftClose, RefreshCw, X } from 'lucide-vue-next'
 import { adminApi, adminToken } from '@/api/admin'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAppStore } from '@/stores/app'
@@ -681,6 +681,15 @@ onMounted(() => {
     <header class="admin-topbar">
       <div class="admin-topbar-inner">
         <div class="admin-topbar-left">
+          <button
+            class="admin-back-btn"
+            :title="t('admin.backToChatTitle')"
+            :aria-label="t('admin.backToChatTitle')"
+            @click="router.push('/workbench')"
+          >
+            <ArrowLeft :size="16" />
+            <span class="admin-back-btn-label">{{ t('admin.backToChat') }}</span>
+          </button>
           <button
             class="admin-icon-btn"
             :disabled="!isAuthenticated"

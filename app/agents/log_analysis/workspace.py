@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -20,7 +21,7 @@ import uuid
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 from app.config import settings
 from app.i18n import DEFAULT as I18N_DEFAULT
@@ -389,6 +390,28 @@ def _place_spreadsheet_file(src: Path, dest_dir: Path, max_bytes: int, *, prefer
     return _place_single_file(src, dest_dir, max_bytes, preferred_name=preferred_name)
 
 
+def _attachment_dirname(index: int, filename: str) -> str:
+    """Return a stable, traversal-safe directory name for one upload."""
+    safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", Path(filename).name).strip("._")
+    if not safe_name:
+        safe_name = "attachment"
+    return f"{index:02d}_{safe_name[:120]}"
+
+
+def _record_archive_path(log_record: Any) -> Path:
+    archive_path_str = getattr(log_record, "archive_path", None) or getattr(
+        log_record, "file_path", None
+    )
+    if not archive_path_str:
+        raise MissingArchiveError(
+            f"LogRecord id={getattr(log_record, 'id', '?')} has no archive_path"
+        )
+    archive_path = Path(archive_path_str)
+    if not archive_path.exists():
+        raise MissingArchiveError(f"Archive file not found: {archive_path}")
+    return archive_path
+
+
 # ─────────────────────── Public API ────────────────────────────────
 
 def populate_logs_dir(
@@ -539,6 +562,128 @@ def prepare(log_record: Any, *, require_metadata: bool = True) -> WorkspaceConte
     except (MissingArchiveError, WorkspaceExtractTooLarge, MissingMetadataJsonError):
         shutil.rmtree(str(temp_dir), ignore_errors=True)
         raise
+    except Exception:
+        shutil.rmtree(str(temp_dir), ignore_errors=True)
+        raise
+
+
+def prepare_many(
+    log_records: Sequence[Any], *, require_metadata: bool = True
+) -> WorkspaceContext:
+    """Prepare one workspace containing multiple independently-isolated uploads.
+
+    Each upload is materialized below ``logs/<index>_<filename>/``. This keeps
+    identically-named files and archive members from overwriting one another,
+    while preserving one recursive ``logs/`` tree for the Agent to inspect.
+    ``task.json.attachments`` is the authoritative manifest for all uploads.
+    """
+    records = list(log_records)
+    if not records:
+        raise MissingArchiveError("No log attachments were provided")
+
+    archive_paths = [_record_archive_path(record) for record in records]
+    task_id = str(uuid.uuid4())
+    base_dir = Path(settings.code_repo_clone_base_dir)
+    temp_dir = base_dir / task_id
+    logs_dir = temp_dir / "logs"
+    repo_dir = temp_dir / "repo"
+
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        repo_dir.mkdir(parents=True, exist_ok=True)
+
+        max_bytes = settings.ai_analysis_max_extract_bytes
+        attachments = []
+        upload_kinds = []
+
+        for index, (record, archive_path) in enumerate(
+            zip(records, archive_paths), start=1
+        ):
+            original_filename = (
+                getattr(record, "original_filename", None) or archive_path.name
+            )
+            attachment_root = logs_dir / _attachment_dirname(
+                index, original_filename
+            )
+            attachment_root.mkdir(parents=True, exist_ok=False)
+
+            used_bytes = sum(
+                path.stat().st_size
+                for path in logs_dir.rglob("*")
+                if path.is_file()
+            )
+            remaining_bytes = max_bytes - used_bytes
+            if remaining_bytes <= 0:
+                raise WorkspaceExtractTooLarge(
+                    f"Extraction aborted: cumulative size {used_bytes} bytes "
+                    f"exceeds limit {max_bytes} bytes"
+                )
+
+            upload_kind, attachment_path = populate_logs_dir(
+                archive_path,
+                attachment_root,
+                max_bytes=remaining_bytes,
+                preferred_name=original_filename,
+            )
+            _validate_extracted_output(logs_dir, max_bytes)
+            upload_kinds.append(upload_kind)
+
+            manifest_path = attachment_path or attachment_root
+            manifest_rel = manifest_path.resolve().relative_to(
+                temp_dir.resolve()
+            ).as_posix()
+            attachments.append(
+                {
+                    "log_id": getattr(record, "id", None),
+                    "filename": Path(original_filename).name,
+                    "path": manifest_rel,
+                    "kind": upload_kind,
+                }
+            )
+
+        if require_metadata and _find_metadata_json(logs_dir) is None:
+            raise MissingMetadataJsonError(
+                f"No metadata.json found under {logs_dir}"
+            )
+
+        primary = records[0]
+        task_data = {
+            "log_id": getattr(primary, "id", None),
+            "log_ids": [getattr(record, "id", None) for record in records],
+            "question": getattr(primary, "issue_description", None)
+            or getattr(primary, "question", None)
+            or "",
+            "hints": getattr(primary, "hints", None) or "",
+            "project_id": getattr(primary, "project_id", None),
+            "upload_kind": "multiple",
+            "upload_kinds": upload_kinds,
+            "attachments": attachments,
+        }
+        task_json_path = temp_dir / "task.json"
+        task_json_path.write_text(
+            json.dumps(task_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        logger.info(
+            "Multi-attachment workspace prepared: task_id=%s temp_dir=%s "
+            "attachment_count=%d",
+            task_id,
+            temp_dir,
+            len(attachments),
+        )
+        return WorkspaceContext(
+            task_id=task_id,
+            temp_dir=str(temp_dir),
+            logs_dir=str(logs_dir),
+            repo_dir=str(repo_dir),
+            task_json_path=str(task_json_path),
+            metadata={
+                "upload_kind": "multiple",
+                "upload_kinds": upload_kinds,
+                "attachments": attachments,
+            },
+        )
     except Exception:
         shutil.rmtree(str(temp_dir), ignore_errors=True)
         raise
