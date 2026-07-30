@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   AlertTriangle,
   ArrowDownToLine,
+  ArrowRight,
   Bolt,
   Check,
   CircleGauge,
@@ -26,7 +27,7 @@ import StatusPill from '@/components/StatusPill.vue'
 import TrendChart from '@/components/TrendChart.vue'
 import type { DashboardData, ProbeRun } from '@/types'
 
-const emit = defineEmits<{ openSettings: [] }>()
+const emit = defineEmits<{ openSettings: []; openProbes: [] }>()
 
 const range = ref<'24h' | '7d' | '30d'>('24h')
 const granularity = ref<'hourly' | 'daily'>('hourly')
@@ -338,7 +339,12 @@ onBeforeUnmount(() => window.clearInterval(refreshTimer))
             <h2>最近 Agent 探测</h2>
             <p>不保存完整模型回复，只留短摘要与性能元数据。</p>
           </div>
-          <span class="endpoint-chip"><ServerCog :size="14" />{{ data.settings.protocol === 'anthropic' ? 'Anthropic Messages' : 'OpenAI Chat' }}</span>
+          <div class="recent-panel__actions">
+            <span class="endpoint-chip"><ServerCog :size="14" />{{ data.settings.protocol === 'anthropic' ? 'Anthropic Messages' : 'OpenAI Chat' }}</span>
+            <button class="button button--secondary" @click="emit('openProbes')">
+              查看更多<ArrowRight :size="15" />
+            </button>
+          </div>
         </header>
         <div v-if="data.recent.length" class="table-wrap">
           <table>

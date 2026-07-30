@@ -149,6 +149,102 @@ async def trigger_probe() -> dict[str, Any]:
     return {"success": result["success"], "data": result}
 
 
+ProbeStatusFilter = Literal["all", "usable", "slow", "failed"]
+ProbeSourceFilter = Literal["all", "scheduled", "manual", "settings_test"]
+ProbeRangeFilter = Literal["24h", "7d", "30d", "all"]
+
+
+def probe_range_start(range_name: str) -> datetime | None:
+    hours = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30}.get(range_name)
+    return None if hours is None else datetime.now(UTC) - timedelta(hours=hours)
+
+
+@app.get("/api/probes")
+async def list_probe_runs(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=10, le=200),
+    status: ProbeStatusFilter = "all",
+    source: ProbeSourceFilter = "all",
+    range_name: ProbeRangeFilter = Query(default="all", alias="range"),
+) -> dict[str, Any]:
+    start = probe_range_start(range_name)
+    items, total = await asyncio.to_thread(
+        database.query_probes,
+        start,
+        status,
+        source,
+        (page - 1) * page_size,
+        page_size,
+    )
+    return {
+        "success": True,
+        "data": {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": max(1, -(-total // page_size)),
+            "filters": {"status": status, "source": source, "range": range_name},
+        },
+    }
+
+
+@app.get("/api/probes/export")
+async def export_probe_runs(
+    status: ProbeStatusFilter = "all",
+    source: ProbeSourceFilter = "all",
+    range_name: ProbeRangeFilter = Query(default="all", alias="range"),
+    limit: int = Query(default=20000, ge=1, le=200000),
+) -> StreamingResponse:
+    start = probe_range_start(range_name)
+    items, _ = await asyncio.to_thread(
+        database.query_probes, start, status, source, 0, limit
+    )
+    fields = [
+        "id",
+        "started_at",
+        "finished_at",
+        "source",
+        "success",
+        "usable",
+        "status_category",
+        "http_status",
+        "latency_ms",
+        "ttft_ms",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "error_kind",
+        "error_message",
+        "model",
+        "endpoint",
+    ]
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fields)
+    writer.writeheader()
+    for item in items:
+        writer.writerow({field: item.get(field) for field in fields})
+    filename = f"model-sentinel-probes-{datetime.now(UTC).date()}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.delete("/api/probes")
+async def purge_probe_runs(
+    confirm: bool = Query(default=False, description="必须显式传 true 才会执行清空"),
+) -> dict[str, Any]:
+    if not confirm:
+        raise HTTPException(status_code=400, detail="缺少 confirm=true，未执行清空")
+    if worker.probe_lock.locked():
+        raise HTTPException(status_code=409, detail="探测正在执行，请稍后再清空数据")
+    deleted = await asyncio.to_thread(database.purge_probes)
+    logger.warning("all probe runs purged via API; deleted=%s", deleted)
+    return {"success": True, "data": {"deleted": deleted}}
+
+
 def range_periods(range_name: str, granularity: str) -> int:
     hours = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30}[range_name]
     return hours if granularity == "hourly" else max(1, hours // 24)

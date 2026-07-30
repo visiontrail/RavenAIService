@@ -20,6 +20,17 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 export const api = {
   dashboard: (range: string, granularity: string) =>
     request<any>(`/api/dashboard?range=${range}&granularity=${granularity}`),
+  probes: (params: {
+    page: number
+    page_size: number
+    status: string
+    source: string
+    range: string
+  }) => request<any>(`/api/probes?${new URLSearchParams(params as any).toString()}`),
+  purgeProbes: () =>
+    request<any>('/api/probes?confirm=true', {
+      method: 'DELETE',
+    }),
   settings: () => request<any>('/api/settings'),
   saveSettings: (data: unknown) =>
     request<any>('/api/settings', {

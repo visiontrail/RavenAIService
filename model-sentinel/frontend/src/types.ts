@@ -51,6 +51,23 @@ export interface ProbeRun {
   endpoint: string
 }
 
+export type ProbeStatusFilter = 'all' | 'usable' | 'slow' | 'failed'
+export type ProbeSourceFilter = 'all' | 'scheduled' | 'manual' | 'settings_test'
+export type ProbeRangeFilter = '24h' | '7d' | '30d' | 'all'
+
+export interface ProbeListData {
+  items: ProbeRun[]
+  total: number
+  page: number
+  page_size: number
+  pages: number
+  filters: {
+    status: ProbeStatusFilter
+    source: ProbeSourceFilter
+    range: ProbeRangeFilter
+  }
+}
+
 export interface HeatmapPoint {
   date: string
   date_label: string

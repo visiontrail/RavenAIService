@@ -4,33 +4,49 @@ import {
   Activity,
   BarChart3,
   ChevronRight,
+  ListOrdered,
   Moon,
   RadioTower,
   Settings2,
   Sun,
 } from 'lucide-vue-next'
 import DashboardView from '@/views/DashboardView.vue'
+import ProbesView from '@/views/ProbesView.vue'
 import SettingsView from '@/views/SettingsView.vue'
 
-type Page = 'dashboard' | 'settings'
+type Page = 'dashboard' | 'probes' | 'settings'
 
-const page = ref<Page>(window.location.hash === '#/settings' ? 'settings' : 'dashboard')
+const HASHES: Record<Page, string> = {
+  dashboard: '#/',
+  probes: '#/probes',
+  settings: '#/settings',
+}
+
+function pageFromHash(): Page {
+  if (window.location.hash === '#/settings') return 'settings'
+  if (window.location.hash === '#/probes') return 'probes'
+  return 'dashboard'
+}
+
+const page = ref<Page>(pageFromHash())
 const dark = ref(document.documentElement.classList.contains('dark'))
 
-const pageMeta = computed(() =>
-  page.value === 'dashboard'
-    ? { eyebrow: 'OBSERVABILITY', title: '运行态势' }
-    : { eyebrow: 'CONTROL PLANE', title: '监控设置' },
-)
+const PAGE_META: Record<Page, { eyebrow: string; title: string }> = {
+  dashboard: { eyebrow: 'OBSERVABILITY', title: '运行态势' },
+  probes: { eyebrow: 'EVENT ARCHIVE', title: '探测记录' },
+  settings: { eyebrow: 'CONTROL PLANE', title: '监控设置' },
+}
+
+const pageMeta = computed(() => PAGE_META[page.value])
 
 function navigate(target: Page) {
-  window.location.hash = target === 'dashboard' ? '#/' : '#/settings'
+  window.location.hash = HASHES[target]
   page.value = target
   window.scrollTo(0, 0)
 }
 
 function syncHash() {
-  page.value = window.location.hash === '#/settings' ? 'settings' : 'dashboard'
+  page.value = pageFromHash()
   window.scrollTo(0, 0)
 }
 
@@ -70,6 +86,11 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', syncHash))
           <span><strong>运行态势</strong><small>可用率与容量信号</small></span>
           <ChevronRight :size="15" class="nav-chevron" />
         </button>
+        <button :class="{ active: page === 'probes' }" @click="navigate('probes')">
+          <span class="nav-icon"><ListOrdered :size="18" stroke-width="1.8" /></span>
+          <span><strong>探测记录</strong><small>全量探测流水</small></span>
+          <ChevronRight :size="15" class="nav-chevron" />
+        </button>
         <button :class="{ active: page === 'settings' }" @click="navigate('settings')">
           <span class="nav-icon"><Settings2 :size="18" stroke-width="1.8" /></span>
           <span><strong>监控设置</strong><small>被测模型与工况</small></span>
@@ -99,7 +120,12 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', syncHash))
       </header>
 
       <main>
-        <DashboardView v-if="page === 'dashboard'" @open-settings="navigate('settings')" />
+        <DashboardView
+          v-if="page === 'dashboard'"
+          @open-settings="navigate('settings')"
+          @open-probes="navigate('probes')"
+        />
+        <ProbesView v-else-if="page === 'probes'" @back-dashboard="navigate('dashboard')" />
         <SettingsView v-else @back-dashboard="navigate('dashboard')" />
       </main>
     </div>
@@ -107,6 +133,9 @@ onBeforeUnmount(() => window.removeEventListener('hashchange', syncHash))
     <nav class="mobile-nav" aria-label="移动端导航">
       <button :class="{ active: page === 'dashboard' }" @click="navigate('dashboard')">
         <BarChart3 :size="19" /><span>态势</span>
+      </button>
+      <button :class="{ active: page === 'probes' }" @click="navigate('probes')">
+        <ListOrdered :size="19" /><span>记录</span>
       </button>
       <button class="mobile-brand" @click="navigate('dashboard')">
         <RadioTower :size="20" />

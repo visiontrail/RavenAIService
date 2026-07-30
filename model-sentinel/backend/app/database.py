@@ -248,6 +248,56 @@ class Database:
             ).fetchall()
         return [self._probe_dict(row) for row in rows]
 
+    def query_probes(
+        self,
+        start: datetime | None = None,
+        status: str = "all",
+        source: str = "all",
+        offset: int = 0,
+        limit: int = 50,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Filtered, paginated probe history plus the total row count."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if start:
+            clauses.append("started_at >= ?")
+            params.append(start.astimezone(UTC).isoformat())
+        if status == "usable":
+            clauses.append("success = 1 AND usable = 1")
+        elif status == "slow":
+            clauses.append("success = 1 AND usable = 0")
+        elif status == "failed":
+            clauses.append("success = 0")
+        if source != "all":
+            clauses.append("source = ?")
+            params.append(source)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connect() as connection:
+            total = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM probe_runs {where}", params
+                ).fetchone()[0]
+            )
+            rows = connection.execute(
+                f"SELECT * FROM probe_runs {where}"
+                " ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?",
+                (*params, limit, offset),
+            ).fetchall()
+        return [self._probe_dict(row) for row in rows], total
+
+    def purge_probes(self) -> int:
+        """Delete every probe run. Settings and credentials are untouched."""
+        with self._write_lock, self._connect() as connection:
+            deleted = max(0, connection.execute("DELETE FROM probe_runs").rowcount)
+            has_sequence = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'"
+            ).fetchone()
+            if has_sequence:
+                connection.execute(
+                    "DELETE FROM sqlite_sequence WHERE name = 'probe_runs'"
+                )
+        return deleted
+
     def cleanup(self, retention_days: int) -> int:
         cutoff = datetime.now(UTC) - timedelta(days=max(1, retention_days))
         with self._write_lock, self._connect() as connection:
