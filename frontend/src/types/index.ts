@@ -19,6 +19,14 @@ export interface LogRecord {
   original_filename?: string
   file_size: number
   file_path?: string
+  analysis_group_id?: string | null
+  attachment_count?: number
+  attachments?: Array<{
+    id: string
+    filename: string
+    file_size: number
+  }>
+  download_filename?: string | null
   project_id?: number | null
   project_code?: string | null
   project_name?: string | null

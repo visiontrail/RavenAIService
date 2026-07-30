@@ -79,6 +79,22 @@
               <label>{{ t('logDetail.originalFilename') }}</label>
               <div class="info-value">{{ logStore.currentLog.original_filename }}</div>
             </div>
+            <div
+              class="info-item col-span-all"
+              v-if="(logStore.currentLog.attachment_count ?? 1) > 1"
+            >
+              <label>
+                {{ t('logDetail.attachments', { count: logStore.currentLog.attachment_count }) }}
+              </label>
+              <div class="code-box">
+                <div
+                  v-for="attachment in logStore.currentLog.attachments"
+                  :key="attachment.id"
+                >
+                  {{ attachment.filename }} · {{ formatFileSize(attachment.file_size) }}
+                </div>
+              </div>
+            </div>
             <div class="info-item">
               <label>{{ t('logDetail.fileSize') }}</label>
               <div class="info-value strong">{{ formatFileSize(logStore.currentLog.file_size) }}</div>
@@ -1012,20 +1028,9 @@ const handleDownload = async () => {
     
     // 直接使用URL下载，立即触发浏览器下载
     const downloadUrl = logApi.getDownloadUrl(logStore.currentLog.id)
-    downloadFile(downloadUrl, logStore.currentLog.filename)
-    ElMessage.success(t('logDetail.downloadStarted', { filename: logStore.currentLog.filename }))
-    
-    // 异步更新下载次数，不影响下载体验
-    try {
-      const response = await logApi.incrementDownloadCount(logStore.currentLog.id)
-      // 更新本地下载次数
-      if (logStore.currentLog && response.data?.data?.download_count) {
-        logStore.currentLog.download_count = response.data.data.download_count
-      }
-    } catch (error) {
-      // 忽略计数更新失败，不影响用户体验
-      console.warn('Failed to update download count:', error)
-    }
+    const filename = logStore.currentLog.download_filename || logStore.currentLog.filename
+    downloadFile(downloadUrl, filename)
+    ElMessage.success(t('logDetail.downloadStarted', { filename }))
   } catch (error) {
     ElMessage.error(t('logDetail.downloadFail'))
   } finally {

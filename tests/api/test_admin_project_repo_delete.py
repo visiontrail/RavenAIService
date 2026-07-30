@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.api import admin as admin_api
 from app.api.admin import require_admin
+from app.exceptions import register_exception_handlers
 from app.models.database import Base, get_db
 from app.models.log import LogRecord
 from app.models.project_repo import ProjectRepo
@@ -57,6 +58,8 @@ def client(tmp_path) -> TestClient:
                 raise
 
     application = FastAPI()
+    # 与生产一致：注册全局异常处理器，保证结构化 detail 也能正确序列化
+    register_exception_handlers(application)
     application.include_router(admin_api.router)
     application.dependency_overrides[get_db] = _get_db
     application.dependency_overrides[require_admin] = lambda: "admin"
@@ -95,8 +98,12 @@ def test_delete_blocked_with_409_when_logs_reference_project(client: TestClient)
     repo_id = client._state["repo_id"]
     resp = client.delete(f"/admin/project-repos/{repo_id}")
     assert resp.status_code == 409, resp.text
-    detail = resp.json()["detail"]
-    assert detail["affected_logs"] == 1
+    body = resp.json()
+    assert body["affected_logs"] == 1
+    # message/detail 必须是字符串，否则 ErrorResponse 校验失败会把 409 变成 500
+    assert isinstance(body["message"], str)
+    assert isinstance(body["detail"], str)
+    assert "force=true" in body["message"]
     # Repo must still exist
     assert asyncio.run(client._repo_exists(repo_id)) is True
 

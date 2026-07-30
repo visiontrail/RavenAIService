@@ -15,13 +15,14 @@ from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, or_
 
 from app.config import settings
 from app.models.log import (
     LogRecord, LogFileInfo, LogUploadRequest, LogListRequest, BatchDeleteRequest,
     BatchDownloadRequest, LogStatus, LogLevel, LogMetadata,
-    BatchOperationResult, SortField, SortOrder, LogListData, PaginationInfo
+    BatchOperationResult, SortField, SortOrder, LogListData, PaginationInfo,
+    LogAttachmentInfo,
 )
 from app.models.project_repo import ProjectRepo
 from app.models.database import get_db
@@ -253,6 +254,214 @@ class LogService(BaseCRUDService[LogRecord]):
             else:
                 raise FileUploadError(f"上传失败: {str(e)}")
 
+    @staticmethod
+    def _record_metadata(record: LogRecord) -> Tuple[Dict[str, Any], LogMetadata]:
+        """Parse one record's metadata without letting malformed legacy data
+        break list/group operations.
+        """
+        metadata_dict: Dict[str, Any] = {}
+        if record.metadata_json:
+            try:
+                raw = json.loads(record.metadata_json) or {}
+                if isinstance(raw, dict):
+                    metadata_dict = raw
+            except Exception:
+                metadata_dict = {}
+        if not metadata_dict:
+            return {}, LogMetadata()
+        try:
+            return metadata_dict, LogMetadata(**metadata_dict)
+        except Exception as exc:
+            logger.warning(
+                "Log metadata is invalid, recovering extra_fields only "
+                "record_id=%s: %s",
+                record.id,
+                exc,
+            )
+            extra_fields = metadata_dict.get("extra_fields")
+            try:
+                return metadata_dict, LogMetadata(
+                    extra_fields=extra_fields
+                    if isinstance(extra_fields, dict)
+                    else {}
+                )
+            except Exception:
+                return metadata_dict, LogMetadata()
+
+    @classmethod
+    def _legacy_analysis_group_identity(
+        cls, record: LogRecord
+    ) -> Optional[Tuple[str, str, Optional[int]]]:
+        """Infer groups written before ``analysis_group_id`` existed.
+
+        Old AI-chat uploads already persisted ``chat_session_id`` on every
+        attachment. The issue description is the upload turn's question, so
+        including it prevents unrelated upload turns in the same conversation
+        from normally being collapsed together.
+        """
+        metadata_dict, _ = cls._record_metadata(record)
+        if metadata_dict.get("source") != "ai_chat":
+            return None
+        extra_fields = metadata_dict.get("extra_fields")
+        if not isinstance(extra_fields, dict):
+            return None
+        session_id = str(extra_fields.get("chat_session_id") or "").strip()
+        if not session_id:
+            return None
+        return (
+            session_id,
+            str(record.issue_description or "").strip(),
+            record.project_id,
+        )
+
+    @classmethod
+    def _analysis_group_key(cls, record: LogRecord) -> Tuple[Any, ...]:
+        if record.analysis_group_id:
+            return ("analysis_group", record.analysis_group_id)
+        legacy_identity = cls._legacy_analysis_group_identity(record)
+        if legacy_identity is not None:
+            return ("legacy_ai_chat", *legacy_identity)
+        return ("log_record", record.id)
+
+    @staticmethod
+    def _group_status(records: List[LogRecord]) -> LogStatus:
+        statuses = {record.status for record in records}
+        if LogStatus.PROCESSING in statuses:
+            return LogStatus.PROCESSING
+        if LogStatus.FAILED in statuses:
+            return LogStatus.FAILED
+        if LogStatus.PENDING in statuses:
+            return LogStatus.PENDING
+        return LogStatus.COMPLETED
+
+    @classmethod
+    def _group_primary_record(
+        cls, records: List[LogRecord]
+    ) -> LogRecord:
+        def _sort_key(record: LogRecord) -> Tuple[Any, ...]:
+            metadata_dict, _ = cls._record_metadata(record)
+            extra_fields = metadata_dict.get("extra_fields")
+            has_analysis = (
+                isinstance(extra_fields, dict)
+                and isinstance(extra_fields.get("ai_analysis_result"), dict)
+            )
+            return (
+                0 if has_analysis else 1,
+                record.created_at,
+                record.id,
+            )
+
+        return min(records, key=_sort_key)
+
+    async def get_analysis_group_records(
+        self,
+        db: AsyncSession,
+        log_id: str,
+        *,
+        include_deleted: bool = False,
+    ) -> List[LogRecord]:
+        """Return all original attachments represented by one list row."""
+        target = await self.get_by_id(db, log_id)
+        if target is None or (target.is_deleted and not include_deleted):
+            raise FileNotFoundError(file_id=log_id)
+
+        conditions = []
+        if not include_deleted:
+            conditions.append(LogRecord.is_deleted == False)
+
+        if target.analysis_group_id:
+            stmt = select(LogRecord).where(
+                LogRecord.analysis_group_id == target.analysis_group_id,
+                *conditions,
+            )
+            result = await db.execute(stmt)
+            records = list(result.scalars().all())
+        else:
+            legacy_identity = self._legacy_analysis_group_identity(target)
+            if legacy_identity is None:
+                records = [target]
+            else:
+                stmt = select(LogRecord)
+                if conditions:
+                    stmt = stmt.where(*conditions)
+                result = await db.execute(stmt)
+                records = [
+                    record
+                    for record in result.scalars().all()
+                    if self._legacy_analysis_group_identity(record)
+                    == legacy_identity
+                ]
+
+        return sorted(
+            records,
+            key=lambda record: (record.created_at, record.id),
+        )
+
+    async def expand_analysis_group_ids(
+        self, db: AsyncSession, log_ids: List[str]
+    ) -> List[str]:
+        """Expand representative IDs while preserving request/group order."""
+        expanded: List[str] = []
+        seen: set[str] = set()
+        for log_id in log_ids:
+            records = await self.get_analysis_group_records(db, log_id)
+            for record in records:
+                if record.id not in seen:
+                    seen.add(record.id)
+                    expanded.append(record.id)
+        return expanded
+
+    async def _group_to_pydantic(
+        self,
+        db: AsyncSession,
+        records: List[LogRecord],
+        project_map: Dict[int, ProjectRepo],
+        *,
+        enrich_analysis_trigger: bool = False,
+    ) -> LogFileInfo:
+        primary = self._group_primary_record(records)
+        _, metadata = self._record_metadata(primary)
+        info = await self._db_to_pydantic(
+            primary,
+            metadata,
+            project_map.get(primary.project_id),
+            db=db if enrich_analysis_trigger else None,
+        )
+        ordered = sorted(
+            records,
+            key=lambda record: (record.created_at, record.id),
+        )
+        info.analysis_group_id = primary.analysis_group_id
+        info.attachment_count = len(ordered)
+        info.attachments = [
+            LogAttachmentInfo(
+                id=record.id,
+                filename=record.original_filename or record.filename,
+                file_size=record.file_size,
+            )
+            for record in ordered
+        ]
+        info.file_size = sum(record.file_size for record in ordered)
+        info.status = self._group_status(ordered)
+        info.progress = sum(record.progress for record in ordered) / len(ordered)
+        info.created_at = min(record.created_at for record in ordered)
+        info.updated_at = max(record.updated_at for record in ordered)
+        # Every grouped attachment is incremented together by ZIP downloads.
+        # max therefore represents the number of group downloads, not N times
+        # that number.
+        info.download_count = max(
+            (record.download_count for record in ordered),
+            default=0,
+        )
+        if len(ordered) > 1:
+            timestamp = info.created_at.strftime("%Y%m%d_%H%M%S")
+            info.download_filename = f"log_analysis_{timestamp}.zip"
+        else:
+            info.download_filename = (
+                primary.original_filename or primary.filename
+            )
+        return info
+
     async def get_log_list(
         self, 
         db: AsyncSession, 
@@ -269,109 +478,84 @@ class LogService(BaseCRUDService[LogRecord]):
             LogListData: 包含日志列表和分页信息的数据
         """
         try:
-            # 构建查询条件
-            query = select(LogRecord)
-            
-            # 添加过滤条件（默认只查询未删除的记录）
-            conditions = [LogRecord.is_deleted == False]
-            
-            # project_id 过滤：0 或负值表示"未分类"（project_id IS NULL）
-            if request.project_id is not None:
-                if request.project_id <= 0:
-                    conditions.append(LogRecord.project_id.is_(None))
-                else:
-                    conditions.append(LogRecord.project_id == request.project_id)
+            # Grouping has to happen before pagination: one AI analysis can own
+            # several LogRecord rows but represents exactly one list item.
+            result = await db.execute(
+                select(LogRecord).where(LogRecord.is_deleted == False)
+            )
+            all_records = list(result.scalars().all())
 
-            if request.log_level:
-                conditions.append(LogRecord.log_level == request.log_level)
-            
-            if request.status:
-                conditions.append(LogRecord.status == request.status)
-            
-            if request.start_time:
-                conditions.append(LogRecord.created_at >= request.start_time)
-            
-            if request.end_time:
-                conditions.append(LogRecord.created_at <= request.end_time)
-            
-            # 按文件名搜索
-            if request.search:
-                search_pattern = f"%{request.search}%"
-                conditions.append(
-                    or_(
-                        LogRecord.original_filename.ilike(search_pattern),
-                        LogRecord.filename.ilike(search_pattern)
-                    )
-                )
-            
-            # 应用过滤条件
-            if conditions:
-                filter_condition = and_(*conditions)
-                query = query.where(filter_condition)
-            
-            # 计算总数
-            from sqlalchemy import func
-            total_query = select(func.count(LogRecord.id))
-            if conditions:
-                total_query = total_query.where(and_(*conditions))
-            
-            total_result = await db.execute(total_query)
-            total = total_result.scalar() or 0
-            
-            # 排序
-            sort_column = getattr(LogRecord, request.sort_by.value)
-            if request.sort_order == SortOrder.DESC:
-                query = query.order_by(sort_column.desc())
-            else:
-                query = query.order_by(sort_column.asc())
-            
-            # 分页
-            offset = (request.page - 1) * request.per_page
-            query = query.offset(offset).limit(request.per_page)
-            
-            # 执行查询
-            result = await db.execute(query)
-            log_records = result.scalars().all()
-            
-            # 批量获取关联项目，避免逐行查询
-            project_map = await self._get_project_map(
-                db, [r.project_id for r in log_records]
+            groups: Dict[Tuple[Any, ...], List[LogRecord]] = {}
+            for record in all_records:
+                groups.setdefault(
+                    self._analysis_group_key(record), []
+                ).append(record)
+
+            filtered_groups: List[List[LogRecord]] = []
+            normalized_search = (request.search or "").strip().casefold()
+            for records in groups.values():
+                primary = self._group_primary_record(records)
+                created_at = min(record.created_at for record in records)
+
+                if request.project_id is not None:
+                    if request.project_id <= 0:
+                        if primary.project_id is not None:
+                            continue
+                    elif primary.project_id != request.project_id:
+                        continue
+                if request.log_level and primary.log_level != request.log_level:
+                    continue
+                if (
+                    request.status
+                    and self._group_status(records) != request.status
+                ):
+                    continue
+                if request.start_time and created_at < request.start_time:
+                    continue
+                if request.end_time and created_at > request.end_time:
+                    continue
+                if normalized_search and not any(
+                    normalized_search
+                    in (record.original_filename or record.filename).casefold()
+                    or normalized_search in record.filename.casefold()
+                    for record in records
+                ):
+                    continue
+                filtered_groups.append(records)
+
+            def _group_sort_key(records: List[LogRecord]) -> Any:
+                primary = self._group_primary_record(records)
+                if request.sort_by == SortField.FILE_SIZE:
+                    return sum(record.file_size for record in records)
+                if request.sort_by == SortField.UPDATED_AT:
+                    return max(record.updated_at for record in records)
+                if request.sort_by == SortField.FILENAME:
+                    return (
+                        primary.original_filename or primary.filename
+                    ).casefold()
+                return min(record.created_at for record in records)
+
+            filtered_groups.sort(
+                key=_group_sort_key,
+                reverse=request.sort_order == SortOrder.DESC,
             )
 
-            # 转换为Pydantic模型
-            log_infos = []
-            for record in log_records:
-                metadata = None
-                if record.metadata_json:
-                    meta_raw: Dict[str, Any] = {}
-                    try:
-                        meta_raw = json.loads(record.metadata_json) or {}
-                    except Exception:
-                        meta_raw = {}
-                    if meta_raw:
-                        try:
-                            metadata = LogMetadata(**meta_raw)
-                        except Exception as me:
-                            logger.warning(
-                                "get_log_list: LogMetadata 构建失败 record_id=%s: %s",
-                                record.id, me,
-                            )
-                            ef = meta_raw.get("extra_fields")
-                            try:
-                                metadata = LogMetadata(extra_fields=ef if isinstance(ef, dict) else {})
-                            except Exception:
-                                metadata = LogMetadata()
-                    else:
-                        metadata = LogMetadata()
-                else:
-                    metadata = LogMetadata()
+            total = len(filtered_groups)
+            offset = (request.page - 1) * request.per_page
+            page_groups = filtered_groups[
+                offset:offset + request.per_page
+            ]
+            page_records = [
+                record for records in page_groups for record in records
+            ]
+            project_map = await self._get_project_map(
+                db, [record.project_id for record in page_records]
+            )
+            log_infos = [
+                await self._group_to_pydantic(db, records, project_map)
+                for records in page_groups
+            ]
 
-                log_info = await self._db_to_pydantic(
-                    record, metadata, project_map.get(record.project_id)
-                )
-                log_infos.append(log_info)
-            
-            # 计算分页信息
             pages = (total + request.per_page - 1) // request.per_page if total > 0 else 0
             pagination = PaginationInfo(
                 page=request.page,
@@ -409,6 +593,18 @@ class LogService(BaseCRUDService[LogRecord]):
             # 更新状态为失败
             await self.update(db, log_id, status=LogStatus.FAILED, error_message="文件不存在")
             raise FileNotFoundError(file_id=log_id)
+
+        group_records = await self.get_analysis_group_records(db, log_id)
+        if len(group_records) > 1:
+            project_map = await self._get_project_map(
+                db, [record.project_id for record in group_records]
+            )
+            return await self._group_to_pydantic(
+                db,
+                group_records,
+                project_map,
+                enrich_analysis_trigger=True,
+            )
 
         # 解析元数据
         metadata = LogMetadata()
@@ -958,7 +1154,15 @@ class LogService(BaseCRUDService[LogRecord]):
                 LogRecord.is_deleted == False
             )
             db_result = await db.execute(stmt)
-            log_records = db_result.scalars().all()
+            records_by_id = {
+                record.id: record
+                for record in db_result.scalars().all()
+            }
+            log_records = [
+                records_by_id[log_id]
+                for log_id in request.log_ids
+                if log_id in records_by_id
+            ]
             
             if not log_records:
                 raise FileNotFoundError("没有找到有效的日志文件")
@@ -983,6 +1187,7 @@ class LogService(BaseCRUDService[LogRecord]):
             # 使用流式压缩避免内存溢出
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
                 processed_count = 0
+                used_filenames: set[str] = set()
                 
                 for log_record in log_records:
                     try:
@@ -997,10 +1202,19 @@ class LogService(BaseCRUDService[LogRecord]):
                             zipf.writestr(error_filename, error_content)
                             continue
                         
-                        # 生成唯一的文件名避免冲突
-                        base_name = log_record.original_filename
+                        # Preserve original names. Only add a short ID when two
+                        # attachments genuinely have the same filename.
+                        base_name = (
+                            log_record.original_filename
+                            or log_record.filename
+                        )
                         name, ext = os.path.splitext(base_name)
-                        unique_filename = f"{name}_{log_record.id[:8]}{ext}"
+                        unique_filename = base_name
+                        if unique_filename in used_filenames:
+                            unique_filename = (
+                                f"{name}_{log_record.id[:8]}{ext}"
+                            )
+                        used_filenames.add(unique_filename)
                         
                         # 流式添加文件到压缩包
                         with open(file_path, 'rb') as f:
@@ -1076,7 +1290,15 @@ class LogService(BaseCRUDService[LogRecord]):
                 LogRecord.is_deleted == False
             )
             db_result = await db.execute(stmt)
-            log_records = db_result.scalars().all()
+            records_by_id = {
+                record.id: record
+                for record in db_result.scalars().all()
+            }
+            log_records = [
+                records_by_id[log_id]
+                for log_id in request.log_ids
+                if log_id in records_by_id
+            ]
             
             if not log_records:
                 raise FileNotFoundError("没有找到有效的日志文件")
@@ -1085,6 +1307,7 @@ class LogService(BaseCRUDService[LogRecord]):
             zip_buffer = io.BytesIO()
             
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
+                used_filenames: set[str] = set()
                 for log_record in log_records:
                     try:
                         file_path = Path(log_record.file_path)
@@ -1092,10 +1315,17 @@ class LogService(BaseCRUDService[LogRecord]):
                         if not file_path.exists():
                             continue
                         
-                        # 生成唯一的文件名
-                        base_name = log_record.original_filename
+                        base_name = (
+                            log_record.original_filename
+                            or log_record.filename
+                        )
                         name, ext = os.path.splitext(base_name)
-                        unique_filename = f"{name}_{log_record.id[:8]}{ext}"
+                        unique_filename = base_name
+                        if unique_filename in used_filenames:
+                            unique_filename = (
+                                f"{name}_{log_record.id[:8]}{ext}"
+                            )
+                        used_filenames.add(unique_filename)
                         
                         # 添加文件到zip
                         zipf.write(file_path, unique_filename)
@@ -1379,6 +1609,16 @@ class LogService(BaseCRUDService[LogRecord]):
             original_filename=record.original_filename,
             file_size=record.file_size,
             file_path=record.file_path,
+            analysis_group_id=record.analysis_group_id,
+            attachment_count=1,
+            attachments=[
+                LogAttachmentInfo(
+                    id=record.id,
+                    filename=record.original_filename or record.filename,
+                    file_size=record.file_size,
+                )
+            ],
+            download_filename=record.original_filename or record.filename,
             project_id=record.project_id,
             project_code=project.project_code if project else None,
             project_name=project.project_name if project else None,

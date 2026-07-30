@@ -1024,6 +1024,7 @@ class LogAnalysisChatService:
         # directly from the user's explicit selection; there is no longer any
         # filename-based auto-classification.
         effective_project_id = project_repo_id
+        analysis_group_id = str(uuid.uuid4())
         upload_request = LogUploadRequest(
             # Legacy processing-control sentinel (NOT a classification): forcing the
             # "oam_antenna" project_code makes LogService mark the record completed
@@ -1036,7 +1037,10 @@ class LogAnalysisChatService:
             log_level=LogLevel.INFO,
             metadata=LogMetadata(
                 source="ai_chat",
-                extra_fields={"chat_session_id": session_id},
+                extra_fields={
+                    "chat_session_id": session_id,
+                    "analysis_group_id": analysis_group_id,
+                },
             ),
             issue_description=question,
         )
@@ -1048,6 +1052,7 @@ class LogAnalysisChatService:
                 raise RuntimeError(
                     f"日志附件 {upload_file.filename!r} 已上传但未找到数据库记录"
                 )
+            log_record.analysis_group_id = analysis_group_id
             log_record.project_id = effective_project_id
             log_record.status = LogStatus.COMPLETED
             log_record.progress = 100.0
@@ -1098,6 +1103,7 @@ class LogAnalysisChatService:
             # Singular fields are retained for older result/metrics readers.
             "log_id": log_ids[0],
             "log_ids": log_ids,
+            "analysis_group_id": analysis_group_id,
             "filename": filenames[0],
             "filenames": filenames,
             "attachment_count": len(filenames),

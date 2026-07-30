@@ -473,7 +473,21 @@ const deleteRepo = async (repo: ProjectRepo) => {
   if (!window.confirm(t('admin.projectRepos.deleteConfirm', { code: repo.project_code }))) return
   deletingId.value = repo.id
   try {
-    await adminApi.deleteProjectRepo(repo.id)
+    try {
+      await adminApi.deleteProjectRepo(repo.id)
+    } catch (err: any) {
+      // 409：项目仍被日志引用，确认后强制删除（关联日志的 project_id 置空）
+      const affected = err?.response?.status === 409 ? err?.response?.data?.affected_logs : undefined
+      if (affected === undefined) throw err
+      if (
+        !window.confirm(
+          t('admin.projectRepos.deleteForceConfirm', { code: repo.project_code, count: affected })
+        )
+      ) {
+        return
+      }
+      await adminApi.deleteProjectRepo(repo.id, true)
+    }
     repos.value = repos.value.filter((item) => item.id !== repo.id)
     delete testResults[repo.id]
     appStore.showNotification({ title: t('admin.projectRepos.deleteSuccess'), message: repo.project_code, type: 'success' })

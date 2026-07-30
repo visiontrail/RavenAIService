@@ -157,6 +157,13 @@
                   >
                     {{ getDisplayFilename(row) }}
                   </router-link>
+                  <span
+                    v-if="(row.attachment_count ?? 1) > 1"
+                    class="rw-pill rw-pill-neutral attachment-count"
+                    :title="getAttachmentTitle(row)"
+                  >
+                    {{ t('logList.attachmentCount', { count: row.attachment_count }) }}
+                  </span>
                   <button class="rw-icon-btn copy-btn" @click="copyLink(row)" :title="t('common.copyLink')">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                       <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
@@ -272,6 +279,13 @@
                 <router-link :to="`/log/${row.id}`" class="mobile-log-name" :title="getDisplayFilename(row)">
                   {{ getDisplayFilename(row) }}
                 </router-link>
+                <span
+                  v-if="(row.attachment_count ?? 1) > 1"
+                  class="rw-pill rw-pill-neutral"
+                  :title="getAttachmentTitle(row)"
+                >
+                  {{ t('logList.attachmentCount', { count: row.attachment_count }) }}
+                </span>
               </div>
 
               <div class="mobile-log-tags">
@@ -536,19 +550,14 @@ const handleCurrentChange = (page: number) => {
 const handleDownload = async (log: LogRecord) => {
   try {
     const downloadUrl = logApi.getDownloadUrl(log.id)
-    downloadFile(downloadUrl, log.filename)
+    const filename = log.download_filename || getDisplayFilename(log)
+    downloadFile(downloadUrl, filename)
 
     appStore.showNotification({
       title: t('logList.downloadStart'),
-      message: t('logList.downloadStartMsg', { filename: log.filename }),
+      message: t('logList.downloadStartMsg', { filename }),
       type: 'success',
     })
-
-    try {
-      await logApi.incrementDownloadCount(log.id)
-    } catch (error) {
-      console.warn('download count update failed:', error)
-    }
   } catch (error) {
     appStore.showNotification({
       title: t('logList.downloadFail'),
@@ -722,6 +731,12 @@ const getDisplayFilename = (row: LogRecord) => {
     }
   }
   return filename
+}
+
+const getAttachmentTitle = (row: LogRecord) => {
+  return (row.attachments || [])
+    .map(attachment => attachment.filename)
+    .join('\n')
 }
 
 const isAIAnalysisCompleted = (log: LogRecord) => {
@@ -964,6 +979,7 @@ const pillKindForStatus = (status?: string) => {
   text-decoration: underline;
   text-decoration-color: var(--rw-ink);
 }
+.attachment-count { flex: 0 0 auto; }
 .copy-btn { flex-shrink: 0; }
 
 .mono-cell {

@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Q
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 
 from app.models.database import get_db
 from app.api.users import get_request_locale, get_optional_user
@@ -776,8 +777,11 @@ async def delete_log(
     # 验证日志ID
     request_validator.validate_log_id(log_id)
     
-    # 删除日志（默认软删除）
-    success = await log_service.delete_log(db, log_id)
+    # A grouped row represents one analysis, so deleting it removes every
+    # original attachment instead of exposing orphan rows afterwards.
+    group_records = await log_service.get_analysis_group_records(db, log_id)
+    for record in group_records:
+        await log_service.delete_log(db, record.id)
     
     logger.info(f"Log deleted successfully: {log_id}")
     
@@ -822,6 +826,42 @@ async def download_log(
     try:
         # 验证日志ID格式
         request_validator.validate_log_id(log_id)
+
+        group_records = await log_service.get_analysis_group_records(db, log_id)
+        if len(group_records) > 1:
+            log_info = await log_service.get_log_detail(db, log_id)
+            if log_info.status not in [
+                LogStatus.COMPLETED,
+                LogStatus.PROCESSING,
+                LogStatus.PENDING,
+            ]:
+                raise AuthorizationError(
+                    t("log.not_ready_for_download", locale)
+                )
+            archive_path = await log_service.batch_download(
+                db,
+                BatchDownloadRequest(
+                    log_ids=[record.id for record in group_records],
+                    compress=True,
+                    include_metadata=False,
+                ),
+            )
+            archive = FilePath(archive_path)
+            filename = (
+                log_info.download_filename
+                or f"log_analysis_{log_id[:8]}.zip"
+            )
+            logger.info(
+                "Grouped log download started: group=%s attachment_count=%d",
+                log_info.analysis_group_id or log_id,
+                len(group_records),
+            )
+            return FileResponse(
+                path=archive,
+                media_type="application/zip",
+                filename=filename,
+                background=BackgroundTask(archive.unlink, missing_ok=True),
+            )
         
         # 获取文件路径和日志信息（包含权限验证）
         file_path = await log_service.get_download_path(db, log_id)
@@ -1025,9 +1065,17 @@ async def batch_delete_logs(
     try:
         # 验证日志ID列表
         request_validator.validate_log_ids(request.log_ids)
+
+        expanded_ids = await log_service.expand_analysis_group_ids(
+            db, request.log_ids
+        )
+        expanded_request = BatchDeleteRequest(
+            log_ids=expanded_ids,
+            force=request.force,
+        )
         
         # 执行批量删除
-        result = await log_service.batch_delete(db, request)
+        result = await log_service.batch_delete(db, expanded_request)
         
         logger.info(
             f"Batch delete completed: {result.deleted_count} deleted, {result.failed_count} failed"
@@ -1070,9 +1118,22 @@ async def batch_download_logs(
             raise ValidationError(t("log.batch_download_limit", locale))
         
         request_validator.validate_log_ids(request.log_ids)
+
+        expanded_ids = await log_service.expand_analysis_group_ids(
+            db, request.log_ids
+        )
+        if len(expanded_ids) > 50:
+            raise ValidationError(
+                t("log.batch_download_limit", locale)
+            )
+        expanded_request = BatchDownloadRequest(
+            log_ids=expanded_ids,
+            compress=request.compress,
+            include_metadata=request.include_metadata,
+        )
         
         # 执行批量下载
-        zip_path = await log_service.batch_download(db, request)
+        zip_path = await log_service.batch_download(db, expanded_request)
         
         # 生成下载信息
         import os
@@ -1090,7 +1151,7 @@ async def batch_download_logs(
             expires_at=expires_at
         )
         
-        logger.info(f"Batch download prepared: {len(request.log_ids)} files requested, {file_size} bytes")
+        logger.info(f"Batch download prepared: {len(expanded_ids)} files requested, {file_size} bytes")
         
         return BatchDownloadResponse(
             success=True,
@@ -1132,15 +1193,30 @@ async def batch_download_logs_stream(
             raise ValidationError(t("log.stream_download_limit", locale))
         
         request_validator.validate_log_ids(request.log_ids)
+
+        expanded_ids = await log_service.expand_analysis_group_ids(
+            db, request.log_ids
+        )
+        if len(expanded_ids) > 20:
+            raise ValidationError(
+                t("log.stream_download_limit", locale)
+            )
+        expanded_request = BatchDownloadRequest(
+            log_ids=expanded_ids,
+            compress=request.compress,
+            include_metadata=request.include_metadata,
+        )
         
         # 执行流式批量下载
-        zip_content = await log_service.batch_download_stream(db, request)
+        zip_content = await log_service.batch_download_stream(
+            db, expanded_request
+        )
         
         # 生成文件名
         download_id = str(uuid.uuid4())[:8]
         filename = f"logs_stream_{download_id}.zip"
         
-        logger.info(f"Stream batch download: {len(request.log_ids)} files, {len(zip_content)} bytes")
+        logger.info(f"Stream batch download: {len(expanded_ids)} files, {len(zip_content)} bytes")
         
         return StreamingResponse(
             io.BytesIO(zip_content),

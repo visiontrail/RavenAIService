@@ -253,8 +253,10 @@ export const adminApi = {
   ): Promise<ApiResponse<ProjectRepo>> =>
     adminClient.put(`/admin/project-repos/${repoId}`, payload),
 
-  deleteProjectRepo: (repoId: number): Promise<void> =>
-    adminClient.delete(`/admin/project-repos/${repoId}`),
+  deleteProjectRepo: (repoId: number, force = false): Promise<void> =>
+    adminClient.delete(`/admin/project-repos/${repoId}`, {
+      params: force ? { force: true } : undefined,
+    }),
 
   testProjectRepoConnection: (repoId: number): Promise<ApiResponse<TestConnectionResult>> =>
     adminClient.post(`/admin/project-repos/${repoId}/test-connection`),

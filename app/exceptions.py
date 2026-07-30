@@ -2,10 +2,12 @@
 自定义异常类和全局异常处理器
 """
 
+import json
 import logging
 import traceback
 from typing import Union, Dict, Any
 from fastapi import Request, HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -155,22 +157,55 @@ class BatchOperationError(LogServiceException):
         )
 
 
+def stringify_detail(detail: Any) -> str:
+    """把任意类型的异常 detail 归一化为可读字符串
+
+    业务代码里大量使用 ``HTTPException(detail={...})`` 携带结构化信息，
+    而 ErrorResponse.message 只接受 str，直接透传会触发 pydantic 校验错误
+    并把 4xx 变成 500。
+    """
+    if isinstance(detail, str):
+        return detail
+    if isinstance(detail, dict):
+        for key in ("message", "detail", "error", "msg"):
+            value = detail.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return json.dumps(detail, ensure_ascii=False, default=str)
+    if isinstance(detail, (list, tuple)):
+        return "; ".join(stringify_detail(item) for item in detail)
+    return str(detail)
+
+
 def create_error_response(
-    message: str,
+    message: Any,
     error_code: str = "INTERNAL_ERROR",
-    detail: str = None,
-    status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR
+    detail: Any = None,
+    status_code: int = status.HTTP_500_INTERNAL_SERVER_ERROR,
+    payload: Any = None
 ) -> JSONResponse:
-    """创建错误响应"""
+    """创建错误响应
+
+    message/detail 始终是字符串（前端普遍按字符串读取 data.detail / data.message）；
+    payload 为结构化的原始 detail（dict），其顶层键会合并到响应根节点，
+    使 ``data.affected_logs``、``data.active_run_id`` 这类字段仍然可读。
+    """
     error_response = ErrorResponse(
-        message=message,
+        message=stringify_detail(message),
         error_code=error_code,
-        detail=detail
+        detail=stringify_detail(detail) if detail is not None else None
     )
-    
+
+    content = error_response.model_dump(mode='json')
+
+    if isinstance(payload, dict):
+        for key, value in jsonable_encoder(payload).items():
+            if key not in content:
+                content[key] = value
+
     return JSONResponse(
         status_code=status_code,
-        content=error_response.model_dump(mode='json')
+        content=content
     )
 
 
@@ -210,10 +245,16 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         extra=extra
     )
     
+    is_structured = exc.detail is not None and not isinstance(exc.detail, str)
+    message = stringify_detail(exc.detail) if exc.detail else "HTTP错误"
+
     return create_error_response(
-        message=exc.detail or "HTTP错误",
+        message=message,
         error_code="HTTP_ERROR",
-        status_code=exc.status_code
+        # 结构化 detail 会被前端按字符串读取，这里回填可读文案
+        detail=message if is_structured else None,
+        status_code=exc.status_code,
+        payload=exc.detail if isinstance(exc.detail, dict) else None
     )
 
 

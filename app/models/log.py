@@ -156,6 +156,15 @@ class LogRecord(Base, TimestampMixin):
         comment="日志归档文件路径（AI分析使用）"
     )
 
+    # 同一次 AI 日志分析上传的多份附件共享同一个分组 ID。普通日志上传为空，
+    # 因而仍按单条记录展示和操作。
+    analysis_group_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        nullable=True,
+        index=True,
+        comment="AI日志分析附件分组ID"
+    )
+
     # 错误信息
     error_message: Mapped[Optional[str]] = mapped_column(
         Text,
@@ -200,6 +209,14 @@ class LogMetadata(BaseModel):
     extra_fields: Dict[str, Any] = Field(default_factory=dict, description="额外字段")
 
 
+class LogAttachmentInfo(BaseModel):
+    """一次 AI 日志分析中的单份原始附件。"""
+
+    id: str = Field(..., description="附件对应的日志记录ID")
+    filename: str = Field(..., description="原始附件文件名")
+    file_size: int = Field(..., description="附件大小（字节）")
+
+
 class LogFileInfo(BaseModel):
     """日志文件信息"""
     id: str = Field(..., description="日志文件ID")
@@ -207,6 +224,16 @@ class LogFileInfo(BaseModel):
     original_filename: str = Field(..., description="原始文件名")
     file_size: int = Field(..., description="文件大小（字节）")
     file_path: str = Field(..., description="文件存储路径")
+    analysis_group_id: Optional[str] = Field(None, description="AI日志分析附件分组ID")
+    attachment_count: int = Field(1, ge=1, description="本次分析包含的原始附件数量")
+    attachments: List[LogAttachmentInfo] = Field(
+        default_factory=list,
+        description="本次分析包含的原始附件摘要"
+    )
+    download_filename: Optional[str] = Field(
+        None,
+        description="推荐的下载文件名；多附件分析为ZIP文件名"
+    )
     project_id: Optional[int] = Field(None, description="关联的项目ID（project_repo.id）")
     project_code: Optional[str] = Field(None, description="关联项目的代号")
     project_name: Optional[str] = Field(None, description="关联项目的展示名称")
