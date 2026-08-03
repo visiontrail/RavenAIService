@@ -62,6 +62,41 @@ AGENT_KEY = "device_agent"
 _SENTINEL: Any = object()
 
 
+def _make_queue_emitter(
+    queue: "asyncio.Queue[AgentTraceEvent]",
+    loop: asyncio.AbstractEventLoop,
+) -> Callable[[AgentTraceEvent], None]:
+    """Return an emitter that wakes the queue's owning loop safely.
+
+    SDK MCP tool handlers may invoke their callbacks from a background thread.
+    ``asyncio.Queue`` is not thread-safe: calling ``put_nowait`` there can add
+    an item without waking a consumer blocked in ``queue.get()``, deadlocking
+    HITL requests because the browser never sees the question it must answer.
+    """
+
+    def emit(event: AgentTraceEvent) -> None:
+        try:
+            if loop.is_closed():
+                logger.warning("DeviceAgent: event loop closed before queue emit")
+                return
+            try:
+                caller_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                caller_loop = None
+            # Thread identity is insufficient here: SDK callbacks can run from
+            # a portal/nested async context on the owner's thread without the
+            # queue's loop being current.  Only write directly when we are
+            # actually executing on the queue's owning loop.
+            if caller_loop is loop:
+                queue.put_nowait(event)
+            else:
+                loop.call_soon_threadsafe(queue.put_nowait, event)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("DeviceAgent: queue put failed: %s", exc)
+
+    return emit
+
+
 # ─────────────────────── Run Context ───────────────────────────────
 
 
@@ -208,15 +243,16 @@ class DeviceAgent:
 
         # Event queue: producer = _drive_loop coroutine, consumer = this generator.
         queue: "asyncio.Queue[AgentTraceEvent]" = asyncio.Queue()
+        event_loop = asyncio.get_running_loop()
+        emit = _make_queue_emitter(queue, event_loop)
 
-        def emit(event: AgentTraceEvent) -> None:
-            try:
-                queue.put_nowait(event)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("DeviceAgent: queue put failed: %s", exc)
-
-        seq_counter = SeqCounter()
         state = _RunState(task_id=task_id, emitter=emit)
+        # Every event in one DeviceAgent stream must share a single sequence
+        # space.  Clarification / permission helpers use ``seq_counter`` while
+        # SDK message translation uses ``state.seq_counter``; separate counters
+        # produce duplicate ``(run_id, seq)`` keys, causing the frontend replay
+        # deduper to discard AskUserQuestion cards as already seen events.
+        seq_counter = state.seq_counter
 
         # Endpoint selection must precede RUN_START below: that event names the
         # model and is emitted straight onto the SSE stream, before the capability
@@ -433,6 +469,12 @@ class DeviceAgent:
                 return build_options(
                     system_prompt=system_prompt,
                     allowed_tools=full_allowed,
+                    # Claude Code also ships a built-in AskUserQuestion tool.
+                    # It is not connected to RavenAI's clarification broker or
+                    # SSE card, so using it leaves headless SDK runs waiting on
+                    # a terminal UI that does not exist.  Only the qualified
+                    # in-process MCP tool below is valid for this product flow.
+                    disallowed_tools=["AskUserQuestion"],
                     cwd=str(workspace_path),
                     permission_mode="default",
                     mcp_servers=mcp_servers or None,
@@ -491,7 +533,9 @@ class DeviceAgent:
                         )
                     )
                 finally:
-                    queue.put_nowait(_SENTINEL)
+                    # Preserve ordering with events scheduled by the
+                    # thread-safe emitter immediately before completion.
+                    event_loop.call_soon_threadsafe(queue.put_nowait, _SENTINEL)
 
             runner = asyncio.create_task(_drive())
 

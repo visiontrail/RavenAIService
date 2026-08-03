@@ -17,8 +17,10 @@ from app.agents.device_agent.agent import (
     DeviceAgent,
     DeviceAgentContext,
     _format_history_block,
+    _make_queue_emitter,
     _single_user_prompt_stream,
 )
+from app.agents.device_agent.prompts import clarification_guidance
 
 
 # ─────────────────────── Fake SDK messages ─────────────────────────
@@ -119,6 +121,28 @@ async def test_single_user_prompt_stream_uses_sdk_streaming_shape():
     ]
 
 
+@pytest.mark.asyncio
+async def test_queue_emitter_wakes_consumer_from_background_thread():
+    """An in-process MCP callback must wake the SSE pump across threads."""
+    queue: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue()
+    emit = _make_queue_emitter(queue, asyncio.get_running_loop())
+    waiting_consumer = asyncio.create_task(queue.get())
+    await asyncio.sleep(0)
+
+    event = {"type": "clarification_request", "request_id": "req-1"}
+    await asyncio.to_thread(emit, event)
+
+    received = await asyncio.wait_for(waiting_consumer, timeout=0.5)
+    assert received is event
+
+
+def test_clarification_guidance_names_product_mcp_tool_explicitly():
+    guidance = clarification_guidance("zh")
+
+    assert "`mcp__ask__AskUserQuestion`" in guidance
+    assert "不要调用 Claude CLI 内置" in guidance
+
+
 # ─────────────────────── DeviceAgent.run_stream ────────────────────
 
 
@@ -164,6 +188,10 @@ async def test_run_stream_emits_run_start_thinking_and_run_complete(monkeypatch)
     assert types[-1] == "run_complete"
     assert "thinking_start" in types
     assert "thinking_end" in types
+    # Frontend replay deduplicates by ``(run_id, seq)``.  All DeviceAgent
+    # producers, including AskUserQuestion, must therefore share one strictly
+    # increasing sequence space rather than restart at 1 independently.
+    assert [e["seq"] for e in events] == list(range(1, len(events) + 1))
     # run_complete carries the final_text excerpt.
     complete = events[-1]
     assert "hello world" in complete.get("final_text", "")
@@ -233,12 +261,14 @@ async def test_run_stream_registers_and_cleans_broker(monkeypatch):
         return device
 
     seen_brokers: List[Any] = []
+    seen_options: List[Any] = []
 
     fake_query = _fake_query_factory([_ResultMessage("done")])
 
     async def _capturing_query(*, prompt, options):  # noqa: ARG001
         # Inspect that broker is registered at this point.
         seen_brokers.append(dict(registry))
+        seen_options.append(options)
         for m in [_ResultMessage("done")]:
             yield m
 
@@ -263,5 +293,10 @@ async def test_run_stream_registers_and_cleans_broker(monkeypatch):
 
     # Broker was registered while SDK was running...
     assert seen_brokers and "sess-broker" in seen_brokers[0]
+    # The headless CLI's built-in prompt tool is unusable here; only RavenAI's
+    # broker-backed MCP variant may be selected by the model.
+    assert seen_options
+    assert "AskUserQuestion" in (seen_options[0].disallowed_tools or [])
+    assert "mcp__ask__AskUserQuestion" in (seen_options[0].allowed_tools or [])
     # ...and removed after run_stream finished.
     assert "sess-broker" not in registry

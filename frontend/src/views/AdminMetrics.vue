@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ArrowLeft, LogOut, Menu, PanelLeftClose, RefreshCw, X } from 'lucide-vue-next'
@@ -8,8 +8,9 @@ import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAppStore } from '@/stores/app'
 import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
 import { useAdminScope } from '@/composables/useAdminScope'
+import { useMermaidOnMount } from '@/composables/useMermaidOnMount'
 import AgentTraceStream from '@/components/AgentTraceStream.vue'
-import { processMermaidBlocks, renderMarkdown } from '@/utils/markdownRenderer'
+import { renderMarkdown } from '@/utils/markdownRenderer'
 import type { AgentTraceEvent } from '@/types/agentTrace'
 import type {
   AdminConversationDetail,
@@ -93,6 +94,10 @@ const conversationVisible = ref(false)
 const loadingConversation = ref(false)
 const conversation = ref<AdminConversationDetail | null>(null)
 const conversationThreadRef = ref<HTMLElement | null>(null)
+
+// The transcript is behind the loading branch, so render Mermaid only after
+// its template ref is actually mounted (rather than while the loader is shown).
+useMermaidOnMount(conversationThreadRef)
 
 /**
  * Blob object URLs for the images attached to the open conversation, keyed by
@@ -531,10 +536,6 @@ const openEventConversation = async (event: MetricsRawEvent) => {
       throw new Error(resp?.message || t('admin.metrics.loadConversationFail'))
     }
     conversation.value = resp.data
-    await nextTick()
-    if (conversationThreadRef.value) {
-      await processMermaidBlocks(conversationThreadRef.value)
-    }
     // Not awaited: thumbnails stream in behind the already-rendered transcript.
     void loadConversationImages(resp.data)
   } catch (err: any) {

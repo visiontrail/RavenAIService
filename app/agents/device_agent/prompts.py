@@ -144,21 +144,25 @@ def render_user_prompt(
 
 _CLARIFICATION_GUIDANCE = {
     "zh": (
-        "## 何时向用户提问（AskUserQuestion）\n"
-        "当且仅当满足以下情形时，调用 `AskUserQuestion` 工具向用户澄清：\n"
+        "## 何时向用户提问（mcp__ask__AskUserQuestion）\n"
+        "当且仅当满足以下情形时，调用 `mcp__ask__AskUserQuestion` 工具向用户澄清：\n"
         "- 缺少执行所必需的关键参数；\n"
         "- 指令存在多种合理且后果不同的解读；\n"
         "- 操作目标对象/范围不明确，猜错代价较高。\n"
+        "必须使用完整工具名 `mcp__ask__AskUserQuestion`；不要调用 Claude CLI 内置的"
+        "同名 `AskUserQuestion` 工具，后者未接入本产品的提问卡片。\n"
         "能够根据上下文合理推断时，不要打断用户，直接继续。\n"
         "提问时：把需要澄清的点尽量在一次调用里问全（每个问题给 2–4 个预设选项，"
         "并配简短说明）；本轮最多可提问 {max_rounds} 次，达上限后请基于已知信息自行决断。"
     ),
     "en": (
-        "## When to ask the user (AskUserQuestion)\n"
-        "Call the `AskUserQuestion` tool to clarify only when:\n"
+        "## When to ask the user (mcp__ask__AskUserQuestion)\n"
+        "Call `mcp__ask__AskUserQuestion` to clarify only when:\n"
         "- a required parameter for the action is missing;\n"
         "- the instruction has multiple reasonable interpretations with different outcomes;\n"
         "- the target/scope is ambiguous and guessing wrong is costly.\n"
+        "Always use the full name `mcp__ask__AskUserQuestion`; never use Claude CLI's "
+        "built-in `AskUserQuestion`, which is not connected to RavenAI's clarification card.\n"
         "If you can reasonably infer intent from context, do NOT interrupt — just proceed.\n"
         "When you do ask, batch everything you need into a single call (2–4 preset options "
         "with short descriptions per question). You may ask at most {max_rounds} time(s) this "

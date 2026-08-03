@@ -1028,6 +1028,11 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       session_id: sessionId,
       history: payload.history || [],
       remember: payload.remember ?? true,
+      // ``/chat/stream`` defaults to GeneralAgent unless the specialist type
+      // is explicit.  The device picker is the UI's DeviceAgent selector, so
+      // a selected target must carry the matching routing discriminator.
+      // Keep it absent for ordinary chat, which also uses this transport.
+      agent_type: payload.target_device_id ? 'device' : undefined,
       target_device_id: payload.target_device_id || undefined,
       target_device_name: payload.target_device_name || undefined,
       // Only include when non-empty so image-free requests are unchanged.

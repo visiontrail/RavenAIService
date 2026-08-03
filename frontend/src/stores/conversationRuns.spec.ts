@@ -117,7 +117,10 @@ describe('conversationRuns store', () => {
     ]))
     vi.stubGlobal('fetch', fetchMock)
 
-    await store.startDeviceRun('session-b', { message: 'hello from B' })
+    await store.startDeviceRun('session-b', {
+      message: 'hello from B',
+      target_device_id: 'dev-b',
+    })
 
     const sessionB = store.ensureState('session-b')
     expect(fetchMock).toHaveBeenCalledWith(
@@ -127,6 +130,9 @@ describe('conversationRuns store', () => {
         headers: expect.objectContaining({ [LOCALE_HEADER]: 'zh' }),
       }),
     )
+    const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body as string)
+    expect(requestBody.agent_type).toBe('device')
+    expect(requestBody.target_device_id).toBe('dev-b')
     expect(sessionA.isSending).toBe(true)
     expect(sessionA.activeRunId).toBe('run-a')
     expect(sessionB.isSending).toBe(false)
@@ -752,6 +758,7 @@ describe('conversationRuns store', () => {
     await store.startDeviceRun('session-noimg', { message: 'plain' })
     const noImagesBody = JSON.parse(fetchMock.mock.calls[0][1].body as string)
     expect(noImagesBody.images).toBeUndefined()
+    expect(noImagesBody.agent_type).toBeUndefined()
   })
 
   it('records an OCR degradation hint on the assistant bubble', () => {
