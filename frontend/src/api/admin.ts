@@ -38,8 +38,11 @@ export interface RegistrationEmailSettings {
   email_validation_message: string
 }
 
+/** Endpoint slots the Admin page can configure; mirrors FieldSpec.group. */
+export type ModelSettingsTarget = 'anthropic' | 'anthropic_backup' | 'ocr'
+
 export interface ModelSettingFieldEntry {
-  group: 'anthropic' | 'ocr'
+  group: ModelSettingsTarget
   source: 'override' | 'env' | 'unset'
   value?: string | number | boolean
   env_default?: string | number | boolean
@@ -62,14 +65,46 @@ export interface ModelProviderProfile {
   base_url_needs_input: boolean
 }
 
+/** Editable fields of one Anthropic endpoint slot (primary or backup). */
+export interface EndpointForm {
+  provider: string
+  api_key: string
+  base_url: string
+  model: string
+  small_fast_model: string
+}
+
+/** Live endpoint-routing state, surfaced so a stuck failover is visible. */
+export interface ModelRouterSlotState {
+  configured: boolean
+  provider: string | null
+  model: string | null
+  samples: number
+  bad_samples: number
+}
+
+export interface ModelRouterState {
+  enabled?: boolean
+  slow_ttft_ms?: number
+  window_size?: number
+  trip_threshold?: number
+  cooldown_seconds?: number
+  slots?: Record<string, ModelRouterSlotState>
+  primary_breaker_open?: boolean
+  serving_slot?: 'primary' | 'backup'
+  /** Unix seconds the breaker opened; null while the primary is healthy. */
+  breaker_opened_at?: number | null
+}
+
 export interface ModelSettingsData {
   fields: Record<string, ModelSettingFieldEntry>
   provider_options: string[]
   provider_profiles: ModelProviderProfile[]
+  router?: ModelRouterState
 }
 
 export interface TestModelSettingsPayload {
-  target: 'anthropic' | 'ocr'
+  target: ModelSettingsTarget
   /** Omitted fields fall back to the saved effective config (e.g. the API key). */
   provider?: string
   base_url?: string
@@ -79,7 +114,7 @@ export interface TestModelSettingsPayload {
 
 export interface ModelSettingsTestResult {
   ok: boolean
-  target: 'anthropic' | 'ocr'
+  target: ModelSettingsTarget
   provider?: string
   base_url?: string
   model?: string
@@ -98,6 +133,12 @@ export interface UpdateModelSettingsPayload {
   anthropic_model?: string
   anthropic_small_fast_model?: string
   anthropic_max_tokens?: number
+  anthropic_backup_enabled?: boolean
+  anthropic_backup_provider?: string
+  anthropic_backup_api_key?: string | null
+  anthropic_backup_base_url?: string
+  anthropic_backup_model?: string
+  anthropic_backup_small_fast_model?: string
   ocr_enabled?: boolean
   ocr_api_key?: string | null
   ocr_base_url?: string

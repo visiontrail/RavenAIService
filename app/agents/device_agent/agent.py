@@ -218,12 +218,26 @@ class DeviceAgent:
         seq_counter = SeqCounter()
         state = _RunState(task_id=task_id, emitter=emit)
 
-        provider = settings.anthropic_provider
-        profile = PROVIDER_PROFILES.get(provider)
-        effective_model = (
-            settings.anthropic_model
-            or (profile.default_model if profile else "unknown")
-        )
+        # Endpoint selection must precede RUN_START below: that event names the
+        # model and is emitted straight onto the SSE stream, before the capability
+        # gate and before query() ever runs, so it cannot be corrected afterwards.
+        from app.agents.routed_query import routed_query
+        from app.services import model_router
+
+        endpoints = model_router.candidates(agent_kind="device_agent", require_mcp=True)
+        chosen = endpoints[0] if endpoints else None
+        if chosen is not None:
+            provider = chosen.provider
+            profile = chosen.profile
+            effective_model = chosen.model
+        else:
+            provider = settings.anthropic_provider
+            profile = PROVIDER_PROFILES.get(provider)
+            effective_model = (
+                settings.anthropic_model
+                or (profile.default_model if profile else "unknown")
+            )
+        served: Dict[str, str] = {"model": effective_model, "provider": str(provider)}
 
         # Emit run_start immediately so the UI sees the agent starting.
         emit(
@@ -415,8 +429,8 @@ class DeviceAgent:
             )
 
             # --- Build options ----------------------------------------------
-            try:
-                options = build_options(
+            def _make_options(endpoint: Optional[Any]) -> Any:
+                return build_options(
                     system_prompt=system_prompt,
                     allowed_tools=full_allowed,
                     cwd=str(workspace_path),
@@ -425,7 +439,17 @@ class DeviceAgent:
                     setting_sources=setting_sources,
                     can_use_tool=can_use_tool,
                     hooks={"PostToolUse": [post_hook]},
+                    endpoint=endpoint,
                 )
+
+            def _on_endpoint(endpoint: Any) -> None:
+                served["model"] = endpoint.model
+                served["provider"] = endpoint.provider
+
+            try:
+                # Validate the chosen endpoint up front so a misconfiguration is
+                # still reported before the workspace-bound run begins.
+                _make_options(chosen)
             except AnthropicConfigurationError as exc:
                 emit(
                     build_event(
@@ -442,12 +466,17 @@ class DeviceAgent:
                 return
 
             # --- Drive query() in a background task -------------------------
-            from claude_agent_sdk import query as sdk_query
 
             async def _drive() -> None:
                 try:
                     prompt_stream = _single_user_prompt_stream(user_prompt)
-                    async for message in sdk_query(prompt=prompt_stream, options=options):
+                    async for message in routed_query(
+                        prompt=prompt_stream,
+                        make_options=_make_options,
+                        agent_kind="device_agent",
+                        candidates=endpoints,
+                        on_endpoint=_on_endpoint,
+                    ):
                         _emit_for_message(message, state=state)
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("DeviceAgent: SDK query failed: %s", exc)
@@ -486,8 +515,8 @@ class DeviceAgent:
                     task_id=task_id,
                     seq_counter=seq_counter,
                     trace_summary=trace_summary,
-                    model=effective_model,
-                    provider=str(provider),
+                    model=served["model"],
+                    provider=served["provider"],
                     token_usage=dict(state.token_usage),
                     duration_seconds=round(time.monotonic() - start_ts, 3),
                     final_text=coerce_excerpt(
@@ -503,7 +532,7 @@ class DeviceAgent:
                 "DeviceAgent run_complete: session=%s model=%s duration_s=%.2f "
                 "tokens_in=%d tokens_out=%d tools=%d",
                 session_id,
-                effective_model,
+                served["model"],
                 duration,
                 state.token_usage["input_tokens"],
                 state.token_usage["output_tokens"],

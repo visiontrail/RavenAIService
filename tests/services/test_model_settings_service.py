@@ -33,6 +33,18 @@ def test_key_lists_are_in_sync():
     assert mss.OVERRIDABLE_KEYS == OVERRIDABLE_MODEL_KEYS
 
 
+def test_request_model_matches_specs():
+    """The Admin PUT body model must mirror ``_SPECS`` exactly.
+
+    FastAPI drops unknown body keys silently, so a spec without a matching
+    pydantic field would be accepted by the API and then discarded before
+    ``save()`` runs — a setting that "won't stick" with no error anywhere.
+    """
+    from app.api.admin import UpdateModelSettingsRequest
+
+    assert set(UpdateModelSettingsRequest.model_fields) == mss.OVERRIDABLE_KEYS
+
+
 def test_no_override_falls_back_to_env(isolated_store):
     env_provider = object.__getattribute__(settings, "anthropic_provider")
     # With an empty store the overlay must return the raw env/default value.
@@ -231,6 +243,10 @@ def blank_model_env(monkeypatch):
         "anthropic_api_key",
         "anthropic_base_url",
         "anthropic_model",
+        "anthropic_backup_api_key",
+        "anthropic_backup_base_url",
+        "anthropic_backup_model",
+        "anthropic_backup_provider",
         "ocr_api_key",
         "ocr_base_url",
         "ocr_model",
@@ -338,6 +354,154 @@ async def test_anthropic_probe_reports_upstream_error(isolated_store, blank_mode
     assert "invalid api key" in result["detail"]
     # The key must never be echoed back to the browser.
     assert "sk-bad" not in json.dumps(result)
+
+
+# ──────────────────────── Backup endpoint (failover slot) ───────────────────
+#
+# The backup slot reuses the primary's validation and probe implementation via
+# ``AnthropicSlot``, so these mirror the primary's cases to pin that the
+# generalisation actually covers both and did not silently keep validating only
+# the primary keys.
+
+
+@pytest.fixture
+def valid_primary(monkeypatch):
+    """Pin a known-good primary so backup assertions are the only thing failing.
+
+    ``save`` validates *every* slot, so a dev machine whose ``.env`` selects
+    ``custom`` would otherwise raise on the primary's own rules before the
+    backup is ever reached. Distinct from ``blank_model_env``, which blanks
+    fields precisely to test the probe's fallback chain.
+    """
+    monkeypatch.setattr(settings, "anthropic_provider", "deepseek")
+    monkeypatch.setattr(settings, "anthropic_base_url", "")
+    monkeypatch.setattr(settings, "anthropic_model", "")
+
+
+def test_disabled_backup_tolerates_partial_config(isolated_store):
+    """An admin must be able to park a half-filled backup without enabling it."""
+    mss.save({"anthropic_backup_provider": "moonshot"})
+    assert settings.anthropic_backup_provider == "moonshot"
+    assert settings.anthropic_backup_enabled is False
+
+
+def test_enabling_backup_requires_provider(isolated_store, valid_primary):
+    with pytest.raises(ValueError, match="anthropic_backup_provider"):
+        mss.save({"anthropic_backup_enabled": True})
+
+
+def test_backup_custom_provider_requires_base_url_and_model(isolated_store, valid_primary):
+    with pytest.raises(ValueError, match="anthropic_backup_base_url"):
+        mss.save(
+            {
+                "anthropic_backup_enabled": True,
+                "anthropic_backup_provider": "custom",
+                "anthropic_backup_base_url": "",
+                "anthropic_backup_model": "",
+            }
+        )
+
+
+def test_backup_invalid_provider_rejected(isolated_store):
+    with pytest.raises(ValueError, match="anthropic_backup_provider"):
+        mss.save({"anthropic_backup_provider": "not-a-provider"})
+
+
+def test_backup_placeholder_base_url_rejected(isolated_store, valid_primary):
+    # aliyun's default carries a {WorkspaceId} template; enabling the slot with
+    # it unresolved would point every failover at a non-existent host.
+    with pytest.raises(ValueError, match="占位符"):
+        mss.save(
+            {
+                "anthropic_backup_enabled": True,
+                "anthropic_backup_provider": "aliyun",
+                "anthropic_backup_base_url": "",
+            }
+        )
+
+
+def test_backup_full_config_saves(isolated_store, valid_primary):
+    mss.save(
+        {
+            "anthropic_backup_enabled": True,
+            "anthropic_backup_provider": "deepseek",
+            "anthropic_backup_api_key": "sk-backup",
+            "anthropic_backup_model": "deepseek-v4-pro",
+        }
+    )
+    assert settings.anthropic_backup_enabled is True
+    assert settings.anthropic_backup_provider == "deepseek"
+    assert settings.anthropic_backup_model == "deepseek-v4-pro"
+    # Secrets stay server-side for the backup slot too.
+    entry = mss.describe()["fields"]["anthropic_backup_api_key"]
+    assert entry["is_set"] is True
+    assert "value" not in entry
+
+
+def test_backup_validation_does_not_affect_primary(isolated_store, blank_model_env):
+    """Enabling a valid backup must not retroactively invalidate the primary."""
+    mss.save(
+        {
+            "anthropic_provider": "custom",
+            "anthropic_base_url": "http://oneapi.example.test",
+            "anthropic_model": "yinhe-thinking",
+            "anthropic_backup_enabled": True,
+            "anthropic_backup_provider": "deepseek",
+        }
+    )
+    assert settings.anthropic_provider == "custom"
+    assert settings.anthropic_backup_provider == "deepseek"
+
+
+async def test_backup_probe_targets_backup_endpoint(
+    isolated_store, blank_model_env, fake_upstream
+):
+    _box, calls = fake_upstream
+
+    result = await mss.test_connection(
+        {
+            "target": "anthropic_backup",
+            "provider": "moonshot",
+            "base_url": "https://api.moonshot.cn/anthropic/",
+            "model": "kimi-k3",
+            "api_key": "sk-backup-typed",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["target"] == "anthropic_backup"
+    assert calls[0]["url"] == "https://api.moonshot.cn/anthropic/v1/messages"
+    assert calls[0]["headers"]["x-api-key"] == "sk-backup-typed"
+
+
+async def test_backup_probe_falls_back_to_backup_keys_not_primary(
+    isolated_store, blank_model_env, fake_upstream, monkeypatch
+):
+    """Omitted fields must resolve from the *backup* config, never the primary."""
+    _box, calls = fake_upstream
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-PRIMARY")
+    monkeypatch.setattr(settings, "anthropic_provider", "anthropic")
+    monkeypatch.setattr(settings, "anthropic_backup_api_key", "sk-BACKUP")
+    monkeypatch.setattr(settings, "anthropic_backup_provider", "zhipu")
+
+    result = await mss.test_connection({"target": "anthropic_backup"})
+
+    assert result["ok"] is True
+    assert result["model"] == "glm-5.2"  # zhipu's default, not anthropic's
+    assert calls[0]["url"] == "https://open.bigmodel.cn/api/anthropic/v1/messages"
+    assert calls[0]["headers"]["x-api-key"] == "sk-BACKUP"
+
+
+async def test_backup_probe_reports_missing_provider(
+    isolated_store, blank_model_env, fake_upstream
+):
+    _box, calls = fake_upstream
+    result = await mss.test_connection({"target": "anthropic_backup"})
+
+    assert result["ok"] is False
+    assert result["error_kind"] == "missing_provider"
+    # Pre-flight failure must not touch the network.
+    assert calls == []
 
 
 async def test_anthropic_probe_reports_timeout(isolated_store, blank_model_env, fake_upstream, monkeypatch):

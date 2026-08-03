@@ -1,0 +1,134 @@
+/* Field-level chrome shared by the Admin「模型设置」page and the endpoint card
+   it renders per slot (primary / backup).
+
+   Kept in a standalone file rather than duplicated in two <style scoped> blocks:
+   both consumers pull it in with `<style scoped src="...">`, so each component
+   still gets its own scoped copy while the rules have a single source of truth.
+   Not imported globally — nothing outside 模型设置 uses `ms-*`. */
+
+.ms-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.05rem 0.4rem;
+  border-radius: 9999px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  line-height: 1.4;
+  border: 1px solid transparent;
+}
+
+.ms-badge--override {
+  color: #0e7490;
+  background: #cffafe;
+  border-color: #a5f3fc;
+}
+
+.ms-badge--env {
+  color: #475569;
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+}
+
+.ms-badge--unset {
+  color: #b45309;
+  background: #fef3c7;
+  border-color: #fde68a;
+}
+
+/* Warning hint for endpoint templates that still need a deployer value. */
+.ms-warn {
+  color: var(--admin-warning, #b45309);
+}
+
+.ms-test-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--admin-hairline-strong, #cbd5e1);
+  background: var(--admin-surface, #fff);
+  color: var(--admin-ink, #0f172a);
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: background 0.15s ease;
+}
+
+.ms-test-btn:hover:not(:disabled) {
+  background: var(--admin-canvas-soft, #f8fafc);
+}
+
+.ms-test-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ms-test-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 0.65rem;
+  border: 1px solid transparent;
+  font-size: 0.8rem;
+}
+
+.ms-test-result.is-ok {
+  color: var(--admin-success, #16a34a);
+  background: var(--admin-status-success-bg, #dcfce7);
+  border-color: var(--admin-success, #16a34a);
+}
+
+.ms-test-result.is-fail {
+  color: var(--admin-error, #dc2626);
+  background: var(--admin-status-error-bg, #fee2e2);
+  border-color: var(--admin-error, #dc2626);
+}
+
+.ms-test-icon {
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.ms-test-title {
+  font-weight: 600;
+}
+
+/* Endpoint / model ids and upstream error bodies: monospace, wrap anywhere so
+   a long URL cannot push the card into horizontal scroll. */
+.ms-test-meta {
+  margin-top: 0.15rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  opacity: 0.9;
+  overflow-wrap: anywhere;
+}
+
+
+/* Live routing strip on the backup card. Reuses the probe-result geometry so
+   the two status blocks on the page read as the same kind of thing. */
+.ms-route {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 0.65rem;
+  border: 1px solid transparent;
+  font-size: 0.8rem;
+}
+
+.ms-route.is-primary {
+  color: var(--admin-success, #16a34a);
+  background: var(--admin-status-success-bg, #dcfce7);
+  border-color: var(--admin-success, #16a34a);
+}
+
+/* Amber, not red: running on the paid backup is working-as-designed, but it
+   costs money and should not blend into the page. */
+.ms-route.is-backup {
+  color: #b45309;
+  background: #fef3c7;
+  border-color: #fbbf24;
+}

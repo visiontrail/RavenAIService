@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
+  AlertTriangle,
   ArrowLeft,
   CheckCircle2,
   LogOut,
@@ -16,11 +17,14 @@ import {
 import {
   adminApi,
   adminToken,
+  type EndpointForm,
   type ModelSettingsData,
+  type ModelSettingsTarget,
   type ModelSettingsTestResult,
   type TestModelSettingsPayload,
   type UpdateModelSettingsPayload,
 } from '@/api/admin'
+import AnthropicEndpointCard from '@/components/admin/AnthropicEndpointCard.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAppStore } from '@/stores/app'
 import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
@@ -44,12 +48,25 @@ const savingSettings = ref(false)
 const resettingSettings = ref(false)
 const settingsData = ref<ModelSettingsData | null>(null)
 
+// The two Anthropic slots are grouped so each can be handed to
+// AnthropicEndpointCard as one object; the flat `anthropic_*` / `ocr_*` keys
+// are reassembled at save time.
 const form = reactive({
-  anthropic_provider: 'anthropic',
-  anthropic_api_key: '',
-  anthropic_base_url: '',
-  anthropic_model: '',
-  anthropic_small_fast_model: '',
+  primary: {
+    provider: 'anthropic',
+    api_key: '',
+    base_url: '',
+    model: '',
+    small_fast_model: '',
+  } as EndpointForm,
+  backup: {
+    provider: 'anthropic',
+    api_key: '',
+    base_url: '',
+    model: '',
+    small_fast_model: '',
+  } as EndpointForm,
+  anthropic_backup_enabled: false,
   anthropic_max_tokens: 8192,
   ocr_enabled: true,
   ocr_api_key: '',
@@ -60,74 +77,66 @@ const form = reactive({
 
 // Secrets are never returned by the API; only whether one is currently set.
 const anthropicKeySet = ref(false)
+const backupKeySet = ref(false)
 const ocrKeySet = ref(false)
 
 const providerOptions = computed(() => settingsData.value?.provider_options ?? [])
-const profileOf = (name: string) =>
-  settingsData.value?.provider_profiles.find((p) => p.name === name) ?? null
-const selectedProfile = computed(() => profileOf(form.anthropic_provider))
-const isCustomProvider = computed(() => form.anthropic_provider === 'custom')
+const providerProfiles = computed(() => settingsData.value?.provider_profiles ?? [])
 
-const providerLabel = (name: string) => {
-  const label = profileOf(name)?.label
-  return label ? `${label} · ${name}` : name
-}
+// ── Routing state ─────────────────────────────────────────────────────────
+// A primary that stays degraded sends every request to the paid backup. Without
+// surfacing that, the first symptom is the invoice — so show it plainly.
+const router$ = computed(() => settingsData.value?.router ?? null)
+const onBackup = computed(() => router$.value?.serving_slot === 'backup')
+const backupSince = computed(() => {
+  const at = router$.value?.breaker_opened_at
+  return at ? new Date(at * 1000).toLocaleString() : ''
+})
+const primaryWindow = computed(() => {
+  const slot = router$.value?.slots?.primary
+  if (!slot || !slot.samples) return ''
+  return `${slot.bad_samples}/${slot.samples}`
+})
 
-const testing = reactive({ anthropic: false, ocr: false })
-const testResults = reactive<{
-  anthropic: ModelSettingsTestResult | null
-  ocr: ModelSettingsTestResult | null
-}>({ anthropic: null, ocr: null })
-
-// ── Model presets ─────────────────────────────────────────────────────────
-// The text inputs stay the source of truth (a provider may ship a model newer
-// than this table); the selects are shortcuts that write into them.
-const CUSTOM_MODEL = '__custom__'
-const modelPresets = computed(() => selectedProfile.value?.models ?? [])
-const presetValue = (current: string) =>
-  modelPresets.value.includes(current) ? current : CUSTOM_MODEL
-const applyPreset = (key: 'anthropic_model' | 'anthropic_small_fast_model', event: Event) => {
-  const value = (event.target as HTMLSelectElement).value
-  if (value !== CUSTOM_MODEL) form[key] = value
-}
-
-/**
- * Switching provider re-points Base URL / models at that vendor's defaults —
- * the whole purpose of the dropdown. Any hand-typed value is replaced, so the
- * form always describes one coherent upstream.
- */
-const handleProviderChange = () => {
-  testResults.anthropic = null
-  const profile = selectedProfile.value
-  if (!profile) return
-  form.anthropic_base_url = profile.default_base_url
-  form.anthropic_model = profile.default_model
-  form.anthropic_small_fast_model = profile.default_small_fast_model ?? ''
-}
+const testing = reactive<Record<ModelSettingsTarget, boolean>>({
+  anthropic: false,
+  anthropic_backup: false,
+  ocr: false,
+})
+const testResults = reactive<Record<ModelSettingsTarget, ModelSettingsTestResult | null>>({
+  anthropic: null,
+  anthropic_backup: null,
+  ocr: null,
+})
 
 // ── Connectivity test ─────────────────────────────────────────────────────
-const runTest = async (target: 'anthropic' | 'ocr') => {
+const ENDPOINT_SLOT: Partial<Record<ModelSettingsTarget, 'primary' | 'backup'>> = {
+  anthropic: 'primary',
+  anthropic_backup: 'backup',
+}
+
+const runTest = async (target: ModelSettingsTarget) => {
   testing[target] = true
   testResults[target] = null
   try {
     // Send the form's current values so a config can be verified before it is
     // saved; the API key is omitted unless it is being changed, in which case
     // the backend tests the stored one.
-    const payload: TestModelSettingsPayload =
-      target === 'anthropic'
-        ? {
-            target,
-            provider: form.anthropic_provider,
-            base_url: form.anthropic_base_url.trim(),
-            model: form.anthropic_model.trim(),
-          }
-        : {
-            target,
-            base_url: form.ocr_base_url.trim(),
-            model: form.ocr_model.trim(),
-          }
-    const typedKey =
-      target === 'anthropic' ? form.anthropic_api_key.trim() : form.ocr_api_key.trim()
+    const slot = ENDPOINT_SLOT[target]
+    const endpoint = slot ? form[slot] : null
+    const payload: TestModelSettingsPayload = endpoint
+      ? {
+          target,
+          provider: endpoint.provider,
+          base_url: endpoint.base_url.trim(),
+          model: endpoint.model.trim(),
+        }
+      : {
+          target,
+          base_url: form.ocr_base_url.trim(),
+          model: form.ocr_model.trim(),
+        }
+    const typedKey = endpoint ? endpoint.api_key.trim() : form.ocr_api_key.trim()
     if (typedKey) payload.api_key = typedKey
 
     const resp = await adminApi.testModelSettings(payload)
@@ -156,19 +165,30 @@ const sourceLabel = (key: string) => {
 const populateForm = (data: ModelSettingsData) => {
   settingsData.value = data
   const f = data.fields || {}
-  form.anthropic_provider = String(f.anthropic_provider?.value ?? 'anthropic')
-  form.anthropic_base_url = String(f.anthropic_base_url?.value ?? '')
-  form.anthropic_model = String(f.anthropic_model?.value ?? '')
-  form.anthropic_small_fast_model = String(f.anthropic_small_fast_model?.value ?? '')
+  form.primary.provider = String(f.anthropic_provider?.value ?? 'anthropic')
+  form.primary.base_url = String(f.anthropic_base_url?.value ?? '')
+  form.primary.model = String(f.anthropic_model?.value ?? '')
+  form.primary.small_fast_model = String(f.anthropic_small_fast_model?.value ?? '')
   form.anthropic_max_tokens = Number(f.anthropic_max_tokens?.value ?? 8192)
+  // An unconfigured backup has no provider yet; default the dropdown to the
+  // primary's so the card opens on a coherent vendor rather than a blank one.
+  form.anthropic_backup_enabled = Boolean(f.anthropic_backup_enabled?.value ?? false)
+  form.backup.provider = String(
+    f.anthropic_backup_provider?.value || form.primary.provider || 'anthropic',
+  )
+  form.backup.base_url = String(f.anthropic_backup_base_url?.value ?? '')
+  form.backup.model = String(f.anthropic_backup_model?.value ?? '')
+  form.backup.small_fast_model = String(f.anthropic_backup_small_fast_model?.value ?? '')
   form.ocr_enabled = Boolean(f.ocr_enabled?.value ?? true)
   form.ocr_base_url = String(f.ocr_base_url?.value ?? '')
   form.ocr_model = String(f.ocr_model?.value ?? '')
   form.ocr_provider = String(f.ocr_provider?.value ?? '')
   // Reset secret inputs — only their "is set" state is known.
-  form.anthropic_api_key = ''
+  form.primary.api_key = ''
+  form.backup.api_key = ''
   form.ocr_api_key = ''
   anthropicKeySet.value = Boolean(f.anthropic_api_key?.is_set)
+  backupKeySet.value = Boolean(f.anthropic_backup_api_key?.is_set)
   ocrKeySet.value = Boolean(f.ocr_api_key?.is_set)
 }
 
@@ -196,18 +216,24 @@ const handleSaveSettings = async () => {
   savingSettings.value = true
   try {
     const payload: UpdateModelSettingsPayload = {
-      anthropic_provider: form.anthropic_provider,
-      anthropic_base_url: form.anthropic_base_url.trim(),
-      anthropic_model: form.anthropic_model.trim(),
-      anthropic_small_fast_model: form.anthropic_small_fast_model.trim(),
+      anthropic_provider: form.primary.provider,
+      anthropic_base_url: form.primary.base_url.trim(),
+      anthropic_model: form.primary.model.trim(),
+      anthropic_small_fast_model: form.primary.small_fast_model.trim(),
       anthropic_max_tokens: Number(form.anthropic_max_tokens),
+      anthropic_backup_enabled: form.anthropic_backup_enabled,
+      anthropic_backup_provider: form.backup.provider,
+      anthropic_backup_base_url: form.backup.base_url.trim(),
+      anthropic_backup_model: form.backup.model.trim(),
+      anthropic_backup_small_fast_model: form.backup.small_fast_model.trim(),
       ocr_enabled: form.ocr_enabled,
       ocr_base_url: form.ocr_base_url.trim(),
       ocr_model: form.ocr_model.trim(),
       ocr_provider: form.ocr_provider.trim(),
     }
     // Only send secrets when the admin typed a new value; blank keeps the old.
-    if (form.anthropic_api_key.trim()) payload.anthropic_api_key = form.anthropic_api_key.trim()
+    if (form.primary.api_key.trim()) payload.anthropic_api_key = form.primary.api_key.trim()
+    if (form.backup.api_key.trim()) payload.anthropic_backup_api_key = form.backup.api_key.trim()
     if (form.ocr_api_key.trim()) payload.ocr_api_key = form.ocr_api_key.trim()
 
     const resp = await adminApi.updateModelSettings(payload)
@@ -238,6 +264,7 @@ const handleResetSettings = async () => {
     populateForm(resp.data)
     // The form now describes a different upstream; any earlier probe is stale.
     testResults.anthropic = null
+    testResults.anthropic_backup = null
     testResults.ocr = null
     appStore.showNotification({ title: t('admin.modelSettings.resetDone'), type: 'success' })
   } catch (err: any) {
@@ -449,182 +476,90 @@ onMounted(() => {
               <p class="text-sm text-slate-500">{{ t('admin.modelSettings.anthropicSectionDesc') }}</p>
             </div>
 
-            <div class="grid gap-4 lg:grid-cols-2">
-              <label class="block text-sm text-slate-700">
-                <span class="flex items-center gap-2">
-                  {{ t('admin.modelSettings.providerLabel') }}
-                  <span class="ms-badge" :class="`ms-badge--${sourceOf('anthropic_provider')}`">{{ sourceLabel('anthropic_provider') }}</span>
-                </span>
-                <select
-                  v-model="form.anthropic_provider"
-                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none bg-white"
-                  @change="handleProviderChange"
-                >
-                  <option v-for="opt in providerOptions" :key="opt" :value="opt">
-                    {{ providerLabel(opt) }}
-                  </option>
-                </select>
-                <p class="text-xs text-slate-500 mt-1">{{ t('admin.modelSettings.providerHint') }}</p>
-                <p v-if="selectedProfile" class="text-xs text-slate-500 mt-1">
-                  {{ t('admin.modelSettings.capabilities') }}:
-                  <span :class="selectedProfile.supports_image_input ? 'text-emerald-600' : 'text-slate-400'">
-                    {{ selectedProfile.supports_image_input ? t('admin.modelSettings.capImageYes') : t('admin.modelSettings.capImageNo') }}
+            <AnthropicEndpointCard
+              slot-name="primary"
+              :form="form.primary"
+              :fields="settingsData?.fields"
+              :provider-options="providerOptions"
+              :profiles="providerProfiles"
+              :key-set="anthropicKeySet"
+              :testing="testing.anthropic"
+              :test-result="testResults.anthropic"
+              @test="runTest('anthropic')"
+            >
+              <!-- Token budget is a workload property, not an endpoint one, so
+                   both slots share it and it lives only on the primary card. -->
+              <template #extra>
+                <label class="block text-sm text-slate-700">
+                  <span class="flex items-center gap-2">
+                    {{ t('admin.modelSettings.maxTokensLabel') }}
+                    <span class="ms-badge" :class="`ms-badge--${sourceOf('anthropic_max_tokens')}`">{{ sourceLabel('anthropic_max_tokens') }}</span>
                   </span>
-                  ·
-                  <span :class="selectedProfile.supports_mcp_server_tools ? 'text-emerald-600' : 'text-slate-400'">
-                    {{ selectedProfile.supports_mcp_server_tools ? t('admin.modelSettings.capMcpYes') : t('admin.modelSettings.capMcpNo') }}
-                  </span>
-                </p>
-                <p v-if="selectedProfile?.notes" class="text-xs text-slate-500 mt-1">
-                  {{ selectedProfile.notes }}
-                </p>
-              </label>
+                  <input
+                    v-model.number="form.anthropic_max_tokens"
+                    type="number"
+                    min="1"
+                    max="200000"
+                    class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
+                  />
+                  <p class="text-xs text-slate-500 mt-1">{{ t('admin.modelSettings.maxTokensHint') }}</p>
+                </label>
+              </template>
+            </AnthropicEndpointCard>
+          </div>
 
-              <label class="block text-sm text-slate-700">
-                <span class="flex items-center gap-2">
-                  {{ t('admin.modelSettings.apiKeyLabel') }}
-                  <span class="ms-badge" :class="`ms-badge--${sourceOf('anthropic_api_key')}`">{{ sourceLabel('anthropic_api_key') }}</span>
-                </span>
-                <input
-                  v-model="form.anthropic_api_key"
-                  type="password"
-                  autocomplete="off"
-                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-                  :placeholder="anthropicKeySet ? t('admin.modelSettings.apiKeySetPlaceholder') : t('admin.modelSettings.apiKeyUnsetPlaceholder')"
-                />
-                <p class="text-xs text-slate-500 mt-1">{{ t('admin.modelSettings.apiKeyHint') }}</p>
-              </label>
-
-              <label class="block text-sm text-slate-700">
-                <span class="flex items-center gap-2">
-                  {{ t('admin.modelSettings.baseUrlLabel') }}
-                  <span class="ms-badge" :class="`ms-badge--${sourceOf('anthropic_base_url')}`">{{ sourceLabel('anthropic_base_url') }}</span>
-                </span>
-                <input
-                  v-model="form.anthropic_base_url"
-                  type="text"
-                  spellcheck="false"
-                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-                  :placeholder="selectedProfile?.default_base_url || t('admin.modelSettings.customRequiredPlaceholder')"
-                />
-                <p v-if="selectedProfile?.base_url_needs_input" class="ms-warn text-xs mt-1">
-                  {{ t('admin.modelSettings.baseUrlPlaceholderHint') }}
-                </p>
-                <p class="text-xs text-slate-500 mt-1">
-                  {{ isCustomProvider ? t('admin.modelSettings.baseUrlCustomHint') : t('admin.modelSettings.baseUrlHint') }}
-                </p>
-              </label>
-
-              <label class="block text-sm text-slate-700">
-                <span class="flex items-center gap-2">
-                  {{ t('admin.modelSettings.modelLabel') }}
-                  <span class="ms-badge" :class="`ms-badge--${sourceOf('anthropic_model')}`">{{ sourceLabel('anthropic_model') }}</span>
-                </span>
-                <select
-                  v-if="modelPresets.length"
-                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none bg-white"
-                  :value="presetValue(form.anthropic_model)"
-                  @change="applyPreset('anthropic_model', $event)"
-                >
-                  <option v-for="m in modelPresets" :key="m" :value="m">{{ m }}</option>
-                  <option :value="CUSTOM_MODEL">{{ t('admin.modelSettings.modelCustomOption') }}</option>
-                </select>
-                <input
-                  v-model="form.anthropic_model"
-                  type="text"
-                  spellcheck="false"
-                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-                  :placeholder="selectedProfile?.default_model || t('admin.modelSettings.customRequiredPlaceholder')"
-                />
-                <p class="text-xs text-slate-500 mt-1">
-                  {{ isCustomProvider ? t('admin.modelSettings.modelCustomHint') : t('admin.modelSettings.modelHint') }}
-                </p>
-              </label>
-
-              <label class="block text-sm text-slate-700">
-                <span class="flex items-center gap-2">
-                  {{ t('admin.modelSettings.smallFastModelLabel') }}
-                  <span class="ms-badge" :class="`ms-badge--${sourceOf('anthropic_small_fast_model')}`">{{ sourceLabel('anthropic_small_fast_model') }}</span>
-                </span>
-                <select
-                  v-if="modelPresets.length"
-                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none bg-white"
-                  :value="presetValue(form.anthropic_small_fast_model)"
-                  @change="applyPreset('anthropic_small_fast_model', $event)"
-                >
-                  <option v-for="m in modelPresets" :key="m" :value="m">{{ m }}</option>
-                  <option :value="CUSTOM_MODEL">{{ t('admin.modelSettings.modelCustomOption') }}</option>
-                </select>
-                <input
-                  v-model="form.anthropic_small_fast_model"
-                  type="text"
-                  spellcheck="false"
-                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-                  :placeholder="selectedProfile?.default_small_fast_model || t('admin.modelSettings.customRequiredPlaceholder')"
-                />
-                <p class="text-xs text-slate-500 mt-1">{{ t('admin.modelSettings.smallFastModelHint') }}</p>
-              </label>
-
-              <label class="block text-sm text-slate-700">
-                <span class="flex items-center gap-2">
-                  {{ t('admin.modelSettings.maxTokensLabel') }}
-                  <span class="ms-badge" :class="`ms-badge--${sourceOf('anthropic_max_tokens')}`">{{ sourceLabel('anthropic_max_tokens') }}</span>
-                </span>
-                <input
-                  v-model.number="form.anthropic_max_tokens"
-                  type="number"
-                  min="1"
-                  max="200000"
-                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
-                />
-                <p class="text-xs text-slate-500 mt-1">{{ t('admin.modelSettings.maxTokensHint') }}</p>
-              </label>
+          <!-- Anthropic 备用模型（故障转移） -->
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+            <div class="mb-4">
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.modelSettings.backupSectionTitle') }}</h2>
+              <p class="text-sm text-slate-500">{{ t('admin.modelSettings.backupSectionDesc') }}</p>
             </div>
 
-            <div class="mt-4 pt-4 border-t border-slate-200">
-              <div class="flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  class="ms-test-btn"
-                  :disabled="testing.anthropic"
-                  @click="runTest('anthropic')"
-                >
-                  <PlugZap :size="15" />
-                  {{ testing.anthropic ? t('admin.modelSettings.testingBtn') : t('admin.modelSettings.testBtn') }}
-                </button>
-                <span class="text-xs text-slate-500">{{ t('admin.modelSettings.testHint') }}</span>
-              </div>
+            <label class="flex items-center gap-2 text-sm text-slate-700 mb-1">
+              <input v-model="form.anthropic_backup_enabled" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500" />
+              <span>{{ t('admin.modelSettings.backupEnabledLabel') }}</span>
+              <span class="ms-badge" :class="`ms-badge--${sourceOf('anthropic_backup_enabled')}`">{{ sourceLabel('anthropic_backup_enabled') }}</span>
+            </label>
+            <p class="text-xs text-slate-500 mb-4">{{ t('admin.modelSettings.backupEnabledHint') }}</p>
 
-              <div
-                v-if="testResults.anthropic"
-                class="ms-test-result"
-                :class="testResults.anthropic.ok ? 'is-ok' : 'is-fail'"
-              >
-                <component
-                  :is="testResults.anthropic.ok ? CheckCircle2 : XCircle"
-                  :size="16"
-                  class="ms-test-icon"
-                />
-                <div class="min-w-0">
-                  <p class="ms-test-title">
-                    {{
-                      testResults.anthropic.ok
-                        ? t('admin.modelSettings.testOk', { ms: testResults.anthropic.latency_ms ?? 0 })
-                        : t('admin.modelSettings.testFailed')
-                    }}
-                  </p>
-                  <p class="ms-test-meta">
-                    {{ testResults.anthropic.model }} · {{ testResults.anthropic.base_url }}
-                  </p>
-                  <p v-if="testResults.anthropic.ok && testResults.anthropic.reply" class="ms-test-meta">
-                    {{ t('admin.modelSettings.testReply') }}: {{ testResults.anthropic.reply }}
-                  </p>
-                  <p v-if="!testResults.anthropic.ok" class="ms-test-meta">
-                    [{{ testResults.anthropic.error_kind }}] {{ testResults.anthropic.detail }}
-                  </p>
-                </div>
+            <!-- Live routing state: which endpoint is answering right now. -->
+            <div v-if="router$" class="ms-route" :class="onBackup ? 'is-backup' : 'is-primary'">
+              <component :is="onBackup ? AlertTriangle : CheckCircle2" :size="16" class="ms-test-icon" />
+              <div class="min-w-0">
+                <p class="ms-test-title">
+                  {{
+                    onBackup
+                      ? t('admin.modelSettings.routeOnBackup', { since: backupSince })
+                      : t('admin.modelSettings.routeOnPrimary')
+                  }}
+                </p>
+                <p class="ms-test-meta">
+                  {{ t('admin.modelSettings.routeMode', {
+                    mode: router$.enabled
+                      ? t('admin.modelSettings.routeModeActive')
+                      : t('admin.modelSettings.routeModeObserve'),
+                  }) }}
+                  <template v-if="primaryWindow">
+                    · {{ t('admin.modelSettings.routeWindow', { ratio: primaryWindow }) }}
+                  </template>
+                </p>
               </div>
             </div>
+
+            <AnthropicEndpointCard
+              slot-name="backup"
+              :form="form.backup"
+              :fields="settingsData?.fields"
+              :provider-options="providerOptions"
+              :profiles="providerProfiles"
+              :key-set="backupKeySet"
+              :testing="testing.anthropic_backup"
+              :test-result="testResults.anthropic_backup"
+              :inactive="!form.anthropic_backup_enabled"
+              @test="runTest('anthropic_backup')"
+            />
+
+            <p class="text-xs text-slate-500 mt-3">{{ t('admin.modelSettings.backupRoutingNote') }}</p>
           </div>
 
           <!-- OCR / 视觉模型 -->
@@ -781,6 +716,8 @@ onMounted(() => {
   </div>
 </template>
 
+<style scoped src="@/styles/model-settings-fields.css"></style>
+
 <style scoped>
 .admin-console {
   --admin-topbar-height: 72px;
@@ -918,105 +855,6 @@ onMounted(() => {
 
 .admin-model-form :deep(code) {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.ms-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.05rem 0.4rem;
-  border-radius: 9999px;
-  font-size: 0.65rem;
-  font-weight: 600;
-  line-height: 1.4;
-  border: 1px solid transparent;
-}
-
-.ms-badge--override {
-  color: #0e7490;
-  background: #cffafe;
-  border-color: #a5f3fc;
-}
-
-.ms-badge--env {
-  color: #475569;
-  background: #f1f5f9;
-  border-color: #e2e8f0;
-}
-
-.ms-badge--unset {
-  color: #b45309;
-  background: #fef3c7;
-  border-color: #fde68a;
-}
-
-/* Warning hint for endpoint templates that still need a deployer value. */
-.ms-warn {
-  color: var(--admin-warning, #b45309);
-}
-
-.ms-test-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.5rem 0.9rem;
-  border-radius: 0.5rem;
-  border: 1px solid var(--admin-hairline-strong, #cbd5e1);
-  background: var(--admin-surface, #fff);
-  color: var(--admin-ink, #0f172a);
-  font-size: 0.875rem;
-  font-weight: 600;
-  transition: background 0.15s ease;
-}
-
-.ms-test-btn:hover:not(:disabled) {
-  background: var(--admin-canvas-soft, #f8fafc);
-}
-
-.ms-test-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.ms-test-result {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
-  padding: 0.7rem 0.85rem;
-  border-radius: 0.65rem;
-  border: 1px solid transparent;
-  font-size: 0.8rem;
-}
-
-.ms-test-result.is-ok {
-  color: var(--admin-success, #16a34a);
-  background: var(--admin-status-success-bg, #dcfce7);
-  border-color: var(--admin-success, #16a34a);
-}
-
-.ms-test-result.is-fail {
-  color: var(--admin-error, #dc2626);
-  background: var(--admin-status-error-bg, #fee2e2);
-  border-color: var(--admin-error, #dc2626);
-}
-
-.ms-test-icon {
-  flex-shrink: 0;
-  margin-top: 0.1rem;
-}
-
-.ms-test-title {
-  font-weight: 600;
-}
-
-/* Endpoint / model ids and upstream error bodies: monospace, wrap anywhere so
-   a long URL cannot push the card into horizontal scroll. */
-.ms-test-meta {
-  margin-top: 0.15rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.7rem;
-  opacity: 0.9;
-  overflow-wrap: anywhere;
 }
 
 @media (max-width: 768px) {

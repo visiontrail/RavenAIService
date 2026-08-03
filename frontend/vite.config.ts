@@ -12,7 +12,9 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000,
+    // Honour $PORT when the caller assigns one (CI, containers, tooling that
+    // picks a free port); otherwise keep the project's usual 3000.
+    port: Number(process.env.PORT) || 3000,
     open: true,
   },
   define: {

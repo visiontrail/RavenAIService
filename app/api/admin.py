@@ -275,11 +275,29 @@ class UpdateModelSettingsRequest(BaseModel):
     anthropic_model: Optional[str] = None
     anthropic_small_fast_model: Optional[str] = None
     anthropic_max_tokens: Optional[int] = None
+    anthropic_backup_enabled: Optional[bool] = None
+    anthropic_backup_provider: Optional[str] = None
+    anthropic_backup_api_key: Optional[str] = None
+    anthropic_backup_base_url: Optional[str] = None
+    anthropic_backup_model: Optional[str] = None
+    anthropic_backup_small_fast_model: Optional[str] = None
     ocr_enabled: Optional[bool] = None
     ocr_api_key: Optional[str] = None
     ocr_base_url: Optional[str] = None
     ocr_model: Optional[str] = None
     ocr_provider: Optional[str] = None
+
+
+# This request model is a hand-maintained mirror of ``model_settings_service._SPECS``,
+# and FastAPI drops unknown body keys silently — so a spec added without a field
+# here would be accepted by the API and then vanish before ``save()`` ever sees it.
+# Fail at import instead of debugging a setting that "won't stick".
+assert (
+    set(UpdateModelSettingsRequest.model_fields) == model_settings_service.OVERRIDABLE_KEYS
+), (
+    "UpdateModelSettingsRequest and model_settings_service._SPECS disagree: "
+    f"{sorted(set(UpdateModelSettingsRequest.model_fields) ^ model_settings_service.OVERRIDABLE_KEYS)}"
+)
 
 
 @router.get("/model-settings", response_model=ModelSettingsResponse)
@@ -321,7 +339,7 @@ class TestModelSettingsRequest(BaseModel):
     a new base URL or model.
     """
 
-    target: str = "anthropic"  # "anthropic" | "ocr"
+    target: str = "anthropic"  # "anthropic" | "anthropic_backup" | "ocr"
     provider: Optional[str] = None
     base_url: Optional[str] = None
     model: Optional[str] = None

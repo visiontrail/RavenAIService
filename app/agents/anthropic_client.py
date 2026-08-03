@@ -340,17 +340,28 @@ def build_options(
     max_tokens: Optional[int] = None,
     request_timeout_seconds: Optional[int] = None,
     include_partial_messages: bool = True,
+    endpoint: Optional[Any] = None,
 ) -> Any:
     """构建 ClaudeAgentOptions，按 caller override → Settings → provider profile 优先级解析参数。
+
+    ``endpoint`` 为 :class:`app.services.model_router.EndpointChoice` 时，provider /
+    base_url / api_key / model 及**能力矩阵**全部取自该端点，而不是进程级全局
+    ``settings``。故障转移必须走这条路：settings 是全进程共享的，路由器若靠改写它
+    来切端点，会与并发运行中的其它 run 互相踩踏。未传时行为与之前完全一致。
 
     返回 ClaudeAgentOptions 实例。
     """
     from app.config import settings
 
-    assert_anthropic_configured()
+    if endpoint is None:
+        assert_anthropic_configured()
 
-    provider_name = settings.anthropic_provider
-    profile = PROVIDER_PROFILES.get(provider_name)
+    if endpoint is not None:
+        provider_name = endpoint.provider
+        profile = endpoint.profile
+    else:
+        provider_name = settings.anthropic_provider
+        profile = PROVIDER_PROFILES.get(provider_name)
     # 防御性兜底：Settings 正常会拒绝未知 provider。若测试或调用方绕过
     # Settings 校验，仍使用最严格的能力矩阵。
     if profile is None:
@@ -378,7 +389,7 @@ def build_options(
             f"(supports_document_input=False). Switch to a capable provider."
         )
 
-    # 解析 effective 值：caller override → Settings → profile default
+    # 解析 effective 值：caller override → endpoint / Settings → profile default
     if model is not None:
         effective_model = model
         if model != (settings.anthropic_model or ""):
@@ -387,15 +398,22 @@ def build_options(
                 model,
                 settings.anthropic_model,
             )
+    elif endpoint is not None:
+        effective_model = endpoint.model
     else:
         effective_model = (
             settings.anthropic_model
             or profile.default_model
         )
-    effective_base_url = (
-        settings.anthropic_base_url
-        or profile.default_base_url
-    )
+    if endpoint is not None:
+        effective_base_url = endpoint.base_url
+        effective_api_key = endpoint.api_key
+    else:
+        effective_base_url = (
+            settings.anthropic_base_url
+            or profile.default_base_url
+        )
+        effective_api_key = settings.anthropic_api_key
     effective_max_turns = max_turns if max_turns is not None else settings.anthropic_max_turns
     effective_permission_mode = permission_mode or settings.anthropic_permission_mode
 
@@ -444,7 +462,8 @@ def build_options(
         effective_allowed_tools = filtered_allowed_tools
 
     logger.info(
-        "Building ClaudeAgentOptions: provider=%s model=%s base_url=%s max_turns=%d",
+        "Building ClaudeAgentOptions: slot=%s provider=%s model=%s base_url=%s max_turns=%d",
+        endpoint.slot if endpoint is not None else "settings",
         provider_name,
         effective_model,
         effective_base_url,
@@ -468,7 +487,7 @@ def build_options(
         "max_turns": effective_max_turns,
         "permission_mode": effective_permission_mode,
         "env": {
-            "ANTHROPIC_API_KEY": settings.anthropic_api_key,
+            "ANTHROPIC_API_KEY": effective_api_key,
             "ANTHROPIC_BASE_URL": effective_base_url,
         },
     }

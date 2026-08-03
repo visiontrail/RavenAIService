@@ -29,6 +29,13 @@ OVERRIDABLE_MODEL_KEYS: frozenset = frozenset(
         "anthropic_model",
         "anthropic_small_fast_model",
         "anthropic_max_tokens",
+        # 备用 Anthropic 兼容模型（主力降级时的故障转移目标）
+        "anthropic_backup_enabled",
+        "anthropic_backup_provider",
+        "anthropic_backup_api_key",
+        "anthropic_backup_base_url",
+        "anthropic_backup_model",
+        "anthropic_backup_small_fast_model",
         # OCR / 视觉模型
         "ocr_enabled",
         "ocr_api_key",
@@ -147,6 +154,31 @@ class Settings(BaseSettings):
     general_agent_max_turns: int = 6
     ai_analysis_max_extract_bytes: int = 2 * 1024 * 1024 * 1024  # 2 GiB
 
+    # 备用 Anthropic 兼容端点（故障转移目标）。字段结构与主力一组完全对称，
+    # 由 Admin「模型设置」独立配置。anthropic_backup_enabled 为 False（默认）时
+    # model_router 只返回主力一个候选，行为与未引入路由前完全一致。
+    # 注意：max_turns / permission_mode / 各类超时等调参项不分主备，两个端点共用。
+    anthropic_backup_enabled: bool = False
+    anthropic_backup_provider: Optional[str] = None   # None/空 视为「未配置」
+    anthropic_backup_api_key: Optional[str] = None
+    anthropic_backup_base_url: Optional[str] = None   # None 时由 provider profile 提供
+    anthropic_backup_model: Optional[str] = None      # None 时由 provider profile 提供
+    anthropic_backup_small_fast_model: Optional[str] = None
+
+    # 模型端点路由（延迟感知预选 + 熔断器）。这些阈值刻意**不**进
+    # OVERRIDABLE_MODEL_KEYS：它们必须在 web 进程与各 Celery worker 间同时一致，
+    # 且暴露到 Admin 是脚枪——阈值填得过低会把 100% 流量打到付费端点。
+    # 总开关（kill switch）。开启后仍需在 Admin 配置并启用备用端点才会真正转移：
+    # 未配置备用时 candidates 只返回主力、熔断器不跳闸，等价于「只观测 TTFT」。
+    model_router_enabled: bool = True
+    model_router_slow_ttft_ms: int = 6000             # 首 token 超过此值即计一次「慢」
+    model_router_window_size: int = 8                 # 滚动窗口样本数
+    model_router_trip_threshold: int = 4              # 窗口内「慢或失败」达到此数即跳闸
+    model_router_min_samples: int = 4                 # 样本不足此数永不跳闸
+    model_router_hard_failure_trip: int = 2           # 连接/鉴权类硬失败的快速跳闸阈值
+    model_router_cooldown_seconds: int = 120          # 熔断冷却 = 半开探测令牌 TTL
+    model_router_sample_ttl_seconds: int = 900        # 窗口 TTL，避免闲置整夜后残留陈旧状态
+
     # OCR / 视觉理解模型（独立于主力 Anthropic 模型，走 OpenAI 兼容端点，默认
     # 对接阿里云百炼 DashScope Qwen-VL）。用户粘贴的图片先由此模型转成文字，再
     # 以 <user_image_ocr> 段合并进用户提示，下游各 Agent 零改动。全部可选、带
@@ -228,10 +260,34 @@ class Settings(BaseSettings):
     @field_validator("anthropic_provider")
     @classmethod
     def validate_anthropic_provider(cls, v: str) -> str:
-        allowed = {"anthropic", "deepseek", "custom"}
-        if v not in allowed:
-            raise ValueError(f"anthropic_provider must be one of {sorted(allowed)}, got '{v}'")
+        """校验 .env 引导值落在已知 provider profile 内。
+
+        名单从 PROVIDER_PROFILES 惰性读取而非硬编码：此前写死的
+        {anthropic, deepseek, custom} 早已与 profile 表脱节，导致想在 .env 里直接
+        写 yinhe / moonshot 等 provider 的部署只能退而求其次填 custom —— 而 custom
+        的 supports_partial_streaming=False，会静默关掉增量流式。
+
+        仅作用于 .env / 构造函数路径；Admin 运行期覆盖绕过 pydantic，由
+        model_settings_service.save 按 ANTHROPIC_PROVIDERS 校验。
+        导入失败时放行，避免让配置层反过来依赖 agents 层的可用性。
+        """
+        try:
+            from app.agents.anthropic_client import PROVIDER_PROFILES
+        except Exception:  # noqa: BLE001 — 校验永不能让应用无法启动
+            return v
+        if v not in PROVIDER_PROFILES:
+            raise ValueError(
+                f"anthropic_provider must be one of {sorted(PROVIDER_PROFILES)}, got '{v}'"
+            )
         return v
+
+    @field_validator("anthropic_backup_provider")
+    @classmethod
+    def validate_anthropic_backup_provider(cls, v: Optional[str]) -> Optional[str]:
+        """备用 provider 同样只接受已知 profile；空值表示「未配置」。"""
+        if not v:
+            return v
+        return cls.validate_anthropic_provider(v)
 
     # Prompt配置（外部化模板路径，可通过环境变量覆盖）
     prompts_config_path: str = "app/prompts/prompts_config.yaml"

@@ -308,7 +308,7 @@ def test_invalid_ids_get_filtered_by_agent(
     )
 
     # Stub _build_options to avoid touching anthropic_client config.
-    def fake_build_options(self, *, system_prompt, project_code, cwd):
+    def fake_build_options(self, *, system_prompt, project_code, cwd, endpoint=None):
         return (object(), "fake-model", "fake-provider")
     monkeypatch.setattr(agent_module.PackageSearchAgent, "_build_options", fake_build_options)
 

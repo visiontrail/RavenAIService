@@ -194,17 +194,32 @@ class PackageSearchAgent:
             yield message
 
     def _build_options(
-        self, *, system_prompt: str, project_code: str, cwd: str
+        self,
+        *,
+        system_prompt: str,
+        project_code: str,
+        cwd: str,
+        endpoint: Optional[Any] = None,
     ) -> Tuple[Any, str, str]:
-        """Build ClaudeAgentOptions; return ``(options, model, provider)``."""
+        """Build ClaudeAgentOptions; return ``(options, model, provider)``.
+
+        With ``endpoint`` set, provider/model/capabilities come from that routed
+        slot instead of the process-global settings — options must be rebuilt per
+        candidate because the MCP capability gate below changes the tool set.
+        """
         from app.agents.anthropic_client import PROVIDER_PROFILES, build_options
         from app.config import settings
 
-        provider = settings.anthropic_provider
-        profile = PROVIDER_PROFILES.get(provider)
-        effective_model = settings.anthropic_model or (
-            profile.default_model if profile else "unknown"
-        )
+        if endpoint is not None:
+            provider = endpoint.provider
+            profile = endpoint.profile
+            effective_model = endpoint.model
+        else:
+            provider = settings.anthropic_provider
+            profile = PROVIDER_PROFILES.get(provider)
+            effective_model = settings.anthropic_model or (
+                profile.default_model if profile else "unknown"
+            )
         supports_mcp = bool(profile and profile.supports_mcp_server_tools)
 
         allowed_tools = list(ALLOWED_TOOLS)
@@ -237,6 +252,7 @@ class PackageSearchAgent:
             cwd=cwd,
             permission_mode="bypassPermissions",
             mcp_servers=mcp_servers,
+            endpoint=endpoint,
         )
         return options, effective_model, str(provider)
 
@@ -311,11 +327,33 @@ class PackageSearchAgent:
         # language is decoupled from the (largely Chinese) package metadata.
         system_prompt += "\n\n" + response_language_directive(ctx.locale)
 
-        options, effective_model, provider = self._build_options(
-            system_prompt=system_prompt,
-            project_code=ctx.project_code,
-            cwd=ctx.temp_dir,
-        )
+        from app.agents.routed_query import routed_query
+        from app.services import model_router
+
+        # Resolve before RUN_START: that event carries the model id and is
+        # already on the wire to the browser once the stream begins.
+        endpoints = model_router.candidates(agent_kind="package_search", require_mcp=True)
+        chosen = endpoints[0] if endpoints else None
+
+        served: Dict[str, str] = {}
+
+        def _make_options(endpoint: Optional[Any]) -> Any:
+            options, model, provider = self._build_options(
+                system_prompt=system_prompt,
+                project_code=ctx.project_code,
+                cwd=ctx.temp_dir,
+                endpoint=endpoint,
+            )
+            served["model"], served["provider"] = model, str(provider)
+            return options
+
+        # RUN_START names the model and goes out before the stream starts, so
+        # resolve the first candidate now. ``_build_options`` stays the single
+        # source of the reported model/provider; the options object it returns
+        # here is discarded (routed_query rebuilds per candidate, since the MCP
+        # capability gate can differ between slots).
+        _make_options(chosen)
+        effective_model, provider = served["model"], served["provider"]
 
         state = _RunState(task_id=ctx.task_id, emitter=trace_emitter)
         start = time.monotonic()
@@ -332,7 +370,15 @@ class PackageSearchAgent:
         )
 
         try:
-            async for message in self._run_sdk_loop(prompt=user_prompt, options=options):
+            async for message in routed_query(
+                prompt=user_prompt,
+                make_options=_make_options,
+                agent_kind="package_search",
+                candidates=endpoints,
+                # Preserve the test seam: suites override ``_run_sdk_loop`` to
+                # replay a curated message sequence.
+                sdk_query=self._run_sdk_loop,
+            ):
                 if cancel_event is not None and cancel_event.is_set():
                     _log_workflow(ctx.task_id, "cancelled", reason="cancel_event_set")
                     _emit_cancel_requested(state)
@@ -360,9 +406,9 @@ class PackageSearchAgent:
                 )
             )
             return _base_result(
-                effective_model,
+                served["model"],
                 status="cancelled",
-                provider=provider,
+                provider=served["provider"],
                 tool_trace=derive_tool_trace(state.trace_events),
                 trace_events=list(state.trace_events),
                 trace_summary=trace_summary,
@@ -451,9 +497,9 @@ class PackageSearchAgent:
                     notes = raw_notes.strip()
 
         return _base_result(
-            effective_model,
+            served["model"],
             status="ok",
-            provider=provider,
+            provider=served["provider"],
             answer=final_text or "",
             recommended_package_ids=recommended,
             relevant_package_ids=relevant,

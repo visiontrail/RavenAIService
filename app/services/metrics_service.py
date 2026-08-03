@@ -56,6 +56,12 @@ METADATA_ALLOWLIST = frozenset(
         # How many images one OCR call transcribed. A bare count — the images
         # and their recognized text never go near a metric event.
         "image_count",
+        # Endpoint routing: which slot ("primary"/"backup") served the run, and
+        # how long the upstream took to produce its first token. Cost attribution
+        # is already possible via the ``provider`` column; these make "why did we
+        # fail over" answerable after the fact.
+        "endpoint_slot",
+        "ttft_ms",
     }
 )
 

@@ -68,8 +68,64 @@ _TEST_PROMPT = "ping"
 class FieldSpec:
     key: str          # matches the Settings attribute / runtime store key
     kind: str         # "str" | "int" | "bool" | "secret"
-    group: str        # "anthropic" | "ocr"
+    group: str        # "anthropic" | "anthropic_backup" | "ocr"
     secret: bool = False
+
+
+@dataclass(frozen=True)
+class AnthropicSlot:
+    """One Anthropic-compatible endpoint's key names.
+
+    Primary and backup are structurally identical — same provider catalogue,
+    same validation rules, same connectivity probe — and differ only in which
+    Settings keys hold the values. Describing that difference as data keeps
+    :func:`save` and :func:`_test_anthropic` single-implementation; adding a
+    third endpoint later is one more entry here plus its ``_SPECS`` rows.
+
+    Deliberately NOT a string-prefix scheme: ``anthropic_backup_model`` also
+    starts with ``anthropic_``, so ``startswith`` matching would misclassify
+    every backup key as primary.
+    """
+
+    name: str                 # "primary" | "backup" — the router's slot id
+    group: str                # FieldSpec.group, and the probe ``target`` value
+    provider_key: str
+    api_key_key: str
+    base_url_key: str
+    model_key: str
+    small_fast_model_key: str
+    # ``None`` means "always on" (the primary cannot be disabled).
+    enabled_key: Optional[str] = None
+
+    def is_enabled(self, resolve: "Any" = None) -> bool:
+        read = resolve or (lambda key: getattr(settings, key))
+        return True if self.enabled_key is None else bool(read(self.enabled_key))
+
+
+PRIMARY_SLOT = AnthropicSlot(
+    name="primary",
+    group="anthropic",
+    provider_key="anthropic_provider",
+    api_key_key="anthropic_api_key",
+    base_url_key="anthropic_base_url",
+    model_key="anthropic_model",
+    small_fast_model_key="anthropic_small_fast_model",
+)
+
+BACKUP_SLOT = AnthropicSlot(
+    name="backup",
+    group="anthropic_backup",
+    provider_key="anthropic_backup_provider",
+    api_key_key="anthropic_backup_api_key",
+    base_url_key="anthropic_backup_base_url",
+    model_key="anthropic_backup_model",
+    small_fast_model_key="anthropic_backup_small_fast_model",
+    enabled_key="anthropic_backup_enabled",
+)
+
+ANTHROPIC_SLOTS: Tuple[AnthropicSlot, ...] = (PRIMARY_SLOT, BACKUP_SLOT)
+SLOT_BY_GROUP: Dict[str, AnthropicSlot] = {slot.group: slot for slot in ANTHROPIC_SLOTS}
+SLOT_BY_NAME: Dict[str, AnthropicSlot] = {slot.name: slot for slot in ANTHROPIC_SLOTS}
 
 
 # Canonical, ordered list of the settings that the Admin page may override.
@@ -81,6 +137,15 @@ _SPECS: Tuple[FieldSpec, ...] = (
     FieldSpec("anthropic_model", "str", "anthropic"),
     FieldSpec("anthropic_small_fast_model", "str", "anthropic"),
     FieldSpec("anthropic_max_tokens", "int", "anthropic"),
+    # ── Backup Anthropic-compatible model (failover target) ───────────────
+    # anthropic_max_tokens is intentionally NOT duplicated: token budget is a
+    # workload property, not an endpoint property, so both slots share it.
+    FieldSpec("anthropic_backup_enabled", "bool", "anthropic_backup"),
+    FieldSpec("anthropic_backup_provider", "str", "anthropic_backup"),
+    FieldSpec("anthropic_backup_api_key", "secret", "anthropic_backup", secret=True),
+    FieldSpec("anthropic_backup_base_url", "str", "anthropic_backup"),
+    FieldSpec("anthropic_backup_model", "str", "anthropic_backup"),
+    FieldSpec("anthropic_backup_small_fast_model", "str", "anthropic_backup"),
     # ── OCR / vision model (image input) ──────────────────────────────────
     FieldSpec("ocr_enabled", "bool", "ocr"),
     FieldSpec("ocr_api_key", "secret", "ocr", secret=True),
@@ -247,7 +312,22 @@ def describe() -> Dict[str, Any]:
         "fields": fields,
         "provider_options": list(ANTHROPIC_PROVIDERS),
         "provider_profiles": _provider_profiles(),
+        # Live routing state. Surfacing it here is the cost guardrail: a primary
+        # that stays degraded routes 100% of traffic to the paid backup, and
+        # without this the only symptom is the bill.
+        "router": _router_snapshot(),
     }
+
+
+def _router_snapshot() -> Dict[str, Any]:
+    """Routing health for the Admin page; never breaks the settings read."""
+    try:
+        from app.services import model_router
+
+        return model_router.health_snapshot()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("model_settings: router snapshot unavailable: %s", exc)
+        return {}
 
 
 # ─────────────────────────── Write for Admin ───────────────────────────────
@@ -288,11 +368,8 @@ def save(payload: Dict[str, Any]) -> Dict[str, Any]:
             coerced[key] = _coerce(spec, raw)
 
     # ── Cross-field validation against the post-save effective state ────────
-    provider = _effective_after(coerced, "anthropic_provider")
-    if provider not in ANTHROPIC_PROVIDERS:
-        raise ValueError(
-            f"anthropic_provider 必须是 {list(ANTHROPIC_PROVIDERS)} 之一"
-        )
+    for slot in ANTHROPIC_SLOTS:
+        _validate_slot(slot, coerced)
 
     max_tokens = _effective_after(coerced, "anthropic_max_tokens")
     try:
@@ -304,14 +381,41 @@ def save(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"anthropic_max_tokens 必须在 {_MAX_TOKENS_MIN}~{_MAX_TOKENS_MAX} 之间"
         )
 
-    base_url = str(_effective_after(coerced, "anthropic_base_url") or "").strip()
-    model = str(_effective_after(coerced, "anthropic_model") or "").strip()
+    if coerced:
+        runtime_settings_service.update(coerced)
+    return describe()
+
+
+def _validate_slot(slot: AnthropicSlot, coerced: Dict[str, Any]) -> None:
+    """Cross-field checks for one endpoint slot, post-save effective state.
+
+    A **disabled** backup is only checked for a well-formed provider — an admin
+    must be able to park a half-filled backup config without the form rejecting
+    it. Everything else is enforced only once the slot can actually serve
+    traffic, which for the primary is always.
+    """
+    enabled = slot.is_enabled(lambda key: _effective_after(coerced, key))
+    provider = str(_effective_after(coerced, slot.provider_key) or "").strip()
+
+    if not provider:
+        if enabled:
+            raise ValueError(f"{slot.provider_key} 启用后不能为空")
+        return
+    if provider not in ANTHROPIC_PROVIDERS:
+        raise ValueError(
+            f"{slot.provider_key} 必须是 {list(ANTHROPIC_PROVIDERS)} 之一"
+        )
+    if not enabled:
+        return
+
+    base_url = str(_effective_after(coerced, slot.base_url_key) or "").strip()
+    model = str(_effective_after(coerced, slot.model_key) or "").strip()
 
     if provider == "custom":
         if not base_url:
-            raise ValueError("provider 为 custom 时必须提供 anthropic_base_url")
+            raise ValueError(f"provider 为 custom 时必须提供 {slot.base_url_key}")
         if not model:
-            raise ValueError("provider 为 custom 时必须提供 anthropic_model")
+            raise ValueError(f"provider 为 custom 时必须提供 {slot.model_key}")
 
     # A template default (e.g. 百炼的 {WorkspaceId}) must be filled in first.
     # Check the *resolved* URL: an empty field falls back to the provider
@@ -319,13 +423,9 @@ def save(payload: Dict[str, Any]) -> Dict[str, Any]:
     placeholder = _URL_PLACEHOLDER_RE.search(_resolve_base_url(provider, base_url))
     if placeholder:
         raise ValueError(
-            f"anthropic_base_url 仍包含占位符 {placeholder.group(0)}，"
+            f"{slot.base_url_key} 仍包含占位符 {placeholder.group(0)}，"
             "请替换为实际值后再保存"
         )
-
-    if coerced:
-        runtime_settings_service.update(coerced)
-    return describe()
 
 
 def reset() -> Dict[str, Any]:
@@ -463,42 +563,46 @@ def _openai_reply_text(data: Dict[str, Any]) -> str:
     return str(message.get("content") or "").strip()
 
 
-async def _test_anthropic(payload: Dict[str, Any]) -> Dict[str, Any]:
-    provider = _pick(payload, "provider") or settings.anthropic_provider
+async def _test_anthropic(slot: AnthropicSlot, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Probe one endpoint slot with the form's values (saved config fills gaps)."""
+    target = slot.group
+    saved = lambda key: str(getattr(settings, key) or "").strip()  # noqa: E731
+
+    provider = _pick(payload, "provider") or saved(slot.provider_key)
+    if not provider:
+        return _fail(target, "missing_provider", "尚未选择 provider")
     if provider not in ANTHROPIC_PROVIDERS:
         return _fail(
-            "anthropic",
+            target,
             "invalid_provider",
-            f"anthropic_provider 必须是 {list(ANTHROPIC_PROVIDERS)} 之一",
+            f"{slot.provider_key} 必须是 {list(ANTHROPIC_PROVIDERS)} 之一",
         )
 
     base_url = _resolve_base_url(
-        provider, _field(payload, "base_url", (settings.anthropic_base_url or "").strip())
+        provider, _field(payload, "base_url", saved(slot.base_url_key))
     )
-    model = _resolve_model(
-        provider, _field(payload, "model", (settings.anthropic_model or "").strip())
-    )
+    model = _resolve_model(provider, _field(payload, "model", saved(slot.model_key)))
     # Secrets follow save()'s rule instead: blank keeps the stored key.
-    api_key = _pick(payload, "api_key") or (settings.anthropic_api_key or "").strip()
+    api_key = _pick(payload, "api_key") or saved(slot.api_key_key)
     context = {"provider": provider, "base_url": base_url, "model": model}
 
     if not api_key:
-        return _fail("anthropic", "missing_api_key", "尚未配置 API Key", **context)
+        return _fail(target, "missing_api_key", "尚未配置 API Key", **context)
     if not base_url:
-        return _fail("anthropic", "missing_base_url", "Base URL 为空", **context)
+        return _fail(target, "missing_base_url", "Base URL 为空", **context)
     if not model:
-        return _fail("anthropic", "missing_model", "模型 id 为空", **context)
+        return _fail(target, "missing_model", "模型 id 为空", **context)
     placeholder = _URL_PLACEHOLDER_RE.search(base_url)
     if placeholder:
         return _fail(
-            "anthropic",
+            target,
             "placeholder_base_url",
             f"Base URL 仍包含占位符 {placeholder.group(0)}，请替换为实际值",
             **context,
         )
 
     return await _probe(
-        target="anthropic",
+        target=target,
         url=f"{base_url.rstrip('/')}/v1/messages",
         # Mirror what the Claude Agent SDK sends (ANTHROPIC_API_KEY → x-api-key),
         # so a green test means the agent path itself will authenticate.
@@ -554,13 +658,15 @@ async def _test_ocr(payload: Dict[str, Any]) -> Dict[str, Any]:
 async def test_connection(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Probe one configured endpoint; returns a result dict, never raises.
 
-    ``payload['target']`` selects ``anthropic`` (the primary agent chain) or
-    ``ocr``; the remaining keys (``provider`` / ``base_url`` / ``model`` /
-    ``api_key``) are optional overrides for values not yet saved.
+    ``payload['target']`` selects ``anthropic`` (the primary agent chain),
+    ``anthropic_backup`` (the failover endpoint) or ``ocr``; the remaining keys
+    (``provider`` / ``base_url`` / ``model`` / ``api_key``) are optional
+    overrides for values not yet saved.
     """
     target = (str(payload.get("target") or "anthropic")).strip().lower()
-    if target == "anthropic":
-        return await _test_anthropic(payload)
+    slot = SLOT_BY_GROUP.get(target)
+    if slot is not None:
+        return await _test_anthropic(slot, payload)
     if target == "ocr":
         return await _test_ocr(payload)
     raise ValueError("target 必须是 'anthropic' 或 'ocr'")

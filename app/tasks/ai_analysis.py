@@ -1035,7 +1035,14 @@ def run_ai_analysis_task(
                 source="log_analysis_agent",
                 agent_kind="log_analysis",
                 result=analysis_result,
-                provider=settings.anthropic_provider,
+                # The run's own provider wins: with endpoint routing the backup
+                # may have served it, and the process-global setting would
+                # mis-attribute paid usage to the free primary. Falls back to
+                # the global for results predating the field.
+                provider=(
+                    (analysis_result or {}).get("provider")
+                    or settings.anthropic_provider
+                ),
                 task_id=str(task_id) if task_id else None,
                 log_id=str(log_id),
                 project_repo_id=(

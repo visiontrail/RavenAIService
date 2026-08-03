@@ -43,6 +43,10 @@ class FakeClaudeAgentOptions:
     hooks: Optional[Dict[str, Any]] = None
     max_tokens: Optional[int] = None
     request_timeout_seconds: Optional[int] = None
+    # Modelled because the real SDK supports it; without the field here
+    # ``_instantiate_options`` silently drops the kwarg and no assertion about
+    # partial streaming can distinguish "gated off" from "unsupported by the SDK".
+    include_partial_messages: Optional[bool] = None
 
 
 class LegacyClaudeAgentOptions:
@@ -314,6 +318,97 @@ class TestBuildOptionsExtensions:
         assert opts.model == "deepseek-v4-pro"
         assert "max_tokens" in caplog.text
         assert "request_timeout_seconds" in caplog.text
+
+
+class TestEndpointOverride:
+    """``build_options(endpoint=...)`` must fully displace the global settings.
+
+    The router resolves one endpoint per run; if any of these leaked from
+    ``settings`` instead, concurrent runs on different slots would cross-talk
+    through process-global state.
+    """
+
+    def _build(self, settings_mock, **kwargs) -> FakeClaudeAgentOptions:
+        with patch("app.config.settings", settings_mock), \
+             patch.dict("sys.modules", {"claude_agent_sdk": _make_fake_sdk()}):
+            import importlib
+            import app.agents.anthropic_client as mod
+            importlib.reload(mod)
+            return mod.build_options(
+                system_prompt=kwargs.pop("system_prompt", "test prompt"),
+                allowed_tools=kwargs.pop("allowed_tools", ["Bash"]),
+                cwd=kwargs.pop("cwd", "/tmp/test"),
+                **kwargs,
+            )
+
+    def _endpoint(self, provider="moonshot", **over):
+        from app.agents.anthropic_client import PROVIDER_PROFILES
+        from app.services.model_router import EndpointChoice
+
+        defaults = dict(
+            slot="backup",
+            provider=provider,
+            base_url="https://backup.test/anthropic",
+            api_key="sk-backup",
+            model="backup-model",
+            small_fast_model=None,
+            profile=PROVIDER_PROFILES.get(provider),
+        )
+        defaults.update(over)
+        return EndpointChoice(**defaults)
+
+    def test_endpoint_supplies_key_url_and_model(self, base_settings):
+        base_settings.anthropic_api_key = "sk-PRIMARY"
+        base_settings.anthropic_base_url = "http://primary.test"
+        base_settings.anthropic_model = "primary-model"
+
+        opts = self._build(base_settings, endpoint=self._endpoint())
+
+        assert opts.env["ANTHROPIC_API_KEY"] == "sk-backup"
+        assert opts.env["ANTHROPIC_BASE_URL"] == "https://backup.test/anthropic"
+        assert opts.model == "backup-model"
+
+    def test_capability_gate_uses_the_endpoint_profile(self, base_settings):
+        """Tool gating must follow the endpoint actually being called.
+
+        Reading the global provider's matrix here would hand MCP tools to an
+        upstream that cannot run them.
+        """
+        from app.agents.anthropic_client import ProviderProfile
+
+        # Global settings name a provider that supports MCP...
+        base_settings.anthropic_provider = "deepseek"
+        no_mcp = ProviderProfile(
+            name="locked",
+            default_base_url="https://locked.test",
+            default_model="locked-model",
+            default_small_fast_model=None,
+            supports_image_input=False,
+            supports_document_input=False,
+            supports_mcp_server_tools=False,
+            thinking_budget_tokens_effective=False,
+            disable_parallel_tool_use_effective=False,
+        )
+        # ...but the endpoint being called does not.
+        opts = self._build(
+            base_settings,
+            allowed_tools=["Read", "mcp__project_repo__lookup_project_repo"],
+            mcp_servers={"project_repo": object()},
+            endpoint=self._endpoint(provider="locked", profile=no_mcp),
+        )
+
+        assert opts.allowed_tools == ["Read"]
+        assert getattr(opts, "mcp_servers", None) in (None, {})
+
+    def test_partial_streaming_follows_the_endpoint_profile(self, base_settings):
+        # yinhe streams incrementally; custom does not.
+        streaming = self._build(base_settings, endpoint=self._endpoint(provider="yinhe"))
+        assert getattr(streaming, "include_partial_messages", None) is True
+
+        non_streaming = self._build(
+            base_settings, endpoint=self._endpoint(provider="custom")
+        )
+        assert getattr(non_streaming, "include_partial_messages", None) is None
 
 
 class TestConfigValidation:

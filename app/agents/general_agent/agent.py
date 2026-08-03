@@ -223,7 +223,9 @@ class GeneralAgent:
         from app.config import settings
 
         try:
-            from claude_agent_sdk import query as sdk_query
+            # routed_query does the actual import; probe here so a missing SDK
+            # surfaces as a clear message rather than mid-stream.
+            import claude_agent_sdk  # noqa: F401
         except ImportError as exc:
             raise RuntimeError(
                 "claude-agent-sdk is required. Install with: pip install claude-agent-sdk>=0.1"
@@ -231,21 +233,42 @@ class GeneralAgent:
 
         session_id = ctx.session_id or ""
         run_id = ctx.run_id or session_id or "general-agent"
-        provider = str(settings.anthropic_provider)
-        profile = PROVIDER_PROFILES.get(provider)
-        supports_project_discovery = bool(profile and profile.supports_mcp_server_tools)
         start_ts = time.monotonic()
 
-        try:
-            model = _resolve_small_fast_model()
-        except AnthropicConfigurationError as exc:
-            yield {
-                "type": "error",
-                "task_id": run_id,
-                "error_kind": "anthropic_misconfigured",
-                "message": str(exc),
-            }
-            return
+        # Resolve the endpoint before ``run_start`` is emitted: that event names
+        # the model and is already streamed to the browser by the time the first
+        # SDK message lands, so it cannot be corrected retroactively.
+        from app.agents.routed_query import routed_query
+        from app.services import model_router
+
+        endpoints = model_router.candidates(
+            agent_kind=AGENT_KEY,
+            require_mcp=True,
+            require_small_fast=True,
+        )
+        chosen = endpoints[0] if endpoints else None
+
+        if chosen is not None:
+            provider = chosen.provider
+            profile = chosen.profile
+            model = chosen.small_fast_model or chosen.model
+        else:
+            provider = str(settings.anthropic_provider)
+            profile = PROVIDER_PROFILES.get(provider)
+            try:
+                model = _resolve_small_fast_model()
+            except AnthropicConfigurationError as exc:
+                yield {
+                    "type": "error",
+                    "task_id": run_id,
+                    "error_kind": "anthropic_misconfigured",
+                    "message": str(exc),
+                }
+                return
+        supports_project_discovery = bool(profile and profile.supports_mcp_server_tools)
+        # run_start is already sent with the pre-selected slot; run_complete
+        # must report whichever endpoint actually answered.
+        served: Dict[str, Any] = {"provider": provider, "model": model}
 
         max_tokens = int(getattr(settings, "anthropic_small_fast_max_tokens", 1024))
         timeout_s = int(
@@ -349,26 +372,42 @@ class GeneralAgent:
                 if skill_prompt:
                     user_prompt = _compose_system_prompt(user_prompt, skill_prompt)
 
-                options = build_options(
-                    system_prompt=system_prompt,
-                    allowed_tools=allowed_tools,
-                    disallowed_tools=_DISABLED_TOOLS,
-                    cwd=tmpdir,
-                    max_turns=max_turns,
-                    permission_mode="bypassPermissions",
-                    model=model,
-                    max_tokens=max_tokens,
-                    request_timeout_seconds=timeout_s,
-                    mcp_servers=mcp_servers,
-                    setting_sources=["project"] if materialized_skills else None,
-                )
+                def _make_options(endpoint: Any) -> Any:
+                    return build_options(
+                        system_prompt=system_prompt,
+                        allowed_tools=allowed_tools,
+                        disallowed_tools=_DISABLED_TOOLS,
+                        cwd=tmpdir,
+                        max_turns=max_turns,
+                        permission_mode="bypassPermissions",
+                        model=(
+                            (endpoint.small_fast_model or endpoint.model)
+                            if endpoint is not None
+                            else model
+                        ),
+                        max_tokens=max_tokens,
+                        request_timeout_seconds=timeout_s,
+                        mcp_servers=mcp_servers,
+                        setting_sources=["project"] if materialized_skills else None,
+                        endpoint=endpoint,
+                    )
+
+                def _on_endpoint(endpoint: Any) -> None:
+                    served["provider"] = endpoint.provider
+                    served["model"] = endpoint.small_fast_model or endpoint.model
 
                 collected: list[Any] = []
                 try:
-                    async with asyncio.timeout(max(timeout_s + 5, 10)):
-                        async for message in sdk_query(
+                    # The outer budget must cover a failover attempt too, so it
+                    # scales with the number of candidates rather than assuming one.
+                    attempts = max(len(endpoints), 1)
+                    async with asyncio.timeout(max(timeout_s + 5, 10) * attempts):
+                        async for message in routed_query(
                             prompt=user_prompt,
-                            options=options,
+                            make_options=_make_options,
+                            agent_kind=AGENT_KEY,
+                            candidates=endpoints,
+                            on_endpoint=_on_endpoint,
                         ):
                             collected.append(message)
                             _emit_for_message(message, state=state)
@@ -430,8 +469,8 @@ class GeneralAgent:
             "type": "run_complete",
             "task_id": run_id,
             "final_text": answer_text,
-            "model": model,
-            "provider": provider,
+            "model": served["model"],
+            "provider": served["provider"],
             "token_usage": dict(state.token_usage),
             "duration_seconds": round(time.monotonic() - start_ts, 3),
             "suggested_agent_type": suggested_agent,

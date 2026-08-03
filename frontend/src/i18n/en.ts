@@ -789,6 +789,21 @@ export default {
       anthropicSectionTitle: 'Anthropic primary model',
       anthropicSectionDesc:
         'All agents (log analysis, device linkage, bug fix, …) call Anthropic-compatible endpoints via the Claude Agent SDK. Values set here override the .env defaults immediately — no restart required.',
+      backupSectionTitle: 'Anthropic backup model (failover)',
+      backupSectionDesc:
+        'Automatically takes over when the primary endpoint degrades or becomes unavailable, and hands back once it recovers. Built for the "primary is free but slow at peak, backup costs money but is always available" trade-off. Fields mean exactly what they do for the primary.',
+      backupEnabledLabel: 'Enable backup endpoint',
+      backupEnabledHint:
+        'While off, every request goes to the primary only — identical to having no backup configured. You can still fill the fields below and leave them dormant.',
+      testBackupBtn: 'Test backup connection',
+      backupRoutingNote:
+        '· Routing policy (when to switch, breaker cooldown, recovery probing) is controlled by environment variables rather than this page, so every process agrees on the thresholds.',
+      routeOnPrimary: 'Currently served by the primary endpoint',
+      routeOnBackup: 'Currently served by the backup endpoint (since {since}) — this is costing money',
+      routeMode: 'Routing mode: {mode}',
+      routeModeActive: 'failover enabled',
+      routeModeObserve: 'observe only (never switches)',
+      routeWindow: 'primary recent window {ratio} bad',
       ocrSectionTitle: 'OCR / vision model (image input)',
       ocrSectionDesc:
         'When a user pastes / drops / picks images in the composer, this model turns them into text that is merged into the prompt. Uses an OpenAI-compatible endpoint, defaulting to Alibaba Cloud DashScope Qwen-VL.',

@@ -68,6 +68,7 @@ def _extract_text_from_messages(messages: list[Any]) -> str:
 async def _record_title_usage(
     *,
     model: Optional[str],
+    provider: Optional[str] = None,
     token_usage: dict,
     duration_seconds: float,
     status: str,
@@ -88,7 +89,7 @@ async def _record_title_usage(
         await metrics_service.record_ai_usage(
             source="title_generator",
             agent_kind="title_generator",
-            provider=str(settings.anthropic_provider),
+            provider=provider or str(settings.anthropic_provider),
             model=model,
             status=status,
             error_kind=error_kind,
@@ -116,11 +117,12 @@ async def _run_query(
     both the success and failure paths (tasks 3.8 / 3.9).
     """
     from app.agents.anthropic_client import build_options
+    from app.agents.routed_query import routed_query
     from app.agents.usage import accumulate_usage, new_token_usage
     from app.config import settings
 
     try:
-        from claude_agent_sdk import query as sdk_query
+        import claude_agent_sdk  # noqa: F401  (fail fast with a clear message)
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
             "claude-agent-sdk is required. Install with: pip install claude-agent-sdk>=0.1"
@@ -134,21 +136,41 @@ async def _run_query(
 
     token_usage = new_token_usage()
     start_ts = time.monotonic()
+    # Which endpoint actually served the run, for the usage metric below. The
+    # module-global provider would name the primary even when the backup answered.
+    served: dict[str, Any] = {"provider": str(settings.anthropic_provider), "model": model}
+
     with tempfile.TemporaryDirectory(prefix="title-gen-") as tmpdir:
-        options = build_options(
-            system_prompt=system_prompt,
-            allowed_tools=[],
-            cwd=tmpdir,
-            max_turns=1,
-            permission_mode="bypassPermissions",
-            model=model,
-            max_tokens=max_tokens,
-            request_timeout_seconds=timeout_s,
-        )
+
+        def _make_options(endpoint: Any) -> Any:
+            # Each slot has its own small/fast model id — a DeepSeek model name
+            # is meaningless on the internal gateway and vice versa.
+            slot_model = endpoint.small_fast_model if endpoint is not None else model
+            return build_options(
+                system_prompt=system_prompt,
+                allowed_tools=[],
+                cwd=tmpdir,
+                max_turns=1,
+                permission_mode="bypassPermissions",
+                model=slot_model,
+                max_tokens=max_tokens,
+                request_timeout_seconds=timeout_s,
+                endpoint=endpoint,
+            )
+
+        def _on_endpoint(endpoint: Any) -> None:
+            served["provider"] = endpoint.provider
+            served["model"] = endpoint.small_fast_model or endpoint.model
 
         async def _drive() -> list[Any]:
             collected: list[Any] = []
-            async for message in sdk_query(prompt=prompt, options=options):
+            async for message in routed_query(
+                prompt=prompt,
+                make_options=_make_options,
+                agent_kind="title_generator",
+                require_small_fast=True,
+                on_endpoint=_on_endpoint,
+            ):
                 collected.append(message)
                 accumulate_usage(getattr(message, "usage", None), token_usage)
             return collected
@@ -160,7 +182,8 @@ async def _run_query(
                 "timeout" if isinstance(exc, asyncio.TimeoutError) else type(exc).__name__
             )
             await _record_title_usage(
-                model=model,
+                model=served["model"],
+                provider=served["provider"],
                 token_usage=token_usage,
                 duration_seconds=time.monotonic() - start_ts,
                 status="failed",
@@ -170,7 +193,8 @@ async def _run_query(
             )
             raise
         await _record_title_usage(
-            model=model,
+            model=served["model"],
+            provider=served["provider"],
             token_usage=token_usage,
             duration_seconds=time.monotonic() - start_ts,
             status="succeeded",

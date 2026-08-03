@@ -788,6 +788,21 @@ export default {
       anthropicSectionTitle: 'Anthropic 主力模型',
       anthropicSectionDesc:
         '各智能体（日志分析、设备联动、代码修复等）统一通过 Claude Agent SDK 调用 Anthropic 兼容端点。此处配置会立即覆盖 .env 默认值，无需重启。',
+      backupSectionTitle: 'Anthropic 备用模型（故障转移）',
+      backupSectionDesc:
+        '主力端点降级或不可用时自动切换到此端点，恢复后自动切回。适合「主力免费但高峰期慢、备用付费但随时可用」的成本优化场景。字段含义与主力完全一致。',
+      backupEnabledLabel: '启用备用端点',
+      backupEnabledHint:
+        '关闭时所有请求只走主力端点，行为与未配置备用完全一致；此时下方字段可以先填好备用配置而不生效。',
+      testBackupBtn: '测试备用连接',
+      backupRoutingNote:
+        '· 路由策略（何时切换、熔断冷却、恢复探测）由环境变量控制，不在此页配置，以保证各进程阈值一致。',
+      routeOnPrimary: '当前由主力端点服务',
+      routeOnBackup: '当前由备用端点服务（自 {since} 起）—— 正在产生费用',
+      routeMode: '路由模式：{mode}',
+      routeModeActive: '已启用故障转移',
+      routeModeObserve: '仅观测（不切换）',
+      routeWindow: '主力最近窗口异常 {ratio}',
       ocrSectionTitle: 'OCR / 视觉模型（图片输入）',
       ocrSectionDesc:
         '用户在对话框粘贴 / 拖拽 / 选择图片后，图片先由此模型转成文字再合并进提示词。走 OpenAI 兼容端点，默认对接阿里云百炼 DashScope Qwen-VL。',
@@ -895,7 +910,7 @@ export default {
       disableMessageLabel: '给用户的留言',
       disableMessagePlaceholder: '例如：你的账号缺少企业邮箱，请通过 xxx 联系管理员补充后恢复使用。',
       disableMessageHint: '留言最多 1000 字；留空则展示默认停用提示。重新启用该账号时留言会自动清除。',
-      disableMessageDefault: '你的账号资料不完整（如缺少邮箱），已被临时停用。请联系管理员补充信息后恢复使用。',
+      disableMessageDefault: '你的账号资料不完整（如缺少邮箱），已被临时停用。请联系管理员补充信息后恢复使用，或重新使用完整信息注册后重新使用。',
       disableMessageBtn: '留言',
       disableMessageSaved: '留言已更新',
       disableConfirmBtn: '确认禁用',

@@ -167,10 +167,26 @@ class ProjectExpertAgent:
         )
 
         # Resolve effective model before run for logging & result.
-        provider = settings.anthropic_provider
-        profile = PROVIDER_PROFILES.get(provider)
-        effective_model = settings.anthropic_model or (profile.default_model if profile else "unknown")
+        # Endpoint selection happens here, not at build_options time: RUN_START
+        # below names the model and is already streamed to the browser by the
+        # time the first SDK message arrives, so it cannot be corrected later.
+        from app.agents.routed_query import routed_query
+        from app.services import model_router
+
+        endpoints = model_router.candidates(agent_kind=AGENT_KEY, require_mcp=True)
+        chosen = endpoints[0] if endpoints else None
+        if chosen is not None:
+            provider = chosen.provider
+            profile = chosen.profile
+            effective_model = chosen.model
+        else:
+            provider = settings.anthropic_provider
+            profile = PROVIDER_PROFILES.get(provider)
+            effective_model = settings.anthropic_model or (profile.default_model if profile else "unknown")
         supports_mcp = bool(profile and profile.supports_mcp_server_tools)
+        # Every candidate is MCP-capable (require_mcp above), so the tool set and
+        # the system prompt below are identical across slots and safe to build once.
+        served: Dict[str, str] = {"model": effective_model, "provider": str(provider)}
 
         allowed_tools = list(ALLOWED_TOOLS)
         mcp_servers = None
@@ -284,14 +300,20 @@ class ProjectExpertAgent:
 
         system_prompt += "\n\n" + response_language_directive(ctx.locale)
 
-        options = build_options(
-            system_prompt=system_prompt,
-            allowed_tools=allowed_tools,
-            cwd=ctx.temp_dir,
-            permission_mode="bypassPermissions",
-            mcp_servers=mcp_servers,
-            setting_sources=setting_sources,
-        )
+        def _make_options(endpoint: Optional[Any]) -> Any:
+            return build_options(
+                system_prompt=system_prompt,
+                allowed_tools=allowed_tools,
+                cwd=ctx.temp_dir,
+                permission_mode="bypassPermissions",
+                mcp_servers=mcp_servers,
+                setting_sources=setting_sources,
+                endpoint=endpoint,
+            )
+
+        def _on_endpoint(endpoint: Any) -> None:
+            served["model"] = endpoint.model
+            served["provider"] = endpoint.provider
 
         state = _RunState(task_id=ctx.task_id, emitter=trace_emitter)
         start = time.monotonic()
@@ -320,7 +342,13 @@ class ProjectExpertAgent:
             )
 
         try:
-            async for message in query(prompt=user_prompt, options=options):
+            async for message in routed_query(
+                prompt=user_prompt,
+                make_options=_make_options,
+                agent_kind=AGENT_KEY,
+                candidates=endpoints,
+                on_endpoint=_on_endpoint,
+            ):
                 if cancel_event is not None and cancel_event.is_set():
                     _log_workflow(ctx.task_id, "cancelled", reason="cancel_event_set")
                     _emit_cancel_requested(state)
@@ -348,7 +376,7 @@ class ProjectExpertAgent:
                 )
             )
             return _cancelled_result(
-                model=effective_model,
+                model=served["model"],
                 duration=duration,
                 tool_trace=derive_tool_trace(state.trace_events),
                 token_usage=state.token_usage,
@@ -420,14 +448,15 @@ class ProjectExpertAgent:
                 )
                 return {
                     "engine": "claude-agent-sdk",
-                    "model": effective_model,
+                    "model": served["model"],
+                    "provider": served["provider"],
                     "schema_version": 3,
                     **wrapped_skill_answer,
                     **common_extra,
                 }
             logger.warning("ProjectExpertAgent: no fenced JSON in result, schema_mismatch")
             return _empty_result(
-                effective_model, status="schema_mismatch", error_kind=None, **common_extra
+                served["model"], status="schema_mismatch", error_kind=None, **common_extra
             )
 
         if not _validate_result_schema(parsed):
@@ -442,7 +471,8 @@ class ProjectExpertAgent:
                     recovered_status = "error"
                 return {
                     "engine": "claude-agent-sdk",
-                    "model": effective_model,
+                    "model": served["model"],
+                    "provider": served["provider"],
                     "schema_version": 3,
                     "status": recovered_status,
                     "error_kind": recovered_error_kind,
@@ -461,7 +491,7 @@ class ProjectExpertAgent:
 
             logger.warning("ProjectExpertAgent: result JSON missing required fields, schema_mismatch")
             return _empty_result(
-                effective_model, status="schema_mismatch", error_kind=None, **common_extra
+                served["model"], status="schema_mismatch", error_kind=None, **common_extra
             )
 
         status = parsed.get("status", "ok")
@@ -477,7 +507,8 @@ class ProjectExpertAgent:
 
         return {
             "engine": "claude-agent-sdk",
-            "model": effective_model,
+            "model": served["model"],
+            "provider": served["provider"],
             "schema_version": 3,
             "status": status,
             "error_kind": error_kind,
