@@ -93,7 +93,7 @@ async def test_emitter_events_flow_through_to_sse(monkeypatch, tmp_path):
     trace_summary = scripted_events[-1]["trace_summary"]
 
     class FakeAgent:
-        def run_sync(self, _ctx, _cancel_event=None, trace_emitter=None):
+        def run_sync(self, _ctx, _cancel_event=None, trace_emitter=None, _clarification_binding=None):
             for event in scripted_events:
                 if trace_emitter is not None:
                     trace_emitter(event)
@@ -178,7 +178,7 @@ async def test_reconnect_replays_trace_events_in_order(monkeypatch, tmp_path):
         await proceed.wait()
 
     class GatedFakeAgent:
-        def run_sync(self, _ctx, _cancel_event=None, trace_emitter=None):
+        def run_sync(self, _ctx, _cancel_event=None, trace_emitter=None, _clarification_binding=None):
             for event in emitted_pre:
                 if trace_emitter:
                     trace_emitter(event)

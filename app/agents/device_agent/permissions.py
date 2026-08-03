@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import logging
+import threading
 import uuid
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
@@ -45,86 +46,9 @@ EmitFn = Callable[[AgentTraceEvent], None]
 # ─────────────────────── PermissionBroker ──────────────────────────
 
 
-@dataclass
-class _PendingDecision:
-    future: "asyncio.Future[Dict[str, Any]]"
-    tool_name: str
-    risk: RiskLevel
-
-
-class PermissionBroker:
-    """Per-run HITL 决策协调器。
-
-    生命周期与一次 ``DeviceAgent.run_stream`` 对齐：broker 创建 → 注册到
-    ``AIChatService.permission_broker_registry[session_id]`` → 在 ``finally``
-    中 :meth:`close` 解除注册并取消所有挂起的 Future。
-
-    线程模型：所有方法都假设在 asyncio event loop 中调用；HTTP 端点处理函数
-    通常在同一 loop 内运行，因此可以直接调用 :meth:`resolve` 而不必跨线程。
-    """
-
-    def __init__(self) -> None:
-        self._pending: Dict[str, _PendingDecision] = {}
-        self._closed = False
-
-    # ---- request lifecycle -------------------------------------------------
-
-    def open(self, request_id: str, *, tool_name: str, risk: str) -> "asyncio.Future[Dict[str, Any]]":
-        """登记一个新的待裁决请求，返回等待方应 await 的 Future。
-
-        ``risk`` 通常是 :data:`RiskLevel` 之一；澄清提问（AskUserQuestion）复用同一
-        broker 时传入 ``"clarify"`` 仅作标记，不参与风险分级。
-        """
-        if self._closed:
-            raise RuntimeError("PermissionBroker has been closed")
-        if request_id in self._pending:
-            raise ValueError(f"duplicate permission request_id={request_id}")
-        loop = asyncio.get_event_loop()
-        future: "asyncio.Future[Dict[str, Any]]" = loop.create_future()
-        self._pending[request_id] = _PendingDecision(future=future, tool_name=tool_name, risk=risk)  # type: ignore[arg-type]
-        return future
-
-    def open_clarification(self, request_id: str, *, tool_name: str = "AskUserQuestion") -> "asyncio.Future[Dict[str, Any]]":
-        """澄清提问专用 open 包装：语义与 :meth:`open` 相同，``risk`` 固定为 ``"clarify"``。"""
-        return self.open(request_id, tool_name=tool_name, risk="clarify")
-
-    def resolve(self, request_id: str, decision: Dict[str, Any]) -> bool:
-        """HTTP 端点入口：把 ``{decision, updated_args?, message?}`` 塞回 Future。
-
-        Returns:
-            True：请求存在且成功 resolve；False：未知 request_id 或已被 resolve。
-        """
-        entry = self._pending.pop(request_id, None)
-        if entry is None or entry.future.done():
-            return False
-        try:
-            entry.future.set_result(decision)
-        except asyncio.InvalidStateError:
-            return False
-        return True
-
-    def cancel(self, request_id: str, *, reason: str = "cancelled") -> bool:
-        """取消一个挂起的请求（连接断开 / agent 整体超时时使用）。"""
-        entry = self._pending.pop(request_id, None)
-        if entry is None or entry.future.done():
-            return False
-        try:
-            entry.future.set_result({"decision": "deny", "reason": reason})
-        except asyncio.InvalidStateError:
-            return False
-        return True
-
-    def close(self) -> None:
-        """Run 结束时清理：把所有未 resolve 的 Future 标记为 deny。"""
-        self._closed = True
-        for rid in list(self._pending.keys()):
-            self.cancel(rid, reason="run_complete")
-
-    def has(self, request_id: str) -> bool:
-        return request_id in self._pending
-
-    def __len__(self) -> int:
-        return len(self._pending)
+# PermissionBroker 已上移到 app.agents.hitl_broker：它同时服务工具审批与跨 agent
+# 的澄清提问，不再是 DeviceAgent 专属。此处 re-export 保持既有 import 路径可用。
+from app.agents.hitl_broker import PermissionBroker  # noqa: E402,F401
 
 
 # ─────────────────────── Risk classification ───────────────────────

@@ -142,46 +142,9 @@ def render_user_prompt(
         return f"{user_prompt_template}\n\n[user] {user_message}".strip()
 
 
-_CLARIFICATION_GUIDANCE = {
-    "zh": (
-        "## 何时向用户提问（mcp__ask__AskUserQuestion）\n"
-        "当且仅当满足以下情形时，调用 `mcp__ask__AskUserQuestion` 工具向用户澄清：\n"
-        "- 缺少执行所必需的关键参数；\n"
-        "- 指令存在多种合理且后果不同的解读；\n"
-        "- 操作目标对象/范围不明确，猜错代价较高。\n"
-        "必须使用完整工具名 `mcp__ask__AskUserQuestion`；不要调用 Claude CLI 内置的"
-        "同名 `AskUserQuestion` 工具，后者未接入本产品的提问卡片。\n"
-        "能够根据上下文合理推断时，不要打断用户，直接继续。\n"
-        "提问时：把需要澄清的点尽量在一次调用里问全（每个问题给 2–4 个预设选项，"
-        "并配简短说明）；本轮最多可提问 {max_rounds} 次，达上限后请基于已知信息自行决断。"
-    ),
-    "en": (
-        "## When to ask the user (mcp__ask__AskUserQuestion)\n"
-        "Call `mcp__ask__AskUserQuestion` to clarify only when:\n"
-        "- a required parameter for the action is missing;\n"
-        "- the instruction has multiple reasonable interpretations with different outcomes;\n"
-        "- the target/scope is ambiguous and guessing wrong is costly.\n"
-        "Always use the full name `mcp__ask__AskUserQuestion`; never use Claude CLI's "
-        "built-in `AskUserQuestion`, which is not connected to RavenAI's clarification card.\n"
-        "If you can reasonably infer intent from context, do NOT interrupt — just proceed.\n"
-        "When you do ask, batch everything you need into a single call (2–4 preset options "
-        "with short descriptions per question). You may ask at most {max_rounds} time(s) this "
-        "run; once the cap is hit, decide using the information you have."
-    ),
-}
-
-
-def clarification_guidance(locale: Optional[str] = None, *, max_rounds: int = 5) -> str:
-    """返回 AskUserQuestion 使用指引（按 locale），供 system prompt 末尾追加。
-
-    仅在 ``clarification_enabled`` 为真时由调用方拼接；禁用澄清时不应出现。
-    """
-    lang = (locale or "zh").strip().lower()
-    body = _CLARIFICATION_GUIDANCE.get(lang) or _CLARIFICATION_GUIDANCE["zh"]
-    try:
-        return body.format(max_rounds=max_rounds)
-    except (KeyError, IndexError):
-        return body
+# AskUserQuestion 使用指引已上移到 app.agents.clarification（跨 agent 共享）。
+# 此处仅保留 re-export，保持既有 import 路径可用。
+from app.agents.clarification import clarification_guidance  # noqa: E402,F401
 
 
 def reset_cache() -> None:

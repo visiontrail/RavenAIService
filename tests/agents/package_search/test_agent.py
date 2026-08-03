@@ -107,7 +107,7 @@ def stub_service(monkeypatch):
 @pytest.fixture
 def stub_options(monkeypatch):
     """Bypass ``_build_options`` so the test does not touch ClaudeAgentOptions."""
-    def fake_build(self, *, system_prompt, project_code, cwd, endpoint=None):
+    def fake_build(self, *, system_prompt, project_code, cwd, endpoint=None, clarification=None):
         return (object(), "fake-model", "fake-provider")
 
     monkeypatch.setattr(PackageSearchAgent, "_build_options", fake_build)

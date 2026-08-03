@@ -29,7 +29,19 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+)
+
+if TYPE_CHECKING:  # avoid importing the SDK-dependent module at import time
+    from app.agents.clarification import ClarificationBinding, ClarificationRuntime
 
 # 复用 log_analysis 的 trace 层（纯 SDK 消息 → AgentTraceEvent 转换，无日志语义）。
 from app.agents.log_analysis.trace import (
@@ -200,6 +212,7 @@ class PackageSearchAgent:
         project_code: str,
         cwd: str,
         endpoint: Optional[Any] = None,
+        clarification: Optional["ClarificationRuntime"] = None,
     ) -> Tuple[Any, str, str]:
         """Build ClaudeAgentOptions; return ``(options, model, provider)``.
 
@@ -208,6 +221,7 @@ class PackageSearchAgent:
         candidate because the MCP capability gate below changes the tool set.
         """
         from app.agents.anthropic_client import PROVIDER_PROFILES, build_options
+        from app.agents.clarification import BUILTIN_ASK_TOOL_NAME
         from app.config import settings
 
         if endpoint is not None:
@@ -246,10 +260,19 @@ class PackageSearchAgent:
                 provider,
             )
 
+        # AskUserQuestion is added here rather than by the caller because options
+        # are rebuilt per routed candidate — the ask tool must survive failover.
+        if clarification is not None:
+            mcp_servers, allowed_tools = clarification.apply(mcp_servers, allowed_tools)
+
         options = build_options(
             system_prompt=system_prompt,
             allowed_tools=allowed_tools,
             cwd=cwd,
+            # Claude Code's built-in AskUserQuestion is not wired to the RavenAI
+            # broker/SSE card and would block forever; only the qualified MCP
+            # tool added above is valid here.
+            disallowed_tools=[BUILTIN_ASK_TOOL_NAME],
             permission_mode="bypassPermissions",
             mcp_servers=mcp_servers,
             endpoint=endpoint,
@@ -261,6 +284,7 @@ class PackageSearchAgent:
         ctx: WorkspaceContext,
         cancel_event: Optional[threading.Event] = None,
         trace_emitter: Optional[TraceEmitter] = None,
+        clarification_binding: Optional["ClarificationBinding"] = None,
     ) -> Dict[str, Any]:
         """Run the agent loop and return the structured result dict.
 
@@ -271,6 +295,9 @@ class PackageSearchAgent:
                 terminates with a ``cancelled`` result.
             trace_emitter: optional synchronous callback invoked once per
                 ``AgentTraceEvent`` (used by the chat service for SSE).
+            clarification_binding: optional AskUserQuestion wiring supplied by
+                the chat service. ``None`` disables asking (no SSE subscriber
+                exists to answer).
         """
         from app.agents.package_search.prompts import get_prompts, render_user_prompt
         from app.i18n.prompts import response_language_directive
@@ -337,12 +364,32 @@ class PackageSearchAgent:
 
         served: Dict[str, str] = {}
 
+        # ``state`` first: the ask tool must share this run's seq space, or the
+        # frontend's (run_id, seq) deduper drops the question card.
+        state = _RunState(task_id=ctx.task_id, emitter=trace_emitter)
+
+        # --- AskUserQuestion clarification (optional) -----------------------
+        clarification = (
+            clarification_binding.setup(
+                emit=state.emit,
+                seq_counter=state.seq_counter,
+                task_id=ctx.task_id,
+                locale=ctx.locale,
+                workflow_agent=True,
+            )
+            if clarification_binding is not None
+            else None
+        )
+        if clarification is not None:
+            system_prompt += "\n\n" + clarification.prompt_addendum
+
         def _make_options(endpoint: Optional[Any]) -> Any:
             options, model, provider = self._build_options(
                 system_prompt=system_prompt,
                 project_code=ctx.project_code,
                 cwd=ctx.temp_dir,
                 endpoint=endpoint,
+                clarification=clarification,
             )
             served["model"], served["provider"] = model, str(provider)
             return options
@@ -355,7 +402,6 @@ class PackageSearchAgent:
         _make_options(chosen)
         effective_model, provider = served["model"], served["provider"]
 
-        state = _RunState(task_id=ctx.task_id, emitter=trace_emitter)
         start = time.monotonic()
 
         _log_workflow(ctx.task_id, "run_start", model=effective_model)
@@ -434,6 +480,11 @@ class PackageSearchAgent:
             )
             logger.exception("PackageSearchAgent: run failed: %s", exc)
             raise
+        finally:
+            # The ask tool can only fire inside the loop above; release the
+            # broker registry slot and deny anything still pending.
+            if clarification is not None:
+                clarification.close()
 
         final_text = state.final_text
         duration = time.monotonic() - start
@@ -517,15 +568,26 @@ class PackageSearchAgent:
         ctx: WorkspaceContext,
         cancel_event: Optional[threading.Event] = None,
         trace_emitter: Optional[TraceEmitter] = None,
+        clarification_binding: Optional["ClarificationBinding"] = None,
     ) -> Dict[str, Any]:
-        """Synchronous wrapper (for background threads). Applies request timeout."""
+        """Synchronous wrapper (for background threads). Applies request timeout.
+
+        Runs on a fresh event loop in the calling thread, i.e. not the FastAPI
+        loop that serves the clarification-resolve endpoint; ``PermissionBroker``
+        settles futures across loops so ``clarification_binding`` still works.
+        """
         from app.config import settings
 
         timeout = settings.anthropic_request_timeout_seconds
         try:
             return asyncio.run(
                 asyncio.wait_for(
-                    self.run(ctx, cancel_event=cancel_event, trace_emitter=trace_emitter),
+                    self.run(
+                        ctx,
+                        cancel_event=cancel_event,
+                        trace_emitter=trace_emitter,
+                        clarification_binding=clarification_binding,
+                    ),
                     timeout=float(timeout),
                 )
             )

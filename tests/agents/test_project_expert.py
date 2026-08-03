@@ -415,7 +415,7 @@ async def test_service_reuses_workspace_and_emits_notice_on_project_switch(monke
     }
 
     class FastAgent:
-        def run_sync(self, seen_ctx, _cancel_event=None, _trace_emitter=None):
+        def run_sync(self, seen_ctx, _cancel_event=None, _trace_emitter=None, _clarification_binding=None):
             assert seen_ctx.temp_dir == ctx.temp_dir
             return {
                 "engine": "claude-agent-sdk",
@@ -497,7 +497,7 @@ async def test_service_cancel_and_result_polling(monkeypatch, tmp_path):
     captured = {}
 
     class CancellableAgent:
-        def run_sync(self, _ctx, cancel_event=None, _trace_emitter=None):
+        def run_sync(self, _ctx, cancel_event=None, _trace_emitter=None, _clarification_binding=None):
             captured["event"] = cancel_event
             for _ in range(200):
                 if cancel_event is not None and cancel_event.is_set():

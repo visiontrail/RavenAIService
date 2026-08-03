@@ -63,6 +63,23 @@
 
 无任何可解析仓库信息时，直接输出 `"status": "error", "error_kind": "missing_project_identity"`，**不允许仅凭日志答题**。
 
+### 2.1 澄清提问优先于工作流
+
+当用户开启了全局偏好「指令不清晰时允许 Agent 向我提问」时，本 Agent 会额外拿到
+`mcp__ask__AskUserQuestion` 工具，以及一段说明「澄清优先于上面的强制工作流」的提示词
+（[app/agents/clarification.py](../app/agents/clarification.py) 的 `workflow_agent=True` 分支）。
+
+这段说明是必需的，不是锦上添花：上面的 6 步工作流本身在提示词里被表述为强制流程，
+模型会把它理解为「无论如何都要把流程走完并产出 JSON」，从而在收到「请定位问题」这类
+没有指明现象、模块或时间范围的笼统诉求时，直接挑一种解读继续跑完，而不是先问清楚。
+指引里因此显式列出了本 Agent 场景下「问题不清晰」的判定标准（多处彼此独立的可疑点、
+现象在材料中无对应线索、多附件未指明目标），以及「澄清可以发生在流程中间，拿到答案后
+从当前步骤继续，最终仍按规定输出围栏 JSON」。
+
+提问由聊天服务通过 `clarification_binding` 注入；Celery 批处理入口不传该参数，因此
+不会提问（没有人在 SSE 那头作答）。事件与 broker 机制见
+[agent_trace_protocol.md](agent_trace_protocol.md#clarification-askuserquestion)。
+
 ---
 
 ## 3. 代码强制使用策略
@@ -162,4 +179,5 @@ Agent 运行期间通过 `trace_emitter` 回调推送 `AgentTraceEvent`，事件
 - [app/prompts/prompts_config.yaml](../app/prompts/prompts_config.yaml) — 系统提示词主体
 - [app/agents/log_analysis/agent.py](../app/agents/log_analysis/agent.py) — 运行时提示词增量（Runtime Constraint / User-Selected Project Repository）
 - [app/tasks/ai_analysis.py](../app/tasks/ai_analysis.py) — `repo_info` 注入逻辑
+- [app/agents/clarification.py](../app/agents/clarification.py) — 澄清提问工具与提示词（四个对话 Agent 共用，改动会同时影响它们）
 - 本文档 — 行为对比表与错误码表

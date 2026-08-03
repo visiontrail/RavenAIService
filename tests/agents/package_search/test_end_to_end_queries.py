@@ -157,7 +157,7 @@ def seeded_service(tmp_path, monkeypatch):
 @pytest.fixture
 def stub_options(monkeypatch):
     """Skip ClaudeAgentOptions construction so we don't touch real config."""
-    def fake_build(self, *, system_prompt, project_code, cwd, endpoint=None):
+    def fake_build(self, *, system_prompt, project_code, cwd, endpoint=None, clarification=None):
         return (object(), "fake-model", "fake-provider")
     monkeypatch.setattr(PackageSearchAgent, "_build_options", fake_build)
 

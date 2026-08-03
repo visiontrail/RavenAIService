@@ -509,7 +509,7 @@ class TestRunSync:
     def test_run_sync_timeout(self, workspace_ctx):
         from app.agents.log_analysis.agent import LogAnalysisAgent
 
-        async def _slow_run(self, _, cancel_event=None, trace_emitter=None):
+        async def _slow_run(self, _, cancel_event=None, trace_emitter=None, clarification_binding=None):
             await asyncio.sleep(9999)
 
         with patch.object(LogAnalysisAgent, "run", _slow_run), \
@@ -566,7 +566,7 @@ class TestCancellation:
 
         received: dict = {}
 
-        async def _capture_run(self, ctx, cancel_event=None, trace_emitter=None):
+        async def _capture_run(self, ctx, cancel_event=None, trace_emitter=None, clarification_binding=None):
             received["evt"] = cancel_event
             received["emitter"] = trace_emitter
             return {

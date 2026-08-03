@@ -407,6 +407,51 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     }
   }
 
+  /**
+   * Apply an AskUserQuestion clarification event to the panel state.
+   *
+   * Kept agent-agnostic and called from both frame shapes: DeviceAgent streams
+   * trace events bare (`type: "clarification_request"`), while the workspace
+   * agents wrap theirs in `event: "agent_trace"`. The global user preference
+   * "let the agent ask me when instructions are unclear" applies to all of
+   * them, so both paths must land in the same `pendingClarifications`.
+   *
+   * Returns true when the event was a clarification event.
+   */
+  const applyClarificationEvent = (
+    state: ConversationState,
+    traceType: string,
+    payload: any,
+  ): boolean => {
+    if (traceType === 'clarification_request') {
+      const requestId = String(payload?.request_id || '')
+      const questions = normalizeClarificationQuestions(payload?.questions)
+      if (
+        requestId &&
+        questions.length &&
+        !state.pendingClarifications.some((c) => c.request_id === requestId)
+      ) {
+        state.pendingClarifications.push(
+          makePendingClarification(requestId, questions, {
+            session_id: payload?.session_id || state.sessionId,
+            run_id: payload?.run_id || state.activeRunId || undefined,
+          }),
+        )
+      }
+      return true
+    }
+    if (traceType === 'clarification_resolved') {
+      const requestId = String(payload?.request_id || '')
+      if (requestId) {
+        state.pendingClarifications = state.pendingClarifications.filter(
+          (c) => c.request_id !== requestId,
+        )
+      }
+      return true
+    }
+    return false
+  }
+
   // ---- event application --------------------------------------------------
 
   const applyEventToState = (state: ConversationState, payload: any) => {
@@ -507,12 +552,22 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         if (trace.type === 'run_complete') {
           state.runStatus = 'succeeded'
           target.traceRunning = false
+          state.pendingClarifications = []
         } else if (trace.type === 'cancelled') {
           state.runStatus = 'cancelled'
           target.traceRunning = false
+          state.pendingClarifications = []
         } else if (trace.type === 'error') {
           state.runStatus = 'failed'
           target.traceRunning = false
+          state.pendingClarifications = []
+        } else {
+          // AskUserQuestion is not DeviceAgent-only: log-analysis,
+          // project-expert and package-search wrap their trace events in
+          // `event: "agent_trace"`, so they never reach the bare-frame branch
+          // below. Route the clarification pair through the same state here or
+          // their question card would never render.
+          applyClarificationEvent(state, trace.type as string, payload)
         }
       }
       return
@@ -587,24 +642,8 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
             (p) => p.request_id !== requestId,
           )
         }
-      } else if (type === 'clarification_request') {
-        const requestId = String(payload?.request_id || '')
-        const questions = normalizeClarificationQuestions(payload?.questions)
-        if (requestId && questions.length && !state.pendingClarifications.some((c) => c.request_id === requestId)) {
-          state.pendingClarifications.push(
-            makePendingClarification(requestId, questions, {
-              session_id: payload?.session_id || state.sessionId,
-              run_id: payload?.run_id || state.activeRunId || undefined,
-            }),
-          )
-        }
-      } else if (type === 'clarification_resolved') {
-        const requestId = String(payload?.request_id || '')
-        if (requestId) {
-          state.pendingClarifications = state.pendingClarifications.filter(
-            (c) => c.request_id !== requestId,
-          )
-        }
+      } else {
+        applyClarificationEvent(state, type, payload)
       }
       return
     }

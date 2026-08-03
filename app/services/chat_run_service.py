@@ -29,6 +29,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.device_agent.permissions import PermissionBroker
+from app.agents.log_analysis.trace import (
+    CLARIFICATION_REQUEST,
+    CLARIFICATION_RESOLVED,
+)
 from app.models.user import ChatAgentRun, User
 
 logger = logging.getLogger(__name__)
@@ -258,7 +262,34 @@ class ChatRunService:
         return self._snapshot_payload(job)
 
     @staticmethod
-    def _snapshot_payload(job: ChatRunJob) -> Dict[str, Any]:
+    def _derive_pending_clarifications(
+        trace_events: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Replay ``clarification_request`` / ``_resolved`` to find open questions.
+
+        ``_run_device_job`` maintains ``job.pending_clarifications`` as it drives
+        the stream, but externally-driven runs (log_analysis / project_expert /
+        package_search) only share their raw ``trace_events`` list — without this
+        replay, reloading the page mid-question would lose the card. Applying the
+        events in order gives the same answer the dict would, so it is also a
+        safe fallback for device runs with nothing pending.
+        """
+        pending: Dict[str, Dict[str, Any]] = {}
+        for ev in trace_events:
+            if not isinstance(ev, dict):
+                continue
+            ev_type = ev.get("type")
+            request_id = ev.get("request_id")
+            if not request_id:
+                continue
+            if ev_type == CLARIFICATION_REQUEST:
+                pending[str(request_id)] = dict(ev)
+            elif ev_type == CLARIFICATION_RESOLVED:
+                pending.pop(str(request_id), None)
+        return list(pending.values())
+
+    @classmethod
+    def _snapshot_payload(cls, job: ChatRunJob) -> Dict[str, Any]:
         return {
             "run_id": job.run_id,
             "session_id": job.session_id,
@@ -270,7 +301,10 @@ class ChatRunService:
             "trace_events": list(job.trace_events),
             "events": list(job.events),
             "pending_permissions": list(job.pending_permissions.values()),
-            "pending_clarifications": list(job.pending_clarifications.values()),
+            "pending_clarifications": (
+                list(job.pending_clarifications.values())
+                or cls._derive_pending_clarifications(job.trace_events)
+            ),
             "started_at": job.started_at,
             "updated_at": job.updated_at,
             "finished_at": job.finished_at,

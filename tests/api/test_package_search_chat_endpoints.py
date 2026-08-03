@@ -91,7 +91,7 @@ def _canned_result(status: str = "ok") -> Dict[str, Any]:
 class FastAgent:
     """Mock agent: returns the canned package-search result immediately."""
 
-    def run_sync(self, _ctx, _cancel_event=None, trace_emitter=None):
+    def run_sync(self, _ctx, _cancel_event=None, trace_emitter=None, _clarification_binding=None):
         if trace_emitter is not None:
             trace_emitter(
                 {
@@ -223,7 +223,7 @@ async def test_service_cancel_path(monkeypatch, tmp_path):
     captured: Dict[str, Any] = {}
 
     class CancellableAgent:
-        def run_sync(self, _ctx, cancel_event=None, _trace_emitter=None):
+        def run_sync(self, _ctx, cancel_event=None, _trace_emitter=None, _clarification_binding=None):
             captured["event"] = cancel_event
             for _ in range(200):
                 if cancel_event is not None and cancel_event.is_set():

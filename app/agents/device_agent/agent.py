@@ -404,31 +404,33 @@ class DeviceAgent:
             # --- AskUserQuestion clarification tool (optional) ---------------
             # Only exposed when the user's ``clarification_enabled`` preference is
             # on; disabling it removes the tool entirely so the model cannot ask.
+            # The wiring itself lives in the shared module so all chat agents get
+            # identical behaviour from one code path.
+            from app.agents.clarification import ClarificationPrefs, setup_clarification
+
             mcp_servers: Dict[str, Any] = {}
             if mcp_server is not None:
                 mcp_servers["device"] = mcp_server
-            if ctx.clarification_enabled:
-                from app.agents.device_agent.clarification import (
-                    build_clarification_mcp_server,
-                )
-
-                clarify_timeout_s = float(
-                    getattr(settings, "device_agent_clarification_timeout_seconds", 300)
-                )
-                ask_server, ask_tool_name = build_clarification_mcp_server(
-                    broker=broker,
-                    timeout_seconds=clarify_timeout_s,
-                    on_timeout=ctx.clarification_on_timeout,
+            clarification = setup_clarification(
+                ClarificationPrefs(
+                    enabled=bool(ctx.clarification_enabled),
                     max_rounds=int(ctx.clarification_max_rounds),
-                    cancel_run=ctx.cancel_run,
-                    emit=emit,
-                    seq_counter=seq_counter,
-                    task_id=task_id,
-                    run_id=run_id,
-                    session_id=session_id,
-                )
-                mcp_servers["ask"] = ask_server
-                full_allowed.append(ask_tool_name)
+                    on_timeout=str(ctx.clarification_on_timeout),
+                    timeout_seconds=ClarificationPrefs._timeout_from_settings(),
+                ),
+                emit=emit,
+                seq_counter=seq_counter,
+                task_id=task_id,
+                run_id=run_id,
+                session_id=session_id,
+                locale=ctx.locale,
+                cancel_run=ctx.cancel_run,
+                # DeviceAgent shares one broker between tool approval and
+                # clarification, and registers it itself above.
+                broker=broker,
+            )
+            if clarification is not None:
+                mcp_servers, full_allowed = clarification.apply(mcp_servers, full_allowed)
 
             # --- Compose prompts --------------------------------------------
             base_system, user_template = get_prompts(ctx.scene_hint, locale=ctx.locale)
@@ -441,14 +443,9 @@ class DeviceAgent:
                 system_prompt, response_language_directive(ctx.locale)
             )
             # 仅当本轮暴露了 AskUserQuestion 工具时，追加其使用指引。
-            if ctx.clarification_enabled:
-                from app.agents.device_agent.prompts import clarification_guidance
-
+            if clarification is not None:
                 system_prompt = _compose_system_prompt(
-                    system_prompt,
-                    clarification_guidance(
-                        ctx.locale, max_rounds=int(ctx.clarification_max_rounds)
-                    ),
+                    system_prompt, clarification.prompt_addendum
                 )
 
             max_history_turns = int(

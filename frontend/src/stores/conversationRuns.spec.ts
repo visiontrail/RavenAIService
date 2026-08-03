@@ -655,6 +655,69 @@ describe('conversationRuns store', () => {
     expect(state.pendingClarifications).toEqual([])
   })
 
+  // The workspace agents (log-analysis / project-expert / package-search) wrap
+  // every trace event in `event: "agent_trace"`, unlike DeviceAgent which
+  // streams them bare. That wrapper used to divert their clarification events
+  // into the trace-only branch, so their question card never rendered even
+  // though the user had clarification switched on.
+  const wrappedClarificationRequest = (
+    runId: string,
+    sessionId: string,
+    seq: number,
+    requestId: string,
+  ): Record<string, unknown> => ({
+    ...clarificationRequest(runId, sessionId, seq, requestId),
+    event: 'agent_trace',
+  })
+
+  it('pushes a pending clarification from an agent_trace-wrapped request', () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
+    store.applyEventToState(
+      state,
+      wrappedClarificationRequest('run-a', 'session-a', 2, 'req-1'),
+    )
+    expect(state.pendingClarifications.map((c) => c.request_id)).toEqual(['req-1'])
+    expect(state.pendingClarifications[0].run_id).toBe('run-a')
+
+    store.applyEventToState(state, {
+      event: 'agent_trace',
+      type: 'clarification_resolved',
+      task_id: 'run-a',
+      run_id: 'run-a',
+      session_id: 'session-a',
+      seq: 3,
+      timestamp: 3,
+      request_id: 'req-1',
+      outcome: 'answered',
+    })
+    expect(state.pendingClarifications).toEqual([])
+  })
+
+  it('drops a pending clarification when an agent_trace run terminates', () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('session-a')
+    store.applyEventToState(state, traceEvent('run-a', 'session-a', 1, 'run_start'))
+    store.applyEventToState(
+      state,
+      wrappedClarificationRequest('run-a', 'session-a', 2, 'req-1'),
+    )
+    expect(state.pendingClarifications).toHaveLength(1)
+
+    store.applyEventToState(state, {
+      event: 'agent_trace',
+      type: 'run_complete',
+      task_id: 'run-a',
+      run_id: 'run-a',
+      session_id: 'session-a',
+      seq: 3,
+      timestamp: 3,
+    })
+    expect(state.pendingClarifications).toEqual([])
+    expect(state.runStatus).toBe('succeeded')
+  })
+
   it('keeps one session\'s clarification out of another session', () => {
     const store = useConversationRunsStore()
     const sessionA = store.ensureState('session-a')

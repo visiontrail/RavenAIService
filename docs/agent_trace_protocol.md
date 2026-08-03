@@ -37,6 +37,33 @@ keys gracefully.
 | `thinking_end`    | `step_id`, `text`, `duration_seconds`                                                                                        | `text` is the full thinking text (≤ 4 KB excerpt).                                     |
 | `answer_delta`    | `text_chunk`, `step_id` (optional)                                                                                           | Incremental chunk of the assistant's **final answer body** (≤ 4 KB UTF-8). Concatenating every `answer_delta.text_chunk` of a run in `seq` order MUST equal `run_complete.final_text` (under the same masking). Distinct from `thinking_delta` (folded reasoning) and `step_delta` (tool output). |
 | `system_notice`   | `kind`, `subtype`, `detail`                                                                                                  | Used for `heartbeat`, `cancel_requested`, SDK system messages, etc.                    |
+| `clarification_request`  | `request_id`, `questions`, `run_id`, `session_id`                                                                     | The agent paused to ask the user (`mcp__ask__AskUserQuestion`). Blocks the agent loop until `POST /chat/clarifications/{request_id}/resolve`, a timeout, or run end. Emitted by **every** chat agent, not just DeviceAgent. |
+| `clarification_resolved` | `request_id`, `outcome` (`answered`/`timeout`/`cancelled`), `reason`                                                   | Always follows its `clarification_request`; clears the question card.                   |
+
+### Clarification (AskUserQuestion)
+
+Any chat-facing agent — `device`, `log_analysis`, `project_expert`,
+`package_search` — may pause mid-run and ask the user to disambiguate an
+unclear instruction. The capability is gated on the user's **global**
+preference (`User.clarification_enabled` / `_max_rounds` / `_on_timeout`),
+never on which agent is running; wiring lives in one place,
+[app/agents/clarification.py](../app/agents/clarification.py), and each agent
+calls `ClarificationBinding.setup()` exactly once per run.
+
+Two consequences worth knowing when adding a new agent or transport:
+
+- The ask tool MUST emit onto the run's own `SeqCounter`. A second counter
+  produces duplicate `(run_id, seq)` keys and the browser's replay de-duper
+  silently drops the question card.
+- `clarification_*` events carry `run_id` explicitly because the answer is
+  routed back through `chat_run_service`'s broker registry, keyed by `run_id`.
+  An agent with no `run_id` cannot ask, and `setup_clarification` returns
+  `None` for it rather than exposing a tool nobody can answer.
+
+Agents that run their SDK loop off the FastAPI event loop (the three
+workspace agents go through `asyncio.to_thread → run_sync → asyncio.run`)
+resolve across loops; `PermissionBroker` handles that internally via
+`call_soon_threadsafe`.
 
 ### Invariants
 

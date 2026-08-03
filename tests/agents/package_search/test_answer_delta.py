@@ -66,7 +66,7 @@ def _input_json_delta(partial: str) -> _StreamEvent:
 
 @pytest.fixture
 def stub_options(monkeypatch):
-    def fake_build(self, *, system_prompt, project_code, cwd, endpoint=None):
+    def fake_build(self, *, system_prompt, project_code, cwd, endpoint=None, clarification=None):
         return (object(), "fake-model", "fake-provider")
 
     monkeypatch.setattr(PackageSearchAgent, "_build_options", fake_build)

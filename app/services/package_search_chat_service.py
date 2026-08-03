@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.package_search.agent import PackageSearchAgent
 from app.agents.package_search.workspace import WorkspaceContext, cleanup, prepare
+from app.agents.clarification import ClarificationBinding
 from app.config import settings
 from app.models.chat import ChatMessage, ImageAttachment
 from app.models.user import User
@@ -81,6 +82,10 @@ class AgentJob:
     # Metadata for images attached to this turn; persisted with the user
     # message so history reloads can re-render the thumbnails.
     images_json: Optional[str] = None
+    # AskUserQuestion wiring for this run (user preference + broker registry +
+    # cancel hook). ``None`` when the user turned clarification off, which is
+    # exactly what makes the agent unable to ask.
+    clarification: Optional[Any] = None
     events: List[Dict[str, Any]] = field(default_factory=list)
     # Raw AgentTraceEvent payloads (no SSE wrapper) for late-subscriber
     # full-history replay and for the final `done` frame to carry the
@@ -355,6 +360,15 @@ class PackageSearchChatService:
                 run_id=run_id,
                 owner_scope=effective_owner_scope,
                 project_repo_id=context_meta.get("project_repo_id"),
+                # Honour the user's global "let the agent ask me when the
+                # instruction is unclear" preference on this agent too, not just
+                # DeviceAgent. Returns None when the preference is off.
+                clarification=ClarificationBinding.for_chat_run(
+                    user=user,
+                    run_id=run_id,
+                    session_id=effective_session_id,
+                    cancel_run=lambda sid=effective_session_id: self.cancel(sid),
+                ),
             )
             self._jobs[effective_session_id] = job
             # Announce run_id to subscribers (replayed by _subscribe) so the
@@ -404,7 +418,11 @@ class PackageSearchChatService:
                 job.events.append({"event": "agent_trace", **event})
 
             result = await asyncio.to_thread(
-                PackageSearchAgent().run_sync, ctx, job.cancel_event, _emit_trace
+                PackageSearchAgent().run_sync,
+                ctx,
+                job.cancel_event,
+                _emit_trace,
+                job.clarification,
             )
             job.result = result
             answer_text = self._format_agent_result(

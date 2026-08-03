@@ -17,6 +17,11 @@ from __future__ import annotations
 
 from app.agents.log_analysis.trace import (  # noqa: F401  re-export for callers
     AgentTraceEvent,
+    # Clarification (AskUserQuestion) events are declared in the shared protocol
+    # module, not here: every chat-facing agent can ask, not just DeviceAgent.
+    # Re-exported so existing ``device_agent.trace`` importers keep working.
+    CLARIFICATION_REQUEST,
+    CLARIFICATION_RESOLVED,
     SeqCounter,
     build_event,
     coerce_chunk,
@@ -32,12 +37,6 @@ from app.agents.log_analysis.trace import (  # noqa: F401  re-export for callers
 TOOL_PERMISSION_REQUEST = "tool_permission_request"
 TOOL_PERMISSION_RESOLVED = "tool_permission_resolved"
 RESULT_VALIDATION = "result_validation"
-
-# Clarification (AskUserQuestion) event constants. Emitted when the agent
-# decides a user instruction is ambiguous and asks for clarification, and when
-# that request is resolved (answered / timed out / cancelled).
-CLARIFICATION_REQUEST = "clarification_request"
-CLARIFICATION_RESOLVED = "clarification_resolved"
 
 
 __all__ = [

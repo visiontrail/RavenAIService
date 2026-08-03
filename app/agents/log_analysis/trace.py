@@ -46,6 +46,8 @@ EventType = Literal[
     "answer_delta",
     "system_notice",
     "error",
+    "clarification_request",
+    "clarification_resolved",
 ]
 
 
@@ -62,6 +64,12 @@ THINKING_END = "thinking_end"
 ANSWER_DELTA = "answer_delta"
 SYSTEM_NOTICE = "system_notice"
 ERROR = "error"
+
+# Clarification (AskUserQuestion) events. Declared here — not under a single
+# agent — because clarification is cross-cutting: every chat-facing agent may
+# pause and ask the user, so every transport must be able to carry these.
+CLARIFICATION_REQUEST = "clarification_request"
+CLARIFICATION_RESOLVED = "clarification_resolved"
 
 
 # Default size cap for a single delta chunk (bytes of UTF-8 encoded text).
@@ -107,6 +115,14 @@ class AgentTraceEvent(TypedDict, total=False):
     final_text: str
     error_kind: str
     message: str
+
+    # clarification_request / clarification_resolved
+    request_id: str
+    questions: List[Dict[str, Any]]
+    outcome: str
+    reason: str
+    run_id: str
+    session_id: str
 
 
 class SeqCounter:

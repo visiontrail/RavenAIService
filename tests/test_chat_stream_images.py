@@ -26,7 +26,7 @@ def _img() -> ImageAttachment:
 
 
 class _FakeResultAgent:
-    def run_sync(self, _ctx, _cancel_event=None, _trace_emitter=None):
+    def run_sync(self, _ctx, _cancel_event=None, _trace_emitter=None, _clarification_binding=None):
         return {
             "status": "ok",
             "model": "fake-model",

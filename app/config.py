@@ -215,9 +215,15 @@ class Settings(BaseSettings):
     device_agent_result_excerpt_bytes: int = 16 * 1024
     device_agent_result_max_bytes: int = 256 * 1024
     device_agent_max_remote_tools: int = 64
+    # Deprecated alias for agent_clarification_timeout_seconds below; kept so
+    # deployments whose .env still sets it keep working.
+    device_agent_clarification_timeout_seconds: int = 300
+
     # AskUserQuestion 澄清提问等待时长：代码常量、非用户可改，默认 5 分钟。
     # 超时后的行为（取消本轮 / 基于已知信息继续）由用户偏好决定。
-    device_agent_clarification_timeout_seconds: int = 300
+    # 适用于全部对话型 Agent（device / log_analysis / project_expert /
+    # package_search），与用户的全局「Agent 澄清提问」偏好配套。
+    agent_clarification_timeout_seconds: int = 300
 
     # Agent Skills 数据目录（Claude Agent SDK Skill 包按 agent 隔离存储）
     skills_data_dir: str = "data/agent_skills"
