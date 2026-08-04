@@ -456,16 +456,53 @@ html.dark .markdown-content {
 }
 
 /* ==================== Mermaid 图表 ==================== */
-/* 5.1 图表容器：浅色背景，与整体浅色聊天界面协调，保证图表清晰可读 */
+/* 图表配色令牌：容器外壳由此驱动，SVG 内部配色由 utils/mermaidLoader.ts 的
+   themeVariables 负责（Mermaid 把颜色烘焙进 SVG，CSS 无法事后翻转）。
+   两处必须成对修改，否则会出现「深色底 + 浅色图」的割裂。 */
+.mermaid-container,
+.mermaid-zoom-dialog {
+  --mmd-surface: #ffffff;
+  --mmd-border: #e5e7eb;
+  --mmd-shadow: rgba(0, 0, 0, 0.08);
+  --mmd-ink: #1f2937;
+  --mmd-body: #374151;
+  --mmd-muted: #6b7280;
+  --mmd-btn-bg: #f3f4f6;
+  --mmd-btn-border: #e5e7eb;
+  --mmd-btn-hover-bg: #e5e7eb;
+  --mmd-btn-hover-border: #d1d5db;
+  --mmd-accent: #3b82f6;
+  --mmd-accent-hover: #2563eb;
+  --mmd-on-accent: #ffffff;
+}
+
+html.dark .mermaid-container,
+html.dark .mermaid-zoom-dialog {
+  --mmd-surface: #17171d;
+  --mmd-border: #30303b;
+  --mmd-shadow: rgba(0, 0, 0, 0.45);
+  --mmd-ink: #f7f7fb;
+  --mmd-body: #d8dae2;
+  --mmd-muted: #a3a8b3;
+  --mmd-btn-bg: #232330;
+  --mmd-btn-border: #35354a;
+  --mmd-btn-hover-bg: #2f2f40;
+  --mmd-btn-hover-border: #45455c;
+  --mmd-accent: #5d7dd6;
+  --mmd-accent-hover: #7592e6;
+  --mmd-on-accent: #ffffff;
+}
+
+/* 5.1 图表容器：跟随主题的卡片背景，保证图表清晰可读 */
 .mermaid-container {
   position: relative;
   display: block;
   margin: 1rem 0;
   padding: 1rem;
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
+  background: var(--mmd-surface);
+  border: 1px solid var(--mmd-border);
   border-radius: 0.5rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 3px var(--mmd-shadow);
   overflow-x: auto; /* 5.5 移动端横向滚动 */
 }
 
@@ -563,7 +600,7 @@ html.dark .markdown-content {
   max-height: 78vh;
   overflow: auto;
   text-align: center;
-  background: #ffffff;
+  background: var(--mmd-surface);
   border-radius: 0.5rem;
 }
 
@@ -599,7 +636,7 @@ html.dark .markdown-content {
 .mermaid-zoom-title {
   font-size: 1rem;
   font-weight: 600;
-  color: #1f2937;
+  color: var(--mmd-ink);
 }
 
 .mermaid-zoom-toolbar {
@@ -617,28 +654,28 @@ html.dark .markdown-content {
   padding: 0 0.6rem;
   font-size: 0.8rem;
   line-height: 1;
-  color: #374151;
-  background: #f3f4f6;
-  border: 1px solid #e5e7eb;
+  color: var(--mmd-body);
+  background: var(--mmd-btn-bg);
+  border: 1px solid var(--mmd-btn-border);
   border-radius: 0.375rem;
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .mermaid-zoom-toolbar .mz-btn:hover {
-  background: #e5e7eb;
-  border-color: #d1d5db;
+  background: var(--mmd-btn-hover-bg);
+  border-color: var(--mmd-btn-hover-border);
 }
 
 .mermaid-zoom-toolbar .mz-btn-primary {
-  color: #ffffff;
-  background: #3b82f6;
-  border-color: #3b82f6;
+  color: var(--mmd-on-accent);
+  background: var(--mmd-accent);
+  border-color: var(--mmd-accent);
 }
 
 .mermaid-zoom-toolbar .mz-btn-primary:hover {
-  background: #2563eb;
-  border-color: #2563eb;
+  background: var(--mmd-accent-hover);
+  border-color: var(--mmd-accent-hover);
 }
 
 .mermaid-zoom-toolbar .mz-scale {
@@ -646,14 +683,12 @@ html.dark .markdown-content {
   text-align: center;
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
-  color: #6b7280;
+  color: var(--mmd-muted);
 }
 
 .mermaid-zoom-toolbar .mz-divider {
   width: 1px;
   height: 1.2rem;
   margin: 0 0.3rem;
-  background: #e5e7eb;
+  background: var(--mmd-btn-border);
 }
-
-/* 移除暗色模式的自动切换，让分析摘要始终使用浅色系样式 */

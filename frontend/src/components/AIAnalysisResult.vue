@@ -259,6 +259,12 @@ const downloadResult = () => {
 <style scoped>
 @reference "tailwindcss";
 
+/*
+ * 颜色一律走 styles/theme.css 的 --rw-* 令牌，不用 Tailwind 的 gray/white 工具类：
+ * 本组件的样式经 @apply 内联成了 .result-section 等类名，theme.css 里针对
+ * .bg-white / .text-gray-* 的深色重映射够不到它们，写死浅色就会在深色模式下
+ * 出现「白卡片 + 浅色正文」（markdown.css 的 html.dark .markdown-content 已翻转）。
+ */
 .ai-analysis-result {
   @apply space-y-4;
 }
@@ -267,7 +273,9 @@ const downloadResult = () => {
 .result-section,
 .error-section,
 .empty-section {
-  @apply rounded-xl border border-gray-200 bg-white p-6;
+  @apply rounded-xl border p-6;
+  background: var(--rw-surface-card);
+  border-color: var(--rw-hairline);
 }
 
 .loading-header {
@@ -299,11 +307,13 @@ const downloadResult = () => {
 }
 
 .loading-title {
-  @apply text-xl font-semibold text-gray-900;
+  @apply text-xl font-semibold;
+  color: var(--rw-ink);
 }
 
 .loading-subtitle {
-  @apply mt-2 text-sm text-gray-500;
+  @apply mt-2 text-sm;
+  color: var(--rw-muted);
 }
 
 .progress-container {
@@ -311,7 +321,8 @@ const downloadResult = () => {
 }
 
 .progress-bar {
-  @apply h-2 flex-1 overflow-hidden rounded-full bg-gray-100;
+  @apply h-2 flex-1 overflow-hidden rounded-full;
+  background: var(--rw-surface-strong);
 }
 
 .progress-fill {
@@ -319,11 +330,14 @@ const downloadResult = () => {
 }
 
 .progress-text {
-  @apply text-sm font-medium text-gray-700;
+  @apply text-sm font-medium;
+  color: var(--rw-body);
 }
 
 .current-step {
-  @apply rounded-md bg-gray-50 px-3 py-2 text-sm text-gray-700;
+  @apply rounded-md px-3 py-2 text-sm;
+  background: var(--rw-canvas-soft);
+  color: var(--rw-body);
 }
 
 .step-label {
@@ -334,20 +348,32 @@ const downloadResult = () => {
   @apply mb-5 flex items-start gap-3;
 }
 
+/*
+ * 状态色用半透明底色：同一组数值在浅色卡片上是淡彩、在深色卡片上是深彩，
+ * 无需为两套主题各写一份。
+ */
 .status-indicator {
-  @apply rounded-lg bg-gray-100 p-2;
+  @apply rounded-lg p-2;
+  background: var(--rw-surface-strong);
 }
 
 .status-indicator.completed {
-  @apply bg-green-50 text-green-600;
+  background: color-mix(in srgb, var(--rw-success) 14%, transparent);
+  color: var(--rw-success);
 }
 
 .status-indicator.failed {
-  @apply bg-red-50 text-red-600;
+  background: color-mix(in srgb, var(--rw-danger) 14%, transparent);
+  color: var(--rw-danger);
 }
 
 .status-indicator.processing {
-  @apply bg-yellow-50 text-yellow-700;
+  background: color-mix(in srgb, #d97706 16%, transparent);
+  color: #d97706;
+}
+
+html.dark .status-indicator.processing {
+  color: #f6c177;
 }
 
 .status-icon {
@@ -359,11 +385,13 @@ const downloadResult = () => {
 }
 
 .result-title {
-  @apply text-xl font-semibold text-gray-900;
+  @apply text-xl font-semibold;
+  color: var(--rw-ink);
 }
 
 .result-meta {
-  @apply mt-1 flex flex-wrap gap-3 text-sm text-gray-500;
+  @apply mt-1 flex flex-wrap gap-3 text-sm;
+  color: var(--rw-muted);
 }
 
 .query-text {
@@ -371,11 +399,14 @@ const downloadResult = () => {
 }
 
 .markdown-panel {
-  @apply rounded-lg border border-gray-200 bg-gray-50 p-4;
+  @apply rounded-lg border p-4;
+  background: var(--rw-canvas-soft);
+  border-color: var(--rw-hairline);
 }
 
 .metadata-line {
-  @apply mt-4 flex flex-wrap gap-4 text-xs text-gray-500;
+  @apply mt-4 flex flex-wrap gap-4 text-xs;
+  color: var(--rw-muted);
 }
 
 .actions-section {
@@ -387,11 +418,25 @@ const downloadResult = () => {
 }
 
 .action-btn.secondary {
-  @apply border border-gray-200 bg-white text-gray-700 hover:bg-gray-50;
+  @apply border;
+  background: var(--rw-surface-card);
+  border-color: var(--rw-hairline-strong);
+  color: var(--rw-body);
+}
+
+.action-btn.secondary:hover {
+  background: var(--rw-surface-strong);
 }
 
 .action-btn.outline {
-  @apply border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100;
+  @apply border;
+  background: color-mix(in srgb, var(--rw-link) 12%, transparent);
+  border-color: color-mix(in srgb, var(--rw-link) 35%, transparent);
+  color: var(--rw-link);
+}
+
+.action-btn.outline:hover {
+  background: color-mix(in srgb, var(--rw-link) 20%, transparent);
 }
 
 .btn-icon {
@@ -405,20 +450,29 @@ const downloadResult = () => {
 
 .error-icon,
 .empty-icon {
-  @apply mx-auto mb-3 h-8 w-8 text-gray-400;
+  @apply mx-auto mb-3 h-8 w-8;
+  color: var(--rw-muted);
 }
 
 .error-title,
 .empty-title {
-  @apply text-lg font-semibold text-gray-900;
+  @apply text-lg font-semibold;
+  color: var(--rw-ink);
 }
 
 .error-message,
 .empty-message {
-  @apply mt-2 text-sm text-gray-500;
+  @apply mt-2 text-sm;
+  color: var(--rw-muted);
 }
 
 .retry-btn {
-  @apply mt-4 inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700;
+  @apply mt-4 inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors;
+  background: var(--rw-primary);
+  color: var(--rw-on-primary);
+}
+
+.retry-btn:hover {
+  background: var(--rw-primary-hover);
 }
 </style>

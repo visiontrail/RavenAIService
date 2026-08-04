@@ -4,6 +4,7 @@ import { ElConfigProvider } from 'element-plus'
 import { useRoute } from 'vue-router'
 import { useAppStore } from './stores/app'
 import { getElementLocale } from './i18n'
+import { refreshMermaidBlocks } from './utils/markdownRenderer'
 import AppNotifications from './components/AppNotifications.vue'
 import AppLoading from './components/AppLoading.vue'
 
@@ -73,6 +74,17 @@ onUnmounted(() => {
   stopThemeWatch?.()
   stopThemeWatch = null
 })
+
+// Mermaid 把配色烘焙进 SVG，CSS 翻转不了；主题变化后按新配色整页重绘图表。
+// flush: 'post' 确保 html.dark class 已经落到 DOM 上再读取配色模式。
+watch(
+  () => appStore.resolvedTheme,
+  () => {
+    if (typeof document === 'undefined') return
+    void refreshMermaidBlocks(document.body)
+  },
+  { flush: 'post' },
+)
 
 const chatViewportHeight = ref<string>('100dvh')
 let isChatPageLocked = false

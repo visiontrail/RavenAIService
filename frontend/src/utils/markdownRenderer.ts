@@ -47,6 +47,21 @@ const escapeHtml = (value: string): string =>
     .replace(/'/g, '&#39;')
 
 /**
+ * Mermaid 占位容器的内部结构（loading 指示器 + 源码降级块）。
+ *
+ * 渲染期与「主题切换后重置」共用同一份结构，保证 `refreshMermaidBlocks()`
+ * 复原出的 DOM 与首次渲染完全一致。
+ *
+ * @param escapedSource - 已做 HTML 转义的 Mermaid 源码
+ */
+function buildMermaidPlaceholder(escapedSource: string): string {
+  return (
+    `<div class="mermaid-loading">${i18n.global.t('markdown.mermaidLoading')}</div>` +
+    `<pre class="hljs mermaid-source language-mermaid"><code>${escapedSource}</code></pre>`
+  )
+}
+
+/**
  * XML标签清理配置
  */
 const XML_CLEANUP_PATTERNS = [
@@ -189,8 +204,7 @@ function createMarkdownRenderer(config: MarkdownRendererConfig): MarkdownIt {
         return (
           `<div class="mermaid-container" data-mermaid-id="${id}" ` +
           `data-mermaid-source="${escapedSource}" data-mermaid-state="pending">` +
-          `<div class="mermaid-loading">${i18n.global.t('markdown.mermaidLoading')}</div>` +
-          `<pre class="hljs mermaid-source language-mermaid"><code>${escapedSource}</code></pre>` +
+          buildMermaidPlaceholder(escapedSource) +
           `</div>`
         )
       }
@@ -420,6 +434,38 @@ export async function processMermaidBlocks(containerEl: HTMLElement | null): Pro
       }
     })
   )
+}
+
+/**
+ * 主题（浅色/深色）切换后重绘容器内已渲染的 Mermaid 图表。
+ *
+ * Mermaid 把配色烘焙进 SVG 的内联样式，CSS 无法事后翻转，只能用新主题
+ * 重新 render。做法是把 `done`/`error` 状态的容器复原成 `pending` 占位结构，
+ * 再交给 `processMermaidBlocks()`（它会在 `loadMermaid()` 中按当前 html.dark
+ * 重新 initialize Mermaid）。
+ *
+ * 仍处于 `pending`/`rendering` 的容器不受影响：前者会被本次处理顺带渲染，
+ * 后者的在途渲染沿用旧主题，但主题切换后会再次触发本函数。
+ *
+ * @param containerEl - 搜索范围，通常传 `document.body` 以覆盖弹窗等传送节点
+ */
+export async function refreshMermaidBlocks(containerEl: HTMLElement | null): Promise<void> {
+  if (!containerEl) return
+
+  const rendered = Array.from(
+    containerEl.querySelectorAll<HTMLElement>(
+      '.mermaid-container[data-mermaid-state="done"], .mermaid-container[data-mermaid-state="error"]'
+    )
+  )
+  if (rendered.length === 0) return
+
+  rendered.forEach((el) => {
+    el.classList.remove('is-rendered', 'is-error')
+    el.innerHTML = buildMermaidPlaceholder(escapeHtml(el.dataset.mermaidSource || ''))
+    el.dataset.mermaidState = 'pending'
+  })
+
+  await processMermaidBlocks(containerEl)
 }
 
 /**

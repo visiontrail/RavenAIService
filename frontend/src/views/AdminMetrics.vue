@@ -2130,9 +2130,8 @@ onMounted(() => {
    the declarations instead of adding the utility classes -- so the dark remaps
    in styles/theme.css can never reach them. Restate the colour-bearing ones
    against admin tokens for this drawer, which is genuinely dark in dark mode.
-   markdown.css itself is deliberately left alone: AIAnalysisResult pins its own
-   card light the same @apply way, so a global rule there would put white text
-   on a white card (the regression commit 155cf3e fixed). */
+   (markdown.css now carries its own html.dark token block; these rules stay
+   because the drawer wants admin tokens rather than the --md-* defaults.) */
 html.dark .admin-ai-content :deep(.markdown-content),
 html.dark .admin-ai-content :deep(p),
 html.dark .admin-ai-content :deep(li),
