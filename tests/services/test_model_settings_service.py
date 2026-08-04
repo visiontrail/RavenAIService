@@ -119,6 +119,99 @@ def test_max_tokens_bounds(isolated_store):
         mss.save({"anthropic_max_tokens": 10**9})
 
 
+# ── Routing policy ─────────────────────────────────────────────────────────
+#
+# This group decides when to stop using the free primary and start paying for
+# the backup, so every rejection below is guarding a bill or a blind spot — not
+# tidiness. It is also why the group is safe to expose in Admin at all.
+
+
+def test_router_policy_is_admin_editable(isolated_store):
+    """The knobs reach the overlay like any other model setting."""
+    mss.save({"model_router_first_token_deadline_ms": 15_000})
+
+    assert settings.model_router_first_token_deadline_ms == 15_000
+    assert mss.describe()["fields"]["model_router_first_token_deadline_ms"] == {
+        "group": "model_router",
+        "source": "override",
+        "value": 15_000,
+        "env_default": object.__getattribute__(
+            settings, "model_router_first_token_deadline_ms"
+        ),
+    }
+
+
+def test_router_bounds_rejected(isolated_store):
+    with pytest.raises(ValueError, match="model_router_cooldown_seconds"):
+        mss.save({"model_router_cooldown_seconds": 1})
+    with pytest.raises(ValueError, match="model_router_window_size"):
+        mss.save({"model_router_window_size": 0})
+
+
+def test_trip_threshold_above_window_rejected(isolated_store):
+    """A threshold the window can never reach disarms the breaker silently.
+
+    That is precisely the state the ttft_ms=0 bug produced, and it took a
+    production log review to notice — the form must not let anyone re-create it.
+    """
+    with pytest.raises(ValueError, match="熔断器永远不会跳闸"):
+        mss.save({"model_router_window_size": 8, "model_router_trip_threshold": 9})
+
+
+def test_deadline_below_slow_threshold_rejected(isolated_store):
+    """Preempting before a sample counts as slow starves the breaker's window."""
+    with pytest.raises(ValueError, match="model_router_slow_ttft_ms"):
+        mss.save(
+            {"model_router_slow_ttft_ms": 30_000, "model_router_first_token_deadline_ms": 10_000}
+        )
+
+
+def test_deadline_floor_rejected_but_zero_allowed(isolated_store):
+    """0 means "preemption off"; a small non-zero value would kill healthy runs."""
+    with pytest.raises(ValueError, match="不能小于"):
+        mss.save({"model_router_first_token_deadline_ms": 500})
+
+    mss.save({"model_router_first_token_deadline_ms": 0})
+    assert settings.model_router_first_token_deadline_ms == 0
+
+
+def test_router_validation_sees_the_post_save_state(isolated_store):
+    """Bounds are checked against the merged result, not the payload alone.
+
+    Saving one half of a cross-field pair must not be able to leave the stored
+    policy in a combination the form would have rejected outright.
+    """
+    mss.save({"model_router_window_size": 4, "model_router_trip_threshold": 3})
+
+    # window_size alone now, but it must be judged against the *stored* threshold.
+    with pytest.raises(ValueError, match="熔断器永远不会跳闸"):
+        mss.save({"model_router_window_size": 2})
+
+
+def test_frontend_bounds_mirror_the_backend():
+    """The Admin number inputs carry min/max copied from ``_ROUTER_BOUNDS``.
+
+    Drift is silently misleading rather than broken: the browser would show a
+    range the server does not accept (or accept one it does), and the admin
+    only finds out from a 400 that contradicts the field's own hint.
+    """
+    import re
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[2] / "frontend/src/utils/routerKnobs.ts"
+    text = source.read_text(encoding="utf-8")
+
+    entries = re.findall(
+        r"key:\s*'(model_router_\w+)',.*?min:\s*(-?\d+),\s*max:\s*(\d+),",
+        text,
+        re.S,
+    )
+    assert entries, "could not parse routerKnobs.ts — update this test with it"
+
+    frontend = {key: (int(low), int(high)) for key, low, high in entries}
+    assert frontend == mss._ROUTER_BOUNDS
+
+
 def test_unknown_key_rejected(isolated_store):
     with pytest.raises(ValueError, match="未知"):
         mss.save({"totally_unknown_key": "x"})

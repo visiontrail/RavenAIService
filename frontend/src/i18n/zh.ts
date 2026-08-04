@@ -796,7 +796,32 @@ export default {
         '关闭时所有请求只走主力端点，行为与未配置备用完全一致；此时下方字段可以先填好备用配置而不生效。',
       testBackupBtn: '测试备用连接',
       backupRoutingNote:
-        '· 路由策略（何时切换、熔断冷却、恢复探测）由环境变量控制，不在此页配置，以保证各进程阈值一致。',
+        '· 路由策略（何时切换、熔断冷却、恢复探测）见下方「路由策略」，保存后各进程立即生效，无需重启。',
+      routerSectionTitle: '路由策略（何时切换、何时切回）',
+      routerSectionDesc:
+        '决定什么时候停用免费的主力端点、改用付费的备用端点。改小会更早开始花钱，改大会让用户等更久——保存时后台会按取值范围和字段间约束校验，非法组合直接拒绝。',
+      routerEnabledLabel: '启用故障转移',
+      routerEnabledHint:
+        '关闭后只记录延迟数据、永不切换（仅观测模式），用于先看清主力端点的真实分布再定阈值。这是总开关，与上方「启用备用端点」都为开时才会真正转移。',
+      routerDeadlineLabel: '首 token 抢占死线（毫秒）',
+      routerDeadlineHint:
+        '等待首个 token 超过此值即放弃当前端点、立刻改用备用，用户的等待因此有了上限。填 0 关闭抢占。仅在尚未产生任何模型输出、且还有下一个候选时生效；最后一个候选永不抢占（慢也好过没有）。',
+      routerSlowLabel: '「慢」判定阈值（毫秒）',
+      routerSlowHint:
+        '首 token 超过此值即给该次调用记一次「慢」。这是事后打标记，不会缩短本次等待——封顶靠上面的抢占死线。抢占死线不得小于此值。',
+      routerWindowLabel: '滑动窗口样本数',
+      routerWindowHint: '按最近 N 次调用判断主力端点健康度。',
+      routerTripLabel: '跳闸阈值',
+      routerTripHint: '窗口内「慢或失败」达到此数即熔断，不得大于窗口样本数。',
+      routerMinSamplesLabel: '最少样本数',
+      routerMinSamplesHint: '样本不足此数时永不跳闸，避免服务刚启动就误判。',
+      routerHardFailLabel: '硬失败快速跳闸阈值',
+      routerHardFailHint: '连接拒绝 / DNS / 鉴权失败这类硬失败走快速通道，无需等窗口填满。',
+      routerCooldownLabel: '熔断冷却（秒）',
+      routerCooldownHint:
+        '熔断后多久放行一个真实请求回主力试探。不额外发探测流量给已经过载的网关，每个冷却期只放一个。',
+      routerSampleTtlLabel: '样本 TTL（秒）',
+      routerSampleTtlHint: '滑动窗口的存活时间，避免夜间闲置后留下陈旧样本。',
       routeOnPrimary: '当前由主力端点服务',
       routeOnBackup: '当前由备用端点服务（自 {since} 起）—— 正在产生费用',
       routeMode: '路由模式：{mode}',

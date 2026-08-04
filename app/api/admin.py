@@ -281,6 +281,15 @@ class UpdateModelSettingsRequest(BaseModel):
     anthropic_backup_base_url: Optional[str] = None
     anthropic_backup_model: Optional[str] = None
     anthropic_backup_small_fast_model: Optional[str] = None
+    model_router_enabled: Optional[bool] = None
+    model_router_first_token_deadline_ms: Optional[int] = None
+    model_router_slow_ttft_ms: Optional[int] = None
+    model_router_window_size: Optional[int] = None
+    model_router_trip_threshold: Optional[int] = None
+    model_router_min_samples: Optional[int] = None
+    model_router_hard_failure_trip: Optional[int] = None
+    model_router_cooldown_seconds: Optional[int] = None
+    model_router_sample_ttl_seconds: Optional[int] = None
     ocr_enabled: Optional[bool] = None
     ocr_api_key: Optional[str] = None
     ocr_base_url: Optional[str] = None

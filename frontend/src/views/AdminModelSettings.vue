@@ -28,6 +28,7 @@ import AnthropicEndpointCard from '@/components/admin/AnthropicEndpointCard.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAppStore } from '@/stores/app'
 import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
+import { ROUTER_KNOBS } from '@/utils/routerKnobs'
 import { useAdminScope } from '@/composables/useAdminScope'
 
 const { t } = useI18n()
@@ -68,6 +69,17 @@ const form = reactive({
   } as EndpointForm,
   anthropic_backup_enabled: false,
   anthropic_max_tokens: 8192,
+  // Routing policy. Kept flat (not nested like the endpoint slots) because the
+  // backend validates these as one interdependent set.
+  model_router_enabled: true,
+  model_router_first_token_deadline_ms: 20000,
+  model_router_slow_ttft_ms: 6000,
+  model_router_window_size: 8,
+  model_router_trip_threshold: 4,
+  model_router_min_samples: 4,
+  model_router_hard_failure_trip: 2,
+  model_router_cooldown_seconds: 120,
+  model_router_sample_ttl_seconds: 900,
   ocr_enabled: true,
   ocr_api_key: '',
   ocr_base_url: '',
@@ -179,6 +191,16 @@ const populateForm = (data: ModelSettingsData) => {
   form.backup.base_url = String(f.anthropic_backup_base_url?.value ?? '')
   form.backup.model = String(f.anthropic_backup_model?.value ?? '')
   form.backup.small_fast_model = String(f.anthropic_backup_small_fast_model?.value ?? '')
+  const routerNum = (key: string, fallback: number) => Number(f[key]?.value ?? fallback)
+  form.model_router_enabled = Boolean(f.model_router_enabled?.value ?? true)
+  form.model_router_first_token_deadline_ms = routerNum('model_router_first_token_deadline_ms', 20000)
+  form.model_router_slow_ttft_ms = routerNum('model_router_slow_ttft_ms', 6000)
+  form.model_router_window_size = routerNum('model_router_window_size', 8)
+  form.model_router_trip_threshold = routerNum('model_router_trip_threshold', 4)
+  form.model_router_min_samples = routerNum('model_router_min_samples', 4)
+  form.model_router_hard_failure_trip = routerNum('model_router_hard_failure_trip', 2)
+  form.model_router_cooldown_seconds = routerNum('model_router_cooldown_seconds', 120)
+  form.model_router_sample_ttl_seconds = routerNum('model_router_sample_ttl_seconds', 900)
   form.ocr_enabled = Boolean(f.ocr_enabled?.value ?? true)
   form.ocr_base_url = String(f.ocr_base_url?.value ?? '')
   form.ocr_model = String(f.ocr_model?.value ?? '')
@@ -226,6 +248,15 @@ const handleSaveSettings = async () => {
       anthropic_backup_base_url: form.backup.base_url.trim(),
       anthropic_backup_model: form.backup.model.trim(),
       anthropic_backup_small_fast_model: form.backup.small_fast_model.trim(),
+      model_router_enabled: form.model_router_enabled,
+      model_router_first_token_deadline_ms: Number(form.model_router_first_token_deadline_ms),
+      model_router_slow_ttft_ms: Number(form.model_router_slow_ttft_ms),
+      model_router_window_size: Number(form.model_router_window_size),
+      model_router_trip_threshold: Number(form.model_router_trip_threshold),
+      model_router_min_samples: Number(form.model_router_min_samples),
+      model_router_hard_failure_trip: Number(form.model_router_hard_failure_trip),
+      model_router_cooldown_seconds: Number(form.model_router_cooldown_seconds),
+      model_router_sample_ttl_seconds: Number(form.model_router_sample_ttl_seconds),
       ocr_enabled: form.ocr_enabled,
       ocr_base_url: form.ocr_base_url.trim(),
       ocr_model: form.ocr_model.trim(),
@@ -560,6 +591,42 @@ onMounted(() => {
             />
 
             <p class="text-xs text-slate-500 mt-3">{{ t('admin.modelSettings.backupRoutingNote') }}</p>
+          </div>
+
+          <!-- 路由策略：何时离开主力、何时切回 -->
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+            <div class="mb-4">
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.modelSettings.routerSectionTitle') }}</h2>
+              <p class="text-sm text-slate-500">{{ t('admin.modelSettings.routerSectionDesc') }}</p>
+            </div>
+
+            <label class="flex items-center gap-2 text-sm text-slate-700 mb-1">
+              <input v-model="form.model_router_enabled" type="checkbox" class="h-4 w-4 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500" />
+              <span>{{ t('admin.modelSettings.routerEnabledLabel') }}</span>
+              <span class="ms-badge" :class="`ms-badge--${sourceOf('model_router_enabled')}`">{{ sourceLabel('model_router_enabled') }}</span>
+            </label>
+            <p class="text-xs text-slate-500 mb-4">{{ t('admin.modelSettings.routerEnabledHint') }}</p>
+
+            <div class="grid gap-4 lg:grid-cols-2" :class="{ 'opacity-50 pointer-events-none': !form.model_router_enabled }">
+              <label
+                v-for="knob in ROUTER_KNOBS"
+                :key="knob.key"
+                class="block text-sm text-slate-700"
+              >
+                <span class="flex items-center gap-2">
+                  {{ t(`admin.modelSettings.${knob.label}`) }}
+                  <span class="ms-badge" :class="`ms-badge--${sourceOf(knob.key)}`">{{ sourceLabel(knob.key) }}</span>
+                </span>
+                <input
+                  v-model.number="form[knob.key]"
+                  type="number"
+                  :min="knob.min"
+                  :max="knob.max"
+                  class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
+                />
+                <p class="text-xs text-slate-500 mt-1">{{ t(`admin.modelSettings.${knob.hint}`) }}</p>
+              </label>
+            </div>
           </div>
 
           <!-- OCR / 视觉模型 -->

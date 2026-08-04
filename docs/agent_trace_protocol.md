@@ -36,7 +36,7 @@ keys gracefully.
 | `thinking_delta`  | `step_id`, `text_chunk`                                                                                                      | `text_chunk` is ≤ 4 KB UTF-8.                                                          |
 | `thinking_end`    | `step_id`, `text`, `duration_seconds`                                                                                        | `text` is the full thinking text (≤ 4 KB excerpt).                                     |
 | `answer_delta`    | `text_chunk`, `step_id` (optional)                                                                                           | Incremental chunk of the assistant's **final answer body** (≤ 4 KB UTF-8). Concatenating every `answer_delta.text_chunk` of a run in `seq` order MUST equal `run_complete.final_text` (under the same masking). Distinct from `thinking_delta` (folded reasoning) and `step_delta` (tool output). |
-| `system_notice`   | `kind`, `subtype`, `detail`                                                                                                  | Used for `heartbeat`, `cancel_requested`, SDK system messages, etc.                    |
+| `system_notice`   | `kind`, `subtype`, `detail`                                                                                                  | Used for `heartbeat`, `cancel_requested`, SDK system messages, and `subtype: "endpoint_switch"` (see below). |
 | `clarification_request`  | `request_id`, `questions`, `run_id`, `session_id`                                                                     | The agent paused to ask the user (`mcp__ask__AskUserQuestion`). Blocks the agent loop until `POST /chat/clarifications/{request_id}/resolve`, a timeout, or run end. Emitted by **every** chat agent, not just DeviceAgent. |
 | `clarification_resolved` | `request_id`, `outcome` (`answered`/`timeout`/`cancelled`), `reason`                                                   | Always follows its `clarification_request`; clears the question card.                   |
 
@@ -64,6 +64,30 @@ Agents that run their SDK loop off the FastAPI event loop (the three
 workspace agents go through `asyncio.to_thread → run_sync → asyncio.run`)
 resolve across loops; `PermissionBroker` handles that internally via
 `call_soon_threadsafe`.
+
+### Endpoint switching mid-run
+
+[app/agents/routed_query.py](../app/agents/routed_query.py) may abandon the
+chosen endpoint and restart on the next candidate — on a connection/auth
+failure, or when no first token arrives within
+`MODEL_ROUTER_FIRST_TOKEN_DEADLINE_MS`. Two consequences a consumer must
+tolerate, both a deliberate trade for never leaving the user on a dead screen:
+
+- **The CLI's own `init`/`status` notices can appear more than once per run.**
+  They are forwarded as they arrive rather than buffered until the first token,
+  so an abandoned attempt has already emitted its pair. A
+  `system_notice{subtype: "endpoint_switch"}` is emitted immediately before the
+  second set and explains it; `detail` is user-facing text and the underlying
+  `data` carries `from_slot`, `to_slot`, `reason`
+  (`first_token_deadline` / `hard_failure` / …) and `waited_ms`.
+- **`run_start.model` can be stale.** It is emitted before the stream opens, so
+  a run that switched was served by a different model than the one named. The
+  authoritative value is the model reported on the terminal event, which the
+  agent updates from `on_endpoint`.
+
+Switching never happens once the first model frame has arrived — at that point
+tools may have run, so `seq` continuity and the single-terminal-event invariant
+below are unaffected.
 
 ### Invariants
 

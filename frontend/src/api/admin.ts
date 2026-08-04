@@ -139,6 +139,20 @@ export interface UpdateModelSettingsPayload {
   anthropic_backup_base_url?: string
   anthropic_backup_model?: string
   anthropic_backup_small_fast_model?: string
+  /**
+   * Routing policy. Rejected by the backend as a set, not field by field:
+   * e.g. a trip threshold above the window size, or a first-token deadline
+   * below the "slow" label. Surface the 400 detail rather than pre-validating.
+   */
+  model_router_enabled?: boolean
+  model_router_first_token_deadline_ms?: number
+  model_router_slow_ttft_ms?: number
+  model_router_window_size?: number
+  model_router_trip_threshold?: number
+  model_router_min_samples?: number
+  model_router_hard_failure_trip?: number
+  model_router_cooldown_seconds?: number
+  model_router_sample_ttl_seconds?: number
   ocr_enabled?: boolean
   ocr_api_key?: string | null
   ocr_base_url?: string

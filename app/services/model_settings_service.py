@@ -50,6 +50,27 @@ ANTHROPIC_PROVIDERS: Tuple[str, ...] = (
 _MAX_TOKENS_MIN = 1
 _MAX_TOKENS_MAX = 200_000
 
+# Per-field bounds for the routing policy, ``key -> (min, max)``.
+#
+# Routing decides when to stop using the free primary and start paying for the
+# backup, so a mistyped threshold has a bill attached. These are not cosmetic
+# form hints: they are the reason this group is safe to expose in Admin at all.
+_ROUTER_BOUNDS: Dict[str, Tuple[int, int]] = {
+    # 0 disables preemption; anything below the floor would abandon healthy
+    # runs, since CLI spawn plus a gateway handshake alone costs seconds.
+    "model_router_first_token_deadline_ms": (0, 600_000),
+    "model_router_slow_ttft_ms": (1_000, 600_000),
+    "model_router_window_size": (1, 100),
+    "model_router_trip_threshold": (1, 100),
+    "model_router_min_samples": (1, 100),
+    "model_router_hard_failure_trip": (1, 100),
+    "model_router_cooldown_seconds": (10, 86_400),
+    "model_router_sample_ttl_seconds": (60, 86_400),
+}
+
+# Non-zero deadlines below this preempt runs that were never unhealthy.
+_DEADLINE_FLOOR_MS = 5_000
+
 # Some provider defaults ship a placeholder that only the deployer can fill in
 # (e.g. 阿里云百炼's ``https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/…``).
 # Saving one verbatim would point every agent at a non-existent host, so reject
@@ -146,6 +167,20 @@ _SPECS: Tuple[FieldSpec, ...] = (
     FieldSpec("anthropic_backup_base_url", "str", "anthropic_backup"),
     FieldSpec("anthropic_backup_model", "str", "anthropic_backup"),
     FieldSpec("anthropic_backup_small_fast_model", "str", "anthropic_backup"),
+    # ── Routing policy (when to leave the primary, when to come back) ─────
+    # Shares the runtime store with the endpoints above, so every process sees
+    # one set of thresholds; the danger is the *values*, which _validate_router
+    # bounds. Order here is the Admin form's reading order: switch away first,
+    # then how a trip is decided, then how recovery is paced.
+    FieldSpec("model_router_enabled", "bool", "model_router"),
+    FieldSpec("model_router_first_token_deadline_ms", "int", "model_router"),
+    FieldSpec("model_router_slow_ttft_ms", "int", "model_router"),
+    FieldSpec("model_router_window_size", "int", "model_router"),
+    FieldSpec("model_router_trip_threshold", "int", "model_router"),
+    FieldSpec("model_router_min_samples", "int", "model_router"),
+    FieldSpec("model_router_hard_failure_trip", "int", "model_router"),
+    FieldSpec("model_router_cooldown_seconds", "int", "model_router"),
+    FieldSpec("model_router_sample_ttl_seconds", "int", "model_router"),
     # ── OCR / vision model (image input) ──────────────────────────────────
     FieldSpec("ocr_enabled", "bool", "ocr"),
     FieldSpec("ocr_api_key", "secret", "ocr", secret=True),
@@ -381,9 +416,61 @@ def save(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"anthropic_max_tokens 必须在 {_MAX_TOKENS_MIN}~{_MAX_TOKENS_MAX} 之间"
         )
 
+    _validate_router(coerced)
+
     if coerced:
         runtime_settings_service.update(coerced)
     return describe()
+
+
+def _validate_router(coerced: Dict[str, Any]) -> None:
+    """Bound the routing policy against the post-save effective state.
+
+    Every check here exists because the failure mode is silent and expensive:
+    a policy that is merely *wrong* still runs, and the first symptom is either
+    an unnecessary bill (too eager) or the degradation this whole subsystem was
+    built to catch going unnoticed (too lax).
+    """
+    values: Dict[str, int] = {}
+    for key, (low, high) in _ROUTER_BOUNDS.items():
+        raw = _effective_after(coerced, key)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} 必须是整数") from exc
+        if not (low <= value <= high):
+            raise ValueError(f"{key} 必须在 {low}~{high} 之间")
+        values[key] = value
+
+    window = values["model_router_window_size"]
+    for key in (
+        "model_router_trip_threshold",
+        "model_router_min_samples",
+        "model_router_hard_failure_trip",
+    ):
+        if values[key] > window:
+            # A threshold the window can never reach means the breaker is
+            # permanently disarmed — the exact state that hid the TTFT bug.
+            raise ValueError(
+                f"{key}({values[key]}) 不能大于 model_router_window_size({window})，"
+                "否则熔断器永远不会跳闸"
+            )
+
+    deadline = values["model_router_first_token_deadline_ms"]
+    slow = values["model_router_slow_ttft_ms"]
+    if deadline:
+        if deadline < _DEADLINE_FLOOR_MS:
+            raise ValueError(
+                f"model_router_first_token_deadline_ms 非 0 时不能小于 "
+                f"{_DEADLINE_FLOOR_MS}（0 表示关闭抢占）"
+            )
+        if deadline < slow:
+            # Preempting before the sample is even labelled "slow" starves the
+            # rolling window of the evidence the breaker decides on.
+            raise ValueError(
+                f"model_router_first_token_deadline_ms({deadline}) 不能小于 "
+                f"model_router_slow_ttft_ms({slow})"
+            )
 
 
 def _validate_slot(slot: AnthropicSlot, coerced: Dict[str, Any]) -> None:

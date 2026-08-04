@@ -36,6 +36,20 @@ OVERRIDABLE_MODEL_KEYS: frozenset = frozenset(
         "anthropic_backup_base_url",
         "anthropic_backup_model",
         "anthropic_backup_small_fast_model",
+        # 路由策略阈值。与主备端点同store：runtime_settings.json 落在 app_data 卷上，
+        # backend / worker / worker-bugfix / beat 四个服务共享，且读取按 mtime 失效，
+        # 因此各进程看到的阈值天然一致——和 API Key 用的是同一条通路。
+        # 危险在于取值本身（填太低会把 100% 流量打到付费端点），由
+        # model_settings_service 的取值范围 + 跨字段校验兜住。
+        "model_router_enabled",
+        "model_router_slow_ttft_ms",
+        "model_router_first_token_deadline_ms",
+        "model_router_window_size",
+        "model_router_trip_threshold",
+        "model_router_min_samples",
+        "model_router_hard_failure_trip",
+        "model_router_cooldown_seconds",
+        "model_router_sample_ttl_seconds",
         # OCR / 视觉模型
         "ocr_enabled",
         "ocr_api_key",
@@ -165,13 +179,18 @@ class Settings(BaseSettings):
     anthropic_backup_model: Optional[str] = None      # None 时由 provider profile 提供
     anthropic_backup_small_fast_model: Optional[str] = None
 
-    # 模型端点路由（延迟感知预选 + 熔断器）。这些阈值刻意**不**进
-    # OVERRIDABLE_MODEL_KEYS：它们必须在 web 进程与各 Celery worker 间同时一致，
-    # 且暴露到 Admin 是脚枪——阈值填得过低会把 100% 流量打到付费端点。
+    # 模型端点路由（延迟感知预选 + 熔断器）。全部可在 Admin「模型设置」运行时调整
+    # （见 OVERRIDABLE_MODEL_KEYS），.env 只是启动兜底；跨字段约束在
+    # model_settings_service._validate_router 中强制。
     # 总开关（kill switch）。开启后仍需在 Admin 配置并启用备用端点才会真正转移：
     # 未配置备用时 candidates 只返回主力、熔断器不跳闸，等价于「只观测 TTFT」。
     model_router_enabled: bool = True
     model_router_slow_ttft_ms: int = 6000             # 首 token 超过此值即计一次「慢」
+    # 首 token 硬性抢占死线：等待超过此值即放弃当前端点、立刻改用下一个候选。
+    # 与 slow_ttft_ms 的区别：后者是**事后**给样本打「慢」标记，救不了当前这一条
+    # 请求；只有本项能给用户可感知的等待时间设上限。仅在「尚未提交」且「还有下一个
+    # 候选」时生效——最后一个候选不抢占，否则用户什么都拿不到。设为 0 关闭抢占。
+    model_router_first_token_deadline_ms: int = 20000
     model_router_window_size: int = 8                 # 滚动窗口样本数
     model_router_trip_threshold: int = 4              # 窗口内「慢或失败」达到此数即跳闸
     model_router_min_samples: int = 4                 # 样本不足此数永不跳闸

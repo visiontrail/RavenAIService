@@ -797,7 +797,32 @@ export default {
         'While off, every request goes to the primary only — identical to having no backup configured. You can still fill the fields below and leave them dormant.',
       testBackupBtn: 'Test backup connection',
       backupRoutingNote:
-        '· Routing policy (when to switch, breaker cooldown, recovery probing) is controlled by environment variables rather than this page, so every process agrees on the thresholds.',
+        '· Routing policy (when to switch, breaker cooldown, recovery probing) is under "Routing policy" below; saved changes take effect in every process immediately, no restart.',
+      routerSectionTitle: 'Routing policy (when to leave, when to come back)',
+      routerSectionDesc:
+        'Decides when to stop using the free primary and start paying for the backup. Lower values start spending sooner; higher ones make users wait longer. Saving validates the whole set — out-of-range values and contradictory combinations are rejected.',
+      routerEnabledLabel: 'Enable failover',
+      routerEnabledHint:
+        'When off, latency is recorded but nothing ever switches (observe-only) — useful for seeing the primary\'s real distribution before picking thresholds. This is the master switch: traffic moves only when both this and "Enable backup endpoint" above are on.',
+      routerDeadlineLabel: 'First-token deadline (ms)',
+      routerDeadlineHint:
+        'Waiting longer than this for the first token abandons the endpoint and switches to the backup immediately, which is what puts a ceiling on the wait. 0 disables preemption. Applies only before any model output and only while another candidate exists — the last endpoint is never preempted, since slow beats nothing.',
+      routerSlowLabel: 'Slow threshold (ms)',
+      routerSlowHint:
+        'A first token slower than this marks the call "slow". This is a label applied after the fact — it cannot shorten the current wait; the deadline above does that. The deadline may not be lower than this value.',
+      routerWindowLabel: 'Rolling window size',
+      routerWindowHint: 'Health is judged over the last N calls.',
+      routerTripLabel: 'Trip threshold',
+      routerTripHint: 'Trips once this many calls in the window were slow or failed. Cannot exceed the window size.',
+      routerMinSamplesLabel: 'Minimum samples',
+      routerMinSamplesHint: 'Never trips below this many samples, so a fresh process cannot misjudge.',
+      routerHardFailLabel: 'Hard-failure trip',
+      routerHardFailHint: 'Connection refused / DNS / auth failures take a fast path instead of waiting for the window to fill.',
+      routerCooldownLabel: 'Breaker cooldown (s)',
+      routerCooldownHint:
+        'How long before one real request is let back through to probe the primary. Exactly one per cooldown — no extra probe traffic is sent to an already-overloaded gateway.',
+      routerSampleTtlLabel: 'Sample TTL (s)',
+      routerSampleTtlHint: 'Lifetime of the rolling window, so an idle night leaves no stale samples behind.',
       routeOnPrimary: 'Currently served by the primary endpoint',
       routeOnBackup: 'Currently served by the backup endpoint (since {since}) — this is costing money',
       routeMode: 'Routing mode: {mode}',
