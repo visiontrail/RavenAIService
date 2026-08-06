@@ -41,8 +41,10 @@ SUPPORTED_MIME_TYPES = [
     'application/octet-stream'  # 允许二进制文件，但会进一步验证扩展名
 ]
 
-# 文件名安全字符正则
-SAFE_FILENAME_PATTERN = re.compile(r'^[a-zA-Z0-9._\-\s()[\]{}]+$')
+# 文件名安全字符正则。\w 在 Python 3 中按 Unicode 匹配字母和数字，
+# 因此可以安全接受中文等本地化文件名；空白只允许普通半角空格，
+# 避免 \s 把换行、制表符等控制字符放进文件名。
+SAFE_FILENAME_PATTERN = re.compile(r'^[\w.\- ()\[\]{}]+$')
 
 # 最大文件名长度
 MAX_FILENAME_LENGTH = 255

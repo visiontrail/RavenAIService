@@ -112,7 +112,7 @@ class ValidationError(LogServiceException):
         super().__init__(
             message=message,
             error_code="VALIDATION_ERROR",
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT
         )
 
 
@@ -282,7 +282,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         message=error_message,
         error_code="VALIDATION_ERROR",
         detail=detail,
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT
     )
 
 

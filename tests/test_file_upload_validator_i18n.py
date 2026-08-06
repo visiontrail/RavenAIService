@@ -7,6 +7,7 @@ import io
 import pytest
 from fastapi import UploadFile
 
+from app.exceptions import ValidationError
 from app.utils.file_upload_validator import t04_file_validator
 
 
@@ -41,6 +42,17 @@ async def test_unsafe_filename_message_defaults_to_zh() -> None:
     )
     assert msg_zh.startswith("文件 1 (notes.txt):")
     assert "支持的格式" in msg_zh
+
+
+def test_localized_archive_filename_is_accepted_by_filename_checks() -> None:
+    """中文文件名不应被安全校验误判，后续内容完整性由 magic number 校验负责。"""
+    t04_file_validator._validate_filename("鹏城核心网.rar", "zh")
+
+
+@pytest.mark.parametrize("name", ["核心\t网.rar", "核心\n网.rar", "核心网💥.rar"])
+def test_localized_archive_filename_still_rejects_unsafe_characters(name: str) -> None:
+    with pytest.raises(ValidationError, match="不安全"):
+        t04_file_validator._validate_filename(name, "zh")
 
 
 @pytest.mark.asyncio

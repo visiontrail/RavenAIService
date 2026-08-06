@@ -21,8 +21,9 @@ from app.tools.archive_tool import SUPPORTED_ARCHIVE_EXTS, check_archive_magic
 # 1GB 文件大小限制
 T04_MAX_FILE_SIZE = 1024 * 1024 * 1024
 
-# 安全文件名基础字符集
-_SAFE_NAME_BASE = r'[a-zA-Z0-9._\-\s()\[\]{}]+'
+# 安全文件名基础字符集。\w 默认支持 Unicode，允许中文等本地化名称；
+# 仅显式允许半角空格，不接受换行或制表符。
+_SAFE_NAME_BASE = r'[\w.\- ()\[\]{}]+'
 # 按扩展名长度降序排，确保 .tar.gz 先于 .gz 匹配
 _EXT_PATTERN = '(' + '|'.join(
     re.escape(ext)
