@@ -502,11 +502,7 @@ onMounted(() => bootstrap())
   --admin-topbar-height: 72px;
   --admin-sidebar-width: 280px;
   min-height: 100vh;
-  background:
-    linear-gradient(rgba(15, 23, 42, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(15, 23, 42, 0.025) 1px, transparent 1px),
-    var(--admin-page-bg);
-  background-size: 28px 28px, 28px 28px, auto;
+  background: var(--admin-page-bg);
 }
 .admin-topbar { position: fixed; inset: 0 0 auto; height: var(--admin-topbar-height); z-index: 70; background: rgba(15,23,42,.97); border-bottom: 1px solid rgba(148,163,184,.3); backdrop-filter: blur(10px); }
 .admin-topbar-inner { height: 100%; padding: 0 1rem; display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
@@ -533,7 +529,7 @@ onMounted(() => bootstrap())
 .admin-textarea { resize: vertical; min-height: 220px; line-height: 1.65; }
 .primary-btn, .publish-btn { display: inline-flex; align-items: center; justify-content: center; gap: .45rem; padding: .67rem 1rem; color: #083344; background: #22d3ee; border: 0; border-radius: .65rem; font-size: .82rem; font-weight: 800; }
 .primary-btn:disabled, .publish-btn:disabled { opacity: .48; cursor: not-allowed; }
-.announcement-workspace { max-width: 1220px; margin: 0 auto; }
+.announcement-workspace { width: 100%; }
 .announcement-hero { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; padding: 1.15rem 1.25rem; color: #e2e8f0; background: #111c2f; border: 1px solid rgba(148,163,184,.2); border-radius: 16px; box-shadow: 0 12px 32px rgba(15,23,42,.12); }
 .announcement-hero-copy { display: flex; align-items: center; gap: .9rem; }
 .announcement-hero-icon { display: grid; width: 42px; height: 42px; place-items: center; flex: 0 0 auto; color: #083344; background: #22d3ee; border-radius: 12px; }
