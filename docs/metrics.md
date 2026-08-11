@@ -30,12 +30,33 @@ user's usage.
 | `GET /admin/metrics/users/{user_id}` | admin | Single-user detail (series, distributions, recent events) |
 | `GET /admin/metrics/events` | admin | Raw (sanitized) event audit feed |
 | `GET /api/v1/users/me/metrics` | user | The caller's own metrics only |
+| `POST /api/v1/client-ai/usage` | user | Idempotently record one direct RavenClient Assistant invocation |
 
 A request to any `/admin/metrics/*` endpoint without a valid admin bearer token
 returns `401`/`403` and no metrics payload. An unknown `user_id` on the detail
 endpoint returns `404`.
 
-### 1.1 Shared query parameters
+### 1.1 RavenClient direct-Assistant usage
+
+RavenClient Assistant prompts and responses go directly from the desktop to
+the provider selected by the RavenAIService model router. After an invocation,
+the desktop posts only a UUID, provider/model/slot, terminal status, bounded
+token counters, duration, TTFT, and a low-cardinality error category to
+`POST /api/v1/client-ai/usage`.
+
+The endpoint derives `user_id` from the bearer token and records source
+`raven_client_assistant`. Its strict schema forbids extra fields, so prompt
+text, answers, tool input/output, attachments, credentials, and arbitrary
+metadata are rejected with `422` instead of being stored. The idempotency key
+is scoped by authenticated user and invocation UUID; retrying a report never
+double-counts. These values are client-reported operational/accounting data,
+not tamper-proof billing facts.
+
+The companion `GET /api/v1/client-ai/capabilities` response contains effective
+upstream credentials and is excluded from request logging. It is returned with
+private/no-store headers and must be served over TLS outside local development.
+
+### 1.2 Shared query parameters
 
 All endpoints share the same parsing/validation helpers in
 [app/api/admin_metrics.py](../app/api/admin_metrics.py), so defaults and bounds

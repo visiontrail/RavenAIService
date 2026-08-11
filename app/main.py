@@ -12,7 +12,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config import settings
 from app.api import health, logs, tasks, admin, users, packages
-from app.api import ai_chat, device_link, metrics as metrics_api
+from app.api import ai_chat, client_ai, device_link, metrics as metrics_api
 from app.api import share as share_api
 from app.api import admin_metrics
 from app.api import announcements as announcements_api
@@ -272,6 +272,10 @@ def create_app() -> FastAPI:
         "/health", "/metrics", "/docs", "/redoc", "/openapi.json",
         "/api/v1/ai-chat/chat/stream",
         "/api/v1/ai-chat/log-analysis/stream",
+        # Capability responses contain upstream credentials; usage reports are
+        # privacy-sensitive even though their schema contains no content.
+        "/api/v1/client-ai/capabilities",
+        "/api/v1/client-ai/usage",
     ])
     app.add_middleware(FileSizeLimitMiddleware, max_file_size=settings.max_file_size)
     
@@ -300,6 +304,7 @@ def create_app() -> FastAPI:
     app.include_router(tasks.router, prefix="/api/v1", tags=["任务管理"])
     app.include_router(ai_chat.router, prefix="/api/v1/ai-chat", tags=["AI Chat"])
     app.include_router(users.router, tags=["用户管理"])
+    app.include_router(client_ai.router, tags=["RavenClient AI"])
     # 公开（不鉴权）对话分享读取面：独立 router，不挂任何用户鉴权依赖。
     app.include_router(share_api.router, tags=["对话分享（公开）"])
     app.include_router(device_link.router, tags=["设备链接"])
