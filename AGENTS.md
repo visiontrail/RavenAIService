@@ -194,5 +194,5 @@ the SDK picks them up via `setting_sources=["project"]`.
   [docs/agent_trace_protocol.md](docs/agent_trace_protocol.md), [docs/metrics.md](docs/metrics.md), and the
   runbooks in `docs/runbook/`.
 - `data/`, `logs/`, `temp/` at the repo root are placeholders only — real data lives in Docker volumes.
-- `GalaxySpace-CostMatrix/` is a git submodule with its own CLAUDE.md; `model-sentinel/` is a deliberately
-  decoupled monitoring service (own compose file, own DB, imports nothing from `app/`).
+- `model-sentinel/` is a deliberately decoupled monitoring service (own compose file, own DB, imports
+  nothing from `app/`).

@@ -16,7 +16,6 @@ env/
 frontend/node_modules/
 frontend/dist/
 **/node_modules/
-GalaxySpace-CostMatrix/
 model-sentinel/
 frontend/
 data/
