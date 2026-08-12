@@ -1554,6 +1554,12 @@ export default {
     confirm: {
       deleteSession: '确定要删除该对话吗？此操作不可恢复。',
     },
+    logWorkspaceReplacement: {
+      title: '当前对话已经关联了一份日志工作区',
+      message: '如果继续在当前对话上传，新日志会替换 AI 的当前工作区。之前上传的日志将不再对 AI 可见；但原日志仍保留在日志列表中，也仍可下载。\n\n独立分析：新建对话，然后发送当前日志。\n关联分析：新建对话，并在同一轮同时上传全部相关日志。\n\n请选择接下来的处理方式。',
+      replace: '继续并替换',
+      newChat: '新建对话（推荐）',
+    },
     export: {
       defaultFilename: 'RavenAI-对话',
       defaultTitle: 'RavenAI 对话',

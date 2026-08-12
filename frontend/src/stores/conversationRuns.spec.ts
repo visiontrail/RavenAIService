@@ -308,6 +308,56 @@ describe('conversationRuns store', () => {
     expect(answer?.traceRunning).toBe(false)
   })
 
+  it('tracks a successful log workspace context only on the event session', () => {
+    const store = useConversationRunsStore()
+    const sessionA = store.ensureState('session-a')
+    const sessionB = store.ensureState('session-b')
+
+    expect(sessionA.hasLogWorkspaceContext).toBe(false)
+    expect(sessionB.hasLogWorkspaceContext).toBe(false)
+
+    store.applyEventToState(sessionA, {
+      event: 'log_analysis_context',
+      session_id: 'session-a',
+      log_id: 'log-a',
+      filenames: ['first.zip'],
+    })
+    store.applyEventToState(sessionB, {
+      event: 'log_analysis_context',
+      session_id: 'session-a',
+      log_id: 'log-a',
+    })
+
+    expect(sessionA.hasLogWorkspaceContext).toBe(true)
+    expect(sessionB.hasLogWorkspaceContext).toBe(false)
+  })
+
+  it('restores persisted log attachment context without leaking it to another session', async () => {
+    const store = useConversationRunsStore()
+    vi.spyOn(userApi, 'fetchMessages').mockImplementation(async (sessionId: string) => ({
+      success: true,
+      data: [
+        {
+          id: `msg-${sessionId}`,
+          session_id: sessionId,
+          role: 'user',
+          content: sessionId === 'session-a'
+            ? '请分析\n\n[日志附件] first.zip'
+            : '普通设备问题',
+          created_at: '2026-08-12T10:00:00.000Z',
+          updated_at: '2026-08-12T10:00:00.000Z',
+        },
+      ],
+    } as any))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 404 })))
+
+    const sessionA = await store.loadSession('session-a', { isLoggedIn: true, force: true })
+    const sessionB = await store.loadSession('session-b', { isLoggedIn: true, force: true })
+
+    expect(sessionA.hasLogWorkspaceContext).toBe(true)
+    expect(sessionB.hasLogWorkspaceContext).toBe(false)
+  })
+
   it('returns from loadSession after restoring a running snapshot without waiting for stream terminal', async () => {
     const store = useConversationRunsStore()
     const openStream = openSseResponse([

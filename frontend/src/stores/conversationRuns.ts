@@ -18,6 +18,7 @@ import type {
   PendingClarification,
 } from '@/types/agentTrace'
 import type { ChatMessageRecord } from '@/types'
+import { hasPersistedLogAttachmentMarker } from '@/utils/logWorkspaceReplacement'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -115,6 +116,8 @@ export type ConversationState = {
   lastAgentKind: AgentKind | null
   /** Last project repo id selected for this conversation (frontend-only, not persisted to backend). */
   lastProjectRepoId: number | null
+  /** The backend has successfully associated this session with a log workspace. */
+  hasLogWorkspaceContext: boolean
 }
 
 export type StartDeviceRunPayload = {
@@ -365,6 +368,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         loaded: false,
         lastAgentKind: null,
         lastProjectRepoId: null,
+        hasLogWorkspaceContext: false,
       }
       bySession[sessionId] = state
     }
@@ -515,7 +519,10 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       target.content = `**${t('aiChat.agents.logAnalysis')} Agent**\n\n${statusText}`
       return
     }
-    if (type === 'log_analysis_context') return
+    if (type === 'log_analysis_context') {
+      state.hasLogWorkspaceContext = true
+      return
+    }
 
     // OCR degradation for an image-bearing turn: attach to the assistant bubble
     // so the UI can show an "images not recognized" hint. The turn still answers
@@ -943,6 +950,12 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
             if (lastWithAgent?.run_agent_kind) {
               state.lastAgentKind = lastWithAgent.run_agent_kind as AgentKind
             }
+            // LogAnalysisChatService persists `[日志附件] ...` in the user
+            // message after a successful run. OR with the live SSE-derived
+            // state so a reload during an in-flight run cannot erase it.
+            state.hasLogWorkspaceContext = state.hasLogWorkspaceContext || records.some(
+              (item) => item.role === 'user' && hasPersistedLogAttachmentMarker(item.content),
+            )
           }
         } catch (err) {
           console.warn('Failed to load session messages', err)

@@ -1559,6 +1559,12 @@ export default {
     confirm: {
       deleteSession: 'Delete this conversation? This action cannot be undone.',
     },
+    logWorkspaceReplacement: {
+      title: 'This conversation already has a log workspace',
+      message: 'Uploading here will replace the AI’s current workspace. Previously uploaded logs will no longer be visible to the AI; their log-list records and downloads remain available.\n\nIndependent analysis: start a new chat, then send the current logs.\nCorrelated analysis: start a new chat and upload all related logs together in the same turn.\n\nChoose how you want to continue.',
+      replace: 'Continue and replace',
+      newChat: 'New chat (recommended)',
+    },
     export: {
       defaultFilename: 'RavenAI-chat',
       defaultTitle: 'RavenAI conversation',

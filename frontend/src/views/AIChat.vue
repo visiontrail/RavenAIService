@@ -8,7 +8,7 @@ import { renderMarkdown, processMermaidBlocks } from '@/utils/markdownRenderer'
 import { loadMermaid } from '@/utils/mermaidLoader'
 import { jsPDF } from 'jspdf'
 import html2canvas from 'html2canvas-pro'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Copy, FileDown } from 'lucide-vue-next'
 import { useUserStore } from '@/stores/user'
 import { useAppStore } from '@/stores/app'
@@ -35,6 +35,12 @@ import {
   type AgentMessageView,
   type VisualAnalysis,
 } from '@/utils/agentResultSummary'
+import {
+  proceedAfterLogWorkspaceReplacementCheck,
+  requiresLogWorkspaceReplacementConfirmation,
+  resolveLogWorkspaceReplacementAction,
+  type LogWorkspaceReplacementDecision,
+} from '@/utils/logWorkspaceReplacement'
 
 type AgentOption = {
   id: string
@@ -1652,6 +1658,49 @@ const triggerSessionSummary = (userContent: string, sid: string | null) => {
     })
 }
 
+const requestLogWorkspaceReplacementDecision = async (): Promise<LogWorkspaceReplacementDecision> => {
+  try {
+    await ElMessageBox.confirm(
+      t('aiChat.logWorkspaceReplacement.message'),
+      t('aiChat.logWorkspaceReplacement.title'),
+      {
+        type: 'warning',
+        confirmButtonText: t('aiChat.logWorkspaceReplacement.newChat'),
+        cancelButtonText: t('aiChat.logWorkspaceReplacement.replace'),
+        distinguishCancelAndClose: true,
+        showClose: true,
+        closeOnClickModal: false,
+        customClass: 'rw-log-workspace-replacement-box',
+      },
+    )
+    return resolveLogWorkspaceReplacementAction('confirm')
+  } catch (action: unknown) {
+    return resolveLogWorkspaceReplacementAction(action)
+  }
+}
+
+/**
+ * Move the untouched composer draft to a fresh session. Do not auto-send:
+ * correlated analysis may still need the user to add the earlier log files.
+ */
+const startNewConversationWithLogDraft = async () => {
+  const draftMessage = inputMessage.value
+  const draftFiles = [...selectedLogFiles.value]
+  const draftImages = [...pendingImages.value]
+  const draftProjectRepoId = selectedProjectRepoId.value
+
+  sessionStore.startNewChat()
+  await nextTick()
+
+  inputMessage.value = draftMessage
+  selectedLogFiles.value = draftFiles
+  pendingImages.value = draftImages
+  setTargetAgent(logAnalysisAgentOption)
+  selectedProjectRepoId.value = draftProjectRepoId
+  ensureProjectRepoOptions()
+  textareaRef.value?.focus()
+}
+
 const sendMessage = async () => {
   if (!isLoggedIn.value) {
     appStore.requestLoginModal('login')
@@ -1675,6 +1724,22 @@ const sendMessage = async () => {
   }))
   if (!content && !filesForRequest.length && !imagesForRequest.length) return
 
+  const shouldUseProjectExpertAgent =
+    isProjectExpertAgentSelected.value || content.includes(`@${agentName(projectExpertAgentOption)}`)
+
+  const shouldUseLogAnalysisAgent =
+    !shouldUseProjectExpertAgent &&
+    (
+      isLogAnalysisAgentSelected.value
+      || content.includes(`@${agentName(logAnalysisAgentOption)}`)
+      || filesForRequest.length > 0
+    )
+
+  const shouldUsePackageAgent =
+    !shouldUseProjectExpertAgent &&
+    !shouldUseLogAnalysisAgent &&
+    (isPackageAgentSelected.value || content.includes(`@${agentName(packageAgentOption)}`))
+
   const authToken = (userStore.token as unknown as string) || null
   if (authToken && userToken.isExpired(authToken)) {
     userStore.clear()
@@ -1686,6 +1751,17 @@ const sendMessage = async () => {
     appStore.requestLoginModal('login')
     return
   }
+
+  const canContinueSend = await proceedAfterLogWorkspaceReplacementCheck({
+    requiresConfirmation: requiresLogWorkspaceReplacementConfirmation({
+      hasExistingLogWorkspace: Boolean(currentConversation.value?.hasLogWorkspaceContext),
+      isLogAnalysisRequest: shouldUseLogAnalysisAgent,
+      logFileCount: filesForRequest.length,
+    }),
+    requestDecision: requestLogWorkspaceReplacementDecision,
+    startNewConversation: startNewConversationWithLogDraft,
+  })
+  if (!canContinueSend) return
 
   // Allocate a session id locally if this is a brand-new conversation. The
   // run service / DB layer will keep the same id for persistence.
@@ -1702,22 +1778,6 @@ const sendMessage = async () => {
   if (content) {
     triggerSessionSummary(content, sid)
   }
-
-  const shouldUseProjectExpertAgent =
-    isProjectExpertAgentSelected.value || content.includes(`@${agentName(projectExpertAgentOption)}`)
-
-  const shouldUseLogAnalysisAgent =
-    !shouldUseProjectExpertAgent &&
-    (
-      isLogAnalysisAgentSelected.value
-      || content.includes(`@${agentName(logAnalysisAgentOption)}`)
-      || filesForRequest.length > 0
-    )
-
-  const shouldUsePackageAgent =
-    !shouldUseProjectExpertAgent &&
-    !shouldUseLogAnalysisAgent &&
-    (isPackageAgentSelected.value || content.includes(`@${agentName(packageAgentOption)}`))
 
   if (shouldUseProjectExpertAgent && !isProjectExpertAgentSelected.value) {
     setTargetAgent(projectExpertAgentOption)
@@ -3253,6 +3313,31 @@ html.dark .rw-composer-alert code {
   cursor: pointer;
 }
 .rw-btn-ghost:hover { background: var(--rw-surface-strong); }
+
+:global(.rw-log-workspace-replacement-box .el-message-box__message p) {
+  white-space: pre-line;
+  line-height: 1.65;
+}
+
+:global(.rw-log-workspace-replacement-box) {
+  width: min(560px, calc(100vw - 32px));
+  border: 1px solid color-mix(in srgb, #d97706 30%, var(--rw-hairline-strong, #cbd5e1));
+  border-top: 3px solid #d97706;
+  border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(30, 41, 59, .2);
+}
+
+:global(.rw-log-workspace-replacement-box .el-message-box__title) {
+  color: var(--rw-ink);
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -.01em;
+}
+
+:global(.rw-log-workspace-replacement-box .el-message-box__btns) {
+  gap: 8px;
+  padding-top: 8px;
+}
 
 /* Responsive */
 @media (max-width: 900px) {
