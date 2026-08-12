@@ -8,6 +8,12 @@ RavenAIService is the core service repository of the Raven intelligent testing p
 
 Logs, AI, devices, code assets, and releases are no longer isolated modules — they are organized by “project” and driven by specialized agents, forming a closed-loop collaboration across testing, R&D, delivery, and operations.
 
+## Companion Desktop Client
+
+**[RavenClient](https://github.com/visiontrail/RavenClient)** is the cross-platform desktop client for RavenAIService. Built with Electron, React, and TypeScript, it provides native Windows, macOS, and Linux access to Raven accounts, AI chat, server-backed Agent workflows, projects, logs, packages, local files and knowledge bases, and an embedded AI-powered terminal.
+
+RavenClient requires a compatible RavenAIService deployment for authentication and managed AI capabilities. The service remains the platform core for identity, model routing, project context, multi-Agent execution, devices, packages, and release assets, while RavenClient provides the native desktop workspace and operating-system integration.
+
 ![RavenAIService Multi-Agent and Project Context Diagram](docs/diagrams/raven-ai-context-en.png)
 
 ## Product Positioning
@@ -276,6 +282,7 @@ Common scripts:
 
 ## Related Documents
 
+- [RavenClient](https://github.com/visiontrail/RavenClient) — cross-platform desktop client for RavenAIService
 - [QUICKSTART.md](QUICKSTART.md) — release, packaging, and Docker workflow
 - [PROJECT_SETUP.md](PROJECT_SETUP.md)
 - [DEPLOY_USAGE.md](DEPLOY_USAGE.md)

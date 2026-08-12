@@ -8,6 +8,12 @@ RavenAIService 是 Raven 智能测试平台的核心服务仓库。平台正在�
 
 日志、AI、设备、代码资产和发布物不再是孤立的功能模块——它们以”项目”为单元串联，由多个专业 Agent 协同驱动，形成测试、研发、交付与运维之间的闭环协作。
 
+## 配套桌面客户端
+
+**[RavenClient](https://github.com/visiontrail/RavenClient)** 是 RavenAIService 的跨平台桌面客户端。它基于 Electron、React 和 TypeScript 构建，为 Windows、macOS 和 Linux 用户提供 Raven 账号登录、AI 对话、服务端 Agent 工作流、项目、日志、软件包、本地文件与知识库，以及内嵌 AI 终端等原生桌面能力。
+
+RavenClient 需要连接兼容的 RavenAIService 服务，以完成身份认证并使用平台统一管理的 AI 能力。RavenAIService 负责身份、模型路由、项目上下文、多 Agent 执行、设备、软件包和发布资产等平台核心能力；RavenClient 则负责原生桌面工作区和操作系统集成。
+
 ![RavenAIService 多 Agent 与项目上下文关系示意图](docs/diagrams/raven-ai-context-zh.png)
 
 ## 项目定位
@@ -274,6 +280,7 @@ RavenAIService/
 
 ## 相关文档
 
+- [RavenClient](https://github.com/visiontrail/RavenClient) — RavenAIService 的跨平台桌面客户端
 - [QUICKSTART.md](QUICKSTART.md) — 发布、打包、Docker 启停
 - [PROJECT_SETUP.md](PROJECT_SETUP.md)
 - [DEPLOY_USAGE.md](DEPLOY_USAGE.md)
