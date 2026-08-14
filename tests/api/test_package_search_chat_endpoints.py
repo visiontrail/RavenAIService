@@ -18,6 +18,8 @@ is needed.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import io
 import json
 import threading
 import time
@@ -27,6 +29,7 @@ from typing import Any, Dict
 
 import pytest
 from fastapi import FastAPI
+from fastapi import UploadFile
 from fastapi.testclient import TestClient
 
 from app.agents.package_search.workspace import WorkspaceContext
@@ -303,6 +306,52 @@ def test_cancel_and_status_enforce_ownership():
     assert service.cancel("ps-session-owned", user=owner) is True
 
 
+@pytest.mark.asyncio
+async def test_stream_reconnect_cannot_replay_another_owners_events():
+    from app.services.package_search_chat_service import AgentJob, PackageSearchChatService
+
+    service = PackageSearchChatService()
+    job = AgentJob(
+        session_id="private-package-session",
+        task_id="private-task",
+        context_meta={},
+        question="secret",
+        user_id="owner-1",
+        remember=False,
+        started_at=time.monotonic(),
+        run_id="private-run",
+        owner_scope="user:owner-1",
+        events=[
+            {
+                "event": "agent_trace",
+                "type": "clarification_request",
+                "questions": [{"question": "secret-file.zip belongs to?"}],
+            }
+        ],
+    )
+    service._jobs[job.session_id] = job
+    backing = io.BytesIO(b"ignored")
+    upload = UploadFile(file=backing, filename="attacker.bin")
+    stream = service.stream(
+        message="",
+        session_id=job.session_id,
+        history_json=None,
+        remember=False,
+        project_repo_id=None,
+        db=None,
+        user=SimpleNamespace(id="attacker-2"),
+        owner_scope="user:attacker-2",
+        files=[upload],
+    )
+
+    with pytest.raises(PermissionError):
+        await anext(stream)
+    # Mismatched requests are rejected before replay. The API preflight catches
+    # this before accepting files; direct service callers still own cleanup.
+    await upload.close()
+    assert backing.closed is True
+
+
 # ───────────────────────── endpoint-level tests ──────────────────────────
 
 
@@ -373,6 +422,33 @@ def test_stream_endpoint_missing_project_returns_400(chat_client):
     )
     assert resp.status_code == 400
     assert resp.json()["detail"]["reason"] == "project_repo_required"
+
+
+def test_stream_endpoint_accepts_repeated_component_files_without_project(
+    chat_client, monkeypatch
+):
+    from app.services.package_search_chat_service import package_search_chat_service
+
+    captured: Dict[str, Any] = {}
+
+    async def fake_stream(**kwargs):
+        captured["project_repo_id"] = kwargs.get("project_repo_id")
+        captured["filenames"] = [item.filename for item in kwargs.get("files") or []]
+        yield 'data: {"event":"done","answer":"ok"}\n\n'
+
+    monkeypatch.setattr(package_search_chat_service, "stream", fake_stream)
+    response = chat_client.post(
+        "/package-search/stream",
+        data={"message": "请打包", "session_id": "package-files"},
+        files=[
+            ("files", ("one.bin", b"one", "application/octet-stream")),
+            ("files", ("two.rar", b"Rar!\x1a\x07", "application/octet-stream")),
+        ],
+    )
+
+    assert response.status_code == 200
+    assert captured["project_repo_id"] is None
+    assert captured["filenames"] == ["one.bin", "two.rar"]
 
 
 def test_three_endpoints_flow_with_mock_agent(
@@ -466,13 +542,92 @@ def test_cancel_endpoint_enforces_ownership_with_403(chat_client):
         package_search_chat_service._jobs.pop("ps-foreign-session", None)
 
 
+def test_stream_endpoint_hides_foreign_cached_session(chat_client):
+    from app.services.package_search_chat_service import AgentJob, package_search_chat_service
+
+    job = AgentJob(
+        session_id="ps-foreign-stream",
+        task_id="task-x",
+        context_meta={},
+        question="secret",
+        user_id="another-user",
+        remember=False,
+        started_at=time.monotonic(),
+        run_id="foreign-run",
+        owner_scope="user:another-user",
+        events=[{"event": "done", "answer": "secret download"}],
+    )
+    package_search_chat_service._jobs[job.session_id] = job
+    try:
+        response = chat_client.post(
+            "/package-search/stream",
+            data={"session_id": job.session_id, "message": ""},
+        )
+        assert response.status_code == 404
+        assert "secret download" not in response.text
+    finally:
+        package_search_chat_service._jobs.pop(job.session_id, None)
+
+
 def test_stream_endpoint_contract_matches_project_expert():
     import inspect
 
     from app.api.ai_chat import package_search_stream_endpoint
 
     signature = inspect.signature(package_search_stream_endpoint)
-    assert "file" not in signature.parameters
+    assert "files" in signature.parameters
     assert {"message", "session_id", "history", "remember", "project_repo_id"}.issubset(
         signature.parameters
     )
+
+
+@pytest.mark.asyncio
+async def test_stage_multiple_inputs_preserves_duplicates_and_hashes(tmp_path):
+    from app.services.package_search_chat_service import PackageSearchChatService
+
+    ctx = _make_ctx(tmp_path)
+    first = b"PK\x03\x04first-zip"
+    second = b"PK\x03\x04second-zip"
+    uploads = [
+        UploadFile(file=io.BytesIO(first), filename="../same.zip"),
+        UploadFile(file=io.BytesIO(second), filename="same.zip"),
+    ]
+
+    manifest = await PackageSearchChatService()._stage_uploaded_inputs(
+        ctx, uploads, run_id="run-stage"
+    )
+
+    records = manifest["inputs"]
+    assert len(records) == 2
+    assert [item["original_name"] for item in records] == ["same.zip", "same.zip"]
+    assert len({item["upload_id"] for item in records}) == 2
+    assert len({item["path"] for item in records}) == 2
+    assert records[0]["sha256"] == hashlib.sha256(first).hexdigest()
+    assert records[1]["sha256"] == hashlib.sha256(second).hexdigest()
+    assert all(item["detected_type"] == "zip" for item in records)
+    assert all(Path(item["path"]).is_relative_to(tmp_path) for item in records)
+    assert Path(manifest["manifest_path"]).is_file()
+    task = json.loads(Path(ctx.task_json_path).read_text(encoding="utf-8"))
+    assert task["inputs_manifest"] == manifest["manifest_path"]
+    assert task["input_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_stage_total_limit_removes_partial_turn(tmp_path, monkeypatch):
+    from app.config import settings
+    from app.services.package_search_chat_service import PackageSearchChatService
+
+    monkeypatch.setattr(settings, "max_file_size", 3)
+    monkeypatch.setattr(settings, "disk_reserve_bytes", 0)
+    ctx = _make_ctx(tmp_path)
+    uploads = [
+        UploadFile(file=io.BytesIO(b"aa"), filename="one.bin"),
+        UploadFile(file=io.BytesIO(b"bb"), filename="two.bin"),
+    ]
+
+    with pytest.raises(ValueError, match="总量"):
+        await PackageSearchChatService()._stage_uploaded_inputs(
+            ctx, uploads, run_id="run-too-large"
+        )
+
+    assert not (tmp_path / "inputs" / "run-too-large").exists()

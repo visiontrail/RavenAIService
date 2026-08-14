@@ -272,6 +272,8 @@ def create_app() -> FastAPI:
         "/health", "/metrics", "/docs", "/redoc", "/openapi.json",
         "/api/v1/ai-chat/chat/stream",
         "/api/v1/ai-chat/log-analysis/stream",
+        "/api/v1/ai-chat/project-expert/stream",
+        "/api/v1/ai-chat/package-search/stream",
         # Capability responses contain upstream credentials; usage reports are
         # privacy-sensitive even though their schema contains no content.
         "/api/v1/client-ai/capabilities",

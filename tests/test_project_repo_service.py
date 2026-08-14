@@ -163,9 +163,17 @@ class TestProjectDiscovery:
 
 class TestProjectAgents:
     def test_default_agents_depend_on_repo_url(self):
-        from app.services.project_repo_service import default_agent_keys_for_repo
+        from app.services.project_repo_service import (
+            PROJECT_AGENT_REGISTRY,
+            default_agent_keys_for_repo,
+        )
 
-        assert default_agent_keys_for_repo(_make_repo(repo_url="")) == ["project_expert"]
+        assert PROJECT_AGENT_REGISTRY["package_search"]["display_name"] == "配置管理员"
+        assert PROJECT_AGENT_REGISTRY["package_search"]["requires_repo"] is False
+        assert default_agent_keys_for_repo(_make_repo(repo_url="")) == [
+            "project_expert",
+            "package_search",
+        ]
         assert default_agent_keys_for_repo(_make_repo(repo_url="https://git.example/x.git")) == [
             "project_expert",
             "log_analysis",
@@ -184,6 +192,14 @@ class TestProjectAgents:
         assert normalize_agent_keys(
             ["package_search", "package_search"],
             _make_repo(repo_url="https://git.example/x.git"),
+        ) == ["package_search"]
+
+    def test_normalize_allows_configuration_manager_without_repo(self):
+        from app.services.project_repo_service import normalize_agent_keys
+
+        assert normalize_agent_keys(
+            ["package_search"],
+            _make_repo(repo_url=""),
         ) == ["package_search"]
 
 

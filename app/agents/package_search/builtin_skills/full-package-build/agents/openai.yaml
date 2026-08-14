@@ -1,0 +1,4 @@
+interface:
+  display_name: "整包打包"
+  short_description: "证据识别、强制逐文件确认并构建升级整包"
+  default_prompt: "使用 $full-package-build 初判这些组件；等待强制逐文件确认后，再通过专用 builder 生成整包。"

@@ -3,12 +3,20 @@ import { createPinia, setActivePinia } from 'pinia'
 
 import { THINKING_PLACEHOLDER, useConversationRunsStore } from '@/stores/conversationRuns'
 import { userApi } from '@/api/user'
-import { resolveChatPermission, resolveChatClarification } from '@/api/chat'
+import {
+  packageSearchStream,
+  projectExpertStream,
+  resolveChatPermission,
+  resolveChatClarification,
+} from '@/api/chat'
+import { mergeUniquePackageFiles } from '@/utils/packageAttachments'
 import { LOCALE_HEADER, setActiveLocale } from '@/i18n/runtime'
 import type { ChatEntry, PendingPermission } from '@/stores/conversationRuns'
 import type { AgentTraceEvent } from '@/types/agentTrace'
 
 vi.mock('@/api/chat', () => ({
+  packageSearchStream: vi.fn(),
+  projectExpertStream: vi.fn(),
   resolveChatPermission: vi.fn(),
   resolveChatClarification: vi.fn(),
 }))
@@ -833,6 +841,52 @@ describe('conversationRuns store', () => {
     expect(state.pendingClarifications[0].error).toBeTruthy()
   })
 
+  it('requires all thirteen component-mapping answers before submitting', async () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('package-session')
+    const questions = Array.from({ length: 13 }, (_, index) => ({
+      header: `file-${index + 1}`,
+      question: `Map component-${index + 1}.bin`,
+      options: [{ label: `component-${index + 1}` }, { label: 'exclude' }],
+    }))
+    store.applyEventToState(state, {
+      event: 'agent_trace',
+      type: 'clarification_request',
+      task_id: 'package-run',
+      run_id: 'package-run',
+      session_id: 'package-session',
+      seq: 1,
+      timestamp: 1,
+      request_id: 'package-confirmation',
+      questions,
+    })
+    const pending = state.pendingClarifications[0]
+    for (let index = 0; index < 12; index += 1) {
+      pending.draftSelected[index] = [`component-${index + 1}`]
+    }
+
+    await store.submitClarification('package-session', 'package-confirmation')
+    expect(resolveChatClarification).not.toHaveBeenCalled()
+    expect(pending.error).toBeTruthy()
+
+    pending.draftSelected[12] = ['exclude']
+    vi.mocked(resolveChatClarification).mockResolvedValue({
+      success: true,
+      message: 'ok',
+      request_id: 'package-confirmation',
+    })
+    await store.submitClarification('package-session', 'package-confirmation')
+
+    const submitted = vi.mocked(resolveChatClarification).mock.calls[0][1].answers
+    expect(submitted).toHaveLength(13)
+    expect(submitted[12]).toEqual({
+      question_index: 12,
+      selected_labels: ['exclude'],
+      custom_text: null,
+    })
+    expect(state.pendingClarifications).toEqual([])
+  })
+
   it('drops pending clarifications when the run reaches a terminal state', () => {
     const store = useConversationRunsStore()
     const state = store.ensureState('session-a')
@@ -872,6 +926,139 @@ describe('conversationRuns store', () => {
     const noImagesBody = JSON.parse(fetchMock.mock.calls[0][1].body as string)
     expect(noImagesBody.images).toBeUndefined()
     expect(noImagesBody.agent_type).toBeUndefined()
+  })
+
+  it('propagates thirteen component files and lists them optimistically', async () => {
+    const store = useConversationRunsStore()
+    const files = Array.from({ length: 13 }, (_, index) =>
+      new File([`payload-${index + 1}`], `component-${index + 1}.bin`),
+    )
+    vi.mocked(packageSearchStream).mockResolvedValue(sseResponse([
+      {
+        event: 'agent_trace',
+        type: 'run_start',
+        task_id: 'package-run',
+        run_id: 'package-run',
+        session_id: 'package-session',
+        seq: 1,
+        timestamp: 1,
+      },
+      {
+        event: 'done',
+        run_id: 'package-run',
+        session_id: 'package-session',
+        answer: 'built',
+      },
+    ]))
+
+    const started = await store.startPackageSearchRun('package-session', {
+      message: 'build package',
+      project_repo_id: null,
+      files,
+    })
+
+    expect(started).toBe(true)
+    expect(packageSearchStream).toHaveBeenCalledWith(expect.objectContaining({
+      projectRepoId: null,
+      files,
+    }))
+    const userMessage = store.ensureState('package-session').messages.find(
+      (message) => message.role === 'user',
+    )?.content || ''
+    for (const file of files) expect(userMessage).toContain(file.name)
+  })
+
+  it('signals a failed package upload so the composer can restore its file snapshot', async () => {
+    const store = useConversationRunsStore()
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    vi.mocked(packageSearchStream).mockResolvedValue(new Response(
+      JSON.stringify({ detail: 'upload rejected' }),
+      { status: 413, headers: { 'Content-Type': 'application/json' } },
+    ))
+
+    const started = await store.startPackageSearchRun('failed-package-session', {
+      message: 'build package',
+      files: [new File(['payload'], 'component.bin')],
+    })
+
+    expect(started).toBe(false)
+    expect(store.ensureState('failed-package-session').runStatus).toBe('failed')
+  })
+
+  it('restores component files when an HTTP 200 package stream ends with an error', async () => {
+    const store = useConversationRunsStore()
+    const files = [
+      new File(['component-a'], 'component-a.bin', { lastModified: 1 }),
+      new File(['component-b'], 'component-b.zip', { lastModified: 2 }),
+    ]
+    vi.mocked(packageSearchStream).mockResolvedValue(sseResponse([
+      {
+        event: 'agent_trace',
+        type: 'run_start',
+        task_id: 'package-preprocess-run',
+        run_id: 'package-preprocess-run',
+        session_id: 'package-preprocess-session',
+        seq: 1,
+        timestamp: 1,
+      },
+      {
+        event: 'error',
+        run_id: 'package-preprocess-run',
+        session_id: 'package-preprocess-session',
+        message: 'component classification failed',
+      },
+    ]))
+
+    // Mirrors AIChat's optimistic clear followed by failure recovery.
+    let selectedPackageFiles: File[] = []
+    const packageRunSucceeded = await store.startPackageSearchRun(
+      'package-preprocess-session',
+      { message: 'build package', files },
+    )
+    if (!packageRunSucceeded) {
+      selectedPackageFiles = mergeUniquePackageFiles(selectedPackageFiles, files)
+    }
+
+    expect(packageRunSucceeded).toBe(false)
+    expect(selectedPackageFiles).toEqual(files)
+    expect(store.ensureState('package-preprocess-session').runStatus).toBe('failed')
+  })
+
+  it('reports a cancelled package stream as unsuccessful without changing Project Expert semantics', async () => {
+    const store = useConversationRunsStore()
+    vi.mocked(packageSearchStream).mockResolvedValue(sseResponse([
+      {
+        event: 'agent_trace',
+        type: 'cancelled',
+        task_id: 'cancelled-package-run',
+        run_id: 'cancelled-package-run',
+        session_id: 'cancelled-package-session',
+        seq: 1,
+        timestamp: 1,
+      },
+    ]))
+    vi.mocked(projectExpertStream).mockResolvedValue(sseResponse([
+      {
+        event: 'error',
+        run_id: 'project-run',
+        session_id: 'project-session',
+        message: 'project preprocessing failed',
+      },
+    ]))
+
+    const packageSucceeded = await store.startPackageSearchRun('cancelled-package-session', {
+      message: 'build package',
+      files: [new File(['component'], 'component.bin')],
+    })
+    const projectStreamStarted = await store.startProjectExpertRun('project-session', {
+      message: 'inspect project',
+      project_repo_id: 1,
+    })
+
+    expect(packageSucceeded).toBe(false)
+    expect(store.ensureState('cancelled-package-session').runStatus).toBe('cancelled')
+    expect(projectStreamStarted).toBe(true)
+    expect(store.ensureState('project-session').runStatus).toBe('failed')
   })
 
   it('records an OCR degradation hint on the assistant bubble', () => {

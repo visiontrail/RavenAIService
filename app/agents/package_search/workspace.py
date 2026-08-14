@@ -1,11 +1,13 @@
 """
-重构包检索工作区准备与清理。
+配置管理员工作区准备与清理。
 
 职责（与 ``project_expert/workspace.py`` 同构）：
-- 为每次运行在隔离临时目录下创建 **只含 `repo/` 占位目录 + `task.json`**
-  的工作区（没有 `logs/`、不解压任何归档、不要求 metadata.json）。
-- 把用户显式选择的项目仓库身份写入 `task.json.repo_info`
-  （`source="user_selected_project_repo"`），**不写入任何 git token**。
+- 为每次运行在隔离临时目录下创建 ``repo/``、``inputs/`` 与 ``task.json``。
+  ``inputs/`` 只保存 API 层已经校验并流式落盘的上传件；归档检查和构建由
+  ``full_package_service`` 在受限目录中完成。
+- 把用户显式选择的候选项目仓库身份写入 `task.json.repo_info`
+  （`source="user_selected_project_repo"`），**不写入任何 git token**。带附件的
+  新会话允许暂不选择项目，此时由 Skill 初判、再由强制反问确定权威项目。
 - 任务结束后幂等清理临时目录。
 """
 
@@ -61,7 +63,7 @@ class WorkspaceContext:
 
 def prepare(
     *,
-    project_repo: Any,
+    project_repo: Optional[Any] = None,
     question: str,
     hints: str = "",
     session_id: Optional[str] = None,
@@ -72,8 +74,9 @@ def prepare(
     metadata.json、不在磁盘上落 git token。
 
     Args:
-        project_repo: ProjectRepo ORM 对象（含 project_code / project_name /
-            repo_url / default_branch 等字段）。权威的项目身份来源。
+        project_repo: 可选 ProjectRepo ORM 对象（含 project_code / project_name /
+            repo_url / default_branch 等字段）。打包会话可先不绑定；如果提供，
+            仅作为候选，仍须经过打包前的强制反问确认。
         question: 用户问题。
         hints: 可选的对话上下文提示。
         session_id: 可选的会话 id，仅用于日志关联。
@@ -81,32 +84,44 @@ def prepare(
     Returns:
         WorkspaceContext
 
-    Raises:
-        MissingProjectRepoError: project_repo 为空。
+    ``MissingProjectRepoError`` 保留用于旧调用方兼容，但本函数不再因
+    ``project_repo`` 为空而抛出；纯检索入口仍在 API 层要求显式项目。
     """
-    if project_repo is None:
-        raise MissingProjectRepoError("project_repo is required for Package Search workspace")
-
     task_id = str(uuid.uuid4())
     base_dir = Path(settings.code_repo_clone_base_dir)
     temp_dir = base_dir / task_id
     repo_dir = temp_dir / "repo"
+    inputs_dir = temp_dir / "inputs"
 
     try:
         repo_dir.mkdir(parents=True, exist_ok=True)
+        inputs_dir.mkdir(parents=True, exist_ok=True)
 
         repo_info = {
-            "project_code": getattr(project_repo, "project_code", None),
-            "project_name": getattr(project_repo, "project_name", None),
-            "repo_url": getattr(project_repo, "repo_url", None),
-            "default_branch": getattr(project_repo, "default_branch", None),
-            "source": "user_selected_project_repo",
+            "project_code": getattr(project_repo, "project_code", None)
+            if project_repo is not None
+            else None,
+            "project_name": getattr(project_repo, "project_name", None)
+            if project_repo is not None
+            else None,
+            "repo_url": getattr(project_repo, "repo_url", None)
+            if project_repo is not None
+            else None,
+            "default_branch": getattr(project_repo, "default_branch", None)
+            if project_repo is not None
+            else None,
+            "source": (
+                "user_selected_project_repo"
+                if project_repo is not None
+                else "pending_mandatory_confirmation"
+            ),
         }
         # task.json 仅含非敏感字段 —— 绝不写入 git token。
         task_data = {
             "question": question or "",
             "hints": hints or "",
             "repo_info": repo_info,
+            "inputs_manifest": None,
         }
         task_json_path = temp_dir / "task.json"
         task_json_path.write_text(

@@ -948,7 +948,7 @@ async def project_expert_result_endpoint(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
-@router.post("/package-search/stream", summary="主对话重构包检索（流式）")
+@router.post("/package-search/stream", summary="主对话配置管理员（流式）")
 async def package_search_stream_endpoint(
     http_request: Request,
     message: str = Form("", description="用户问题"),
@@ -962,11 +962,14 @@ async def package_search_stream_endpoint(
     images: Optional[str] = Form(
         None, description="可选：随消息附带图片的 JSON 数组字符串 [{media_type,data}]"
     ),
+    files: Optional[List[UploadFile]] = File(
+        None, description="可选：一个或多个待制作整包的组件文件（字段名可重复）"
+    ),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
     logger.info("=" * 80)
-    logger.info("接收到主对话重构包检索请求")
+    logger.info("接收到主对话配置管理员请求")
     logger.info("message: %s...", message[:100])
     logger.info("session_id: %s, project_repo_id=%s", session_id, project_repo_id)
     logger.info("=" * 80)
@@ -979,12 +982,12 @@ async def package_search_stream_endpoint(
         user=current_user,
     )
 
-    # New session requires an explicit project: package metadata tools and the
-    # repository workspace are both project-scoped. Fail fast with 4xx before
-    # streaming.
+    # Pure package search still requires a project.  An attachment-bearing
+    # packaging turn may start unbound: project inference is part of the Skill
+    # plan and the server forces the human to confirm it before any side effect.
     if project_repo_id is None and not package_search_chat_service.session_has_workspace(
         session_id
-    ):
+    ) and not files:
         raise HTTPException(
             status_code=400,
             detail={
@@ -1005,6 +1008,15 @@ async def package_search_stream_endpoint(
     cookie_carrier = Response()
     owner_scope = resolve_owner_scope(http_request, cookie_carrier, current_user)
     try:
+        package_search_chat_service.assert_session_access(
+            session_id,
+            owner_scope=owner_scope,
+            user=current_user,
+        )
+    except PermissionError as exc:
+        # 404 avoids disclosing whether another user's session id exists.
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
         generator = package_search_chat_service.stream(
             message=message,
             session_id=session_id,
@@ -1012,6 +1024,7 @@ async def package_search_stream_endpoint(
             remember=remember,
             project_repo_id=project_repo_id,
             images=parsed_images,
+            files=files,
             db=db,
             user=current_user,
             owner_scope=owner_scope,
@@ -1038,7 +1051,7 @@ async def package_search_stream_endpoint(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.post("/package-search/cancel", summary="取消进行中的重构包检索任务")
+@router.post("/package-search/cancel", summary="取消进行中的配置管理员任务")
 async def package_search_cancel_endpoint(
     payload: PackageSearchCancelRequest,
     current_user=Depends(get_optional_user),
@@ -1057,7 +1070,7 @@ async def package_search_cancel_endpoint(
     return {"session_id": payload.session_id, "cancelled": True}
 
 
-@router.get("/package-search/result", summary="查询重构包检索任务状态/结果（轮询兜底）")
+@router.get("/package-search/result", summary="查询配置管理员任务状态/结果（轮询兜底）")
 async def package_search_result_endpoint(
     session_id: str = Query(..., description="对话会话 ID"),
     current_user=Depends(get_optional_user),

@@ -22,8 +22,12 @@ hand-rolled async generator that yields fake ``AssistantMessage`` /
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, List
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -328,6 +332,211 @@ def test_trace_emitter_receives_events(stub_service, stub_options, tmp_path):
         e.get("type") for e in result["trace_events"]
     ]
     assert seen[0]["type"] == "run_start"
+
+
+def test_agent_materializes_skills_layers_prompts_and_reuses_trace_seq(
+    stub_service,
+    monkeypatch,
+    tmp_path,
+):
+    from app.agents.log_analysis.trace import SeqCounter
+    from app.services import skills_service
+
+    ctx = _make_ctx(tmp_path, question="请制作整包")
+    Path(ctx.task_json_path).write_text(
+        json.dumps(
+            {
+                "question": "请制作整包",
+                "repo_info": {
+                    "project_code": PROJECT,
+                    "repo_url": "",
+                },
+                "packaging_requested": True,
+                "inputs_manifest": "package_inputs/manifest.json",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    shared_counter = SeqCounter()
+    assert shared_counter.next() == 1
+    assert shared_counter.next() == 2
+    ctx.metadata["trace_seq_counter"] = shared_counter
+
+    materialize = MagicMock(return_value=["full-package-build"])
+    overviews = MagicMock(
+        return_value=[
+            {
+                "name": "full-package-build",
+                "description": "分类并构建已确认的软件升级整包",
+            }
+        ]
+    )
+    monkeypatch.setattr(skills_service, "materialize_enabled_skills", materialize)
+    monkeypatch.setattr(skills_service, "enabled_skill_overviews", overviews)
+
+    captured: dict[str, str] = {}
+
+    def fake_build(
+        self,
+        *,
+        system_prompt,
+        project_code,
+        cwd,
+        endpoint=None,
+        clarification=None,
+    ):
+        captured["system_prompt"] = system_prompt
+        return object(), "fake-model", "fake-provider"
+
+    monkeypatch.setattr(PackageSearchAgent, "_build_options", fake_build)
+    agent = PackageSearchAgent()
+
+    async def fake_loop(self, prompt, options):
+        captured["user_prompt"] = prompt
+        yield _ResultMessage(
+            "```json\n"
+            '{"recommended_package_ids": [], "relevant_package_ids": []}\n'
+            "```"
+        )
+
+    agent._run_sdk_loop = fake_loop.__get__(agent, PackageSearchAgent)  # type: ignore[method-assign]
+    result = asyncio.run(agent.run(ctx))
+
+    materialize.assert_called_once_with(
+        "package_search",
+        ctx.temp_dir,
+        project_code=PROJECT,
+    )
+    overviews.assert_called_once_with(
+        "package_search",
+        project_code=PROJECT,
+        names=["full-package-build"],
+    )
+    assert "可用的 Skill（按需加载）" in captured["system_prompt"]
+    assert "可用的 Skill（按需加载）" in captured["user_prompt"]
+    assert "`full-package-build`：分类并构建已确认的软件升级整包" in (
+        captured["user_prompt"]
+    )
+    assert "整包打包安全边界（最高优先级）" in captured["system_prompt"]
+    assert "Bash（包括 shell、curl）" in captured["system_prompt"]
+    assert "未关联代码仓库" in captured["system_prompt"]
+
+    run_start = next(event for event in result["trace_events"] if event["type"] == "run_start")
+    skills_notice = next(
+        event
+        for event in result["trace_events"]
+        if event["type"] == "system_notice" and event.get("kind") == "skills_loaded"
+    )
+    assert run_start["seq"] == 3
+    assert run_start["loaded_skills"] == ["full-package-build"]
+    assert skills_notice["seq"] == 4
+    assert skills_notice["loaded_skills"] == ["full-package-build"]
+    assert result["loaded_skills"] == ["full-package-build"]
+    assert shared_counter.value == max(event["seq"] for event in result["trace_events"])
+
+
+def test_packaging_options_explicitly_disallow_side_effect_bypasses(
+    monkeypatch,
+    tmp_path,
+):
+    from app.agents.anthropic_client import PROVIDER_PROFILES
+    from app.agents.package_search.agent import (
+        ALLOWED_TOOLS,
+        PACKAGING_DISALLOWED_TOOLS,
+    )
+    from app.agents.package_search.package_builder_mcp import SDK_TOOL_NAME
+
+    Path(tmp_path / "task.json").write_text(
+        json.dumps(
+            {
+                "package_mode": "build",
+                "confirmed_plan_path": "package_plan/confirmed-plan.json",
+                "run_id": "run-1",
+                "session_id": "session-1",
+                "user_id": "user-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    skill_dir = tmp_path / ".claude" / "skills" / "full-package-build"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: full-package-build\ndescription: build\n---\nbody\n",
+        encoding="utf-8",
+    )
+
+    captured: dict[str, Any] = {}
+    sentinel = object()
+
+    def fake_build_options(**kwargs):
+        captured.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(
+        "app.agents.anthropic_client.build_options",
+        fake_build_options,
+    )
+    monkeypatch.setattr(
+        "app.agents.log_analysis.mcp_tools.get_mcp_server",
+        lambda: object(),
+    )
+    package_builder_server = object()
+    get_package_builder_server = MagicMock(return_value=package_builder_server)
+    monkeypatch.setattr(
+        "app.agents.package_search.mcp_tools.get_mcp_server",
+        lambda _project_code: object(),
+    )
+    monkeypatch.setattr(
+        "app.agents.package_search.package_builder_mcp.get_mcp_server",
+        get_package_builder_server,
+    )
+    endpoint = SimpleNamespace(
+        provider="anthropic",
+        profile=PROVIDER_PROFILES["anthropic"],
+        model="claude-test",
+    )
+
+    options, model, provider = PackageSearchAgent()._build_options(
+        system_prompt="system",
+        project_code=PROJECT,
+        cwd=str(tmp_path),
+        endpoint=endpoint,
+    )
+
+    assert options is sentinel
+    assert (model, provider) == ("claude-test", "anthropic")
+    assert set(PACKAGING_DISALLOWED_TOOLS) <= set(captured["disallowed_tools"])
+    assert set(PACKAGING_DISALLOWED_TOOLS).isdisjoint(captured["allowed_tools"])
+    assert "Skill" in captured["allowed_tools"]
+    assert SDK_TOOL_NAME in captured["allowed_tools"]
+    assert "Bash" in ALLOWED_TOOLS  # ordinary package search keeps Git access
+    assert {"Bash", "Write"} <= set(captured["disallowed_tools"])
+    assert captured["setting_sources"] == ["project"]
+    assert captured["mcp_servers"]["package_builder"] is package_builder_server
+    get_package_builder_server.assert_called_once_with(
+        str(tmp_path),
+        expected_run_id="run-1",
+        expected_session_id="session-1",
+        expected_user_id="user-1",
+    )
+
+
+@pytest.mark.parametrize(
+    ("task_data", "expected"),
+    [
+        ({"inputs_manifest": None}, False),
+        ({"inputs_manifest": "package_inputs/manifest.json"}, True),
+        ({"draft_plan_path": "package_plan/draft-plan.json"}, True),
+        ({"confirmed_plan": {"plan_hash": "abc"}}, True),
+        ({"package_plan": {"confirmed_path": "confirmed-plan.json"}}, True),
+        ({"packaging_requested": True}, True),
+    ],
+)
+def test_packaging_task_detection(task_data, expected):
+    from app.agents.package_search.agent import _is_packaging_task
+
+    assert _is_packaging_task(task_data) is expected
 
 
 def test_stream_yields_events_and_final(stub_service, stub_options, tmp_path):

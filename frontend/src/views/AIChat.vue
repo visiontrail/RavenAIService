@@ -41,6 +41,10 @@ import {
   resolveLogWorkspaceReplacementAction,
   type LogWorkspaceReplacementDecision,
 } from '@/utils/logWorkspaceReplacement'
+import {
+  configurationManagerRequiresProject,
+  mergeUniquePackageFiles,
+} from '@/utils/packageAttachments'
 
 type AgentOption = {
   id: string
@@ -121,6 +125,7 @@ const deviceMenuBtnRef = ref<HTMLElement | null>(null)
 const topMoreMenuRef = ref<HTMLElement | null>(null)
 const topMoreBtnRef = ref<HTMLElement | null>(null)
 const logFileInputRef = ref<HTMLInputElement | null>(null)
+const packageFileInputRef = ref<HTMLInputElement | null>(null)
 
 const devices = ref<DeviceInfo[]>([])
 const isLoadingDevices = ref(false)
@@ -132,6 +137,10 @@ const targetDeviceId = ref<string | null>(null)
 const targetDeviceName = ref<string | null>(null)
 const targetAgent = ref<AgentOption | null>(null)
 const selectedLogFiles = ref<File[]>([])
+// Component inputs are intentionally independent from log attachments: they
+// use a different multipart endpoint, skip log metadata checks, and route only
+// to the Configuration Manager.
+const selectedPackageFiles = ref<File[]>([])
 const isLogFileDragOver = ref(false)
 let logFileDragDepth = 0
 
@@ -357,6 +366,7 @@ const resetPanel = () => {
   targetDeviceName.value = null
   selectedProjectRepoId.value = null
   selectedLogFiles.value = []
+  selectedPackageFiles.value = []
   deviceMenuVisible.value = false
   nextTick(() => textareaRef.value?.focus())
 }
@@ -818,7 +828,9 @@ const filteredDeviceOptions = computed<DeviceInfo[]>(() => {
 })
 
 const targetAgentName = computed(() => targetAgent.value ? agentName(targetAgent.value) : null)
-const isPackageAgentSelected = computed(() => targetAgent.value?.agentType === 'package-manager')
+const isPackageAgentSelected = computed(() =>
+  targetAgent.value?.agentType === 'package-manager' || selectedPackageFiles.value.length > 0
+)
 const isProjectExpertAgentSelected = computed(() => targetAgent.value?.agentType === 'project-expert')
 const isLogAnalysisAgentSelected = computed(() =>
   targetAgent.value?.agentType === 'log-analysis' || selectedLogFiles.value.length > 0
@@ -829,13 +841,19 @@ const isProjectRepoSelectVisible = computed(() =>
 const isLogFileUploadDisabled = computed(() =>
   isPackageAgentSelected.value || isProjectExpertAgentSelected.value
 )
-// Project repo is mandatory for the project-bound agents (project expert and
-// package search); log analysis keeps it optional.
+// A pure Configuration Manager search remains project-bound. Packaging turns
+// with component files may start unbound so the Skill can infer candidates and
+// ask the human to confirm the authoritative project.
 const isProjectRepoRequired = computed(() =>
-  isProjectExpertAgentSelected.value || isPackageAgentSelected.value
+  isProjectExpertAgentSelected.value ||
+  (
+    isPackageAgentSelected.value &&
+    configurationManagerRequiresProject(selectedPackageFiles.value.length)
+  )
 )
-// 「未关联代码仓库」的项目仅项目专家可见；日志分析、包检索等 Agent 的项目
-// 下拉中需要按项目启用的 Agent 精确过滤。
+// Filter by each project's enabled Agent keys. Repository presence is not a
+// Configuration Manager requirement; its package catalog and repository
+// operations do not clone source code.
 const selectedProjectAgentKey = computed(() => {
   if (isProjectExpertAgentSelected.value) return 'project_expert'
   if (isPackageAgentSelected.value) return 'package_search'
@@ -847,7 +865,7 @@ const repoSupportsAgent = (repo: ProjectRepoOption, agentKey: string): boolean =
   if (Array.isArray(repo.enabled_agent_keys) && repo.enabled_agent_keys.length) {
     return repo.enabled_agent_keys.includes(agentKey)
   }
-  if (agentKey === 'project_expert') return true
+  if (agentKey === 'project_expert' || agentKey === 'package_search') return true
   return repo.has_repo !== false
 }
 
@@ -937,7 +955,12 @@ const logAnalysisMetadataError = computed(() => {
 const sendDisabled = computed(() =>
   !isLoggedIn.value ||
   isSending.value ||
-  (!inputMessage.value.trim() && !selectedLogFiles.value.length && !pendingImages.value.length) ||
+  (
+    !inputMessage.value.trim() &&
+    !selectedLogFiles.value.length &&
+    !selectedPackageFiles.value.length &&
+    !pendingImages.value.length
+  ) ||
   isProjectRepoRequiredMissing.value ||
   logAnalysisMetadataError.value
 )
@@ -1348,7 +1371,7 @@ const toggleDeviceMenu = () => {
 const selectDevice = (device: DeviceInfo) => {
   targetDeviceId.value = device.id
   targetDeviceName.value = device.name || device.id
-  // 设备操作与重构包 / 日志分析 Agent 互斥
+  // 设备操作与配置管理员 / 日志分析 Agent 互斥
   clearTargetAgent()
   selectedLogFiles.value = []
   deviceMenuVisible.value = false
@@ -1357,12 +1380,20 @@ const selectDevice = (device: DeviceInfo) => {
 const isDeviceSelected = computed(() => !!targetDeviceId.value)
 const clearTargetDevice = () => { targetDeviceId.value = null; targetDeviceName.value = null }
 const clearTargetAgent = () => {
+  if (targetAgent.value?.agentType === 'package-manager') {
+    selectedPackageFiles.value = []
+  }
   targetAgent.value = null
   selectedProjectRepoId.value = null
   saveAgentSelectionToState()
 }
 const clearSelectedLogFile = (file: File) => {
   selectedLogFiles.value = selectedLogFiles.value.filter(
+    (candidate) => candidate !== file,
+  )
+}
+const clearSelectedPackageFile = (file: File) => {
+  selectedPackageFiles.value = selectedPackageFiles.value.filter(
     (candidate) => candidate !== file,
   )
 }
@@ -1376,18 +1407,8 @@ const triggerLogFilePicker = () => {
 
 const selectLogFiles = (files: File[]) => {
   if (!files.length) return
-  const existing = new Set(
-    selectedLogFiles.value.map(
-      (file) => `${file.name}:${file.size}:${file.lastModified}`,
-    ),
-  )
-  const additions = files.filter((file) => {
-    const signature = `${file.name}:${file.size}:${file.lastModified}`
-    if (existing.has(signature)) return false
-    existing.add(signature)
-    return true
-  })
-  selectedLogFiles.value = [...selectedLogFiles.value, ...additions]
+  selectedPackageFiles.value = []
+  selectedLogFiles.value = mergeUniquePackageFiles(selectedLogFiles.value, files)
   setTargetAgent(logAnalysisAgentOption)
   ensureProjectRepoOptions()
 }
@@ -1395,6 +1416,32 @@ const selectLogFiles = (files: File[]) => {
 const handleLogFileChange = (event: Event) => {
   const input = event.target as HTMLInputElement
   selectLogFiles(Array.from(input.files || []))
+  input.value = ''
+}
+
+const triggerPackageFilePicker = () => {
+  if (isSending.value || isProjectExpertAgentSelected.value) return
+  setTargetAgent(packageAgentOption)
+  ensureProjectRepoOptions()
+  packageFileInputRef.value?.click()
+}
+
+const triggerAttachmentPicker = () => {
+  if (isPackageAgentSelected.value) triggerPackageFilePicker()
+  else triggerLogFilePicker()
+}
+
+const selectPackageFiles = (files: File[]) => {
+  if (!files.length) return
+  selectedLogFiles.value = []
+  selectedPackageFiles.value = mergeUniquePackageFiles(selectedPackageFiles.value, files)
+  setTargetAgent(packageAgentOption)
+  ensureProjectRepoOptions()
+}
+
+const handlePackageFileChange = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  selectPackageFiles(Array.from(input.files || []))
   input.value = ''
 }
 
@@ -1429,6 +1476,13 @@ const handleLogFileDrop = (event: DragEvent) => {
   if (isSending.value) return
   const files = Array.from(event.dataTransfer?.files || [])
   if (!files.length) return
+  // In Configuration Manager mode every dropped file is a component input,
+  // including formats that browsers report as images. The dedicated image
+  // picker remains available when visual/OCR context is intended instead.
+  if (isPackageAgentSelected.value) {
+    selectPackageFiles(files)
+    return
+  }
   const imageFiles = files.filter((f) => (f.type || '').startsWith('image/'))
   const otherFiles = files.filter((f) => !(f.type || '').startsWith('image/'))
   // Images attach under any agent, independent of the log-file restrictions.
@@ -1529,6 +1583,7 @@ const handleComposerPaste = (event: ClipboardEvent) => {
 
 const togglePackageAgent = () => {
   if (isPackageAgentSelected.value) {
+    selectedPackageFiles.value = []
     clearTargetAgent()
     return
   }
@@ -1544,6 +1599,7 @@ const toggleLogAnalysisAgent = () => {
     clearTargetAgent()
     return
   }
+  selectedPackageFiles.value = []
   setTargetAgent(logAnalysisAgentOption)
   ensureProjectRepoOptions()
 }
@@ -1554,6 +1610,7 @@ const toggleProjectExpertAgent = () => {
     return
   }
   selectedLogFiles.value = []
+  selectedPackageFiles.value = []
   setTargetAgent(projectExpertAgentOption)
   ensureProjectRepoOptions()
 }
@@ -1710,7 +1767,9 @@ const sendMessage = async () => {
   // background do not affect this one.
   if (currentConversation.value?.isSending) return
   const content = inputMessage.value.trim()
-  const filesForRequest = [...selectedLogFiles.value]
+  const logFilesForRequest = [...selectedLogFiles.value]
+  const packageFilesForRequest = [...selectedPackageFiles.value]
+  const pendingImagesForRecovery = [...pendingImages.value]
   const imagesForRequest: ChatImageAttachment[] = pendingImages.value.map((img) => ({
     media_type: img.mediaType,
     data: img.dataUrl,
@@ -1722,7 +1781,12 @@ const sendMessage = async () => {
     mediaType: img.mediaType,
     url: img.dataUrl,
   }))
-  if (!content && !filesForRequest.length && !imagesForRequest.length) return
+  if (
+    !content &&
+    !logFilesForRequest.length &&
+    !packageFilesForRequest.length &&
+    !imagesForRequest.length
+  ) return
 
   const shouldUseProjectExpertAgent =
     isProjectExpertAgentSelected.value || content.includes(`@${agentName(projectExpertAgentOption)}`)
@@ -1732,13 +1796,17 @@ const sendMessage = async () => {
     (
       isLogAnalysisAgentSelected.value
       || content.includes(`@${agentName(logAnalysisAgentOption)}`)
-      || filesForRequest.length > 0
+      || logFilesForRequest.length > 0
     )
 
   const shouldUsePackageAgent =
     !shouldUseProjectExpertAgent &&
     !shouldUseLogAnalysisAgent &&
-    (isPackageAgentSelected.value || content.includes(`@${agentName(packageAgentOption)}`))
+    (
+      isPackageAgentSelected.value ||
+      packageFilesForRequest.length > 0 ||
+      content.includes(`@${agentName(packageAgentOption)}`)
+    )
 
   const authToken = (userStore.token as unknown as string) || null
   if (authToken && userToken.isExpired(authToken)) {
@@ -1756,7 +1824,7 @@ const sendMessage = async () => {
     requiresConfirmation: requiresLogWorkspaceReplacementConfirmation({
       hasExistingLogWorkspace: Boolean(currentConversation.value?.hasLogWorkspaceContext),
       isLogAnalysisRequest: shouldUseLogAnalysisAgent,
-      logFileCount: filesForRequest.length,
+      logFileCount: logFilesForRequest.length,
     }),
     requestDecision: requestLogWorkspaceReplacementDecision,
     startNewConversation: startNewConversationWithLogDraft,
@@ -1789,15 +1857,29 @@ const sendMessage = async () => {
     setTargetAgent(packageAgentOption)
   }
 
-  // Project-bound agents (project expert / package search) cannot start
-  // without a project repo selection.
-  if ((shouldUseProjectExpertAgent || shouldUsePackageAgent) && selectedProjectRepoId.value === null) {
+  // Project Expert and pure Configuration Manager searches remain
+  // project-bound. Component-bearing packaging turns deliberately start
+  // unbound and confirm the inferred project through the mandatory card.
+  if (
+    (
+      shouldUseProjectExpertAgent ||
+      (
+        shouldUsePackageAgent &&
+        configurationManagerRequiresProject(packageFilesForRequest.length)
+      )
+    ) &&
+    selectedProjectRepoId.value === null
+  ) {
     ensureProjectRepoOptions()
     appStore.showNotification({ title: t('aiChat.notifications.selectProjectFirst'), type: 'warning' })
     return
   }
 
-  const outgoingContent = content || t('aiChat.defaultLogAnalysisMessage')
+  const outgoingContent = content || (
+    shouldUsePackageAgent
+      ? t('aiChat.defaultPackageBuildMessage')
+      : t('aiChat.defaultLogAnalysisMessage')
+  )
   // History payload only for anonymous sessions; logged-in sessions reuse
   // the DB transcript on the backend.
   const historyPayload = isLoggedIn.value
@@ -1829,7 +1911,7 @@ const sendMessage = async () => {
         { authToken },
       )
     } else if (shouldUseLogAnalysisAgent) {
-      const filesSnapshot = filesForRequest
+      const filesSnapshot = logFilesForRequest
       // Clear the files from the composer; startLogAnalysisRun will append the
       // user message with attachment info.
       if (filesSnapshot.length) selectedLogFiles.value = []
@@ -1852,21 +1934,33 @@ const sendMessage = async () => {
         throw err
       }
     } else if (shouldUsePackageAgent) {
-      // Package search agent — session-scoped run via the unified runs store
-      // pipeline (same start/cancel/resume contract as the project expert).
-      selectedLogFiles.value = []
-      await runsStore.startPackageSearchRun(
+      // Configuration Manager — component files are an independent optimistic
+      // attachment flow. Restore the untouched selection if stream creation or
+      // upload fails so the user can retry without choosing every file again.
+      selectedPackageFiles.value = []
+      const packageRunSucceeded = await runsStore.startPackageSearchRun(
         sid,
         {
           message: outgoingContent,
           history: historyPayload,
-          project_repo_id: selectedProjectRepoId.value as number,
+          project_repo_id: selectedProjectRepoId.value,
+          files: packageFilesForRequest,
           remember: true,
           images,
           imagePreviews,
         },
         { authToken },
       )
+      // The stream helper returns false for both transport failures and an
+      // HTTP-200 SSE error/cancelled terminal emitted during preprocessing.
+      if (!packageRunSucceeded) {
+        selectedPackageFiles.value = mergeUniquePackageFiles(
+          selectedPackageFiles.value,
+          packageFilesForRequest,
+        )
+        if (!inputMessage.value.trim()) inputMessage.value = content
+        if (!pendingImages.value.length) pendingImages.value = pendingImagesForRecovery
+      }
     } else {
       // DeviceAgent — fully delegated to the run store.
       await runsStore.startDeviceRun(
@@ -1889,6 +1983,14 @@ const sendMessage = async () => {
     }
   } catch (error: any) {
     console.error('Request failed', error)
+    if (shouldUsePackageAgent && packageFilesForRequest.length) {
+      selectedPackageFiles.value = mergeUniquePackageFiles(
+        selectedPackageFiles.value,
+        packageFilesForRequest,
+      )
+      if (!inputMessage.value.trim()) inputMessage.value = content
+      if (!pendingImages.value.length) pendingImages.value = pendingImagesForRecovery
+    }
   }
 }
 
@@ -2286,6 +2388,28 @@ const openShareModal = () => {
           </div>
         </div>
 
+        <div v-if="selectedPackageFiles.length" class="rw-file-strip">
+          <span class="rw-file-count">
+            {{ t('aiChat.packageAttachmentsSelected', { count: selectedPackageFiles.length }) }}
+          </span>
+          <div
+            v-for="file in selectedPackageFiles"
+            :key="`package:${file.name}:${file.size}:${file.lastModified}`"
+            class="rw-file-chip rw-file-chip--above"
+            :title="file.name"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg>
+            <span>{{ file.name }}</span>
+            <button
+              type="button"
+              :aria-label="t('aiChat.removeNamedAttachment', { name: file.name })"
+              @click="clearSelectedPackageFile(file)"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+            </button>
+          </div>
+        </div>
+
         <div v-if="pendingImages.length" class="rw-image-strip">
           <div v-for="img in pendingImages" :key="img.id" class="rw-image-thumb" :title="img.name">
             <img :src="img.dataUrl" :alt="img.name" />
@@ -2315,10 +2439,10 @@ const openShareModal = () => {
         <div class="rw-composer-row">
           <button
             class="rw-mini-btn"
-            :disabled="isLogFileUploadDisabled"
-            :title="isLogFileUploadDisabled ? t('aiChat.attachmentDisabled') : t('aiChat.attachLog')"
-            :aria-label="t('aiChat.attachLog')"
-            @click="triggerLogFilePicker"
+            :disabled="isProjectExpertAgentSelected"
+            :title="isProjectExpertAgentSelected ? t('aiChat.attachmentDisabled') : isPackageAgentSelected ? t('aiChat.attachPackageFiles') : t('aiChat.attachLog')"
+            :aria-label="isPackageAgentSelected ? t('aiChat.attachPackageFiles') : t('aiChat.attachLog')"
+            @click="triggerAttachmentPicker"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11.5-9.5 9.5a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5L9.5 18.5a2 2 0 0 1-3-3L15 7"/></svg>
           </button>
@@ -2329,6 +2453,13 @@ const openShareModal = () => {
             :accept="acceptedLogArchiveTypes"
             multiple
             @change="handleLogFileChange"
+          />
+          <input
+            ref="packageFileInputRef"
+            class="rw-file-input"
+            type="file"
+            multiple
+            @change="handlePackageFileChange"
           />
           <button
             class="rw-mini-btn"
@@ -2552,7 +2683,7 @@ const openShareModal = () => {
 
     <!-- AskUserQuestion clarification modal -->
     <div v-if="currentClarification" class="rw-modal-backdrop rw-hitl-backdrop">
-      <div class="rw-modal rw-hitl-modal">
+      <div class="rw-modal rw-hitl-modal rw-clarification-modal">
         <ClarificationCard
           :pending="currentClarification"
           @submit="submitClarificationAnswers"
@@ -3235,6 +3366,13 @@ html.dark .rw-composer-alert code {
   padding: 20px 22px;
   box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
   display: flex; flex-direction: column; gap: 14px;
+}
+.rw-hitl-modal.rw-clarification-modal {
+  width: min(720px, 94vw);
+  max-width: 720px;
+  max-height: calc(100vh - 32px);
+  padding: 0;
+  overflow: hidden;
 }
 .rw-hitl-risk {
   display: inline-block; padding: 1px 8px; border-radius: 999px;

@@ -103,3 +103,27 @@ def test_create_repoless_project_rejects_repo_bound_agent(client: TestClient) ->
     )
     assert resp.status_code == 422, resp.text
     assert "不能启用" in resp.json()["detail"]
+
+
+def test_create_repoless_project_allows_configuration_manager(
+    client: TestClient,
+) -> None:
+    resp = client.post(
+        "/admin/project-repos",
+        json={
+            "project_code": "config-only",
+            "project_name": "Config Only",
+            "project_card": "Configuration catalog without a code repository",
+            "repo_url": "",
+            "enabled_agent_keys": ["package_search"],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["data"]["enabled_agent_keys"] == ["package_search"]
+
+    listed = client.get(
+        "/api/v1/project-repos",
+        params={"agent_key": "package_search"},
+    )
+    assert listed.status_code == 200, listed.text
+    assert [item["project_code"] for item in listed.json()["data"]] == ["config-only"]

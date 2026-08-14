@@ -115,3 +115,16 @@ describe('announcement markdown renderer', () => {
     expect(html).toContain('Open')
   })
 })
+
+describe('conversation package download links', () => {
+  it('renders the existing Raven download route as a clickable link', () => {
+    const html = renderMarkdown(
+      '[下载整包](/raven/api/download/package-123)',
+    )
+
+    expect(html).toContain('href="/raven/api/download/package-123"')
+    expect(html).toContain('target="_blank"')
+    expect(html).toContain('rel="noopener noreferrer"')
+    expect(html).toContain('下载整包')
+  })
+})

@@ -45,8 +45,8 @@ PROMPT_FUNCTION_META: Dict[str, Dict[str, str]] = {
         "description": "Claude Agent SDK 驱动的项目源码问答提示词",
     },
     "claude_agent_package_search": {
-        "name": "重构包检索",
-        "description": "Claude Agent SDK 驱动的项目绑定重构包检索提示词",
+        "name": "配置管理员",
+        "description": "Claude Agent SDK 驱动的配置管理、整包构建与重构包检索提示词",
     },
     "claude_agent_general": {
         "name": "通用助手",
@@ -72,8 +72,8 @@ PROMPT_AGENT_META: Dict[Tuple[str, str], Dict[str, str]] = {
         "description": "面向已登记项目的源码答疑场景，按用户选择的项目仓库克隆代码并回答问题",
     },
     ("claude_agent_package_search", "generic"): {
-        "name": "重构包配置管理员",
-        "description": "面向所选项目的重构包检索场景，包元数据工具优先、必要时结合 Git 提交记录分析",
+        "name": "配置管理员",
+        "description": "通过 Skills 完成配置管理与整包构建，并支持项目范围内的重构包检索",
     },
     ("claude_agent_general", "generic"): {
         "name": "通用路由 Agent",

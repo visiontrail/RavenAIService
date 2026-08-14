@@ -42,16 +42,27 @@ describe('parseAgentMessage', () => {
     })
   })
 
-  it('supports the package-search completion wording', () => {
+  it('supports a Configuration Manager package-build summary and preserves its download link', () => {
     const view = parseAgentMessage([
-      '**重构包检索 Agent** 已完成本轮检索。',
+      '**配置管理员 Agent** 已完成本轮整包构建。',
       '',
+      '- 项目：`LX10`',
+      '- 整包：`LX10-V1.0.0.3.tgz`',
+      '- SHA-256：`0123456789abcdef`',
       '- 模型：`qwen-max`',
       '',
       '## 回答',
-      '找到两个结果。',
+      '整包已发布。',
+      '',
+      '[下载整包](/raven/api/download/package-123)',
     ].join('\n'))
-    expect(view.displayMarkdown).toBe('找到两个结果。')
+    expect(view.displayMarkdown).toContain('整包已发布。')
+    expect(view.displayMarkdown).toContain('[下载整包](/raven/api/download/package-123)')
+    expect(view.completionSummary?.title).toBe('配置管理员 Agent')
+    expect(view.completionSummary?.fields).toContainEqual({
+      label: '整包',
+      value: 'LX10-V1.0.0.3.tgz',
+    })
     expect(view.completionSummary?.model).toBe('qwen-max')
     expect(view.completionSummary?.duration).toBeUndefined()
   })

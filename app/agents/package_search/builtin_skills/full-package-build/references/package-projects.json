@@ -1,0 +1,551 @@
+{
+  "schema_version": "1.0",
+  "catalog_version": "2026.08.14-lx10.1",
+  "limits": {
+    "max_archive_members": 10000,
+    "max_extract_bytes": 2147483648
+  },
+  "projects": [
+    {
+      "project_code": "lingxi-10",
+      "label": "灵犀 10（LX10）",
+      "aliases": [
+        "lingxi-10",
+        "Lingxi 10",
+        "LX10",
+        "灵犀10",
+        "S-GNB"
+      ],
+      "packet_attr": 1001,
+      "patch_packet_attr": 1002,
+      "publisher": "yinhe",
+      "package_prefix": "GalaxySpace-Lx10",
+      "package_name_pattern": "{package_prefix}-V{numeric_version}{patch_suffix}-{confirmation_short}.tgz",
+      "package_version_pattern": "^\\d+\\.\\d+\\.\\d+\\.\\d+$",
+      "recognition": [
+        {
+          "field": "relative_path",
+          "pattern": "(?:LX10|lingxi[-_ ]?10|灵犀.?10|S-GNB)",
+          "weight": 40,
+          "reason": "相对路径包含 LX10/灵犀10 项目标识"
+        },
+        {
+          "field": "filename",
+          "pattern": "(?:lx10|gnb[-_]oam[-_]lx10|S-GNB|Satellite[_-]McpServer|yh5gc|S5GC|upf_bundle)",
+          "weight": 30,
+          "reason": "文件名符合 LX10 已知交付物命名"
+        }
+      ],
+      "prebuilt_recognition": [
+        {
+          "field": "archive_member",
+          "pattern": "(?:^|/)si\\.ini$",
+          "weight": 80,
+          "reason": "归档根或子目录已包含 si.ini，判定为预制升级包"
+        },
+        {
+          "field": "filename",
+          "pattern": "(?:GalaxySpace.*|Satellite[_-]McpServer.*-Patch)\\.(?:tgz|tar\\.gz)$",
+          "weight": 55,
+          "reason": "文件名符合预制整包/Patch 命名"
+        }
+      ],
+      "version_rules": [
+        {
+          "source": "relative_path",
+          "pattern": "LX10[-_ ]?V(?P<version>\\d+\\.\\d+\\.\\d+\\.\\d+)",
+          "transform": "dotted"
+        }
+      ],
+      "components": [
+        {
+          "component_key": "oam",
+          "label": "OAM",
+          "description": "LX10 OAM 服务",
+          "file_attr": 301,
+          "output_name": "gnb-oam-lx10",
+          "publishable": true,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "gnb[-_]oam[-_]lx10",
+              "weight": 55,
+              "reason": "文件名包含 gnb-oam-lx10"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)gnb-oam-lx10$",
+              "weight": 80,
+              "reason": "归档内存在 OAM 可执行文件 gnb-oam-lx10"
+            }
+          ],
+          "version_rules": [
+            {
+              "source": "filename",
+              "pattern": "[Vv](?P<version>\\d{4})(?!\\d)",
+              "transform": "compact_decimal"
+            }
+          ],
+          "materialization": {
+            "type": "extract_match",
+            "patterns": [
+              "(?:^|/)gnb-oam-lx10$"
+            ],
+            "exclude_patterns": []
+          }
+        },
+        {
+          "component_key": "cucp",
+          "label": "CUCP 协议栈",
+          "description": "S-GNB CU 控制面 Debian 包",
+          "file_attr": 302,
+          "output_name": "cucp.deb",
+          "publishable": true,
+          "classification_threshold": 50,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "S-GNB",
+              "weight": 25,
+              "reason": "源文件名为 S-GNB 协议栈集合"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)gnb_cucp-[^/]+\\.deb$",
+              "weight": 85,
+              "reason": "归档内存在 gnb_cucp Debian 载荷"
+            }
+          ],
+          "version_rules": [
+            {
+              "source": "archive_member",
+              "pattern": "gnb_cucp-(?P<version>\\d+\\.\\d+\\.\\d+\\.\\d+)-(?P<timestamp>\\d{12})",
+              "transform": "dotted_timestamp"
+            }
+          ],
+          "materialization": {
+            "type": "extract_match",
+            "patterns": [
+              "(?:^|/)gnb_cucp-[^/]+\\.deb$"
+            ],
+            "exclude_patterns": [
+              "\\.md5$"
+            ]
+          }
+        },
+        {
+          "component_key": "sct_fpga",
+          "label": "SCT FPGA Master",
+          "description": "SCT 主 FPGA 镜像",
+          "file_attr": 303,
+          "output_name": "sct.bin",
+          "publishable": true,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "sct[_-]10[_-]master",
+              "weight": 60,
+              "reason": "文件名符合 SCT master 构建"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)sct_top\\.bin$",
+              "weight": 75,
+              "reason": "归档内存在 sct_top.bin"
+            }
+          ],
+          "version_rules": [
+            {
+              "source": "filename",
+              "pattern": "[Vv](?P<version>[0-9A-Fa-f]{8})(?![0-9A-Fa-f])",
+              "transform": "hex_bytes"
+            }
+          ],
+          "materialization": {
+            "type": "extract_match",
+            "patterns": [
+              "(?:^|/)sct_top\\.bin$"
+            ],
+            "exclude_patterns": []
+          }
+        },
+        {
+          "component_key": "cuup",
+          "label": "CUUP 协议栈",
+          "description": "S-GNB CU 用户面 Debian 包",
+          "file_attr": 307,
+          "output_name": "cuup.deb",
+          "publishable": true,
+          "classification_threshold": 50,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "S-GNB",
+              "weight": 25,
+              "reason": "源文件名为 S-GNB 协议栈集合"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)gnb_cuup-[^/]+\\.deb$",
+              "weight": 85,
+              "reason": "归档内存在 gnb_cuup Debian 载荷"
+            }
+          ],
+          "version_rules": [
+            {
+              "source": "archive_member",
+              "pattern": "gnb_cuup-(?P<version>\\d+\\.\\d+\\.\\d+\\.\\d+)-(?P<timestamp>\\d{12})",
+              "transform": "dotted_timestamp"
+            }
+          ],
+          "materialization": {
+            "type": "extract_match",
+            "patterns": [
+              "(?:^|/)gnb_cuup-[^/]+\\.deb$"
+            ],
+            "exclude_patterns": [
+              "\\.md5$"
+            ]
+          }
+        },
+        {
+          "component_key": "du",
+          "label": "DU 协议栈",
+          "description": "S-GNB DU Debian 包",
+          "file_attr": 308,
+          "output_name": "du.deb",
+          "publishable": true,
+          "classification_threshold": 50,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "S-GNB",
+              "weight": 25,
+              "reason": "源文件名为 S-GNB 协议栈集合"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)gnb_du-[^/]+\\.deb$",
+              "weight": 85,
+              "reason": "归档内存在 gnb_du Debian 载荷"
+            }
+          ],
+          "version_rules": [
+            {
+              "source": "archive_member",
+              "pattern": "gnb_du-(?P<version>\\d+\\.\\d+\\.\\d+\\.\\d+)-(?P<timestamp>\\d{12})",
+              "transform": "dotted_timestamp"
+            }
+          ],
+          "materialization": {
+            "type": "extract_match",
+            "patterns": [
+              "(?:^|/)gnb_du-[^/]+\\.deb$"
+            ],
+            "exclude_patterns": [
+              "\\.md5$"
+            ]
+          }
+        },
+        {
+          "component_key": "bpoka100",
+          "label": "BPO KA100 FPGA",
+          "description": "BPO master 的 KA100 解释（需人工选择）",
+          "file_attr": 313,
+          "output_name": "bpoka100.bin",
+          "publishable": true,
+          "ambiguous_group": "bpo-master-313-or-315",
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "bb[_-]10[_-]master",
+              "weight": 55,
+              "reason": "BPO master 文件名不能区分 FileAttr 313/315"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)xy_gnb_bpo_top\\.bin$",
+              "weight": 70,
+              "reason": "归档内只有通用 xy_gnb_bpo_top.bin，仍存在 313/315 歧义"
+            }
+          ],
+          "version_rules": [
+            {
+              "source": "filename",
+              "pattern": "[Vv](?P<version>[0-9A-Fa-f]{8})(?![0-9A-Fa-f])",
+              "transform": "hex_bytes"
+            }
+          ],
+          "materialization": {
+            "type": "extract_match",
+            "patterns": [
+              "(?:^|/)xy_gnb_bpo_top\\.bin$"
+            ],
+            "exclude_patterns": []
+          }
+        },
+        {
+          "component_key": "bpodvb_fpga",
+          "label": "BPO DVB FPGA",
+          "description": "BPO master 的 DVB 解释（需人工选择）",
+          "file_attr": 315,
+          "output_name": "bpodvb.bin",
+          "publishable": true,
+          "ambiguous_group": "bpo-master-313-or-315",
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "bb[_-]10[_-]master",
+              "weight": 55,
+              "reason": "BPO master 文件名不能区分 FileAttr 313/315"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)xy_gnb_bpo_top\\.bin$",
+              "weight": 70,
+              "reason": "归档内只有通用 xy_gnb_bpo_top.bin，仍存在 313/315 歧义"
+            }
+          ],
+          "version_rules": [
+            {
+              "source": "filename",
+              "pattern": "[Vv](?P<version>[0-9A-Fa-f]{8})(?![0-9A-Fa-f])",
+              "transform": "hex_bytes"
+            }
+          ],
+          "materialization": {
+            "type": "extract_match",
+            "patterns": [
+              "(?:^|/)xy_gnb_bpo_top\\.bin$"
+            ],
+            "exclude_patterns": []
+          }
+        },
+        {
+          "component_key": "galaxy_core_network",
+          "label": "银河核心网",
+          "description": "银河 5GC 原始交付归档",
+          "file_attr": 401,
+          "output_name": "galaxy_core_network.tgz",
+          "publishable": true,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "^yh5gc[_-]V",
+              "weight": 90,
+              "reason": "文件名符合 yh5gc 银河核心网交付物"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)open5gs-amfd$",
+              "weight": 45,
+              "reason": "归档含银河 Open5GS AMF 载荷"
+            }
+          ],
+          "materialization": {
+            "type": "direct_include"
+          }
+        },
+        {
+          "component_key": "satellite_app_server",
+          "label": "卫星应用服务器",
+          "description": "卫星应用服务器归档",
+          "file_attr": 403,
+          "output_name": "satellite_app_server.tgz",
+          "publishable": true,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "satellite[_-]app[_-]server",
+              "weight": 85,
+              "reason": "文件名明确标识 satellite app server"
+            }
+          ],
+          "materialization": {
+            "type": "direct_include"
+          }
+        },
+        {
+          "component_key": "pengcheng_core_amf",
+          "label": "鹏城核心网 AMF",
+          "description": "鹏城 S5GC 归档",
+          "file_attr": 404,
+          "output_name": "pengcheng_core_amf.tgz",
+          "publishable": true,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "^S5GC[-_]V",
+              "weight": 90,
+              "reason": "文件名符合鹏城 S5GC 交付物"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)5gc/bin/s5gc$",
+              "weight": 45,
+              "reason": "归档内存在鹏城 s5gc 主程序"
+            }
+          ],
+          "materialization": {
+            "type": "direct_include"
+          }
+        },
+        {
+          "component_key": "pengcheng_core_upf",
+          "label": "鹏城核心网 UPF",
+          "description": "鹏城 UPF bundle 归档",
+          "file_attr": 405,
+          "output_name": "pengcheng_core_upf.tgz",
+          "publishable": true,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "^upf_bundle[_-]",
+              "weight": 90,
+              "reason": "文件名符合鹏城 UPF bundle"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)bin/open5gs-upfd$",
+              "weight": 45,
+              "reason": "归档内存在 open5gs-upfd"
+            }
+          ],
+          "version_rules": [
+            {
+              "source": "filename",
+              "pattern": "(?P<major>\\d+)_(?P<minor>\\d+)",
+              "transform": "template",
+              "template": "V{major}.{minor}.0.0"
+            }
+          ],
+          "materialization": {
+            "type": "direct_include"
+          }
+        },
+        {
+          "component_key": "pengcheng_core_scripts",
+          "label": "鹏城核心网脚本",
+          "description": "鹏城部署和升级脚本归档",
+          "file_attr": 406,
+          "output_name": "pengcheng_core_scripts.tgz",
+          "publishable": true,
+          "classification_threshold": 70,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "^script\\.tgz$",
+              "weight": 55,
+              "reason": "文件名为鹏城脚本交付物 script.tgz"
+            },
+            {
+              "field": "relative_path",
+              "pattern": "鹏城核心网",
+              "weight": 40,
+              "reason": "相对路径位于鹏城核心网目录"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)xw_5gc_update_config\\.sh$",
+              "weight": 50,
+              "reason": "归档内存在鹏城 5GC 升级脚本"
+            }
+          ],
+          "materialization": {
+            "type": "direct_include"
+          }
+        },
+        {
+          "component_key": "satellite_mcp_server",
+          "label": "Satellite MCP Server",
+          "description": "卫星 MCP 服务归档（LX10 新增 FileAttr 801）",
+          "file_attr": 801,
+          "output_name": "satellite_mcp_server.tgz",
+          "publishable": true,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "^Satellite[_-]McpServer[_-]",
+              "weight": 75,
+              "reason": "文件名明确标识 Satellite MCP Server 原始归档"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)Satellite_McpServer/(?:run_docker\\.sh|requirements_http\\.txt)$",
+              "weight": 60,
+              "reason": "归档内包含 Satellite_McpServer 服务结构"
+            }
+          ],
+          "materialization": {
+            "type": "direct_include"
+          }
+        },
+        {
+          "component_key": "sct_sf2",
+          "label": "SCT SF2 工程",
+          "description": "仅识别；缺少正式 FileAttr 与升级器目标格式",
+          "publishable": false,
+          "recognition_only": true,
+          "classification_threshold": 70,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "sct[_-]sf2",
+              "weight": 75,
+              "reason": "文件名表明这是 SCT SF2 工程，而非已配置的 sct.bin"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)SF2_TOP\\.(?:job|pdb)$",
+              "weight": 60,
+              "reason": "归档成员是 SF2 工程文件，默认 catalog 不发布"
+            }
+          ]
+        },
+        {
+          "component_key": "bpo_sf2",
+          "label": "BPO SF2 工程",
+          "description": "仅识别；缺少正式 FileAttr 与升级器目标格式",
+          "publishable": false,
+          "recognition_only": true,
+          "classification_threshold": 70,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "bpo[_-]sf2",
+              "weight": 75,
+              "reason": "文件名表明这是 BPO SF2 工程"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)SF2_TOP\\.(?:job|pdb)$",
+              "weight": 50,
+              "reason": "归档成员是 SF2 工程文件，默认 catalog 不发布"
+            }
+          ]
+        },
+        {
+          "component_key": "sct_m3",
+          "label": "SCT M3 固件",
+          "description": "仅识别；缺少正式 FileAttr 与升级器目标格式",
+          "publishable": false,
+          "recognition_only": true,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "^SF2_SCT\\.bin$",
+              "weight": 75,
+              "reason": "文件名符合样例 SCT M3 固件"
+            },
+            {
+              "field": "relative_path",
+              "pattern": "(?:^|[/\\\\])m3(?:[/\\\\]|$)",
+              "weight": 45,
+              "reason": "文件位于 m3 目录，默认 catalog 仅识别"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

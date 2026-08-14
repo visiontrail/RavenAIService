@@ -43,10 +43,10 @@ PROJECT_AGENT_REGISTRY: Dict[str, Dict[str, Any]] = {
     "package_search": {
         "key": "package_search",
         "name": "PackageSearchAgent",
-        "display_name": "重构包配置管理员",
+        "display_name": "配置管理员",
         "framework": "Claude Agent SDK",
-        "requires_repo": True,
-        "description": "在项目范围内检索重构包、版本资产与配置线索",
+        "requires_repo": False,
+        "description": "通过 Skills 管理项目配置、构建整包并检索重构包资产",
     },
 }
 
@@ -71,8 +71,8 @@ def has_repo(repo: Optional[ProjectRepo]) -> bool:
     """项目是否关联了代码仓库。
 
     repo_url 为空（NULL 或纯空白）表示「未关联代码仓库」的项目。
-    此类项目仅对项目专家（Project Expert）可见，对日志分析、包检索等
-    其它 Agent 不可见。
+    此类项目仍可用于项目专家与配置管理员；只有声明 ``requires_repo`` 的
+    Agent（当前为日志分析）会过滤掉它们。
     """
     if repo is None:
         return False
@@ -192,8 +192,8 @@ async def get_by_project_code(
 
     Args:
         require_repo: 为 ``True`` 时，未关联代码仓库（repo_url 为空）的项目视为
-            不存在，返回 ``None``。日志分析、包检索等非项目专家的 Agent 应传
-            ``True``，从而对「未关联代码仓库」的项目不可见。
+            不存在，返回 ``None``。日志分析应传 ``True``；项目专家与配置管理员
+            应传 ``False``，因为两者都支持无仓库项目。
     """
     normalized = _normalize_code(code)
     result = await db.execute(
@@ -346,7 +346,7 @@ async def create(
     enabled: bool = True,
 ) -> ProjectRepo:
     now = datetime.utcnow()
-    # repo_url 允许为空：表示「未关联代码仓库」的项目（仅对项目专家可见）。
+    # repo_url 允许为空：表示「未关联代码仓库」的项目（项目专家与配置管理员可见）。
     # 未关联仓库时不应保存 git_token。
     normalized_url = (repo_url or "").strip()
     repo = ProjectRepo(

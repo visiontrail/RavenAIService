@@ -40,4 +40,21 @@ describe('Frontend catalog parity', () => {
   it('catalogs have identical key counts', () => {
     expect(enKeys.size).toBe(zhKeys.size)
   })
+
+  it('uses the Configuration Manager product name consistently', () => {
+    const zhCatalog = zh as any
+    const enCatalog = en as any
+
+    expect(zhCatalog.aiChat.agents.packageManager).toBe('配置管理员')
+    expect(zhCatalog.aiChat.capabilities.package.label).toBe('配置管理员')
+    expect(zhCatalog.admin.prompts.metadata.projectAgents.package_search.name).toBe('配置管理员')
+    expect(JSON.stringify(zh)).not.toMatch(/重构包配置管理员|重构包检索|检索重构包/)
+
+    expect(enCatalog.aiChat.agents.packageManager).toBe('Configuration Manager')
+    expect(enCatalog.aiChat.capabilities.package.label).toBe('Configuration Manager')
+    expect(enCatalog.admin.prompts.metadata.projectAgents.package_search.name).toBe('Configuration Manager')
+    expect(JSON.stringify(en)).not.toMatch(
+      /Package Search|Package Configuration Manager|Package Config Manager/i,
+    )
+  })
 })

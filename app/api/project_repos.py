@@ -42,7 +42,7 @@ async def list_enabled_project_repos(
         default=None,
         description=(
             "为 true 仅返回已关联代码仓库的项目；为 false 仅返回未关联的项目；"
-            "不传返回全部。未关联代码仓库的项目仅项目专家可见。"
+            "不传返回全部。未关联代码仓库的项目可供项目专家和配置管理员使用。"
         ),
     ),
     agent_key: Optional[str] = Query(
@@ -56,9 +56,9 @@ async def list_enabled_project_repos(
 ) -> ProjectRepoOptionListResponse:
     """列出所有已启用的项目（仅返回展示用字段）。
 
-    通过 ``with_repo`` 过滤是否关联代码仓库：日志分析、包检索等 Agent 应传
-    ``with_repo=true``，从而对「未关联代码仓库」的项目不可见；项目专家则可
-    看到全部项目。``has_repo`` 字段也会一并返回，便于前端按所选 Agent 过滤。
+    通过 ``with_repo`` 过滤是否关联代码仓库：日志分析应传 ``with_repo=true``，
+    从而对「未关联代码仓库」的项目不可见；项目专家与配置管理员可看到全部项目。
+    ``has_repo`` 字段也会一并返回，便于前端按所选 Agent 过滤。
     """
     requested_agent = (agent_key or "").strip()
     if requested_agent and requested_agent not in project_repo_service.PROJECT_AGENT_REGISTRY:

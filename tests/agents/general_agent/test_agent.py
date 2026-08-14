@@ -219,7 +219,7 @@ async def test_system_prompt_contains_key_guidance():
     assert "Raven AI" in system_prompt
     assert "设备操作" in system_prompt
     assert "日志分析" in system_prompt
-    assert "检索包" in system_prompt
+    assert "配置管理员" in system_prompt
     assert "项目专家" in system_prompt
     # The structured marker contract must be described to the model.
     assert "SUGGESTED_AGENT" in system_prompt
@@ -405,7 +405,7 @@ class TestExtractSuggestedAgent:
 async def test_run_stream_emits_suggested_agent(monkeypatch):
     """A B-class answer with a marker surfaces suggested_agent_type and a clean body."""
     fake_query = _fake_query_factory(
-        "该需求需要使用「检索包」，请先在上方选择对应 Agent。\n[[SUGGESTED_AGENT:package_search]]"
+        "该需求需要使用「配置管理员」，请先在上方选择对应 Agent。\n[[SUGGESTED_AGENT:package_search]]"
     )
     monkeypatch.setattr("claude_agent_sdk.query", fake_query)
     monkeypatch.setattr("app.config.settings.anthropic_provider", "anthropic")

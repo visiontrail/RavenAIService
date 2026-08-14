@@ -82,9 +82,9 @@ def test_extract_prompt_entries_uses_package_search_display_names():
     assert len(entries) == 1
     entry = entries[0]
     assert entry["function_key"] == "claude_agent_package_search"
-    assert entry["function_name"] == "重构包检索"
+    assert entry["function_name"] == "配置管理员"
     assert entry["agent_key"] == "generic"
-    assert entry["agent_name"] == "重构包配置管理员"
+    assert entry["agent_name"] == "配置管理员"
     assert entry["prompt_label"] == "系统提示词 (zh)"
     assert entry["locale"] == "zh"
 

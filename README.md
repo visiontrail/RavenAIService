@@ -175,7 +175,7 @@ RavenAIService/
 │   │   ├── device_agent/        #   device operation integration
 │   │   ├── project_expert/      #   code repository Q&A
 │   │   ├── bug_fix/             #   bug fix suggestions
-│   │   └── package_search/      #   software package search
+│   │   └── package_search/      #   Skill-driven configuration manager / package build & search
 │   ├── middleware/              # request logging, file size limits, etc.
 │   ├── models/                  # SQLAlchemy and Pydantic models
 │   ├── services/                # service layer

@@ -107,9 +107,22 @@ export interface ProjectExpertResultResponse {
   result?: Record<string, unknown> | null
 }
 
-// Package-search chat shares the project-expert wire contract: multipart
-// stream start (project repo mandatory), session-scoped cancel, result poll.
-export type PackageSearchStreamPayload = ProjectExpertStreamPayload
+// The Configuration Manager uses the same multipart stream lifecycle as the
+// project expert, but packaging turns may start unbound when component files
+// are attached. The backend infers project candidates before mandatory human
+// confirmation, so ``projectRepoId`` is optional only on this wire contract.
+export interface PackageSearchStreamPayload {
+  message: string
+  sessionId: string
+  history?: { role: string; content: string }[]
+  remember?: boolean
+  projectRepoId?: number | null
+  /** Component inputs are repeated multipart ``files`` fields. */
+  files?: File[]
+  images?: ChatImageAttachment[]
+  authToken?: string | null
+  signal?: AbortSignal
+}
 export type PackageSearchCancelResponse = ProjectExpertCancelResponse
 export type PackageSearchResultResponse = ProjectExpertResultResponse
 
@@ -234,8 +247,11 @@ export const packageSearchStream = (payload: PackageSearchStreamPayload): Promis
   formData.append('message', payload.message || '')
   formData.append('session_id', payload.sessionId)
   formData.append('remember', String(payload.remember ?? true))
-  formData.append('project_repo_id', String(payload.projectRepoId))
+  if (payload.projectRepoId != null) {
+    formData.append('project_repo_id', String(payload.projectRepoId))
+  }
   if (payload.history) formData.append('history', JSON.stringify(payload.history))
+  for (const file of payload.files || []) formData.append('files', file)
   if (payload.images && payload.images.length) formData.append('images', JSON.stringify(payload.images))
 
   const headers: Record<string, string> = { [LOCALE_HEADER]: getActiveLocale() }

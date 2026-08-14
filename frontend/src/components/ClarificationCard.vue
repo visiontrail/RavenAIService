@@ -8,7 +8,12 @@
       </div>
     </div>
 
-    <div class="rw-clarify-body">
+    <div
+      class="rw-clarify-body"
+      role="group"
+      tabindex="0"
+      :aria-label="t('aiChat.clarification.questionsLabel', { count: pending.questions.length })"
+    >
       <div
         v-for="(q, qi) in pending.questions"
         :key="qi"
@@ -92,9 +97,13 @@ const toggleOption = (qi: number, label: string, multi?: boolean): void => {
   border-radius: 12px;
   background: var(--rw-canvas, #fff);
   overflow: hidden;
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
 }
 .rw-clarify-head {
   display: flex;
+  flex: 0 0 auto;
   gap: 12px;
   align-items: flex-start;
   padding: 14px 16px;
@@ -103,7 +112,17 @@ const toggleOption = (qi: number, label: string, multi?: boolean): void => {
 .rw-clarify-icon { width: 20px; height: 20px; flex-shrink: 0; color: var(--rw-accent, #4f46e5); margin-top: 2px; }
 .rw-clarify-title { font-size: 15px; font-weight: 600; margin: 0; color: var(--rw-ink, #171717); }
 .rw-clarify-sub { font-size: 12px; margin: 2px 0 0; color: var(--rw-ink-soft, #6b7280); }
-.rw-clarify-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 18px; }
+.rw-clarify-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
 .rw-clarify-q { display: flex; flex-direction: column; gap: 8px; }
 .rw-clarify-q-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .rw-clarify-chip {
@@ -135,6 +154,7 @@ const toggleOption = (qi: number, label: string, multi?: boolean): void => {
 .rw-clarify-error { font-size: 12px; color: var(--rw-danger, #dc2626); }
 .rw-clarify-actions {
   display: flex; justify-content: flex-end;
+  flex: 0 0 auto;
   padding: 12px 16px;
   border-top: 1px solid var(--rw-hairline, #e5e5e5);
 }

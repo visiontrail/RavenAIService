@@ -25,6 +25,16 @@ Project Skills 存储布局：
             └── <skill_name>/
                 ├── SKILL.md
                 └── ...
+
+Built-in Skills（源码内置、只读）布局：
+    app/agents/<agent_key>/builtin_skills/
+    └── <skill_name>/
+        ├── SKILL.md
+        └── ...
+
+运行时合并优先级固定为 built-in → Agent → project；同名 Skill 由后层
+覆盖前层。overview 与 materialization 共享同一份合并源，避免提示词宣告
+的 Skill 与实际物化内容不一致。
 """
 
 from __future__ import annotations
@@ -69,6 +79,12 @@ SUPPORTED_AGENTS: Dict[str, Dict[str, str]] = {
         "name": "GeneralAgent",
         "framework": "Claude Agent SDK",
         "description": "基于轻量模型的系统使用说明与 Agent/项目路由智能体（默认对话入口）",
+    },
+    "package_search": {
+        "key": "package_search",
+        "name": "PackageSearchAgent",
+        "framework": "Claude Agent SDK",
+        "description": "可通过 Skills 扩展的软件配置与重构包管理智能体（配置管理员）",
     },
 }
 
@@ -294,6 +310,75 @@ def _parse_skill_frontmatter(skill_md_path: Path) -> Dict[str, str]:
             f"SKILL.md name='{result['name']}' 非法，只允许字母/数字/下划线/连字符，最长 64"
         )
     return result
+
+
+# ─────────────────────── Built-in Skill discovery ─────────────────
+
+
+def _builtin_skills_root(agent_key: str) -> Path:
+    """Return the read-only source tree that ships with an Agent.
+
+    The agent key is validated even when no built-in directory exists so the
+    public overview/materialization APIs preserve their UnknownAgentError
+    contract.
+    """
+    if agent_key not in SUPPORTED_AGENTS:
+        raise UnknownAgentError(f"Unknown agent_key: {agent_key}")
+    app_root = Path(__file__).resolve().parents[1]
+    return app_root / "agents" / agent_key / "builtin_skills"
+
+
+def _builtin_enabled_entries(
+    agent_key: str,
+) -> List[Tuple[Dict[str, Any], Path]]:
+    """Discover valid source-controlled Skills for ``agent_key``.
+
+    Built-ins are always enabled and cannot be mutated through the uploaded
+    Skill registry APIs. A malformed source package is skipped with a warning
+    so one bad optional Skill cannot prevent unrelated Agent runs from starting.
+    """
+    root = _builtin_skills_root(agent_key)
+    if not root.is_dir():
+        return []
+
+    entries: List[Tuple[Dict[str, Any], Path]] = []
+    for skill_dir in sorted(root.iterdir(), key=lambda path: path.name.lower()):
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_dir.is_dir() or not skill_md.is_file():
+            continue
+        try:
+            frontmatter = _parse_skill_frontmatter(skill_md)
+        except (OSError, SkillValidationError) as exc:
+            logger.warning(
+                "invalid built-in skill skipped: agent=%s path=%s error=%s",
+                agent_key,
+                skill_dir,
+                exc,
+            )
+            continue
+        name = frontmatter["name"]
+        if name != skill_dir.name:
+            logger.warning(
+                "built-in skill directory/name mismatch skipped: agent=%s dir=%s name=%s",
+                agent_key,
+                skill_dir.name,
+                name,
+            )
+            continue
+        entries.append(
+            (
+                {
+                    "id": name,
+                    "name": name,
+                    "description": frontmatter.get("description", ""),
+                    "enabled": True,
+                    "source": "built-in",
+                    "dir_name": skill_dir.name,
+                },
+                skill_dir,
+            )
+        )
+    return entries
 
 
 # ─────────────────────── Zip 解包与校验 ────────────────────────────
@@ -755,11 +840,28 @@ def read_project_skill_file(project_code: str, skill_id: str, rel_path: str) -> 
 
 # ─────────────────────── Project enabled entries ─────────────────
 
+
 def _project_enabled_entries(project_code: str) -> List[Dict[str, Any]]:
     return _base_enabled_entries(_project_root(project_code))
 
 
 # ─────────────────────── Overviews & Materialization ──────────────
+
+
+def _enabled_skill_sources(
+    agent_key: str,
+    *,
+    project_code: Optional[str] = None,
+) -> Iterable[Tuple[Dict[str, Any], Path]]:
+    """Yield enabled Skill entries in their authoritative precedence order."""
+    yield from _builtin_enabled_entries(agent_key)
+    for entry in _enabled_entries(agent_key):
+        yield entry, _skill_dir_for_entry(agent_key, entry)
+    if project_code:
+        project_root = _project_root(project_code)
+        for entry in _project_enabled_entries(project_code):
+            yield entry, _base_skill_dir_for_entry(project_root, entry)
+
 
 def enabled_skill_overviews(
     agent_key: str,
@@ -769,8 +871,8 @@ def enabled_skill_overviews(
 ) -> List[Dict[str, str]]:
     """Return name/description pairs for the combined enabled skill pool.
 
-    Mirrors the materialization order (agent skills first, project skills
-    override on name conflict) so agents can advertise exactly what was
+    Mirrors the materialization order (built-in, Agent, then project; later
+    layers override on name conflict) so agents advertise exactly what was
     materialized. ``names`` optionally restricts the result to a subset.
     """
     wanted = {str(n) for n in names} if names is not None else None
@@ -785,11 +887,11 @@ def enabled_skill_overviews(
             order.append(name)
         merged[name] = str(entry.get("description") or "")
 
-    for entry in _enabled_entries(agent_key):
+    for entry, _source in _enabled_skill_sources(
+        agent_key,
+        project_code=project_code,
+    ):
         _add(entry)
-    if project_code:
-        for entry in _project_enabled_entries(project_code):
-            _add(entry)
     return [{"name": name, "description": merged[name]} for name in order]
 
 
@@ -829,19 +931,15 @@ def materialize_enabled_skills(
         if name not in materialized:
             materialized.append(name)
 
-    # Agent skills first
-    for entry in _enabled_entries(agent_key):
+    # built-in → Agent → project; every later same-name source overwrites the
+    # previously materialized directory while preserving the stable name order.
+    for entry, source in _enabled_skill_sources(
+        agent_key,
+        project_code=project_code,
+    ):
         name = entry["name"]
         if selected_names is not None and name not in selected_names:
             continue
-        _link_skill(name, _skill_dir_for_entry(agent_key, entry))
-
-    # Project skills second — overwrite on name conflict
-    if project_code:
-        for entry in _project_enabled_entries(project_code):
-            name = entry["name"]
-            if selected_names is not None and name not in selected_names:
-                continue
-            _link_skill(name, _base_skill_dir_for_entry(_project_root(project_code), entry))
+        _link_skill(name, source)
 
     return materialized

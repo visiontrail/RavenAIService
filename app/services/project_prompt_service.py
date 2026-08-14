@@ -4,8 +4,8 @@ Project 级系统提示词管理服务。
 让系统提示词也能像 Skill 一样分级处理：
 
 - **Agent 级（基础层）**：来自 ``prompts_config.yaml``，按 agent + locale 选择。
-  日志分析与重构包配置管理员的基础提示词**自带**代码仓库工作流（这两个 Agent
-  必须能克隆仓库）；只有项目专家的基础提示词是**通用、与代码无关**的。
+  日志分析的基础提示词自带代码仓库工作流；项目专家与配置管理员都允许无仓库
+  项目，可通过项目提示词、Skills 和用户上下文工作。
 - **Project 级（追加层）**：针对单个 ``project_code`` 追加的系统提示词，用于限定
   该项目的专属约束（可以为空）。本服务负责存取这一层，它又分为两类：
 
@@ -13,7 +13,7 @@ Project 级系统提示词管理服务。
   * **Agent 专属层**：仅对某个 Agent 生效。**项目创建时会为「项目专家」播种默认
     提示词**：关联了代码仓库的项目播种 ``code_workflow_prompt``（克隆/分析源码
     的工作流），未关联仓库的项目播种 ``no_repo_workflow_prompt``（无代码约束）。
-    日志分析与重构包配置管理员的这一层默认为空，仅由管理员按需填写。
+    日志分析与配置管理员的这一层默认为空，仅由管理员按需填写。
 
 存储布局（按 project_code 隔离，与 Project Skills 平行）：
 
@@ -25,7 +25,7 @@ Project 级系统提示词管理服务。
         ├── log_analysis/
         │   └── system_prompt.md        # Agent 专属层（仅日志分析）
         └── package_search/
-            └── system_prompt.md        # Agent 专属层（仅重构包配置管理员）
+            └── system_prompt.md        # Agent 专属层（仅配置管理员）
 
 读取走文件系统、无缓存，Admin 编辑后立即对后续 Agent 运行生效。Agent 运行前
 调用 :func:`build_project_prompt_addendum` （传入 ``agent_key``）拿到要拼接到基础
@@ -55,8 +55,8 @@ PROJECT_AGENT_KEYS = ("project_expert", "log_analysis", "package_search")
 # 兼容旧名（历史脚本/调用方可能仍引用）。
 CODE_WORKFLOW_AGENT_KEYS = PROJECT_AGENT_KEYS
 
-# 项目创建时会播种默认项目级提示词的 Agent：目前仅项目专家。日志分析与重构包
-# 配置管理员的代码工作流内置在基础提示词中，其项目级提示词默认为空。
+# 项目创建时会播种默认项目级提示词的 Agent：目前仅项目专家。日志分析与配置
+# 管理员的项目级提示词默认为空，由各自基础提示词和 Skills 提供通用工作流。
 SEEDED_AGENT_KEYS = ("project_expert",)
 
 # agent_key -> prompts_config.yaml 中对应的功能键，用于读取默认提示词模板。

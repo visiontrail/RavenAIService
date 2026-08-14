@@ -205,7 +205,8 @@ export interface ProjectRepoOption {
   project_code: string
   project_name: string
   default_branch: string
-  // 是否关联了代码仓库。未关联的项目仅项目专家可见。
+  // Whether a Git repository is linked. Repository-less projects can still
+  // be used by agents such as Project Expert and Configuration Manager.
   has_repo?: boolean
   enabled_agent_keys?: string[]
   project_card: string

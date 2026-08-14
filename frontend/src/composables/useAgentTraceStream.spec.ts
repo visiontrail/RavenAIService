@@ -4,6 +4,7 @@ import { ref } from 'vue'
 import type { AgentTraceEvent } from '@/types/agentTrace'
 import {
   buildCards,
+  collectLoadedSkills,
   computeFallbackSummary,
   normaliseEvents,
   useAgentTraceStream,
@@ -71,6 +72,44 @@ describe('normaliseEvents', () => {
     const bad = { type: 'run_start', task_id: TASK_ID, timestamp: 1 } as unknown as AgentTraceEvent
     const good: AgentTraceEvent = { type: 'run_start', task_id: TASK_ID, seq: 5, timestamp: 5 }
     expect(normaliseEvents([bad, good])).toEqual([good])
+  })
+})
+
+describe('collectLoadedSkills', () => {
+  it('aggregates run metadata, skills_loaded notices, and historical Skill calls', () => {
+    const events: AgentTraceEvent[] = [
+      {
+        type: 'run_start',
+        task_id: TASK_ID,
+        seq: 1,
+        timestamp: 1,
+        loaded_skills: ['full-package-build', 'shared-skill'],
+      },
+      {
+        type: 'system_notice',
+        task_id: TASK_ID,
+        seq: 2,
+        timestamp: 2,
+        kind: 'skills_loaded',
+        loaded_skills: ['project-override', 'shared-skill'],
+      },
+      {
+        type: 'step_start',
+        task_id: TASK_ID,
+        seq: 3,
+        timestamp: 3,
+        step_id: 'skill-call',
+        tool_name: 'Skill',
+        tool_input: { skill: 'legacy-invoked-skill' },
+      },
+    ]
+
+    expect(collectLoadedSkills(events)).toEqual([
+      'full-package-build',
+      'shared-skill',
+      'project-override',
+      'legacy-invoked-skill',
+    ])
   })
 })
 

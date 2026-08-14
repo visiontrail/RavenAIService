@@ -1,8 +1,9 @@
 """
-Claude Agent SDK 重构包检索 Agent（项目绑定形态）。
+Claude Agent SDK 配置管理员 Agent。
 
 与 ``ProjectExpertAgent`` 同构：工作区只含 ``repo/`` + ``task.json``，
-项目身份来自用户显式选择的项目仓库（写入 ``task.json.repo_info``）。
+纯检索时项目身份来自用户显式选择的项目；整包流程可先由 Skill 初判，
+再通过服务端强制反问绑定人工确认的项目。
 trace 层与 ``_RunState`` 状态机 **复用** log_analysis 的实现；包元数据
 MCP 工具按本次运行绑定的 ``project_code`` 构建，服务端强制限定项目范围。
 
@@ -51,13 +52,16 @@ from app.agents.log_analysis.trace import (
     ERROR,
     RUN_COMPLETE,
     RUN_START,
+    SYSTEM_NOTICE,
     STEP_END,
+    SeqCounter,
     build_event,
     coerce_excerpt,
     derive_tool_trace,
     mask_tokens,
     summarize,
 )
+
 # 复用 log_analysis agent 的 trace 状态机与取消机制。
 from app.agents.log_analysis.agent import (
     AgentCancelled,
@@ -93,9 +97,28 @@ ALLOWED_TOOLS = [
     "Read",
     "Grep",
     "Glob",
+    "Skill",  # 通过 setting_sources 加载内置、Agent 与项目 Skill
     PROJECT_REPO_MCP_TOOL,
     *PACKAGE_MCP_TOOLS,
 ]
+
+# 打包运行只能经确认计划绑定的专用服务端工具产生和发布字节。Claude Agent
+# SDK 的 allowed_tools 只是自动批准列表，并不是工具白名单，因此这些旁路工具
+# 必须同时写入 disallowed_tools，不能只从 ALLOWED_TOOLS 移除。
+PACKAGING_DISALLOWED_TOOLS = [
+    "Bash",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "NotebookEdit",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+    "Agent",
+]
+
+# Agent 唯一键，与 skills_service.SUPPORTED_AGENTS 对应。
+AGENT_KEY = "package_search"
 
 
 TraceEmitter = Callable[[AgentTraceEvent], None]
@@ -177,13 +200,100 @@ def _base_result(model: str, *, status: str, **extra: Any) -> Dict[str, Any]:
         "recommended_package_ids": [],
         "relevant_package_ids": [],
         "notes": None,
+        "loaded_skills": [],
     }
     base.update(extra)
     return base
 
 
+PACKAGING_TASK_VALUE_KEYS = (
+    "package_inputs",
+    "inputs_manifest",
+    "inputs_manifest_path",
+    "package_inputs_manifest",
+    "package_inputs_manifest_path",
+    "package_plan",
+    "draft",
+    "draft_plan",
+    "draft_plan_path",
+    "package_draft_plan_path",
+    "confirmed",
+    "confirmed_plan",
+    "confirmed_plan_path",
+    "package_confirmed_plan_path",
+)
+# Backward-compatible private alias for focused tests and older imports.
+_PACKAGING_TASK_VALUE_KEYS = PACKAGING_TASK_VALUE_KEYS
+
+
+def _has_task_value(value: Any) -> bool:
+    if value is None or value is False:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, dict, set)):
+        return bool(value)
+    return True
+
+
+def _is_packaging_task(task_data: Any) -> bool:
+    """Recognise draft and confirmed packaging task.json variants.
+
+    ``inputs_manifest`` is present as ``null`` in a normal search workspace,
+    so key presence alone is deliberately insufficient. The explicit flag is
+    preferred; the value-bearing path keys preserve compatibility with staged
+    workspaces written before that flag was introduced.
+    """
+    if not isinstance(task_data, dict):
+        return False
+    if task_data.get("packaging_requested") is True:
+        return True
+    package_mode = task_data.get("package_mode")
+    if package_mode is True or (
+        isinstance(package_mode, str)
+        and package_mode.strip().lower()
+        in {"package", "packaging", "build", "true", "1"}
+    ):
+        return True
+    return any(_has_task_value(task_data.get(key)) for key in PACKAGING_TASK_VALUE_KEYS)
+
+
+def _has_confirmed_package_plan(task_data: Any) -> bool:
+    if not isinstance(task_data, dict):
+        return False
+    if _has_task_value(task_data.get("confirmed_plan")) or _has_task_value(
+        task_data.get("confirmed_plan_path")
+    ):
+        return True
+    package_plan = task_data.get("package_plan")
+    if not isinstance(package_plan, dict):
+        return False
+    return any(
+        _has_task_value(package_plan.get(key))
+        for key in ("confirmed", "confirmed_plan", "confirmed_path")
+    )
+
+
+def _read_task_json(path: Path) -> Dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - workspace input is best-effort here
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _workspace_has_materialized_skills(cwd: str) -> bool:
+    skills_dir = Path(cwd) / ".claude" / "skills"
+    if not skills_dir.is_dir():
+        return False
+    return any(
+        child.is_dir() and (child / "SKILL.md").is_file()
+        for child in skills_dir.iterdir()
+    )
+
+
 class PackageSearchAgent:
-    """Wraps the Claude Agent SDK query() loop for project-bound package search.
+    """Wrap the Claude Agent SDK loop for Configuration Manager search/Skills.
 
     Tests that need to bypass the real SDK loop can monkeypatch
     ``self._run_sdk_loop`` to yield a curated sequence of messages.
@@ -237,6 +347,11 @@ class PackageSearchAgent:
         supports_mcp = bool(profile and profile.supports_mcp_server_tools)
 
         allowed_tools = list(ALLOWED_TOOLS)
+        task_data = _read_task_json(Path(cwd) / "task.json")
+        packaging_mode = _is_packaging_task(task_data)
+        if packaging_mode:
+            blocked = set(PACKAGING_DISALLOWED_TOOLS)
+            allowed_tools = [name for name in allowed_tools if name not in blocked]
         mcp_servers: Optional[Dict[str, Any]] = None
         if supports_mcp:
             from app.agents.log_analysis.mcp_tools import (
@@ -250,6 +365,20 @@ class PackageSearchAgent:
                 "project_repo": get_project_repo_server(),
                 "package_search": get_package_server(project_code),
             }
+            if packaging_mode and _has_confirmed_package_plan(task_data):
+                from app.agents.package_search.package_builder_mcp import (
+                    SDK_TOOL_NAME,
+                    get_mcp_server as get_package_builder_server,
+                )
+
+                mcp_servers["package_builder"] = get_package_builder_server(
+                    cwd,
+                    expected_run_id=task_data.get("run_id"),
+                    expected_session_id=task_data.get("session_id"),
+                    expected_user_id=task_data.get("user_id"),
+                )
+                if SDK_TOOL_NAME not in allowed_tools:
+                    allowed_tools.append(SDK_TOOL_NAME)
         else:
             allowed_tools = [
                 name for name in allowed_tools if not name.startswith("mcp__")
@@ -265,6 +394,10 @@ class PackageSearchAgent:
         if clarification is not None:
             mcp_servers, allowed_tools = clarification.apply(mcp_servers, allowed_tools)
 
+        disallowed_tools = [BUILTIN_ASK_TOOL_NAME]
+        if packaging_mode:
+            disallowed_tools.extend(PACKAGING_DISALLOWED_TOOLS)
+
         options = build_options(
             system_prompt=system_prompt,
             allowed_tools=allowed_tools,
@@ -272,9 +405,12 @@ class PackageSearchAgent:
             # Claude Code's built-in AskUserQuestion is not wired to the RavenAI
             # broker/SSE card and would block forever; only the qualified MCP
             # tool added above is valid here.
-            disallowed_tools=[BUILTIN_ASK_TOOL_NAME],
+            disallowed_tools=disallowed_tools,
             permission_mode="bypassPermissions",
             mcp_servers=mcp_servers,
+            setting_sources=["project"]
+            if _workspace_has_materialized_skills(cwd)
+            else None,
             endpoint=endpoint,
         )
         return options, effective_model, str(provider)
@@ -309,21 +445,33 @@ class PackageSearchAgent:
             f"`task.json` 的真实路径是 `{ctx.task_json_path}`，"
             f"源码目录是 `{ctx.repo_dir}`。"
             "读取文件和搜索时只使用这些路径或它们的相对路径 "
-            "(`task.json`、`repo/...`)。"
+            "（如 `task.json`、`repo/...`、`inputs/...`、`package_plan/...`）。"
             "本工作区没有 `logs/` 目录，也没有 metadata.json，不要去搜索它们。"
             "如果路径不确定，先用 `pwd` / `ls -la` 确认当前目录。\n"
-            "\n## 本次运行绑定的项目\n"
-            f"本次运行绑定项目 `{ctx.project_code}`。"
-            "所有 mcp__package_search__* 工具已在服务端限定为该项目的包。\n"
         )
+        if ctx.project_code:
+            system_prompt += (
+                "\n## 本次运行绑定的项目\n"
+                f"本次运行绑定项目 `{ctx.project_code}`。"
+                "所有 mcp__package_search__* 工具已在服务端限定为该项目的包。\n"
+            )
+        else:
+            system_prompt += (
+                "\n## 项目尚待强制确认\n"
+                "本次整包任务没有预先绑定项目。任何候选项目都只是初步判断；"
+                "在服务端反问机制确认目标项目之前，不得把候选项目描述为最终选择，"
+                "也不得使用包检索工具跨项目推断或发布产物。\n"
+            )
 
         # 项目级附加系统提示词：像 Skill 一样分级处理——在通用（Agent 级）系统
         # 提示词之后叠加该项目的专属约束。无配置时返回空串。
         try:
             from app.services import project_prompt_service
 
-            project_prompt_addendum = project_prompt_service.build_project_prompt_addendum(
-                ctx.project_code, "package_search"
+            project_prompt_addendum = (
+                project_prompt_service.build_project_prompt_addendum(
+                    ctx.project_code, "package_search"
+                )
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("PackageSearchAgent: failed to load project prompt: %s", exc)
@@ -336,11 +484,30 @@ class PackageSearchAgent:
                 len(project_prompt_addendum),
             )
 
-        task_data: Dict[str, Any] = {}
-        try:
-            task_data = json.loads(Path(ctx.task_json_path).read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        task_data = _read_task_json(Path(ctx.task_json_path))
+        repo_info = task_data.get("repo_info") if isinstance(task_data, dict) else None
+        if (
+            isinstance(repo_info, dict)
+            and not str(repo_info.get("repo_url") or "").strip()
+        ):
+            system_prompt += (
+                "\n\n## 未关联代码仓库\n"
+                "当前候选/已绑定项目没有关联代码仓库（repo_info.repo_url 为空）。"
+                "不要尝试 clone 任意仓库；`repo/` 目录为空。"
+                "请基于项目级提示词、已启用 Skill、上传清单和包仓库工具完成任务。\n"
+            )
+        packaging_mode = _is_packaging_task(task_data)
+        if packaging_mode:
+            system_prompt += (
+                "\n\n## 整包打包安全边界（最高优先级）\n"
+                "这是一个由服务端确认门禁保护的整包任务。你可以读取 task.json、"
+                "上传清单、draft/confirmed plan 和已物化 Skill 来理解任务，但必须遵守：\n"
+                "- 禁止使用 Bash（包括 shell、curl）、Write、Edit、WebFetch/WebSearch、"
+                "Task/Agent 等通用工具构造、修改、上传或发布包；\n"
+                "- 禁止绕过反问确认，禁止把 draft plan 当成 confirmed plan；\n"
+                "- 只有服务端专用分类/构建/发布工具可以产生包字节或写入重构包仓库，"
+                "且构建工具必须自行校验完整、未失效的 confirmed plan。\n"
+            )
 
         user_prompt = render_user_prompt(
             user_prompt_template,
@@ -349,6 +516,43 @@ class PackageSearchAgent:
             question=ctx.metadata.get("question") or task_data.get("question", ""),
             hints=ctx.metadata.get("hints") or task_data.get("hints", ""),
         )
+
+        # 物化全部启用的 built-in / Agent / project Skill。相关性判定由模型
+        # 完成；name+description 菜单同时进入 system/user prompt，SDK 则通过
+        # setting_sources=["project"] 发现对应 Skill 工具内容。
+        materialized_skills: List[str] = []
+        skill_overviews: List[Dict[str, str]] = []
+        try:
+            from app.services import skills_service
+
+            materialized_skills = skills_service.materialize_enabled_skills(
+                AGENT_KEY,
+                ctx.temp_dir,
+                project_code=ctx.project_code or None,
+            )
+            if materialized_skills:
+                skill_overviews = skills_service.enabled_skill_overviews(
+                    AGENT_KEY,
+                    project_code=ctx.project_code or None,
+                    names=materialized_skills,
+                )
+                logger.info(
+                    "PackageSearchAgent: materialized %d skill(s): %s",
+                    len(materialized_skills),
+                    ", ".join(materialized_skills),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PackageSearchAgent: failed to materialize skills: %s", exc)
+
+        if materialized_skills:
+            from app.agents.skill_prompting import build_skill_availability_prompt
+
+            skill_availability_prompt = build_skill_availability_prompt(
+                skill_overviews or materialized_skills,
+                final_output_contract="配置管理员的围栏 JSON 结果契约",
+            )
+            system_prompt += skill_availability_prompt
+            user_prompt += skill_availability_prompt
 
         # Append the blunt response-language directive last so the answer
         # language is decoupled from the (largely Chinese) package metadata.
@@ -359,7 +563,9 @@ class PackageSearchAgent:
 
         # Resolve before RUN_START: that event carries the model id and is
         # already on the wire to the browser once the stream begins.
-        endpoints = model_router.candidates(agent_kind="package_search", require_mcp=True)
+        endpoints = model_router.candidates(
+            agent_kind="package_search", require_mcp=True
+        )
         chosen = endpoints[0] if endpoints else None
 
         served: Dict[str, str] = {}
@@ -367,6 +573,9 @@ class PackageSearchAgent:
         # ``state`` first: the ask tool must share this run's seq space, or the
         # frontend's (run_id, seq) deduper drops the question card.
         state = _RunState(task_id=ctx.task_id, emitter=trace_emitter)
+        shared_seq_counter = ctx.metadata.get("trace_seq_counter")
+        if isinstance(shared_seq_counter, SeqCounter):
+            state.seq_counter = shared_seq_counter
 
         # --- AskUserQuestion clarification (optional) -----------------------
         clarification = (
@@ -412,8 +621,20 @@ class PackageSearchAgent:
                 seq_counter=state.seq_counter,
                 model=effective_model,
                 provider=provider,
+                loaded_skills=list(materialized_skills),
             )
         )
+        if materialized_skills:
+            state.emit(
+                build_event(
+                    SYSTEM_NOTICE,
+                    task_id=ctx.task_id,
+                    seq_counter=state.seq_counter,
+                    kind="skills_loaded",
+                    detail=", ".join(materialized_skills),
+                    loaded_skills=list(materialized_skills),
+                )
+            )
 
         try:
             async for message in routed_query(
@@ -461,6 +682,7 @@ class PackageSearchAgent:
                 usage=dict(state.token_usage),
                 duration_seconds=round(duration, 2),
                 session_id=ctx.task_id,
+                loaded_skills=list(materialized_skills),
             )
         except asyncio.TimeoutError:
             raise
@@ -492,7 +714,9 @@ class PackageSearchAgent:
             ctx.task_id,
             "run_complete",
             status="finished",
-            tool_calls=sum(1 for ev in state.trace_events if ev.get("type") == STEP_END),
+            tool_calls=sum(
+                1 for ev in state.trace_events if ev.get("type") == STEP_END
+            ),
             duration_s=round(duration, 2),
             tokens_in=state.token_usage["input_tokens"],
             tokens_out=state.token_usage["output_tokens"],
@@ -525,10 +749,9 @@ class PackageSearchAgent:
         elif parsed is not None:
             raw_recommended = _coerce_id_list(parsed.get("recommended_package_ids"))
             raw_relevant = _coerce_id_list(parsed.get("relevant_package_ids"))
-            if (
-                not isinstance(parsed.get("recommended_package_ids"), list)
-                or not isinstance(parsed.get("relevant_package_ids"), list)
-            ):
+            if not isinstance(
+                parsed.get("recommended_package_ids"), list
+            ) or not isinstance(parsed.get("relevant_package_ids"), list):
                 _append_warning(tool_trace, "unparsable structured answer")
             else:
                 recommended, dropped_r = _validate_ids_in_project(
@@ -561,6 +784,7 @@ class PackageSearchAgent:
             usage=dict(state.token_usage),
             duration_seconds=round(duration, 2),
             session_id=ctx.task_id,
+            loaded_skills=list(materialized_skills),
         )
 
     def run_sync(
@@ -667,5 +891,6 @@ class PackageSearchAgent:
                 "tool_trace": result["tool_trace"],
                 "model": result["model"],
                 "usage": result["usage"],
+                "loaded_skills": result.get("loaded_skills", []),
             },
         }

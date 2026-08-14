@@ -10,6 +10,7 @@ project-scoped download, the new stats shape, and the Prometheus
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Optional
 
 import pytest
@@ -96,6 +97,37 @@ def _seed(store, tmp_path, entries):
                          "description": "", "sha256": "deadbeef", "customFields": {}},
         })
     store.save_packages(packages)
+
+
+def test_project_validation_allows_repoless_configuration_manager(monkeypatch):
+    """Package ownership is catalog-bound and must not require a Git URL."""
+    from app.services import project_repo_service
+    from app.services.raven_package_service import validate_project_code
+
+    repo = _FakeRepo("config-only")
+    repo.repo_url = ""
+    seen: dict[str, bool] = {}
+
+    async def fake_get_by_project_code(_db, code, *, require_repo=False):
+        seen["require_repo"] = require_repo
+        return repo if code == "config-only" else None
+
+    async def fake_supports_agent(_db, candidate, agent_key):
+        return candidate is repo and agent_key == "package_search"
+
+    monkeypatch.setattr(
+        project_repo_service,
+        "get_by_project_code",
+        fake_get_by_project_code,
+    )
+    monkeypatch.setattr(
+        project_repo_service,
+        "supports_agent",
+        fake_supports_agent,
+    )
+
+    assert asyncio.run(validate_project_code(None, "config-only")) is repo
+    assert seen == {"require_repo": False}
 
 
 # ────────────────────── GET /packages filtering ──────────────────────

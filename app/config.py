@@ -3,9 +3,10 @@
 支持环境变量配置和开发/生产环境切换
 """
 
+import hmac
 import os
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import List, Optional
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
@@ -85,11 +86,11 @@ class Settings(BaseSettings):
             except Exception:  # noqa: BLE001 — 覆盖层永不能让配置读取失败
                 pass
         return super().__getattribute__(name)
-    
+
     # 环境配置
     environment: str = "development"
     base_dir: str = str(Path(__file__).resolve().parent.parent)
-    
+
     # 服务配置
     host: str = "0.0.0.0"
     port: int = 8085
@@ -107,7 +108,7 @@ class Settings(BaseSettings):
     device_link_heartbeat_sec: int = 30  # 环境变量: DEVICE_LINK_HEARTBEAT_SEC
     device_link_timeout_sec: int = 120  # 环境变量: DEVICE_LINK_TIMEOUT_SEC
     device_link_store_file: str = "data/device_links.json"
-    
+
     # 日志配置
     log_level: str = "INFO"
     log_file_path: str = "logs/app.log"
@@ -116,7 +117,7 @@ class Settings(BaseSettings):
     log_file_max_bytes: int = 50 * 1024 * 1024  # 50MB 默认单个日志文件上限
     log_file_backup_count: int = 5  # 保留的滚动日志文件数量
     enable_debug_file_log: bool = False  # 默认关闭单独的debug文件
-    
+
     # 文件配置
     max_file_size: int = 1073741824  # 1GB
     temp_dir: str = "temp"
@@ -135,7 +136,7 @@ class Settings(BaseSettings):
     package_search_max_turns: int = 8
     package_search_default_limit: int = 5
     package_search_max_limit: int = 50
-    
+
     # Agent配置（日志分析智能体）
     agent_enabled: bool = True
     agent_root_dir: str = "."  # 允许Agent访问的日志根目录
@@ -146,17 +147,21 @@ class Settings(BaseSettings):
 
     # 代码仓库配置（用于代码分析智能体克隆源码）
     code_repo_clone_base_dir: str = "temp/code_repos"
-    code_repo_git_token: Optional[str] = None      # 全局 Git Token（私有仓库认证，可被 project_repo 单独 token 覆盖）
+    code_repo_git_token: Optional[str] = (
+        None  # 全局 Git Token（私有仓库认证，可被 project_repo 单独 token 覆盖）
+    )
 
     # 上下文压缩/记忆配置
-    agent_compression_strategy: str = "map_reduce_summarize"  # 可选：map_reduce_summarize | extractive | hybrid
+    agent_compression_strategy: str = (
+        "map_reduce_summarize"  # 可选：map_reduce_summarize | extractive | hybrid
+    )
     agent_short_term_window: int = 5  # 短时记忆窗口消息条数
-    
+
     # Anthropic 标准 LLM 配置（供 Claude Agent SDK 使用）
     anthropic_provider: str = "deepseek"  # anthropic | deepseek | custom
     anthropic_api_key: Optional[str] = None
-    anthropic_base_url: Optional[str] = None        # None 时由 provider profile 提供
-    anthropic_model: Optional[str] = None           # None 时由 provider profile 提供
+    anthropic_base_url: Optional[str] = None  # None 时由 provider profile 提供
+    anthropic_model: Optional[str] = None  # None 时由 provider profile 提供
     anthropic_small_fast_model: Optional[str] = None
     anthropic_max_tokens: int = 8192
     anthropic_max_turns: int = 30
@@ -173,10 +178,10 @@ class Settings(BaseSettings):
     # model_router 只返回主力一个候选，行为与未引入路由前完全一致。
     # 注意：max_turns / permission_mode / 各类超时等调参项不分主备，两个端点共用。
     anthropic_backup_enabled: bool = False
-    anthropic_backup_provider: Optional[str] = None   # None/空 视为「未配置」
+    anthropic_backup_provider: Optional[str] = None  # None/空 视为「未配置」
     anthropic_backup_api_key: Optional[str] = None
-    anthropic_backup_base_url: Optional[str] = None   # None 时由 provider profile 提供
-    anthropic_backup_model: Optional[str] = None      # None 时由 provider profile 提供
+    anthropic_backup_base_url: Optional[str] = None  # None 时由 provider profile 提供
+    anthropic_backup_model: Optional[str] = None  # None 时由 provider profile 提供
     anthropic_backup_small_fast_model: Optional[str] = None
 
     # 模型端点路由（延迟感知预选 + 熔断器）。全部可在 Admin「模型设置」运行时调整
@@ -185,32 +190,32 @@ class Settings(BaseSettings):
     # 总开关（kill switch）。开启后仍需在 Admin 配置并启用备用端点才会真正转移：
     # 未配置备用时 candidates 只返回主力、熔断器不跳闸，等价于「只观测 TTFT」。
     model_router_enabled: bool = True
-    model_router_slow_ttft_ms: int = 6000             # 首 token 超过此值即计一次「慢」
+    model_router_slow_ttft_ms: int = 6000  # 首 token 超过此值即计一次「慢」
     # 首 token 硬性抢占死线：等待超过此值即放弃当前端点、立刻改用下一个候选。
     # 与 slow_ttft_ms 的区别：后者是**事后**给样本打「慢」标记，救不了当前这一条
     # 请求；只有本项能给用户可感知的等待时间设上限。仅在「尚未提交」且「还有下一个
     # 候选」时生效——最后一个候选不抢占，否则用户什么都拿不到。设为 0 关闭抢占。
     model_router_first_token_deadline_ms: int = 20000
-    model_router_window_size: int = 8                 # 滚动窗口样本数
-    model_router_trip_threshold: int = 4              # 窗口内「慢或失败」达到此数即跳闸
-    model_router_min_samples: int = 4                 # 样本不足此数永不跳闸
-    model_router_hard_failure_trip: int = 2           # 连接/鉴权类硬失败的快速跳闸阈值
-    model_router_cooldown_seconds: int = 120          # 熔断冷却 = 半开探测令牌 TTL
-    model_router_sample_ttl_seconds: int = 900        # 窗口 TTL，避免闲置整夜后残留陈旧状态
+    model_router_window_size: int = 8  # 滚动窗口样本数
+    model_router_trip_threshold: int = 4  # 窗口内「慢或失败」达到此数即跳闸
+    model_router_min_samples: int = 4  # 样本不足此数永不跳闸
+    model_router_hard_failure_trip: int = 2  # 连接/鉴权类硬失败的快速跳闸阈值
+    model_router_cooldown_seconds: int = 120  # 熔断冷却 = 半开探测令牌 TTL
+    model_router_sample_ttl_seconds: int = 900  # 窗口 TTL，避免闲置整夜后残留陈旧状态
 
     # OCR / 视觉理解模型（独立于主力 Anthropic 模型，走 OpenAI 兼容端点，默认
     # 对接阿里云百炼 DashScope Qwen-VL）。用户粘贴的图片先由此模型转成文字，再
     # 以 <user_image_ocr> 段合并进用户提示，下游各 Agent 零改动。全部可选、带
     # 安全默认；未配置 OCR_API_KEY 时对图片自动降级。
-    ocr_enabled: bool = True                          # 总开关；False 时无条件降级
-    ocr_provider: str = "dashscope"                   # 计量/日志标签
+    ocr_enabled: bool = True  # 总开关；False 时无条件降级
+    ocr_provider: str = "dashscope"  # 计量/日志标签
     ocr_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    ocr_api_key: Optional[str] = None                 # 未设置即视为「未配置」→ 降级
-    ocr_model: str = "qwen3.5-ocr"                    # 可设 qwen-vl-ocr-latest / qwen-vl-ocr
-    ocr_max_tokens: int = 2048                        # 单次输出上限
-    ocr_request_timeout_seconds: int = 30             # 单次请求超时
-    ocr_max_images: int = 6                           # 单轮图片数上限
-    ocr_max_image_mb: int = 5                         # 单图大小上限（MB）
+    ocr_api_key: Optional[str] = None  # 未设置即视为「未配置」→ 降级
+    ocr_model: str = "qwen3.5-ocr"  # 可设 qwen-vl-ocr-latest / qwen-vl-ocr
+    ocr_max_tokens: int = 2048  # 单次输出上限
+    ocr_request_timeout_seconds: int = 30  # 单次请求超时
+    ocr_max_images: int = 6  # 单轮图片数上限
+    ocr_max_image_mb: int = 5  # 单图大小上限（MB）
 
     # 用户随消息附带图片的原图存储。图片按 <session_id>/<image_id>.<ext> 落盘，
     # chat_messages.images_json 只存元数据，历史回显经鉴权端点回图。目录随会话
@@ -222,12 +227,16 @@ class Settings(BaseSettings):
     chat_image_workspace_materialize: bool = True
 
     # Bug Fix Coding Agent（分析判定需要代码修复时自动派发的写入型 Agent）
-    bug_fix_auto_dispatch: bool = False             # 自动派发总开关，默认关闭，灰度可控
-    bug_fix_agent_model: Optional[str] = None       # None 时复用 anthropic_model / provider 默认
+    bug_fix_auto_dispatch: bool = False  # 自动派发总开关，默认关闭，灰度可控
+    bug_fix_agent_model: Optional[str] = (
+        None  # None 时复用 anthropic_model / provider 默认
+    )
     bug_fix_agent_request_timeout_seconds: int = 3600
-    bug_fix_agent_max_turns: int = 150              # 写入型任务回合多（定位/编辑/提交/推送/建 MR × 多个修复项）；实测 60 回合不够修完 2 个修复项
-    bug_fix_git_provider: Optional[str] = None      # None 时由 repo_url host 推断（gitlab|github）
-    bug_fix_git_api_base: Optional[str] = None       # None 时由 repo_url host 推断
+    bug_fix_agent_max_turns: int = 150  # 写入型任务回合多（定位/编辑/提交/推送/建 MR × 多个修复项）；实测 60 回合不够修完 2 个修复项
+    bug_fix_git_provider: Optional[str] = (
+        None  # None 时由 repo_url host 推断（gitlab|github）
+    )
+    bug_fix_git_api_base: Optional[str] = None  # None 时由 repo_url host 推断
 
     # DeviceAgent 专属（Claude Agent SDK 设备联动对话）
     device_agent_permission_timeout_seconds: int = 120
@@ -316,21 +325,24 @@ class Settings(BaseSettings):
 
     # Prompt配置（外部化模板路径，可通过环境变量覆盖）
     prompts_config_path: str = "app/prompts/prompts_config.yaml"
-    
+
     # 后台管理配置
     admin_auth_config_path: str = "app/admin_auth.yaml"
     admin_token_ttl_minutes: int = 120
     user_token_ttl_minutes: int = 60 * 24 * 7
-    
+
     # CORS配置
     cors_origins: List[str] = ["*"]
     cors_credentials: bool = True
     cors_methods: List[str] = ["*"]
     cors_headers: List[str] = ["*"]
-    
+
     # 安全配置
     secret_key: str = "your-secret-key-here"
-    
+    # 整包确认签名是发布权限边界，生产环境必须使用与登录
+    # token 分离的随机密钥。开发环境为了现有测试兼容可回退 secret_key。
+    package_confirmation_secret: Optional[str] = None
+
     # 数据库配置
     database_url: Optional[str] = None
     database_echo: bool = False
@@ -338,7 +350,7 @@ class Settings(BaseSettings):
     database_max_overflow: int = 10
     database_pool_timeout: int = 30
     database_pool_recycle: int = 3600
-    
+
     # Celery配置
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/0"
@@ -347,13 +359,13 @@ class Settings(BaseSettings):
     celery_accept_content: List[str] = ["json"]
     celery_timezone: str = "UTC"
     celery_enable_utc: bool = True
-    
+
     # Redis配置
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_db: int = 0
     redis_password: Optional[str] = None
-    
+
     # 协议栈日志处理配置
     log_processing_speed_mb_per_sec: int = 100  # 假设处理速度100MB/s
     max_retry_attempts: int = 3
@@ -362,28 +374,28 @@ class Settings(BaseSettings):
     repackage_use_pigz: bool = True  # 优先使用pigz并行压缩
     repackage_pigz_threads: int = 0  # 0表示自动按CPU核心数选择
     repackage_compress_level: int = 6  # pigz缺失时tarfile的压缩等级(1-9)
-    
+
     # SQLite配置（开发环境）
     # 默认放在 data 目录，避免与代码目录冲突，方便卷持久化
     sqlite_file: str = "data/logs.db"
-    
+
     # PostgreSQL配置（生产环境）
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "log_staging"
     postgres_user: str = "postgres"
     postgres_password: str = "password"
-    
+
     def get_database_url(self) -> str:
         """获取数据库连接URL"""
         if self.database_url:
             return self.database_url
-            
+
         if self.environment == "production":
             return f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         else:
             return f"sqlite+aiosqlite:///{self.sqlite_file}"
-    
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -393,12 +405,14 @@ class Settings(BaseSettings):
 
 class DevelopmentSettings(Settings):
     """开发环境配置"""
+
     environment: str = "development"
     log_level: str = "DEBUG"
 
 
 class ProductionSettings(Settings):
     """生产环境配置"""
+
     environment: str = "production"
     log_level: str = "WARNING"
     cors_origins: List[str] = []  # 生产环境需要配置具体的域名
@@ -407,9 +421,23 @@ class ProductionSettings(Settings):
 def get_settings() -> Settings:
     """获取配置实例"""
     env = os.getenv("ENVIRONMENT", "development").lower()
-    
+
     if env == "production":
-        return ProductionSettings()
+        configured = ProductionSettings()
+        confirmation_secret = str(configured.package_confirmation_secret or "").strip()
+        if (
+            len(confirmation_secret.encode("utf-8")) < 32
+            or confirmation_secret == "your-secret-key-here"
+            or hmac.compare_digest(
+                confirmation_secret.encode("utf-8"),
+                str(configured.secret_key).encode("utf-8"),
+            )
+        ):
+            raise RuntimeError(
+                "PACKAGE_CONFIRMATION_SECRET must be an independent random "
+                "secret of at least 32 bytes in production"
+            )
+        return configured
     else:
         return DevelopmentSettings()
 

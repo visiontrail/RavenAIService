@@ -1,7 +1,7 @@
 <template>
   <div v-if="hasContent" class="agent-trace">
     <div v-if="loadedSkills.length" class="agent-trace__skills" :title="t('agentTrace.loadedSkillsTitle')">
-      <span class="agent-trace__skills-label">Loaded Skills</span>
+      <span class="agent-trace__skills-label">{{ t('agentTrace.loadedSkillsLabel') }}</span>
       <span
         v-for="skill in loadedSkills"
         :key="skill"
@@ -111,7 +111,10 @@ import { useI18n } from 'vue-i18n'
 import { AlertTriangle, Ban, Check, ChevronDown } from 'lucide-vue-next'
 import type { AgentTraceEvent, TraceSummary } from '@/types/agentTrace'
 import type { AgentCompletionSummary } from '@/utils/agentResultSummary'
-import { useAgentTraceStream } from '@/composables/useAgentTraceStream'
+import {
+  collectLoadedSkills,
+  useAgentTraceStream,
+} from '@/composables/useAgentTraceStream'
 import { useToolDisplayName, type ToolNameMap } from '@/composables/useToolDisplayName'
 import TraceStepCard from './TraceStepCard.vue'
 
@@ -143,24 +146,14 @@ const hasContent = computed(
     cards.value.length > 0 ||
     running.value ||
     !!terminal.value ||
+    loadedSkills.value.length > 0 ||
     !!props.completionSummary ||
     !!props.visualAnalysis,
 )
 
 const summaryExpanded = ref(false)
 
-const loadedSkills = computed(() => {
-  const names = new Set<string>()
-  for (const event of props.events || []) {
-    if (event.type !== 'step_start' || event.tool_name !== 'Skill') continue
-    const input = event.tool_input || {}
-    const raw = input.skill ?? input.name ?? input.value
-    if (typeof raw === 'string' && raw.trim()) {
-      names.add(raw.trim())
-    }
-  }
-  return Array.from(names)
-})
+const loadedSkills = computed(() => collectLoadedSkills(props.events || []))
 
 const cancelling = ref(false)
 watch(terminal, (term: unknown) => {

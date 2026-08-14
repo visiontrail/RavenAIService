@@ -310,6 +310,15 @@ def test_unknown_agent_rejected(isolated_skills_dir):
         skills_service.list_skills("__nope__")
 
 
+def test_package_search_is_registered_as_skills_host(isolated_skills_dir):
+    from app.services import skills_service
+
+    assert skills_service.SUPPORTED_AGENTS["package_search"]["name"] == (
+        "PackageSearchAgent"
+    )
+    assert skills_service.list_skills("package_search") == []
+
+
 def test_install_zip_too_large(isolated_skills_dir, monkeypatch):
     from app.services import skills_service
     monkeypatch.setattr(skills_service, "MAX_SKILL_ZIP_BYTES", 64)
@@ -463,6 +472,100 @@ class TestProjectSkillStorage:
 
 
 class TestUnifiedMaterialization:
+
+    def test_builtin_agent_project_precedence_is_shared_with_overview(
+        self,
+        isolated_skills_dir,
+        tmp_path,
+        monkeypatch,
+    ):
+        """built-in → Agent → project overrides content and description alike."""
+        from app.services import skills_service
+
+        builtin_root = tmp_path / "builtin_skills"
+        builtin_dir = builtin_root / "shared-skill"
+        builtin_dir.mkdir(parents=True)
+        (builtin_dir / "SKILL.md").write_text(
+            "---\n"
+            "name: shared-skill\n"
+            "description: built-in version\n"
+            "---\n"
+            "Built-in body.\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            skills_service,
+            "_builtin_skills_root",
+            lambda agent_key: builtin_root
+            if agent_key == "package_search"
+            else tmp_path / "no-builtins",
+        )
+
+        builtin_cwd = tmp_path / "cwd_builtin"
+        builtin_cwd.mkdir()
+        assert skills_service.materialize_enabled_skills(
+            "package_search",
+            builtin_cwd,
+        ) == ["shared-skill"]
+        assert "Built-in body." in (
+            builtin_cwd / ".claude" / "skills" / "shared-skill" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        assert skills_service.enabled_skill_overviews("package_search") == [
+            {"name": "shared-skill", "description": "built-in version"}
+        ]
+
+        agent_md = (
+            "---\n"
+            "name: shared-skill\n"
+            "description: Agent version\n"
+            "---\n"
+            "Agent body.\n"
+        ).encode("utf-8")
+        project_md = (
+            "---\n"
+            "name: shared-skill\n"
+            "description: project version\n"
+            "---\n"
+            "Project body.\n"
+        ).encode("utf-8")
+        skills_service.install_skill(
+            "package_search",
+            zip_bytes=_build_zip({"SKILL.md": agent_md}),
+            source_filename="agent.zip",
+        )
+
+        agent_cwd = tmp_path / "cwd_agent"
+        agent_cwd.mkdir()
+        assert skills_service.materialize_enabled_skills(
+            "package_search",
+            agent_cwd,
+        ) == ["shared-skill"]
+        assert "Agent body." in (
+            agent_cwd / ".claude" / "skills" / "shared-skill" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        assert skills_service.enabled_skill_overviews("package_search") == [
+            {"name": "shared-skill", "description": "Agent version"}
+        ]
+
+        skills_service.install_project_skill(
+            "sat1",
+            zip_bytes=_build_zip({"SKILL.md": project_md}),
+            source_filename="project.zip",
+        )
+        project_cwd = tmp_path / "cwd_project"
+        project_cwd.mkdir()
+        assert skills_service.materialize_enabled_skills(
+            "package_search",
+            project_cwd,
+            project_code="sat1",
+        ) == ["shared-skill"]
+        assert "Project body." in (
+            project_cwd / ".claude" / "skills" / "shared-skill" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        assert skills_service.enabled_skill_overviews(
+            "package_search",
+            project_code="sat1",
+        ) == [{"name": "shared-skill", "description": "project version"}]
 
     def test_backward_compat_project_code_none(self, isolated_skills_dir, tmp_path):
         """With project_code=None, behavior is identical to pre-change."""

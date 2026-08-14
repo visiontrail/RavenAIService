@@ -89,7 +89,9 @@ class ClarificationPrefs:
         if not value:
             # Legacy key kept for deployments whose .env still sets it.
             value = getattr(
-                settings, "device_agent_clarification_timeout_seconds", DEFAULT_TIMEOUT_SECONDS
+                settings,
+                "device_agent_clarification_timeout_seconds",
+                DEFAULT_TIMEOUT_SECONDS,
             )
         try:
             return float(value)
@@ -101,8 +103,12 @@ class ClarificationPrefs:
         """从 ``User`` 记录构造；``None``（匿名用户）取默认值（开启）。"""
         return cls(
             enabled=bool(getattr(user, "clarification_enabled", True)),
-            max_rounds=int(getattr(user, "clarification_max_rounds", DEFAULT_MAX_ROUNDS) or 0),
-            on_timeout=str(getattr(user, "clarification_on_timeout", "cancel") or "cancel"),
+            max_rounds=int(
+                getattr(user, "clarification_max_rounds", DEFAULT_MAX_ROUNDS) or 0
+            ),
+            on_timeout=str(
+                getattr(user, "clarification_on_timeout", "cancel") or "cancel"
+            ),
             timeout_seconds=cls._timeout_from_settings(),
         )
 
@@ -136,6 +142,20 @@ class ClarificationPrefs:
     def active(self) -> bool:
         """真正会向用户提问：既要开关打开，也要还允许至少提问 1 次。"""
         return bool(self.enabled) and int(self.max_rounds) > 0
+
+
+class MandatoryClarificationError(RuntimeError):
+    """A server-enforced clarification could not be completed safely.
+
+    Unlike the model-facing ``AskUserQuestion`` tool, callers must treat this
+    exception as a terminal gate: no protected side effect may run after it.
+    ``code`` is stable for API/tests while the human-readable message can be
+    localized by the caller.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 # ─────────────────────── Prompt guidance ───────────────────────────
@@ -197,8 +217,8 @@ _WORKFLOW_CLARIFICATION_ADDENDUM: Dict[str, str] = {
         "Clarifying mid-workflow is fine; resume from the current step once answered and "
         "still finish with the required fenced JSON.\n"
         "For this agent, the following count as an unclear question and should be asked about:\n"
-        "- the user gives only a blanket request such as \"locate the problem\" / \"take a "
-        "look\" with no symptom, module or time range, while the material contains several "
+        '- the user gives only a blanket request such as "locate the problem" / "take a '
+        'look" with no symptom, module or time range, while the material contains several '
         "independent suspicious findings of differing severity, so which one they care "
         "about cannot be determined;\n"
         "- the symptom the user describes has no matching evidence in the material, and "
@@ -274,7 +294,10 @@ _INPUT_SCHEMA: Dict[str, Any] = {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "label": {"type": "string", "description": "选项简短文本。"},
+                                "label": {
+                                    "type": "string",
+                                    "description": "选项简短文本。",
+                                },
                                 "description": {
                                     "type": "string",
                                     "description": "选项含义/影响说明。",
@@ -324,7 +347,10 @@ def _normalize_questions(raw: Any) -> List[Dict[str, Any]]:
                 if not label:
                     continue
                 options.append(
-                    {"label": label, "description": str(opt.get("description") or "").strip()}
+                    {
+                        "label": label,
+                        "description": str(opt.get("description") or "").strip(),
+                    }
                 )
         out.append(
             {
@@ -332,6 +358,11 @@ def _normalize_questions(raw: Any) -> List[Dict[str, Any]]:
                 "question": question,
                 "multiSelect": multi,
                 "options": options,
+                **(
+                    {"question_key": str(item.get("question_key"))}
+                    if item.get("question_key") is not None
+                    else {}
+                ),
             }
         )
     return out
@@ -360,7 +391,11 @@ def _format_answers(questions: List[Dict[str, Any]], answers: Any) -> str:
         lines.append(f"{i + 1}. {q.get('question', '')}")
         ans = by_index.get(i) or {}
         selected = ans.get("selected_labels")
-        labels = [str(s).strip() for s in selected if str(s).strip()] if isinstance(selected, list) else []
+        labels = (
+            [str(s).strip() for s in selected if str(s).strip()]
+            if isinstance(selected, list)
+            else []
+        )
         custom = str(ans.get("custom_text") or "").strip()
         if labels:
             lines.append(f"   - 选择：{', '.join(labels)}")
@@ -369,6 +404,225 @@ def _format_answers(questions: List[Dict[str, Any]], answers: Any) -> str:
         if not labels and not custom:
             lines.append("   - （未作答）")
     return "\n".join(lines)
+
+
+def _normalize_complete_answers(
+    questions: List[Dict[str, Any]], answers: Any
+) -> List[Dict[str, Any]]:
+    """Validate that every mandatory question has exactly one complete answer."""
+    if not isinstance(answers, list):
+        raise MandatoryClarificationError(
+            "missing_answers", "配置管理员未收到完整的打包确认答案。"
+        )
+
+    by_index: Dict[int, Dict[str, Any]] = {}
+    for raw in answers:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            index = int(raw.get("question_index"))
+        except (TypeError, ValueError):
+            continue
+        if index < 0 or index >= len(questions) or index in by_index:
+            raise MandatoryClarificationError(
+                "invalid_answers", "打包确认答案包含无效或重复的问题序号。"
+            )
+        selected_raw = raw.get("selected_labels")
+        selected = (
+            [str(value).strip() for value in selected_raw if str(value).strip()]
+            if isinstance(selected_raw, list)
+            else []
+        )
+        custom = str(raw.get("custom_text") or "").strip()
+        if not selected and not custom:
+            raise MandatoryClarificationError(
+                "missing_answers", "项目与每个上传文件都必须由用户逐项确认。"
+            )
+        if not bool(questions[index].get("multiSelect")) and len(selected) > 1:
+            raise MandatoryClarificationError(
+                "invalid_answers", "单选确认问题不能选择多个选项。"
+            )
+        allowed = {
+            str(option.get("label") or "").strip()
+            for option in questions[index].get("options") or []
+            if isinstance(option, dict)
+        }
+        if selected and any(label not in allowed for label in selected):
+            raise MandatoryClarificationError(
+                "invalid_answers", "打包确认答案引用了不存在的选项。"
+            )
+        by_index[index] = {
+            "question_index": index,
+            "selected_labels": selected,
+            "custom_text": custom or None,
+            **(
+                {"question_key": questions[index]["question_key"]}
+                if questions[index].get("question_key") is not None
+                else {}
+            ),
+        }
+
+    if len(by_index) != len(questions):
+        raise MandatoryClarificationError(
+            "missing_answers", "项目与每个上传文件都必须由用户逐项确认。"
+        )
+    return [by_index[index] for index in range(len(questions))]
+
+
+async def request_mandatory_clarification(
+    questions: List[Dict[str, Any]],
+    *,
+    broker: PermissionBroker,
+    emit: EmitFn,
+    seq_counter: SeqCounter,
+    task_id: str,
+    run_id: str,
+    session_id: Optional[str] = None,
+    timeout_seconds: Optional[float] = None,
+    cancel_run: Optional[CancelRunFn] = None,
+    event_fields: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Ask a non-optional, programmatic confirmation through the existing UI.
+
+    This is deliberately separate from ``AskUserQuestion``.  It is invoked by
+    the service before a protected build/publication, so it does not depend on
+    model tool use and ignores the user's preference for *optional* agent
+    clarification.  The caller must bind the returned answers to an immutable
+    plan and must stop on every :class:`MandatoryClarificationError`.
+    """
+    normalized = _normalize_questions(questions)
+    if not normalized or len(normalized) != len(questions):
+        raise MandatoryClarificationError(
+            "invalid_questions", "无法生成完整的打包确认问题。"
+        )
+    if not run_id:
+        raise MandatoryClarificationError(
+            "missing_run_id", "打包确认缺少可回传答案的运行标识。"
+        )
+
+    request_id = str(uuid.uuid4())
+    extra = dict(event_fields or {})
+    # Register the broker request before exposing its ID on SSE.  A fast client
+    # can resolve as soon as it sees the frame; emitting first creates a small
+    # but real 404 race.
+    try:
+        future = broker.open_clarification(request_id)
+    except RuntimeError as exc:
+        raise MandatoryClarificationError(
+            "broker_closed", "打包确认通道不可用，已阻止构建和发布。"
+        ) from exc
+    safe_emit(
+        emit,
+        build_event(
+            CLARIFICATION_REQUEST,
+            task_id=task_id,
+            seq_counter=seq_counter,
+            request_id=request_id,
+            questions=normalized,
+            run_id=run_id,
+            session_id=session_id,
+            mandatory=True,
+            purpose="package_build_confirmation",
+            **extra,
+        ),
+    )
+
+    timeout = (
+        float(timeout_seconds)
+        if timeout_seconds is not None
+        else ClarificationPrefs._timeout_from_settings()
+    )
+    try:
+        decision = await asyncio.wait_for(future, timeout=max(0.1, timeout))
+    except asyncio.TimeoutError as exc:
+        broker.cancel(request_id, reason="timeout")
+        safe_emit(
+            emit,
+            build_event(
+                CLARIFICATION_RESOLVED,
+                task_id=task_id,
+                seq_counter=seq_counter,
+                request_id=request_id,
+                outcome="cancelled",
+                reason="timeout",
+                run_id=run_id,
+                session_id=session_id,
+                mandatory=True,
+                purpose="package_build_confirmation",
+                **extra,
+            ),
+        )
+        if cancel_run is not None:
+            cancel_run()
+        raise MandatoryClarificationError(
+            "timeout", "用户未在限定时间内完成打包确认，已阻止构建和发布。"
+        ) from exc
+    except asyncio.CancelledError:
+        broker.cancel(request_id, reason="cancelled")
+        raise
+
+    if not isinstance(decision, dict) or decision.get("decision") == "deny":
+        reason = (
+            str(decision.get("reason") or "cancelled")
+            if isinstance(decision, dict)
+            else "cancelled"
+        )
+        safe_emit(
+            emit,
+            build_event(
+                CLARIFICATION_RESOLVED,
+                task_id=task_id,
+                seq_counter=seq_counter,
+                request_id=request_id,
+                outcome="cancelled",
+                reason=reason,
+                run_id=run_id,
+                session_id=session_id,
+                mandatory=True,
+                purpose="package_build_confirmation",
+                **extra,
+            ),
+        )
+        raise MandatoryClarificationError(
+            "cancelled", "打包确认已取消，未执行构建和发布。"
+        )
+    try:
+        complete = _normalize_complete_answers(normalized, decision.get("answers"))
+    except MandatoryClarificationError as exc:
+        safe_emit(
+            emit,
+            build_event(
+                CLARIFICATION_RESOLVED,
+                task_id=task_id,
+                seq_counter=seq_counter,
+                request_id=request_id,
+                outcome="rejected",
+                reason=exc.code,
+                run_id=run_id,
+                session_id=session_id,
+                mandatory=True,
+                purpose="package_build_confirmation",
+                **extra,
+            ),
+        )
+        raise
+
+    safe_emit(
+        emit,
+        build_event(
+            CLARIFICATION_RESOLVED,
+            task_id=task_id,
+            seq_counter=seq_counter,
+            request_id=request_id,
+            outcome="answered",
+            run_id=run_id,
+            session_id=session_id,
+            mandatory=True,
+            purpose="package_build_confirmation",
+            **extra,
+        ),
+    )
+    return complete
 
 
 # ─────────────────────── Tool factory ──────────────────────────────
@@ -402,7 +656,9 @@ def make_ask_user_question_tool(
 
     # Per-run 提问计数（闭包内可变）。
     counter: Dict[str, int] = {"count": 0}
-    normalized_on_timeout = "continue" if str(on_timeout).strip().lower() == "continue" else "cancel"
+    normalized_on_timeout = (
+        "continue" if str(on_timeout).strip().lower() == "continue" else "cancel"
+    )
 
     def _emit_request(request_id: str, questions: List[Dict[str, Any]]) -> None:
         if emit is None or seq_counter is None:
@@ -420,7 +676,9 @@ def make_ask_user_question_tool(
             ),
         )
 
-    def _emit_resolved(request_id: str, outcome: str, *, reason: Optional[str] = None) -> None:
+    def _emit_resolved(
+        request_id: str, outcome: str, *, reason: Optional[str] = None
+    ) -> None:
         if emit is None or seq_counter is None:
             return
         safe_emit(
@@ -448,7 +706,9 @@ def make_ask_user_question_tool(
         # 每轮提问上限：达上限后不再阻塞用户。
         if counter["count"] >= max(0, int(max_rounds)):
             logger.info(
-                "AskUserQuestion: max rounds reached run_id=%s max=%s", run_id, max_rounds
+                "AskUserQuestion: max rounds reached run_id=%s max=%s",
+                run_id,
+                max_rounds,
             )
             return _wrap_text(
                 f"已达到本轮提问上限（{max_rounds} 次）。请基于已知信息自行决断，"
@@ -457,14 +717,13 @@ def make_ask_user_question_tool(
         counter["count"] += 1
 
         request_id = str(uuid.uuid4())
-        _emit_request(request_id, questions)
-
         try:
             future = broker.open_clarification(request_id)
         except RuntimeError as exc:
             logger.warning("AskUserQuestion: broker closed: %s", exc)
             _emit_resolved(request_id, "cancelled", reason="broker_closed")
             return _wrap_text("澄清通道不可用；请基于已知信息继续。")
+        _emit_request(request_id, questions)
 
         try:
             decision = await asyncio.wait_for(future, timeout=timeout_seconds)
@@ -614,7 +873,8 @@ def setup_clarification(
         return None
     if not run_id:
         logger.info(
-            "clarification: disabled for task_id=%s — no run_id to resolve against", task_id
+            "clarification: disabled for task_id=%s — no run_id to resolve against",
+            task_id,
         )
         return None
 
@@ -625,7 +885,9 @@ def setup_clarification(
         try:
             register_broker(run_id, broker)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("clarification: broker register failed run_id=%s: %s", run_id, exc)
+            logger.warning(
+                "clarification: broker register failed run_id=%s: %s", run_id, exc
+            )
             return None
 
     try:
@@ -644,7 +906,9 @@ def setup_clarification(
     except Exception as exc:  # noqa: BLE001
         # An SDK-side failure here must never take the whole run down; the agent
         # simply proceeds without the ability to ask.
-        logger.warning("clarification: failed to build ask server run_id=%s: %s", run_id, exc)
+        logger.warning(
+            "clarification: failed to build ask server run_id=%s: %s", run_id, exc
+        )
         if owned_broker and unregister_broker is not None:
             try:
                 unregister_broker(run_id)
@@ -750,10 +1014,12 @@ __all__ = [
     "ASK_SDK_NAME",
     "BUILTIN_ASK_TOOL_NAME",
     "ClarificationBinding",
+    "MandatoryClarificationError",
     "ClarificationPrefs",
     "ClarificationRuntime",
     "clarification_guidance",
     "make_ask_user_question_tool",
+    "request_mandatory_clarification",
     "build_clarification_mcp_server",
     "setup_clarification",
 ]

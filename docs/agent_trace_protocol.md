@@ -37,8 +37,8 @@ keys gracefully.
 | `thinking_end`    | `step_id`, `text`, `duration_seconds`                                                                                        | `text` is the full thinking text (≤ 4 KB excerpt).                                     |
 | `answer_delta`    | `text_chunk`, `step_id` (optional)                                                                                           | Incremental chunk of the assistant's **final answer body** (≤ 4 KB UTF-8). Concatenating every `answer_delta.text_chunk` of a run in `seq` order MUST equal `run_complete.final_text` (under the same masking). Distinct from `thinking_delta` (folded reasoning) and `step_delta` (tool output). |
 | `system_notice`   | `kind`, `subtype`, `detail`                                                                                                  | Used for `heartbeat`, `cancel_requested`, SDK system messages, and `subtype: "endpoint_switch"` (see below). |
-| `clarification_request`  | `request_id`, `questions`, `run_id`, `session_id`                                                                     | The agent paused to ask the user (`mcp__ask__AskUserQuestion`). Blocks the agent loop until `POST /chat/clarifications/{request_id}/resolve`, a timeout, or run end. Emitted by **every** chat agent, not just DeviceAgent. |
-| `clarification_resolved` | `request_id`, `outcome` (`answered`/`timeout`/`cancelled`), `reason`                                                   | Always follows its `clarification_request`; clears the question card.                   |
+| `clarification_request`  | `request_id`, `questions`, `run_id`, `session_id`; optional `mandatory`, `purpose`, `plan_hash`                       | The agent or service paused to ask the user. Blocks until `POST /chat/clarifications/{request_id}/resolve`, timeout, or run end. Configuration Manager packaging uses `mandatory=true`, `purpose="package_build_confirmation"`. |
+| `clarification_resolved` | `request_id`, `outcome` (`answered`/`timeout`/`cancelled`/`rejected`), `reason`; optional `mandatory`, `purpose`        | Always follows its `clarification_request`; clears the question card.                   |
 
 ### Clarification (AskUserQuestion)
 
@@ -49,6 +49,14 @@ preference (`User.clarification_enabled` / `_max_rounds` / `_on_timeout`),
 never on which agent is running; wiring lives in one place,
 [app/agents/clarification.py](../app/agents/clarification.py), and each agent
 calls `ClarificationBinding.setup()` exactly once per run.
+
+Configuration Manager has one deliberate exception: when component files are
+submitted for full-package creation, the **service** emits a mandatory
+clarification before the Agent can build or publish. It uses the same broker,
+resolve endpoint, trace schema, card, replay, and shared `SeqCounter`, but is
+independent of `User.clarification_enabled` and requires the project plus every
+input-to-component mapping to be answered. A partial/timeout answer terminates
+the side-effect path.
 
 Two consequences worth knowing when adding a new agent or transport:
 

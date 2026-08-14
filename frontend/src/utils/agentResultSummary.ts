@@ -21,7 +21,7 @@ export type VisualAnalysis = {
 }
 
 const COMPLETION_LINE_RE =
-  /^\*\*(.+?\bAgent)\*\*\s+(?:\u5df2\u5b8c\u6210\u672c\u8f6e(?:\u5206\u6790|\u68c0\u7d22)|completed (?:this|the current) (?:analysis|search))[\u3002.]*$/i
+  /^\*\*(.+?\bAgent)\*\*\s+(?:\u5df2\u5b8c\u6210(?:\u672c\u8f6e)?(?:\u5206\u6790|\u68c0\u7d22|\u6253\u5305|\u6574\u5305\u6253\u5305|\u6574\u5305\u6784\u5efa|\u5904\u7406)|completed (?:(?:this|the current) (?:analysis|search|packaging|package build|run)|(?:the )?full-package build))[\u3002.]*$/i
 const SECTION_HEADING_RE = /^##\s+(.+?)\s*$/
 const FIELD_RE = /^-\s+([^：:]+)[：:]\s*(.*)$/
 

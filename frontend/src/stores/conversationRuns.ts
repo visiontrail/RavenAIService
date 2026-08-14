@@ -19,6 +19,7 @@ import type {
 } from '@/types/agentTrace'
 import type { ChatMessageRecord } from '@/types'
 import { hasPersistedLogAttachmentMarker } from '@/utils/logWorkspaceReplacement'
+import { formatPackageAttachmentMessage } from '@/utils/packageAttachments'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -154,7 +155,17 @@ export type StartProjectExpertPayload = {
   imagePreviews?: ChatEntryImage[]
 }
 
-export type StartPackageSearchPayload = StartProjectExpertPayload
+export type StartPackageSearchPayload = {
+  message: string
+  history?: { role: string; content: string }[]
+  /** Optional only when ``files`` contains component inputs for packaging. */
+  project_repo_id?: number | null
+  files?: File[]
+  remember?: boolean
+  images?: ChatImageAttachment[]
+  /** Local previews for the optimistic user bubble (data: URLs, no round-trip). */
+  imagePreviews?: ChatEntryImage[]
+}
 
 const DEVICE_TRACE_TYPES = new Set([
   'run_start',
@@ -1351,28 +1362,49 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     }
   }
 
-  /**
-   * Shared driver for the project-bound agents (project expert / package
-   * search). Both use the same trace/SSE renderer as log-analysis, but require
-   * an explicit project repo and never send files.
-   */
+  /** Shared trace/SSE driver for the project expert and Configuration Manager. */
   const startProjectBoundRun = async (
     sessionId: string,
-    payload: StartProjectExpertPayload,
+    payload: StartProjectExpertPayload | StartPackageSearchPayload,
     opts: { authToken?: string | null },
     cfg: {
       agentKind: AgentKind
-      stream: typeof projectExpertStream
+      stream: (payload: {
+        message: string
+        sessionId: string
+        history?: { role: string; content: string }[]
+        remember?: boolean
+        projectRepoId?: number | null
+        files?: File[]
+        images?: ChatImageAttachment[]
+        authToken?: string | null
+        signal?: AbortSignal
+      }) => Promise<Response>
       failureMessage: (error: string) => string
+      /**
+       * Configuration Manager must report an in-stream failure to its
+       * composer so component files can be restored. Project Expert keeps
+       * the legacy "HTTP/SSE started" boolean semantics.
+       */
+      requireSuccessfulTerminal?: boolean
     },
-  ) => {
+  ): Promise<boolean> => {
     const state = ensureState(sessionId)
-    if (state.isSending) return
+    if (state.isSending) return false
+
+    const attachedFiles = 'files' in payload && Array.isArray(payload.files)
+      ? payload.files
+      : []
+    const userDisplay = formatPackageAttachmentMessage(
+      payload.message,
+      attachedFiles,
+      t('aiChat.runs.componentAttachments'),
+    )
 
     state.messages.push({
       id: generateUUID(),
       role: 'user',
-      content: payload.message,
+      content: userDisplay,
       kind: 'user',
       images: payload.imagePreviews?.length ? payload.imagePreviews : undefined,
     })
@@ -1401,6 +1433,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         history: payload.history,
         remember: payload.remember ?? true,
         projectRepoId: payload.project_repo_id,
+        files: attachedFiles,
         images: payload.images,
         authToken: opts.authToken || null,
         signal: ac.signal,
@@ -1436,8 +1469,14 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
               state.currentAnswerId = stableId
             }
             applyEventToState(state, evPayload)
-            const t = evPayload?.event || evPayload?.type
-            if (t === 'done' || t === 'error' || t === 'run_complete' || t === 'cancelled') {
+            const frameType = evPayload?.event || evPayload?.type
+            const terminalType = frameType === 'agent_trace' ? evPayload?.type : frameType
+            if (
+              terminalType === 'done'
+              || terminalType === 'error'
+              || terminalType === 'run_complete'
+              || terminalType === 'cancelled'
+            ) {
               terminal = true
             }
           } catch (err) {
@@ -1459,10 +1498,13 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       }
 
       if (terminal) {
-        markTerminal(state, terminalStatus(state))
+        const status = terminalStatus(state)
+        markTerminal(state, status)
+        if (cfg.requireSuccessfulTerminal) return status === 'succeeded'
       }
+      return true
     } catch (err: any) {
-      if (err?.name === 'AbortError') return
+      if (err?.name === 'AbortError') return false
       console.error(`Failed to start ${cfg.agentKind} run`, err)
       const target = state.messages.find((m) => m.id === state.currentAnswerId)
       if (target) {
@@ -1470,6 +1512,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         target.traceRunning = false
       }
       markTerminal(state, 'failed')
+      return false
     } finally {
       if (state.subscription === ac) state.subscription = null
     }
@@ -1483,15 +1526,17 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
   ) =>
     startProjectBoundRun(sessionId, payload, opts, {
       agentKind: 'project_expert',
-      stream: projectExpertStream,
+      stream: (streamPayload) => projectExpertStream({
+        ...streamPayload,
+        projectRepoId: streamPayload.projectRepoId as number,
+      }),
       failureMessage: (error) => t('aiChat.runs.projectExpertFailed', { error }),
     })
 
   /**
-   * Start a Package Search Agent run. Same project-bound contract as the
-   * project expert; the terminal `done` frame additionally carries the
-   * package-search result contract (recommended/relevant package IDs) inside
-   * the backend-formatted answer.
+   * Start a Configuration Manager run. Pure search stays project-bound while
+   * component-bearing packaging may start unbound and enter mandatory project
+   * and per-file confirmation before any build side effect.
    */
   const startPackageSearchRun = (
     sessionId: string,
@@ -1502,6 +1547,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       agentKind: 'package_search',
       stream: packageSearchStream,
       failureMessage: (error) => t('aiChat.runs.packageSearchFailed', { error }),
+      requireSuccessfulTerminal: true,
     })
 
   /** Drop the local run state when the backend can no longer cancel it. */
