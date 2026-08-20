@@ -76,8 +76,8 @@ resolve across loops; `PermissionBroker` handles that internally via
 ### Endpoint switching mid-run
 
 [app/agents/routed_query.py](../app/agents/routed_query.py) may abandon the
-chosen endpoint and restart on the next candidate — on a connection/auth
-failure, or when no first token arrives within
+chosen endpoint and restart on the next candidate — on a connection/auth/API
+rejection, or when no first token arrives within
 `MODEL_ROUTER_FIRST_TOKEN_DEADLINE_MS`. Two consequences a consumer must
 tolerate, both a deliberate trade for never leaving the user on a dead screen:
 
@@ -87,15 +87,25 @@ tolerate, both a deliberate trade for never leaving the user on a dead screen:
   `system_notice{subtype: "endpoint_switch"}` is emitted immediately before the
   second set and explains it; `detail` is user-facing text and the underlying
   `data` carries `from_slot`, `to_slot`, `reason`
-  (`first_token_deadline` / `hard_failure` / …) and `waited_ms`.
+  (`first_token_deadline` / `hard_failure` / `billing_error` / …) and
+  `waited_ms`.
 - **`run_start.model` can be stale.** It is emitted before the stream opens, so
   a run that switched was served by a different model than the one named. The
   authoritative value is the model reported on the terminal event, which the
   agent updates from `on_endpoint`.
 
-Switching never happens once the first model frame has arrived — at that point
-tools may have run, so `seq` continuity and the single-terminal-event invariant
-below are unaffected.
+Some compatible gateways encode a request rejection as assistant text, for
+example `API Error: 402 Insufficient Balance`, before the SDK raises a generic
+`error result: success`. The router quarantines that narrow, anchored response
+until structured SDK metadata or the terminal result confirms it. A confirmed
+rejection is not emitted as `answer_delta`; it remains pre-commit and can switch
+endpoints safely. If every candidate fails, the terminal error preserves the
+sanitized status and provider detail. Similar prose in a successful response is
+released unchanged and in order.
+
+Switching never happens once the first genuine model frame has arrived — at
+that point tools may have run, so `seq` continuity and the
+single-terminal-event invariant below are unaffected.
 
 ### Invariants
 

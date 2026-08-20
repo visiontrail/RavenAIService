@@ -21,9 +21,13 @@ analysis says nothing about how fast the gateway is answering.
   and periodically while the model is still thinking. Also not model output.
   ``ResultMessage`` carries ``subtype`` but no ``data`` attribute, so the dict
   check keeps a bare terminal result on the committing side where it belongs.
-* Everything else — ``StreamEvent`` (partial streaming) or ``AssistantMessage``.
-  This is the first frame that required a model round trip, and tools only ever
-  run in response to a ``tool_use`` block inside an ``AssistantMessage``.
+* Everything else — normally ``StreamEvent`` (partial streaming) or
+  ``AssistantMessage``. This is the first frame that required a model round
+  trip, and tools only ever run in response to a ``tool_use`` block inside an
+  ``AssistantMessage``. The one exception is a narrowly identified upstream API
+  rejection: compatible gateways sometimes wrap ``API Error: 402 ...`` in an
+  assistant-shaped frame. Those frames are quarantined until their terminal
+  result confirms whether they are an endpoint failure or legitimate prose.
 
 Getting that middle class wrong is not academic: treating ``status`` as model
 output pins TTFT at ~0 ms for every run, so the router's window fills with
@@ -48,7 +52,7 @@ attempt is abandoned and the next candidate starts immediately. It applies only
 while uncommitted **and** only when another candidate exists — preempting the
 last endpoint would leave the user with nothing, which is worse than slow.
 
-Once a model frame arrives the attempt is **committed**: the deadline is
+Once a genuine model frame arrives the attempt is **committed**: the deadline is
 disarmed, the rest of the stream passes through untouched, and no further
 failover happens. Re-running a committed attempt would replay tool side effects
 and pay for the tokens twice.
@@ -76,6 +80,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any, AsyncIterator, Callable, List, Optional, Set, Tuple
 
@@ -95,6 +100,7 @@ __all__ = [
     "AllEndpointsUnavailable",
     "EndpointChoice",
     "EndpointSwitchNotice",
+    "UpstreamAPIError",
     "drain_cleanup_tasks",
 ]
 
@@ -135,8 +141,190 @@ _HARD_FAILURE_MARKERS = (
     "authentication",
 )
 
+_UPSTREAM_ERROR_KINDS = frozenset(
+    {
+        "authentication_failed",
+        "billing_error",
+        "rate_limit",
+        "invalid_request",
+        "server_error",
+        "unknown",
+    }
+)
+_API_ERROR_TEXT_RE = re.compile(
+    r"\A\s*API\s+Error:\s*(?P<status>[1-5]\d{2})\s+(?P<detail>\S(?:.*\S)?)\s*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+_TOKEN_URL_RE = re.compile(r"https?://[^@\s/]+@", re.IGNORECASE)
+_NAMED_SECRET_RE = re.compile(
+    r"(?i)\b(authorization|x-api-key|api[_-]?key)\b\s*[:=]\s*"
+    r"(?:bearer\s+)?[^\s,;]+"
+)
+_SK_TOKEN_RE = re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b")
+_MAX_UPSTREAM_DETAIL_CHARS = 300
+
+
+def _sanitize_upstream_detail(value: Any) -> str:
+    """Return a single-line, credential-masked provider detail for diagnostics."""
+    detail = " ".join(str(value or "").split())
+    detail = _TOKEN_URL_RE.sub("https://***@", detail)
+    detail = _NAMED_SECRET_RE.sub(lambda match: f"{match.group(1)}=[REDACTED]", detail)
+    detail = _SK_TOKEN_RE.sub("[REDACTED]", detail)
+    if len(detail) > _MAX_UPSTREAM_DETAIL_CHARS:
+        detail = detail[: _MAX_UPSTREAM_DETAIL_CHARS - 3].rstrip() + "..."
+    return detail
+
+
+def _kind_for_status(status_code: Optional[int]) -> str:
+    if status_code in {401, 403}:
+        return "authentication_failed"
+    if status_code == 402:
+        return "billing_error"
+    if status_code == 429:
+        return "rate_limit"
+    if status_code is not None and 400 <= status_code < 500:
+        return "invalid_request"
+    if status_code is not None and status_code >= 500:
+        return "server_error"
+    return "unknown"
+
+
+class UpstreamAPIError(RuntimeError):
+    """An endpoint rejected the request before genuine model output.
+
+    Only normalized and sanitized fields are retained so aggregate router errors
+    remain actionable without turning provider payloads into an unbounded or
+    credential-bearing log surface.
+    """
+
+    def __init__(
+        self,
+        *,
+        error_kind: str,
+        status_code: Optional[int] = None,
+        detail: str = "",
+    ) -> None:
+        normalized_kind = str(error_kind or "unknown").strip().lower()
+        self.error_kind = (
+            normalized_kind if normalized_kind in _UPSTREAM_ERROR_KINDS else "unknown"
+        )
+        self.status_code = status_code if isinstance(status_code, int) else None
+        self.detail = _sanitize_upstream_detail(detail) or self.error_kind.replace(
+            "_", " "
+        )
+        status = f", status={self.status_code}" if self.status_code is not None else ""
+        super().__init__(
+            f"upstream API rejected request (kind={self.error_kind}{status}, "
+            f"detail={self.detail})"
+        )
+
+
+def _only_assistant_text(message: Any) -> Optional[str]:
+    """Return text only for a one-block, text-only assistant-shaped frame."""
+    content = getattr(message, "content", None)
+    if not isinstance(content, (list, tuple)) or len(content) != 1:
+        return None
+    block = content[0]
+    if isinstance(block, dict):
+        if block.get("type") != "text" or not isinstance(block.get("text"), str):
+            return None
+        return block["text"]
+    text = getattr(block, "text", None)
+    return text if isinstance(text, str) else None
+
+
+def _match_api_error_text(value: Any) -> Optional[Tuple[int, str]]:
+    if not isinstance(value, str):
+        return None
+    matched = _API_ERROR_TEXT_RE.fullmatch(value)
+    if matched is None:
+        return None
+    return int(matched.group("status")), matched.group("detail")
+
+
+def _upstream_error_candidate(
+    message: Any,
+) -> Optional[Tuple[UpstreamAPIError, bool]]:
+    """Extract an upstream rejection and whether the frame confirms it.
+
+    Structured SDK fields are authoritative. The legacy assistant-text form is
+    only a candidate until a terminal/error frame follows; that quarantine lets
+    a model legitimately output the exact sentinel without being discarded.
+    """
+    raw_kind = getattr(message, "error", None)
+    kind = (
+        str(raw_kind).strip().lower()
+        if isinstance(raw_kind, str) and raw_kind.strip()
+        else None
+    )
+    raw_status = getattr(message, "api_error_status", None)
+    structured_status = raw_status if isinstance(raw_status, int) else None
+    status = structured_status
+
+    text = _only_assistant_text(message)
+    match = _match_api_error_text(text)
+
+    result = getattr(message, "result", None)
+    result_match = _match_api_error_text(result)
+    result_is_error = getattr(message, "is_error", None)
+    if (
+        result_match is not None
+        and result_is_error is False
+        and kind is None
+        and status is None
+    ):
+        # A successful terminal result can legitimately contain this exact prose.
+        # It disproves a quarantined legacy candidate instead of confirming it.
+        result_match = None
+    if match is None and result_match is not None:
+        match = result_match
+        text = result
+
+    errors = getattr(message, "errors", None)
+    if match is None and isinstance(errors, (list, tuple)):
+        for item in errors:
+            error_match = _match_api_error_text(item)
+            if error_match is not None:
+                match = error_match
+                text = item
+                break
+
+    if match is not None:
+        matched_status, matched_detail = match
+        status = status or matched_status
+        detail = matched_detail
+    else:
+        detail = text or (result if isinstance(result, str) else "")
+
+    if kind is not None or structured_status is not None:
+        return (
+            UpstreamAPIError(
+                error_kind=kind or _kind_for_status(status),
+                status_code=status,
+                detail=detail,
+            ),
+            True,
+        )
+
+    if match is None:
+        return None
+
+    # A terminal result or errors[] entry confirms the legacy assistant-shaped
+    # candidate. Assistant text alone remains quarantined but unconfirmed.
+    confirmed = result_is_error is True or bool(errors)
+    return (
+        UpstreamAPIError(
+            error_kind=_kind_for_status(status),
+            status_code=status,
+            detail=detail,
+        ),
+        confirmed,
+    )
+
 
 def _classify(exc: BaseException) -> str:
+    if isinstance(exc, UpstreamAPIError):
+        return OUTCOME_HARD_FAILURE
     name = f"{type(exc).__name__} {exc}".lower()
     if any(marker in name for marker in _HARD_FAILURE_MARKERS):
         return OUTCOME_HARD_FAILURE
@@ -145,9 +333,8 @@ def _classify(exc: BaseException) -> str:
 
 def _is_init_frame(message: Any) -> bool:
     """``SystemMessage(subtype='init')`` — CLI is up, model not yet contacted."""
-    return (
-        getattr(message, "subtype", None) == "init"
-        and isinstance(getattr(message, "data", None), dict)
+    return getattr(message, "subtype", None) == "init" and isinstance(
+        getattr(message, "data", None), dict
     )
 
 
@@ -157,9 +344,8 @@ def _is_pre_model_frame(message: Any) -> bool:
     ``ResultMessage`` also carries ``subtype`` but has no ``data`` attribute,
     so the dict check leaves a bare terminal result on the committing side.
     """
-    return (
-        isinstance(getattr(message, "subtype", None), str)
-        and isinstance(getattr(message, "data", None), dict)
+    return isinstance(getattr(message, "subtype", None), str) and isinstance(
+        getattr(message, "data", None), dict
     )
 
 
@@ -291,7 +477,10 @@ async def _close_attempt(
         await asyncio.wait_for(aclose(), timeout=_CLEANUP_TIMEOUT_S)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "routed_query: aclose failed slot=%s (agent_kind=%s): %s", slot, agent_kind, exc
+            "routed_query: aclose failed slot=%s (agent_kind=%s): %s",
+            slot,
+            agent_kind,
+            exc,
         )
 
 
@@ -367,12 +556,16 @@ async def routed_query(
     if sdk_query is None:
         from claude_agent_sdk import query as sdk_query  # type: ignore[no-redef]
 
-    choices = candidates if candidates is not None else model_router.candidates(
-        agent_kind=agent_kind,
-        require_mcp=require_mcp,
-        require_image=require_image,
-        require_document=require_document,
-        require_small_fast=require_small_fast,
+    choices = (
+        candidates
+        if candidates is not None
+        else model_router.candidates(
+            agent_kind=agent_kind,
+            require_mcp=require_mcp,
+            require_image=require_image,
+            require_document=require_document,
+            require_small_fast=require_small_fast,
+        )
     )
     if not choices:
         # No routed endpoint is usable (routing off, or nothing configured).
@@ -403,12 +596,19 @@ async def routed_query(
             queue: "asyncio.Queue[Tuple[str, Any]]" = asyncio.Queue(maxsize=1)
             credits: "asyncio.Queue[None]" = asyncio.Queue()
             agen = sdk_query(prompt=prompt, options=options)
-            pump: "asyncio.Task[None]" = asyncio.ensure_future(_pump(agen, queue, credits))
+            pump: "asyncio.Task[None]" = asyncio.ensure_future(
+                _pump(agen, queue, credits)
+            )
 
             started = _now()
             committed = False
             preempted = False
+            abandoned_failure = False
             stream_error: Optional[BaseException] = None
+            pending_api_error: Optional[UpstreamAPIError] = None
+            pending_api_error_confirmed = False
+            pending_error_frames: List[Any] = []
+            pending_ttft_ms: Optional[int] = None
             live = True  # pump still owns an un-drained generator
 
             try:
@@ -422,7 +622,11 @@ async def routed_query(
                     if not committed and attempt_deadline > 0:
                         timeout = attempt_deadline - (_now() - started)
                         if timeout <= 0:
-                            preempted = True
+                            if pending_api_error is not None:
+                                stream_error = pending_api_error
+                                abandoned_failure = has_fallback
+                            else:
+                                preempted = True
                             break
                     try:
                         if timeout is None:
@@ -430,14 +634,25 @@ async def routed_query(
                         else:
                             kind, payload = await asyncio.wait_for(queue.get(), timeout)
                     except asyncio.TimeoutError:
-                        preempted = True
+                        if pending_api_error is not None:
+                            # A legacy assistant-shaped rejection arrived, then
+                            # its terminal confirmation stalled. It is still not
+                            # genuine output; preserve the useful captured cause.
+                            stream_error = pending_api_error
+                            abandoned_failure = has_fallback
+                        else:
+                            preempted = True
                         break
 
                     if kind == _ERR:
-                        stream_error = payload
+                        # The SDK often follows a useful `API Error: 402 ...`
+                        # frame with `error result: success`. Keep the former.
+                        stream_error = pending_api_error or payload
                         live = False
                         break
                     if kind == _END:
+                        if pending_api_error is not None:
+                            stream_error = pending_api_error
                         live = False
                         break
 
@@ -456,6 +671,56 @@ async def routed_query(
                             # keepalive arriving mid-wait must not reset the deadline.
                             yield message
                             continue
+
+                        candidate = _upstream_error_candidate(message)
+                        if candidate is not None:
+                            api_error, confirmed = candidate
+                            if pending_api_error is None:
+                                pending_ttft_ms = int((_now() - started) * 1000)
+                            # Prefer a later structured/terminal confirmation over
+                            # an earlier text-only candidate.
+                            if pending_api_error is None or confirmed:
+                                pending_api_error = api_error
+                            pending_api_error_confirmed = (
+                                pending_api_error_confirmed or confirmed
+                            )
+                            pending_error_frames.append(message)
+                            if pending_api_error_confirmed:
+                                stream_error = pending_api_error
+                                abandoned_failure = has_fallback
+                                break
+                            continue
+
+                        if pending_api_error is not None:
+                            if pending_api_error_confirmed:
+                                # Structured metadata is authoritative even if a
+                                # malformed gateway sends another frame afterward.
+                                stream_error = pending_api_error
+                                abandoned_failure = has_fallback
+                                break
+
+                            # The next normal frame disproves a legacy text-only
+                            # candidate. Commit at the candidate's original TTFT
+                            # and release every quarantined frame in order.
+                            committed = True
+                            ttft_ms = pending_ttft_ms or 0
+                            if choice is not None:
+                                model_router.record_outcome(
+                                    slot, outcome=OUTCOME_OK, ttft_ms=ttft_ms
+                                )
+                            logger.info(
+                                "routed_query: committed slot=%s agent_kind=%s ttft_ms=%d",
+                                slot,
+                                agent_kind,
+                                ttft_ms,
+                            )
+                            for pending_message in pending_error_frames:
+                                yield pending_message
+                            pending_error_frames.clear()
+                            pending_api_error = None
+                            yield message
+                            continue
+
                         committed = True
                         ttft_ms = int((_now() - started) * 1000)
                         if choice is not None:
@@ -474,7 +739,7 @@ async def routed_query(
                 # us mid-stream (cancel, break, throw). ``live`` is already False on
                 # the error/end paths, where the generator finalised itself.
                 if live and not pump.done():
-                    if preempted:
+                    if preempted or abandoned_failure:
                         # Someone is waiting on the next endpoint — reap in the
                         # background so the switch is instant, and remember the
                         # task so this call does not return before it is done.
@@ -484,7 +749,11 @@ async def routed_query(
                                 pump,
                                 slot=slot,
                                 agent_kind=agent_kind,
-                                reason="preempt",
+                                reason=(
+                                    "upstream_api_error"
+                                    if abandoned_failure
+                                    else "preempt"
+                                ),
                             )
                         )
                     else:
@@ -516,7 +785,9 @@ async def routed_query(
                 waited_ms = int((_now() - started) * 1000)
                 if choice is not None:
                     model_router.record_outcome(slot, outcome=OUTCOME_TIMEOUT)
-                failures.append((slot, asyncio.TimeoutError(f"no first token in {waited_ms}ms")))
+                failures.append(
+                    (slot, asyncio.TimeoutError(f"no first token in {waited_ms}ms"))
+                )
                 logger.warning(
                     "routed_query: slot=%s no first token within %dms (agent_kind=%s) — "
                     "abandoning and switching to the next endpoint",
@@ -555,10 +826,15 @@ async def routed_query(
                 )
                 if remaining:
                     next_slot = choices[index + 1]
+                    reason = (
+                        stream_error.error_kind
+                        if isinstance(stream_error, UpstreamAPIError)
+                        else outcome
+                    )
                     yield EndpointSwitchNotice(
                         from_slot=slot,
                         to_slot=next_slot.slot if next_slot is not None else "settings",
-                        reason=outcome,
+                        reason=reason,
                         waited_ms=int((_now() - started) * 1000),
                     )
                 continue
@@ -599,4 +875,3 @@ async def routed_query(
                 # Our own task is going away; the detached tasks stay
                 # registered in _CLEANUP_TASKS for drain_cleanup_tasks().
                 raise
-

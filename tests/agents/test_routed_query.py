@@ -64,8 +64,9 @@ class StreamEvent:
 class AssistantMessage:
     event = None
 
-    def __init__(self, text: str = "hello") -> None:
+    def __init__(self, text: str = "hello", *, error: str | None = None) -> None:
         self.content = [{"type": "text", "text": text}]
+        self.error = error
 
 
 class ResultMessage:
@@ -79,8 +80,18 @@ class ResultMessage:
     event = None
     subtype = "success"
 
-    def __init__(self) -> None:
-        self.result = "done"
+    def __init__(
+        self,
+        result: str = "done",
+        *,
+        is_error: bool = False,
+        api_error_status: int | None = None,
+        errors: list[str] | None = None,
+    ) -> None:
+        self.result = result
+        self.is_error = is_error
+        self.api_error_status = api_error_status
+        self.errors = errors
 
 
 # ─────────────────────────── Harness ───────────────────────────────────────
@@ -460,7 +471,10 @@ async def test_preempted_attempt_is_torn_down(router_stub, monkeypatch):
 async def test_switch_notice_is_shaped_like_a_system_frame():
     """Agents dispatch on ``subtype`` + ``data``; it must not look like output."""
     notice = EndpointSwitchNotice(
-        from_slot="primary", to_slot="backup", reason="first_token_deadline", waited_ms=20_000
+        from_slot="primary",
+        to_slot="backup",
+        reason="first_token_deadline",
+        waited_ms=20_000,
     )
 
     assert notice.content is None and notice.event is None
@@ -636,6 +650,172 @@ async def test_no_failover_after_commit(router_stub):
     assert calls["n"] == 1
 
 
+# ────────────────────── Upstream API error frames ──────────────────────────
+
+
+async def test_structured_billing_error_fails_over_without_leaking_text(router_stub):
+    """SDK 0.2.82 exposes AssistantMessage.error; it is authoritative."""
+    fake_query, calls = sdk_yielding(
+        [
+            InitMessage(),
+            AssistantMessage(
+                "API Error: 402 Insufficient Balance", error="billing_error"
+            ),
+            RuntimeError("backup should be selected before this wrapper error"),
+        ],
+        [InitMessage(), AssistantMessage("from backup"), ResultMessage()],
+    )
+
+    out = await drain(prompt="p", make_options=OPTS, sdk_query=fake_query)
+
+    assert calls["n"] == 2
+    assert kinds(out) == [
+        "InitMessage",
+        "EndpointSwitchNotice",
+        "InitMessage",
+        "AssistantMessage",
+        "ResultMessage",
+    ]
+    assert out[1].data["reason"] == "billing_error"
+    assert out[3].content[0]["text"] == "from backup"
+    assert router_stub["outcomes"][0] == {
+        "slot": "primary",
+        "outcome": "hard_failure",
+    }
+
+
+async def test_production_legacy_402_preserves_real_cause(router_stub):
+    """Captured production sequence must not become `error result: success`."""
+    router_stub["candidates"] = [choice("backup")]
+    fake_query, calls = sdk_yielding(
+        [
+            InitMessage(),
+            StatusMessage(),
+            AssistantMessage("API Error: 402 Insufficient Balance"),
+            ResultMessage(
+                "API Error: 402 Insufficient Balance",
+                is_error=True,
+            ),
+            RuntimeError("Claude Code returned an error result: success"),
+        ]
+    )
+
+    with pytest.raises(AllEndpointsUnavailable) as excinfo:
+        await drain(prompt="p", make_options=OPTS, sdk_query=fake_query)
+
+    assert calls["n"] == 1
+    assert len(excinfo.value.failures) == 1
+    slot, cause = excinfo.value.failures[0]
+    assert slot == "backup"
+    assert isinstance(cause, rq.UpstreamAPIError)
+    assert cause.error_kind == "billing_error"
+    assert cause.status_code == 402
+    assert cause.detail == "Insufficient Balance"
+    assert "error result: success" not in str(excinfo.value)
+
+
+async def test_timeout_then_backup_402_reports_both_causes(router_stub, monkeypatch):
+    monkeypatch.setattr(settings, "model_router_first_token_deadline_ms", 25)
+    fake_query, calls = sdk_yielding(
+        [InitMessage(), StatusMessage(), Sleep(1), AssistantMessage("too late")],
+        [
+            InitMessage(),
+            AssistantMessage("API Error: 402 Insufficient Balance"),
+            ResultMessage(
+                "API Error: 402 Insufficient Balance",
+                is_error=True,
+                api_error_status=402,
+            ),
+        ],
+    )
+
+    with pytest.raises(AllEndpointsUnavailable) as excinfo:
+        await asyncio.wait_for(
+            drain(prompt="p", make_options=OPTS, sdk_query=fake_query), timeout=5
+        )
+
+    assert calls["n"] == 2
+    assert [slot for slot, _ in excinfo.value.failures] == ["primary", "backup"]
+    message = str(excinfo.value)
+    assert "no first token" in message
+    assert "status=402" in message
+    assert "Insufficient Balance" in message
+
+
+async def test_successful_result_disproves_legacy_text_candidate(router_stub, clock):
+    fake_query, calls = sdk_yielding(
+        [
+            InitMessage(),
+            Tick(0.3),
+            AssistantMessage("API Error: 402 Insufficient Balance"),
+            ResultMessage("done", is_error=False),
+        ],
+        clock=clock,
+    )
+
+    out = await drain(prompt="p", make_options=OPTS, sdk_query=fake_query)
+
+    assert calls["n"] == 1
+    assert kinds(out) == ["InitMessage", "AssistantMessage", "ResultMessage"]
+    assert out[1].content[0]["text"] == "API Error: 402 Insufficient Balance"
+    assert router_stub["outcomes"] == [
+        {"slot": "primary", "outcome": "ok", "ttft_ms": 300}
+    ]
+
+
+async def test_error_like_diagnostic_prose_commits_normally(router_stub):
+    fake_query, calls = sdk_yielding(
+        [
+            InitMessage(),
+            AssistantMessage("The log contains API Error: 402, so check billing."),
+            RuntimeError("upstream died after the answer"),
+        ],
+        [AssistantMessage("must not retry")],
+    )
+
+    with pytest.raises(RuntimeError, match="after the answer"):
+        await drain(prompt="p", make_options=OPTS, sdk_query=fake_query)
+
+    assert calls["n"] == 1
+
+
+async def test_confirmed_error_after_stream_commit_never_retries(router_stub):
+    fake_query, calls = sdk_yielding(
+        [
+            InitMessage(),
+            StreamEvent("partial"),
+            AssistantMessage(
+                "API Error: 402 Insufficient Balance", error="billing_error"
+            ),
+            RuntimeError("mid-stream wrapper failure"),
+        ],
+        [AssistantMessage("must not retry")],
+    )
+
+    with pytest.raises(RuntimeError, match="mid-stream"):
+        await drain(prompt="p", make_options=OPTS, sdk_query=fake_query)
+
+    assert calls["n"] == 1
+
+
+def test_upstream_error_diagnostic_is_bounded_and_masks_credentials():
+    secret = "sk-1234567890abcdef"
+    exc = rq.UpstreamAPIError(
+        error_kind="billing_error",
+        status_code=402,
+        detail=(
+            f"line one\napi_key={secret} https://token-value@example.test/path "
+            + "x" * 500
+        ),
+    )
+
+    assert "\n" not in exc.detail
+    assert secret not in str(exc)
+    assert "token-value" not in str(exc)
+    assert "[REDACTED]" in str(exc)
+    assert len(exc.detail) <= rq._MAX_UPSTREAM_DETAIL_CHARS
+
+
 async def test_all_endpoints_failing_raises_typed_error(router_stub):
     fake_query, _ = sdk_yielding(
         [ConnectionError("primary down")],
@@ -659,5 +839,7 @@ async def test_falls_back_to_legacy_path_when_no_candidates(router_stub):
     out = await drain(prompt="p", make_options=OPTS, sdk_query=fake_query)
 
     assert len(out) == 1
-    assert calls["options"] == [{"slot": None}]  # build_options called with endpoint=None
+    assert calls["options"] == [
+        {"slot": None}
+    ]  # build_options called with endpoint=None
     assert router_stub["outcomes"] == []  # nothing to attribute the call to
