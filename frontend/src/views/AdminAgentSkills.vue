@@ -25,6 +25,7 @@ import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAppStore } from '@/stores/app'
 import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
 import { useAdminScope } from '@/composables/useAdminScope'
+import { useMermaidPreview } from '@/composables/useMermaidPreview'
 import { renderMarkdown } from '@/utils/markdownRenderer'
 import type {
   AgentSkill,
@@ -66,6 +67,7 @@ const activeFilePath = ref<string | null>(null)
 const activeFileContent = ref<SkillFileContent | null>(null)
 const activeFileLoading = ref(false)
 const activeFileError = ref<string | null>(null)
+const skillMarkdownPreviewRef = ref<HTMLElement | null>(null)
 
 interface FlatTreeRow {
   node: SkillFileNode
@@ -164,6 +166,8 @@ const renderedMarkdown = computed<string>(() => {
   const { body } = splitFrontmatter(content)
   return renderMarkdown(body, { cleanXml: false, wrapperClass: 'skill-markdown' })
 })
+
+useMermaidPreview(skillMarkdownPreviewRef, renderedMarkdown)
 
 const parseErrorMessage = (err: any): string => {
   if (err?.response?.data?.detail) return err.response.data.detail
@@ -900,6 +904,7 @@ onMounted(() => bootstrap())
               </div>
               <div
                 v-else-if="activeFileContent && isMarkdownFile && renderedMarkdown"
+                ref="skillMarkdownPreviewRef"
                 class="skill-content-markdown"
               >
                 <div v-if="renderedFrontmatter" v-html="renderedFrontmatter"></div>
