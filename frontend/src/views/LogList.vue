@@ -205,6 +205,18 @@
             </el-table-column>
 
             <el-table-column
+              prop="ai_analysis_triggered_by"
+              :label="t('logList.colAnalysisUser')"
+              width="150"
+              :show-overflow-tooltip="true"
+              resizable
+            >
+              <template #default="{ row }">
+                <span class="muted-cell">{{ analysisTriggerUserText(row) }}</span>
+              </template>
+            </el-table-column>
+
+            <el-table-column
               prop="metadata.service_name"
               :label="t('logList.colServiceName')"
               width="140"
@@ -302,6 +314,7 @@
               <div class="mobile-log-meta">
                 <span>{{ formatFileSize(row.file_size) }}</span>
                 <span>{{ formatDateTime(row.created_at) }}</span>
+                <span>{{ t('logList.analysisUserValue', { user: analysisTriggerUserText(row) }) }}</span>
               </div>
 
               <div class="mobile-log-actions">
@@ -397,6 +410,7 @@ import { ElMessageBox, ElMessage } from 'element-plus'
 import { useLogStore } from '../stores/logs'
 import { useAppStore } from '../stores/app'
 import { formatFileSize, formatDateTime, getStatusText, downloadFile, debounce } from '../utils'
+import { formatAnalysisTriggerUser } from '../utils/logAnalysisTrigger'
 import { logApi, projectRepoApi } from '../api'
 import type { ProjectRepoOption } from '../api'
 import type { LogRecord } from '../types'
@@ -418,6 +432,11 @@ const mobileFilterDrawerVisible = ref(false)
 
 const sortBy = ref<'created_at' | 'file_size' | 'updated_at' | 'filename'>(logStore.filters.sort_by)
 const sortOrder = ref<'asc' | 'desc'>(logStore.filters.sort_order)
+
+const analysisTriggerUserText = (row: LogRecord) => formatAnalysisTriggerUser(
+  row.ai_analysis_triggered_by,
+  t('logList.anonymousUser'),
+)
 
 const dateShortcuts = computed(() => [
   {

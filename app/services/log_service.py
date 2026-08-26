@@ -552,7 +552,12 @@ class LogService(BaseCRUDService[LogRecord]):
                 db, [record.project_id for record in page_records]
             )
             log_infos = [
-                await self._group_to_pydantic(db, records, project_map)
+                await self._group_to_pydantic(
+                    db,
+                    records,
+                    project_map,
+                    enrich_analysis_trigger=True,
+                )
                 for records in page_groups
             ]
 
@@ -778,7 +783,8 @@ class LogService(BaseCRUDService[LogRecord]):
         query: Optional[str] = None,
         error: Optional[str] = None,
         started_at: Optional[datetime] = None,
-        finished_at: Optional[datetime] = None
+        finished_at: Optional[datetime] = None,
+        triggered_by: Optional[Dict[str, Any]] = None,
     ) -> LogFileInfo:
         """
         更新AI分析任务的元数据（状态/进度/错误）
@@ -817,6 +823,8 @@ class LogService(BaseCRUDService[LogRecord]):
             task_info["started_at"] = started_at.isoformat()
         if finished_at:
             task_info["finished_at"] = finished_at.isoformat()
+        if isinstance(triggered_by, dict):
+            task_info["triggered_by"] = triggered_by
 
         extra_fields["ai_analysis_task"] = task_info
         metadata_dict["extra_fields"] = extra_fields
@@ -1532,6 +1540,7 @@ class LogService(BaseCRUDService[LogRecord]):
         ai_analysis_result = None
         ai_analysis_conversation: Optional[List[Dict[str, Any]]] = None
         ai_analysis_task: Dict[str, Any] = {}
+        ai_analysis_triggered_by: Optional[Dict[str, Any]] = None
         manual_analysis_content: Optional[str] = None
         manual_analysis_updated_at: Optional[datetime] = None
         manual_analysis_author: Optional[Dict[str, Any]] = None
@@ -1584,14 +1593,44 @@ class LogService(BaseCRUDService[LogRecord]):
             logger.error("_db_to_pydantic: extra_fields 提取异常 record_id=%s: %s", record.id, e, exc_info=True)
             ai_analysis_result = None
 
-        if (
+        result_trigger = (
+            ai_analysis_result.get("triggered_by")
+            if isinstance(ai_analysis_result, dict)
+            and isinstance(ai_analysis_result.get("triggered_by"), dict)
+            else None
+        )
+        task_trigger = (
+            ai_analysis_task.get("triggered_by")
+            if isinstance(ai_analysis_task.get("triggered_by"), dict)
+            else None
+        )
+        task_status = str(ai_analysis_task.get("status") or "").lower()
+        if task_status in {"queued", "running", "processing"} and task_trigger:
+            ai_analysis_triggered_by = task_trigger
+        elif result_trigger:
+            ai_analysis_triggered_by = result_trigger
+        elif task_trigger:
+            ai_analysis_triggered_by = task_trigger
+
+        should_backfill_trigger = (
             db is not None
-            and isinstance(ai_analysis_result, dict)
-            and not isinstance(ai_analysis_result.get("triggered_by"), dict)
-        ):
-            ai_analysis_result = await self._enrich_ai_analysis_trigger(
-                db, record, ai_analysis_result
+            and ai_analysis_triggered_by is None
+            and (
+                isinstance(ai_analysis_result, dict)
+                or getattr(metadata, "source", None) == "ai_chat"
             )
+        )
+        if should_backfill_trigger:
+            enriched_result = await self._enrich_ai_analysis_trigger(
+                db,
+                record,
+                ai_analysis_result if isinstance(ai_analysis_result, dict) else {},
+            )
+            enriched_trigger = enriched_result.get("triggered_by")
+            if isinstance(enriched_trigger, dict):
+                ai_analysis_triggered_by = enriched_trigger
+                if isinstance(ai_analysis_result, dict):
+                    ai_analysis_result = enriched_result
 
         metadata_payload = metadata or LogMetadata()
         try:
@@ -1636,6 +1675,7 @@ class LogService(BaseCRUDService[LogRecord]):
             issue_description=record.issue_description,
             ai_analysis_result=ai_analysis_result,
             ai_analysis_conversation=ai_analysis_conversation,
+            ai_analysis_triggered_by=ai_analysis_triggered_by,
             ai_analysis_task_id=ai_analysis_task.get("task_id"),
             ai_analysis_status=ai_analysis_task.get("status"),
             ai_analysis_progress=ai_analysis_task.get("progress"),

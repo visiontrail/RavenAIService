@@ -839,7 +839,9 @@ const scheduleManualAnalysisMermaidRender = () => {
 }
 
 const triggerInfo = computed(() => {
-  const value = aiAnalysisResult.value?.triggered_by || logStore.currentLog?.ai_analysis_result?.triggered_by
+  const value = logStore.currentLog?.ai_analysis_triggered_by
+    || aiAnalysisResult.value?.triggered_by
+    || logStore.currentLog?.ai_analysis_result?.triggered_by
   return value && typeof value === 'object' ? value : null
 })
 

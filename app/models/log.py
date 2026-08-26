@@ -260,6 +260,10 @@ class LogFileInfo(BaseModel):
         None,
         description="AI分析多轮对话历史（按时间顺序的每轮结果，含本轮提问 query）"
     )
+    ai_analysis_triggered_by: Optional[Dict[str, Any]] = Field(
+        None,
+        description="当前或最近一次AI分析的触发来源与用户快照"
+    )
     ai_analysis_task_id: Optional[str] = Field(
         None,
         description="AI分析任务ID"

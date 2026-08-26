@@ -7,7 +7,9 @@ import io
 import json
 import uuid
 import zipfile
+from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -22,6 +24,7 @@ from sqlalchemy.ext.asyncio import (
 from app.api import logs as logs_api
 from app.models.database import Base, get_db
 from app.models.log import LogRecord, LogStatus
+from app.models.user import ChatAgentRun, User
 
 
 def _metadata(
@@ -82,6 +85,14 @@ def grouped_client(tmp_path) -> TestClient:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         async with factory() as session:
+            user = User(
+                id=str(uuid.uuid4()),
+                username="alice",
+                display_name="Alice Chen",
+                email="alice@example.com",
+                password_hash="test-only",
+            )
+            session.add(user)
             session.add_all(
                 [
                     LogRecord(
@@ -160,6 +171,36 @@ def grouped_client(tmp_path) -> TestClient:
                     ),
                 ]
             )
+            session.add_all(
+                [
+                    ChatAgentRun(
+                        id=str(uuid.uuid4()),
+                        session_id="session-new",
+                        user_id=user.id,
+                        owner_scope=f"user:{user.id}",
+                        agent_kind="log_analysis",
+                        status="succeeded",
+                        user_message="analyse this batch",
+                        request_json=json.dumps(
+                            {"log_id": ids["group_primary"]}
+                        ),
+                        started_at=datetime(2026, 6, 4, 1, 2, 3),
+                    ),
+                    ChatAgentRun(
+                        id=str(uuid.uuid4()),
+                        session_id="session-legacy",
+                        user_id=user.id,
+                        owner_scope=f"user:{user.id}",
+                        agent_kind="log_analysis",
+                        status="succeeded",
+                        user_message="old batch question",
+                        request_json=json.dumps(
+                            {"log_id": ids["legacy_primary"]}
+                        ),
+                        started_at=datetime(2026, 6, 3, 1, 2, 3),
+                    ),
+                ]
+            )
             await session.commit()
 
     asyncio.run(_seed())
@@ -207,6 +248,7 @@ def test_list_groups_new_and_legacy_ai_attachments(
         for attachment in grouped["attachments"]
     } == {"companion.log", "capture.zip"}
     assert grouped["download_filename"].endswith(".zip")
+    assert grouped["ai_analysis_triggered_by"]["user"]["display_name"] == "Alice Chen"
 
     legacy = next(
         log
@@ -218,6 +260,78 @@ def test_list_groups_new_and_legacy_ai_attachments(
         attachment["filename"]
         for attachment in legacy["attachments"]
     } == {"old-a.log", "old-b.zip"}
+    assert legacy["ai_analysis_triggered_by"]["user"]["username"] == "alice"
+
+
+def test_standalone_analysis_captures_authenticated_trigger(
+    grouped_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.tasks.ai_analysis import run_ai_analysis_task
+
+    fake_user = SimpleNamespace(
+        id="user-standalone",
+        username="standalone-user",
+        display_name="Standalone User",
+        email="standalone@example.com",
+    )
+    grouped_client.app.dependency_overrides[logs_api.get_optional_user] = (
+        lambda: fake_user
+    )
+    monkeypatch.setattr(
+        run_ai_analysis_task,
+        "delay",
+        lambda *_args, **_kwargs: SimpleNamespace(id="task-standalone"),
+    )
+
+    try:
+        response = grouped_client.post(
+            f"/api/v1/logs/{grouped_client._ids['standalone']}/analyze",
+            data={"query": "find the root cause"},
+        )
+    finally:
+        grouped_client.app.dependency_overrides.pop(
+            logs_api.get_optional_user, None
+        )
+
+    assert response.status_code == 200, response.text
+    detail = grouped_client.get(
+        f"/api/v1/logs/{grouped_client._ids['standalone']}"
+    ).json()["data"]
+    trigger = detail["ai_analysis_triggered_by"]
+    assert trigger["source"] == "log_detail"
+    assert trigger["task_id"] == "task-standalone"
+    assert trigger["user"] == {
+        "id": "user-standalone",
+        "username": "standalone-user",
+        "display_name": "Standalone User",
+        "email": "standalone@example.com",
+    }
+
+
+def test_standalone_analysis_records_anonymous_trigger(
+    grouped_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.tasks.ai_analysis import run_ai_analysis_task
+
+    monkeypatch.setattr(
+        run_ai_analysis_task,
+        "delay",
+        lambda *_args, **_kwargs: SimpleNamespace(id="task-anonymous"),
+    )
+
+    response = grouped_client.post(
+        f"/api/v1/logs/{grouped_client._ids['standalone']}/analyze",
+        data={"query": "anonymous analysis"},
+    )
+
+    assert response.status_code == 200, response.text
+    detail = grouped_client.get(
+        f"/api/v1/logs/{grouped_client._ids['standalone']}"
+    ).json()["data"]
+    assert detail["ai_analysis_triggered_by"]["source"] == "log_detail"
+    assert detail["ai_analysis_triggered_by"]["user"] == {}
 
 
 def test_group_download_contains_every_original_attachment(

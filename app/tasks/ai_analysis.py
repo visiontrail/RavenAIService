@@ -192,6 +192,13 @@ def _update_ai_task_metadata(
 
     if result is not None:
         # 把本轮提问写入结果并追加到多轮对话历史，使详情页能展示完整问答记录
+        task_trigger = task_info.get("triggered_by")
+        if (
+            isinstance(result, dict)
+            and not isinstance(result.get("triggered_by"), dict)
+            and isinstance(task_trigger, dict)
+        ):
+            result["triggered_by"] = task_trigger
         turn_query = task_info.get("query") or query
         if turn_query and isinstance(result, dict) and not result.get("query"):
             result["query"] = turn_query

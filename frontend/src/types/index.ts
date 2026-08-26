@@ -12,6 +12,23 @@ export interface LogMetadata {
   extra_fields?: Record<string, any>
 }
 
+export interface AnalysisTriggerUser {
+  id?: string
+  username?: string
+  display_name?: string
+  email?: string
+}
+
+export interface AnalysisTriggerInfo {
+  source?: string
+  run_id?: string
+  session_id?: string
+  task_id?: string
+  user?: AnalysisTriggerUser
+  started_at?: string
+  finished_at?: string
+}
+
 // 日志记录类型
 export interface LogRecord {
   id: string
@@ -57,6 +74,7 @@ export interface LogRecord {
   file_size_human?: string
   ai_analysis_result?: any
   ai_analysis_conversation?: any[]
+  ai_analysis_triggered_by?: AnalysisTriggerInfo | null
   ai_analysis_task_id?: string
   ai_analysis_status?: string
   ai_analysis_progress?: number

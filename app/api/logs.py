@@ -1298,6 +1298,7 @@ async def analyze_log(
     ),
     db: AsyncSession = Depends(get_db),
     locale: str = Depends(get_request_locale),
+    current_user=Depends(get_optional_user),
 ):
     """
     AI分析日志文件
@@ -1362,6 +1363,15 @@ async def analyze_log(
             )
 
             # 记录任务信息，便于前端轮询
+            started_at = datetime.utcnow()
+            trigger_user = {}
+            if current_user is not None:
+                trigger_user = {
+                    "id": current_user.id,
+                    "username": current_user.username,
+                    "display_name": current_user.display_name,
+                    "email": current_user.email,
+                }
             await log_service.update_ai_analysis_task(
                 db,
                 log_id,
@@ -1369,7 +1379,17 @@ async def analyze_log(
                 status="queued",
                 progress=0.0,
                 query=query,
-                started_at=datetime.utcnow(),
+                started_at=started_at,
+                triggered_by={
+                    "source": "log_detail",
+                    "task_id": task_result.id,
+                    "user": {
+                        key: value
+                        for key, value in trigger_user.items()
+                        if value is not None
+                    },
+                    "started_at": started_at.isoformat(),
+                },
             )
 
             return {
