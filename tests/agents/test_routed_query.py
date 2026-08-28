@@ -650,6 +650,66 @@ async def test_no_failover_after_commit(router_stub):
     assert calls["n"] == 1
 
 
+async def test_pre_output_429_rotates_one_primary_key_before_backup(
+    router_stub, monkeypatch
+):
+    first = choice("primary")
+    first = EndpointChoice(
+        **{
+            **first.__dict__,
+            "api_key": "sk-first",
+            "api_key_id": "key-first",
+            "api_key_index": 0,
+            "api_key_count": 2,
+        }
+    )
+    second = EndpointChoice(
+        **{
+            **first.__dict__,
+            "api_key": "sk-second",
+            "api_key_id": "key-second",
+            "api_key_index": 1,
+        }
+    )
+    router_stub["candidates"] = [first, choice("backup")]
+    monkeypatch.setattr(
+        rq.model_router,
+        "alternate_api_key",
+        lambda endpoint: second if endpoint.api_key_id == "key-first" else None,
+    )
+    fake_query, calls = sdk_yielding(
+        [AssistantMessage("API Error: 429 RPM exceeded", error="rate_limit")],
+        [AssistantMessage("from rotated key")],
+        [AssistantMessage("backup must not run")],
+    )
+    seen: list[str] = []
+
+    out = await drain(
+        prompt="p",
+        make_options=lambda endpoint: endpoint.api_key_id,
+        sdk_query=fake_query,
+        on_endpoint=lambda endpoint: seen.append(endpoint.api_key_id),
+    )
+
+    assert calls["options"] == ["key-first", "key-second"]
+    assert seen == ["key-first", "key-second"]
+    assert kinds(out) == ["EndpointSwitchNotice", "AssistantMessage"]
+    assert out[0].data == {
+        "from_slot": "primary",
+        "to_slot": "primary",
+        "reason": "rate_limit",
+        "waited_ms": 0,
+        "message": "主力 API Key 达到 RPM 限制，已轮换另一个 Key 继续",
+        "from_key_id": "key-first",
+        "to_key_id": "key-second",
+    }
+    # A key-local 429 does not poison the endpoint breaker; the successful
+    # rotated attempt supplies the endpoint outcome.
+    assert router_stub["outcomes"] == [
+        {"slot": "primary", "outcome": "ok", "ttft_ms": 0}
+    ]
+
+
 # ────────────────────── Upstream API error frames ──────────────────────────
 
 

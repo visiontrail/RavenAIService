@@ -90,6 +90,39 @@ def test_blank_secret_keeps_existing_key(isolated_store):
     assert settings.anthropic_model == "some-model"
 
 
+def test_primary_secret_pool_is_masked_and_legacy_key_remains_fallback(isolated_store):
+    keys = ["sk-pool-a", "sk-pool-b", "sk-pool-c"]
+    response = mss.save({"anthropic_api_keys": keys})
+
+    assert settings.anthropic_api_keys == keys
+    assert mss.api_keys_for_slot(mss.PRIMARY_SLOT) == keys
+    entry = response["fields"]["anthropic_api_keys"]
+    assert entry == {
+        "group": "anthropic",
+        "source": "override",
+        "is_set": True,
+        "count": 3,
+    }
+    rendered = json.dumps(response)
+    assert all(key not in rendered for key in keys)
+
+
+def test_primary_secret_pool_rejects_duplicates_without_echoing_secret(isolated_store):
+    secret = "sk-do-not-echo"
+    with pytest.raises(ValueError) as excinfo:
+        mss.save({"anthropic_api_keys": [secret, secret]})
+
+    assert "重复" in str(excinfo.value)
+    assert secret not in str(excinfo.value)
+
+
+def test_legacy_primary_key_is_one_item_pool(isolated_store, monkeypatch):
+    monkeypatch.setattr(settings, "anthropic_api_keys", [])
+    monkeypatch.setattr(settings, "anthropic_api_key", "sk-legacy")
+
+    assert mss.api_keys_for_slot(mss.PRIMARY_SLOT) == ["sk-legacy"]
+
+
 def test_custom_provider_requires_base_url_and_model(isolated_store):
     with pytest.raises(ValueError, match="custom"):
         mss.save({"anthropic_provider": "custom", "anthropic_base_url": "", "anthropic_model": ""})
@@ -334,6 +367,7 @@ def blank_model_env(monkeypatch):
     """
     for key in (
         "anthropic_api_key",
+        "anthropic_api_keys",
         "anthropic_base_url",
         "anthropic_model",
         "anthropic_backup_api_key",
@@ -447,6 +481,47 @@ async def test_anthropic_probe_reports_upstream_error(isolated_store, blank_mode
     assert "invalid api key" in result["detail"]
     # The key must never be echoed back to the browser.
     assert "sk-bad" not in json.dumps(result)
+
+
+async def test_anthropic_probe_redacts_key_echoed_by_upstream(
+    isolated_store, blank_model_env, fake_upstream, monkeypatch
+):
+    box, _calls = fake_upstream
+    secret = "sk-provider-echo"
+    box["response"] = _FakeResponse(
+        status_code=401,
+        payload={"error": {"message": f"invalid x-api-key {secret}"}},
+    )
+    monkeypatch.setattr(settings, "anthropic_api_key", secret)
+
+    result = await mss.test_connection({"target": "anthropic", "provider": "zhipu"})
+
+    assert result["ok"] is False
+    assert secret not in json.dumps(result)
+    assert "[REDACTED]" in result["detail"]
+
+
+async def test_primary_pool_probe_tests_every_key_without_returning_secrets(
+    isolated_store, blank_model_env, fake_upstream
+):
+    _box, calls = fake_upstream
+    keys = ["sk-pool-a", "sk-pool-b", "sk-pool-c"]
+
+    result = await mss.test_connection(
+        {
+            "target": "anthropic",
+            "provider": "yinhe",
+            "api_keys": keys,
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["tested_key_count"] == 3
+    assert result["healthy_key_count"] == 3
+    assert len(result["key_results"]) == 3
+    assert {call["headers"]["x-api-key"] for call in calls} == set(keys)
+    rendered = json.dumps(result)
+    assert all(key not in rendered for key in keys)
 
 
 # ──────────────────────── Backup endpoint (failover slot) ───────────────────

@@ -56,6 +56,7 @@ const form = reactive({
   primary: {
     provider: 'anthropic',
     api_key: '',
+    api_keys: '',
     base_url: '',
     model: '',
     small_fast_model: '',
@@ -63,6 +64,7 @@ const form = reactive({
   backup: {
     provider: 'anthropic',
     api_key: '',
+    api_keys: '',
     base_url: '',
     model: '',
     small_fast_model: '',
@@ -89,6 +91,7 @@ const form = reactive({
 
 // Secrets are never returned by the API; only whether one is currently set.
 const anthropicKeySet = ref(false)
+const anthropicKeyCount = ref(0)
 const backupKeySet = ref(false)
 const ocrKeySet = ref(false)
 
@@ -127,6 +130,9 @@ const ENDPOINT_SLOT: Partial<Record<ModelSettingsTarget, 'primary' | 'backup'>> 
   anthropic_backup: 'backup',
 }
 
+const parseKeyPool = (value: string) =>
+  value.split(/[\r\n,]+/).map((key) => key.trim()).filter(Boolean)
+
 const runTest = async (target: ModelSettingsTarget) => {
   testing[target] = true
   testResults[target] = null
@@ -148,8 +154,13 @@ const runTest = async (target: ModelSettingsTarget) => {
           base_url: form.ocr_base_url.trim(),
           model: form.ocr_model.trim(),
         }
-    const typedKey = endpoint ? endpoint.api_key.trim() : form.ocr_api_key.trim()
-    if (typedKey) payload.api_key = typedKey
+    if (target === 'anthropic') {
+      const typedKeys = parseKeyPool(form.primary.api_keys)
+      if (typedKeys.length) payload.api_keys = typedKeys
+    } else {
+      const typedKey = endpoint ? endpoint.api_key.trim() : form.ocr_api_key.trim()
+      if (typedKey) payload.api_key = typedKey
+    }
 
     const resp = await adminApi.testModelSettings(payload)
     if (!resp?.data) throw new Error(resp?.message || t('admin.modelSettings.testFail'))
@@ -207,9 +218,12 @@ const populateForm = (data: ModelSettingsData) => {
   form.ocr_provider = String(f.ocr_provider?.value ?? '')
   // Reset secret inputs — only their "is set" state is known.
   form.primary.api_key = ''
+  form.primary.api_keys = ''
   form.backup.api_key = ''
+  form.backup.api_keys = ''
   form.ocr_api_key = ''
-  anthropicKeySet.value = Boolean(f.anthropic_api_key?.is_set)
+  anthropicKeyCount.value = Number(f.anthropic_api_keys?.count || (f.anthropic_api_key?.is_set ? 1 : 0))
+  anthropicKeySet.value = Boolean(f.anthropic_api_keys?.is_set || f.anthropic_api_key?.is_set)
   backupKeySet.value = Boolean(f.anthropic_backup_api_key?.is_set)
   ocrKeySet.value = Boolean(f.ocr_api_key?.is_set)
 }
@@ -263,7 +277,8 @@ const handleSaveSettings = async () => {
       ocr_provider: form.ocr_provider.trim(),
     }
     // Only send secrets when the admin typed a new value; blank keeps the old.
-    if (form.primary.api_key.trim()) payload.anthropic_api_key = form.primary.api_key.trim()
+    const primaryKeys = parseKeyPool(form.primary.api_keys)
+    if (primaryKeys.length) payload.anthropic_api_keys = primaryKeys
     if (form.backup.api_key.trim()) payload.anthropic_backup_api_key = form.backup.api_key.trim()
     if (form.ocr_api_key.trim()) payload.ocr_api_key = form.ocr_api_key.trim()
 
@@ -514,6 +529,7 @@ onMounted(() => {
               :provider-options="providerOptions"
               :profiles="providerProfiles"
               :key-set="anthropicKeySet"
+              :key-count="anthropicKeyCount"
               :testing="testing.anthropic"
               :test-result="testResults.anthropic"
               @test="runTest('anthropic')"

@@ -28,6 +28,7 @@ const emptyForm = (over: Partial<EndpointForm> = {}): EndpointForm =>
   reactive({
     provider: 'deepseek',
     api_key: '',
+    api_keys: '',
     base_url: '',
     model: '',
     small_fast_model: '',
@@ -60,6 +61,7 @@ describe('AnthropicEndpointCard', () => {
   it('reads source badges from the primary keys for the primary slot', async () => {
     const fields: Record<string, ModelSettingFieldEntry> = {
       anthropic_provider: { group: 'anthropic', source: 'override' },
+      anthropic_api_keys: { group: 'anthropic', source: 'override', is_set: true, count: 2 },
       anthropic_base_url: { group: 'anthropic', source: 'override' },
       // The backup entries must be ignored here — picking these up would mean
       // the two cards are reading each other's state.
@@ -125,5 +127,20 @@ describe('AnthropicEndpointCard', () => {
 
     expect(primary).toContain('测试连接')
     expect(backup).toContain('测试备用连接')
+  })
+
+  it('renders a multi-key textarea only for the primary slot', async () => {
+    const primary = await render({
+      slotName: 'primary',
+      form: emptyForm(),
+      keySet: true,
+      keyCount: 15,
+    })
+    const backup = await render({ slotName: 'backup', form: emptyForm() })
+
+    expect(primary).toContain('<textarea')
+    expect(primary).toContain('已配置 15 个')
+    expect(backup).not.toContain('<textarea')
+    expect(backup).toContain('type="password"')
   })
 })

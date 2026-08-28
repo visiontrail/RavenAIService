@@ -61,6 +61,10 @@ def _probe_key(slot: str) -> str:
     return f"{_KEY_PREFIX}probe:{slot}"
 
 
+def _key_cursor_key(slot: str) -> str:
+    return f"{_KEY_PREFIX}api_key_cursor:{slot}"
+
+
 # Outcomes recorded per model call.
 OUTCOME_OK = "ok"
 OUTCOME_SLOW = "slow"
@@ -105,6 +109,9 @@ class EndpointChoice:
     model: str
     small_fast_model: Optional[str]
     profile: Any  # ProviderProfile; typed loosely to avoid an import cycle
+    api_key_id: str = "key-single"
+    api_key_index: int = 0
+    api_key_count: int = 1
 
     @property
     def is_backup(self) -> bool:
@@ -135,6 +142,7 @@ class _RouterStore:
         self._local_samples: Dict[str, List[str]] = {}
         self._local_breaker: Dict[str, float] = {}  # slot -> expiry monotonic
         self._local_probe: Dict[str, float] = {}
+        self._local_key_cursor: Dict[str, int] = {}
         self._lock = threading.Lock()
 
     @property
@@ -275,6 +283,28 @@ class _RouterStore:
             self._local_probe[slot] = now + cooldown
             return True
 
+    # ── API-key pool cursor ─────────────────────────────────────────────────
+
+    def next_key_index(self, slot: str, *, pool_size: int) -> int:
+        """Return the next round-robin index, shared through Redis when possible."""
+        if pool_size <= 1:
+            return 0
+        client = self.client
+        if client is not None:
+            try:
+                # Redis starts at one; subtract before modulo so the first
+                # resolved run uses pool index zero.
+                value = int(client.incr(_key_cursor_key(slot)))
+                return (value - 1) % pool_size
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "model_router: api-key cursor failed slot=%s: %s", slot, exc
+                )
+        with self._lock:
+            index = self._local_key_cursor.get(slot, 0) % pool_size
+            self._local_key_cursor[slot] = (index + 1) % pool_size
+            return index
+
 
 _store: Optional[_RouterStore] = None
 
@@ -295,7 +325,12 @@ def reset_store_for_tests(redis_client: Optional[Any] = None) -> _RouterStore:
 # ─────────────────────────── Endpoint resolution ───────────────────────────
 
 
-def _resolve(slot_spec: Any) -> Optional[EndpointChoice]:
+def _resolve(
+    slot_spec: Any,
+    *,
+    advance_key: bool = False,
+    key_index: Optional[int] = None,
+) -> Optional[EndpointChoice]:
     """Build an :class:`EndpointChoice` from one configured slot.
 
     Returns ``None`` when the slot cannot serve traffic at all (disabled, no
@@ -304,6 +339,8 @@ def _resolve(slot_spec: Any) -> Optional[EndpointChoice]:
     """
     from app.agents.anthropic_client import PROVIDER_PROFILES
     from app.config import settings
+    from app.services.api_key_pool import key_identifier
+    from app.services.model_settings_service import api_keys_for_slot
 
     if not slot_spec.is_enabled():
         return None
@@ -313,9 +350,17 @@ def _resolve(slot_spec: Any) -> Optional[EndpointChoice]:
     if profile is None:
         return None
 
-    api_key = str(getattr(settings, slot_spec.api_key_key) or "").strip()
-    if not api_key:
+    api_keys = api_keys_for_slot(slot_spec)
+    if not api_keys:
         return None
+    if key_index is None:
+        key_index = (
+            get_store().next_key_index(slot_spec.name, pool_size=len(api_keys))
+            if advance_key
+            else 0
+        )
+    key_index %= len(api_keys)
+    api_key = api_keys[key_index]
 
     base_url = str(getattr(settings, slot_spec.base_url_key) or "").strip() or (
         profile.default_base_url or ""
@@ -338,7 +383,28 @@ def _resolve(slot_spec: Any) -> Optional[EndpointChoice]:
         model=model,
         small_fast_model=small_fast,
         profile=profile,
+        api_key_id=key_identifier(api_key),
+        api_key_index=key_index,
+        api_key_count=len(api_keys),
     )
+
+
+def alternate_api_key(choice: EndpointChoice) -> Optional[EndpointChoice]:
+    """Resolve the next key for the same primary endpoint, if a pool exists."""
+    if choice.slot != SLOT_PRIMARY or choice.api_key_count <= 1:
+        return None
+    from app.services.model_settings_service import PRIMARY_SLOT, api_keys_for_slot
+
+    api_keys = api_keys_for_slot(PRIMARY_SLOT)
+    if len(api_keys) <= 1:
+        return None
+    alternate = _resolve(
+        PRIMARY_SLOT,
+        key_index=(choice.api_key_index + 1) % len(api_keys),
+    )
+    if alternate is None or alternate.api_key_id == choice.api_key_id:
+        return None
+    return alternate
 
 
 def _supports(choice: EndpointChoice, *, require_mcp: bool, require_image: bool,
@@ -386,7 +452,7 @@ def candidates(
         require_small_fast=require_small_fast,
     )
 
-    primary = _resolve(PRIMARY_SLOT)
+    primary = _resolve(PRIMARY_SLOT, advance_key=True)
     if primary is not None and not _supports(primary, **caps):
         primary = None
 
@@ -594,6 +660,7 @@ def health_snapshot() -> Dict[str, Any]:
                 "configured": choice is not None,
                 "provider": choice.provider if choice else None,
                 "model": choice.model if choice else None,
+                "key_count": choice.api_key_count if choice else 0,
                 "samples": len(window),
                 "bad_samples": sum(1 for flag in window if flag == "1"),
             }

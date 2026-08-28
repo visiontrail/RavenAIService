@@ -49,6 +49,12 @@ class FakeRedis:
         self.lists.pop(key, None)
         return 1
 
+    def incr(self, key):
+        self._check()
+        value = int(self.strings.get(key, "0")) + 1
+        self.strings[key] = str(value)
+        return value
+
     # -- list ops --
     def lrange(self, key, start, end):
         self._check()
@@ -116,6 +122,7 @@ def routed(monkeypatch, tmp_path):
 
     monkeypatch.setattr(settings, "anthropic_provider", "yinhe")
     monkeypatch.setattr(settings, "anthropic_api_key", "sk-primary")
+    monkeypatch.setattr(settings, "anthropic_api_keys", [])
     monkeypatch.setattr(settings, "anthropic_base_url", "")
     monkeypatch.setattr(settings, "anthropic_model", "")
     monkeypatch.setattr(settings, "anthropic_small_fast_model", "")
@@ -147,6 +154,48 @@ def test_resolves_endpoint_from_provider_profile(fake_redis, routed):
     assert primary.api_key == "sk-primary"
     # The backup must carry its own key, never the primary's.
     assert model_router.candidates()[1].api_key == "sk-backup"
+
+
+def test_primary_pool_round_robins_through_redis_cursor(fake_redis, routed, monkeypatch):
+    monkeypatch.setattr(
+        settings, "anthropic_api_keys", ["sk-pool-a", "sk-pool-b", "sk-pool-c"]
+    )
+
+    choices = [model_router.candidates()[0] for _ in range(5)]
+
+    assert [choice.api_key for choice in choices] == [
+        "sk-pool-a",
+        "sk-pool-b",
+        "sk-pool-c",
+        "sk-pool-a",
+        "sk-pool-b",
+    ]
+    assert all(choice.api_key_count == 3 for choice in choices)
+    assert len({choice.api_key_id for choice in choices}) == 3
+    assert all(not choice.api_key_id.startswith("sk-") for choice in choices)
+
+
+def test_primary_pool_falls_back_to_local_cursor_when_redis_is_down(
+    fake_redis, routed, monkeypatch
+):
+    monkeypatch.setattr(settings, "anthropic_api_keys", ["sk-a", "sk-b"])
+    fake_redis.fail = True
+
+    assert [model_router.candidates()[0].api_key for _ in range(4)] == [
+        "sk-a",
+        "sk-b",
+        "sk-a",
+        "sk-b",
+    ]
+
+
+def test_backup_remains_single_key_when_primary_has_pool(fake_redis, routed, monkeypatch):
+    monkeypatch.setattr(settings, "anthropic_api_keys", ["sk-a", "sk-b"])
+
+    backup = model_router.candidates()[1]
+
+    assert backup.api_key == "sk-backup"
+    assert backup.api_key_count == 1
 
 
 def test_routing_disabled_yields_primary_only(fake_redis, routed, monkeypatch):

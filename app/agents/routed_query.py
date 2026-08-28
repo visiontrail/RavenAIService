@@ -373,6 +373,8 @@ class EndpointSwitchNotice:
         to_slot: str,
         reason: str,
         waited_ms: int,
+        from_key_id: Optional[str] = None,
+        to_key_id: Optional[str] = None,
     ) -> None:
         self.data = {
             "from_slot": from_slot,
@@ -382,9 +384,17 @@ class EndpointSwitchNotice:
             "message": (
                 f"主力端点 {waited_ms} ms 未返回首个 token，已切换到备用端点继续"
                 if reason == "first_token_deadline"
-                else f"端点 {from_slot} 不可用（{reason}），已切换到 {to_slot} 继续"
+                else (
+                    "主力 API Key 达到 RPM 限制，已轮换另一个 Key 继续"
+                    if reason == "rate_limit" and from_slot == to_slot
+                    else f"端点 {from_slot} 不可用（{reason}），已切换到 {to_slot} 继续"
+                )
             ),
         }
+        if from_key_id:
+            self.data["from_key_id"] = from_key_id
+        if to_key_id:
+            self.data["to_key_id"] = to_key_id
 
 
 def _deadline_seconds() -> float:
@@ -573,6 +583,7 @@ async def routed_query(
         choices = [None]  # type: ignore[list-item]
 
     failures: List[Tuple[str, BaseException]] = []
+    rate_limit_key_retry_used = False
     deadline = _deadline_seconds()
     # Teardowns this call started. Reaped before we hand control back, because
     # the workspace agents run under ``asyncio.run`` in a Celery worker — the
@@ -709,8 +720,11 @@ async def routed_query(
                                     slot, outcome=OUTCOME_OK, ttft_ms=ttft_ms
                                 )
                             logger.info(
-                                "routed_query: committed slot=%s agent_kind=%s ttft_ms=%d",
+                                "routed_query: committed slot=%s key_id=%s pool_size=%d "
+                                "agent_kind=%s ttft_ms=%d",
                                 slot,
+                                choice.api_key_id if choice is not None else "settings",
+                                choice.api_key_count if choice is not None else 1,
                                 agent_kind,
                                 ttft_ms,
                             )
@@ -728,8 +742,11 @@ async def routed_query(
                                 slot, outcome=OUTCOME_OK, ttft_ms=ttft_ms
                             )
                         logger.info(
-                            "routed_query: committed slot=%s agent_kind=%s ttft_ms=%d",
+                            "routed_query: committed slot=%s key_id=%s pool_size=%d "
+                            "agent_kind=%s ttft_ms=%d",
                             slot,
+                            choice.api_key_id if choice is not None else "settings",
+                            choice.api_key_count if choice is not None else 1,
                             agent_kind,
                             ttft_ms,
                         )
@@ -811,7 +828,25 @@ async def routed_query(
                     # effects and re-bill the tokens.
                     raise stream_error
                 outcome = _classify(stream_error)
-                if choice is not None:
+                alternate_choice: Optional[EndpointChoice] = None
+                if (
+                    choice is not None
+                    and isinstance(stream_error, UpstreamAPIError)
+                    and stream_error.error_kind == "rate_limit"
+                    and not rate_limit_key_retry_used
+                ):
+                    alternate_choice = model_router.alternate_api_key(choice)
+                    if alternate_choice is not None:
+                        choices.insert(index + 1, alternate_choice)
+                        rate_limit_key_retry_used = True
+                        logger.warning(
+                            "routed_query: key-local rate limit slot=%s key_id=%s; "
+                            "retrying once with key_id=%s before backup",
+                            slot,
+                            choice.api_key_id,
+                            alternate_choice.api_key_id,
+                        )
+                if choice is not None and alternate_choice is None:
                     model_router.record_outcome(slot, outcome=outcome)
                 failures.append((slot, stream_error))
                 remaining = len(choices) - index - 1
@@ -836,6 +871,10 @@ async def routed_query(
                         to_slot=next_slot.slot if next_slot is not None else "settings",
                         reason=reason,
                         waited_ms=int((_now() - started) * 1000),
+                        from_key_id=(choice.api_key_id if choice is not None else None),
+                        to_key_id=(
+                            next_slot.api_key_id if next_slot is not None else None
+                        ),
                     )
                 continue
 

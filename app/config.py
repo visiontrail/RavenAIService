@@ -26,6 +26,7 @@ OVERRIDABLE_MODEL_KEYS: frozenset = frozenset(
         # 主力 Anthropic 兼容模型
         "anthropic_provider",
         "anthropic_api_key",
+        "anthropic_api_keys",
         "anthropic_base_url",
         "anthropic_model",
         "anthropic_small_fast_model",
@@ -160,6 +161,9 @@ class Settings(BaseSettings):
     # Anthropic 标准 LLM 配置（供 Claude Agent SDK 使用）
     anthropic_provider: str = "deepseek"  # anthropic | deepseek | custom
     anthropic_api_key: Optional[str] = None
+    # 主力 API Key 池。非空时优先于上面的兼容单 Key；环境变量使用 JSON 数组，
+    # 例如 ANTHROPIC_API_KEYS=["sk-a","sk-b"]。后台运行期配置同样保存原生数组。
+    anthropic_api_keys: List[str] = []
     anthropic_base_url: Optional[str] = None  # None 时由 provider profile 提供
     anthropic_model: Optional[str] = None  # None 时由 provider profile 提供
     anthropic_small_fast_model: Optional[str] = None

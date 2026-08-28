@@ -838,6 +838,8 @@ export default {
         'When a user pastes / drops / picks images in the composer, this model turns them into text that is merged into the prompt. Uses an OpenAI-compatible endpoint, defaulting to Alibaba Cloud DashScope Qwen-VL.',
       providerLabel: 'Provider',
       apiKeyLabel: 'API Key',
+      apiKeyPoolLabel: 'Primary API key pool',
+      apiKeyCount: '{count} configured',
       baseUrlLabel: 'Base URL',
       modelLabel: 'Primary model',
       smallFastModelLabel: 'Small / fast model',
@@ -853,6 +855,9 @@ export default {
       capMcpYes: 'MCP tools',
       capMcpNo: 'no MCP tools',
       apiKeyHint: 'Only fill this in to rotate the key; leave blank to keep the current key.',
+      apiKeyPoolHint: 'One API key per line. Saved keys are round-robin assigned across instances; leave blank to keep the current pool.',
+      apiKeyPoolSetPlaceholder: 'Pool configured — paste the complete list to replace it (one per line)',
+      apiKeyPoolUnsetPlaceholder: 'Enter one API key per line',
       apiKeySetPlaceholder: 'Configured — leave blank to keep',
       apiKeyUnsetPlaceholder: 'Not configured — enter an API key',
       providerHint:
@@ -891,6 +896,7 @@ export default {
       testOcrHint:
         'Sends a text-only request to verify the OCR endpoint / key / model. No image is uploaded.',
       testOk: 'Connection OK ({ms} ms)',
+      testPoolResult: 'Key pool connectivity: {healthy}/{total} passed',
       testFailed: 'Connection failed',
       testFail: 'Test request failed',
       testReply: 'Model reply',

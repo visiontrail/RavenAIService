@@ -297,14 +297,22 @@ PROVIDER_PROFILES: Dict[str, ProviderProfile] = {
 
 # ─────────────────────── Public API ────────────────────────────────
 
+def _configured_primary_api_keys(settings_obj: Any) -> List[str]:
+    """Read the typed pool defensively; legacy mocks/configs may lack the field."""
+    raw = getattr(settings_obj, "anthropic_api_keys", [])
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [str(key).strip() for key in raw if str(key).strip()]
+
+
 def assert_anthropic_configured() -> None:
     """校验 Anthropic 配置完整性，不完整时抛 AnthropicConfigurationError。"""
     from app.config import settings
 
-    if not settings.anthropic_api_key:
+    if not _configured_primary_api_keys(settings) and not settings.anthropic_api_key:
         raise AnthropicConfigurationError(
-            "anthropic_api_key is not configured. "
-            "Set ANTHROPIC_API_KEY environment variable."
+            "Neither anthropic_api_keys nor anthropic_api_key is configured. "
+            "Set ANTHROPIC_API_KEYS or ANTHROPIC_API_KEY."
         )
 
     if settings.anthropic_provider == "custom":
@@ -413,7 +421,8 @@ def build_options(
             settings.anthropic_base_url
             or profile.default_base_url
         )
-        effective_api_key = settings.anthropic_api_key
+        configured_api_keys = _configured_primary_api_keys(settings)
+        effective_api_key = configured_api_keys[0] if configured_api_keys else settings.anthropic_api_key
     effective_max_turns = max_turns if max_turns is not None else settings.anthropic_max_turns
     effective_permission_mode = permission_mode or settings.anthropic_permission_mode
 

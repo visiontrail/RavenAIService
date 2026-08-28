@@ -47,6 +47,7 @@ export interface ModelSettingFieldEntry {
   value?: string | number | boolean
   env_default?: string | number | boolean
   is_set?: boolean
+  count?: number
 }
 
 export interface ModelProviderProfile {
@@ -69,6 +70,8 @@ export interface ModelProviderProfile {
 export interface EndpointForm {
   provider: string
   api_key: string
+  /** Primary only: one secret per line. Backup remains a single key. */
+  api_keys: string
   base_url: string
   model: string
   small_fast_model: string
@@ -79,6 +82,7 @@ export interface ModelRouterSlotState {
   configured: boolean
   provider: string | null
   model: string | null
+  key_count: number
   samples: number
   bad_samples: number
 }
@@ -110,6 +114,7 @@ export interface TestModelSettingsPayload {
   base_url?: string
   model?: string
   api_key?: string
+  api_keys?: string[]
 }
 
 export interface ModelSettingsTestResult {
@@ -124,11 +129,24 @@ export interface ModelSettingsTestResult {
   usage?: Record<string, unknown> | null
   error_kind?: string
   detail?: string
+  key_count?: number
+  tested_key_count?: number
+  healthy_key_count?: number
+  failed_key_count?: number
+  key_results?: Array<{
+    key_id: string
+    ok: boolean
+    status_code?: number
+    latency_ms?: number
+    error_kind?: string
+    detail?: string
+  }>
 }
 
 export interface UpdateModelSettingsPayload {
   anthropic_provider?: string
   anthropic_api_key?: string | null
+  anthropic_api_keys?: string[] | null
   anthropic_base_url?: string
   anthropic_model?: string
   anthropic_small_fast_model?: string

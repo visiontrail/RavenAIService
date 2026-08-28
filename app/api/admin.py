@@ -271,6 +271,7 @@ class UpdateModelSettingsRequest(BaseModel):
 
     anthropic_provider: Optional[str] = None
     anthropic_api_key: Optional[str] = None
+    anthropic_api_keys: Optional[List[str]] = None
     anthropic_base_url: Optional[str] = None
     anthropic_model: Optional[str] = None
     anthropic_small_fast_model: Optional[str] = None
@@ -353,6 +354,7 @@ class TestModelSettingsRequest(BaseModel):
     base_url: Optional[str] = None
     model: Optional[str] = None
     api_key: Optional[str] = None
+    api_keys: Optional[List[str]] = None
 
 
 @router.post("/model-settings/test", response_model=ModelSettingsResponse)

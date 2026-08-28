@@ -77,3 +77,20 @@ def test_invalid_policy_is_rejected_with_400(client):
     assert "熔断器永远不会跳闸" in resp.text
     # Nothing from the rejected payload may have been written.
     assert "model_router_window_size" not in runtime_settings_service.get_all()
+
+
+def test_primary_key_pool_round_trips_as_count_only(client):
+    keys = ["sk-http-a", "sk-http-b", "sk-http-c"]
+    resp = client.put(
+        "/admin/model-settings",
+        json={"anthropic_api_keys": keys},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    field = body["data"]["fields"]["anthropic_api_keys"]
+    assert field["is_set"] is True
+    assert field["count"] == 3
+    assert "value" not in field
+    assert all(key not in resp.text for key in keys)
+    assert runtime_settings_service.get_all()["anthropic_api_keys"] == keys

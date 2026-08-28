@@ -18,6 +18,7 @@ without touching call sites again.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -26,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import OVERRIDABLE_MODEL_KEYS, settings
 from app.services import runtime_settings_service
+from app.services.api_key_pool import key_identifier, normalize_api_keys
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +90,7 @@ _TEST_PROMPT = "ping"
 @dataclass(frozen=True)
 class FieldSpec:
     key: str          # matches the Settings attribute / runtime store key
-    kind: str         # "str" | "int" | "bool" | "secret"
+    kind: str         # "str" | "int" | "bool" | "secret" | "secret_list"
     group: str        # "anthropic" | "anthropic_backup" | "ocr"
     secret: bool = False
 
@@ -112,6 +114,7 @@ class AnthropicSlot:
     group: str                # FieldSpec.group, and the probe ``target`` value
     provider_key: str
     api_key_key: str
+    api_keys_key: Optional[str]
     base_url_key: str
     model_key: str
     small_fast_model_key: str
@@ -128,6 +131,7 @@ PRIMARY_SLOT = AnthropicSlot(
     group="anthropic",
     provider_key="anthropic_provider",
     api_key_key="anthropic_api_key",
+    api_keys_key="anthropic_api_keys",
     base_url_key="anthropic_base_url",
     model_key="anthropic_model",
     small_fast_model_key="anthropic_small_fast_model",
@@ -138,6 +142,7 @@ BACKUP_SLOT = AnthropicSlot(
     group="anthropic_backup",
     provider_key="anthropic_backup_provider",
     api_key_key="anthropic_backup_api_key",
+    api_keys_key=None,
     base_url_key="anthropic_backup_base_url",
     model_key="anthropic_backup_model",
     small_fast_model_key="anthropic_backup_small_fast_model",
@@ -154,6 +159,7 @@ _SPECS: Tuple[FieldSpec, ...] = (
     # ── Primary Anthropic-compatible model ────────────────────────────────
     FieldSpec("anthropic_provider", "str", "anthropic"),
     FieldSpec("anthropic_api_key", "secret", "anthropic", secret=True),
+    FieldSpec("anthropic_api_keys", "secret_list", "anthropic", secret=True),
     FieldSpec("anthropic_base_url", "str", "anthropic"),
     FieldSpec("anthropic_model", "str", "anthropic"),
     FieldSpec("anthropic_small_fast_model", "str", "anthropic"),
@@ -230,6 +236,8 @@ def _coerce(spec: FieldSpec, raw: Any) -> Any:
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{spec.key} 必须是整数") from exc
         return value
+    if spec.kind == "secret_list":
+        return normalize_api_keys(raw, field_name=spec.key)
     # str / secret — normalise to a trimmed string
     return str(raw).strip()
 
@@ -336,6 +344,8 @@ def describe() -> Dict[str, Any]:
         if spec.secret:
             is_set = bool(effective)
             entry["is_set"] = is_set
+            if spec.kind == "secret_list":
+                entry["count"] = len(effective or [])
             if not is_set:
                 entry["source"] = "unset"
         else:
@@ -393,7 +403,13 @@ def save(payload: Dict[str, Any]) -> Dict[str, Any]:
         spec = _SPEC_BY_KEY[key]
         if raw is None:
             continue
-        if spec.secret:
+        if spec.kind == "secret_list":
+            value = _coerce(spec, raw)
+            if not value:
+                # Empty secret list → keep whatever is already effective.
+                continue
+            coerced[key] = value
+        elif spec.secret:
             value = str(raw).strip()
             if not value:
                 # Empty secret → keep whatever is already effective.
@@ -421,6 +437,23 @@ def save(payload: Dict[str, Any]) -> Dict[str, Any]:
     if coerced:
         runtime_settings_service.update(coerced)
     return describe()
+
+
+def api_keys_for_slot(slot: AnthropicSlot) -> List[str]:
+    """Resolve a slot's effective secret list without exposing it to callers.
+
+    Only the primary declares ``api_keys_key``. A non-empty pool wins; otherwise
+    the legacy single-key field remains the one-item compatibility pool. The
+    backup therefore stays structurally single-key.
+    """
+    if slot.api_keys_key:
+        pooled = normalize_api_keys(
+            getattr(settings, slot.api_keys_key), field_name=slot.api_keys_key
+        )
+        if pooled:
+            return pooled
+    single = str(getattr(settings, slot.api_key_key) or "").strip()
+    return [single] if single else []
 
 
 def _validate_router(coerced: Dict[str, Any]) -> None:
@@ -669,11 +702,21 @@ async def _test_anthropic(slot: AnthropicSlot, payload: Dict[str, Any]) -> Dict[
         provider, _field(payload, "base_url", saved(slot.base_url_key))
     )
     model = _resolve_model(provider, _field(payload, "model", saved(slot.model_key)))
-    # Secrets follow save()'s rule instead: blank keeps the stored key.
-    api_key = _pick(payload, "api_key") or saved(slot.api_key_key)
+    # Secrets follow save()'s rule instead: blank keeps the stored key. Primary
+    # may test a whole unsaved pool; backup intentionally remains single-key.
+    if slot.api_keys_key:
+        typed_keys = normalize_api_keys(payload.get("api_keys"), field_name="api_keys")
+        if typed_keys:
+            api_keys = typed_keys
+        else:
+            typed_key = _pick(payload, "api_key")
+            api_keys = [typed_key] if typed_key else api_keys_for_slot(slot)
+    else:
+        api_key = _pick(payload, "api_key") or saved(slot.api_key_key)
+        api_keys = [api_key] if api_key else []
     context = {"provider": provider, "base_url": base_url, "model": model}
 
-    if not api_key:
+    if not api_keys:
         return _fail(target, "missing_api_key", "尚未配置 API Key", **context)
     if not base_url:
         return _fail(target, "missing_base_url", "Base URL 为空", **context)
@@ -688,24 +731,64 @@ async def _test_anthropic(slot: AnthropicSlot, payload: Dict[str, Any]) -> Dict[
             **context,
         )
 
-    return await _probe(
-        target=target,
-        url=f"{base_url.rstrip('/')}/v1/messages",
-        # Mirror what the Claude Agent SDK sends (ANTHROPIC_API_KEY → x-api-key),
-        # so a green test means the agent path itself will authenticate.
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        body={
-            "model": model,
-            "max_tokens": _TEST_MAX_TOKENS,
-            "messages": [{"role": "user", "content": _TEST_PROMPT}],
-        },
-        context=context,
-        parse_reply=_anthropic_reply_text,
-    )
+    async def probe_key(api_key: str) -> Dict[str, Any]:
+        result = await _probe(
+            target=target,
+            url=f"{base_url.rstrip('/')}/v1/messages",
+            # Mirror what the Claude Agent SDK sends (ANTHROPIC_API_KEY →
+            # x-api-key), so a green test means the agent path authenticates.
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            body={
+                "model": model,
+                "max_tokens": _TEST_MAX_TOKENS,
+                "messages": [{"role": "user", "content": _TEST_PROMPT}],
+            },
+            context={**context, "key_id": key_identifier(api_key)},
+            parse_reply=_anthropic_reply_text,
+        )
+        # A provider is not trusted to keep credentials out of its own error
+        # body. Strip the exact submitted secret before either a single-key or
+        # aggregate result can cross the Admin API boundary.
+        for field in ("detail", "reply"):
+            value = result.get(field)
+            if isinstance(value, str) and api_key in value:
+                result[field] = value.replace(api_key, "[REDACTED]")
+        return result
+
+    results = await asyncio.gather(*(probe_key(api_key) for api_key in api_keys))
+    if len(results) == 1:
+        return results[0]
+
+    healthy = sum(1 for result in results if result.get("ok"))
+    # Keep the aggregate secret-safe and compact. Per-key identifiers are
+    # opaque hashes; upstream reply bodies are omitted from the pool summary.
+    key_results = [
+        {
+            key: result.get(key)
+            for key in ("key_id", "ok", "status_code", "latency_ms", "error_kind", "detail")
+            if result.get(key) is not None
+        }
+        for result in results
+    ]
+    return {
+        "ok": healthy == len(results),
+        "target": target,
+        **context,
+        "key_count": len(results),
+        "tested_key_count": len(results),
+        "healthy_key_count": healthy,
+        "failed_key_count": len(results) - healthy,
+        "key_results": key_results,
+        "detail": (
+            f"{healthy}/{len(results)} 个 API Key 连接测试通过"
+            if healthy != len(results)
+            else f"全部 {len(results)} 个 API Key 连接测试通过"
+        ),
+    }
 
 
 async def _test_ocr(payload: Dict[str, Any]) -> Dict[str, Any]:

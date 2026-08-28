@@ -250,7 +250,9 @@ Common scripts:
 - `LLM_MODEL_NAME`
 - `LLM_REASONING_MODEL`
 - `ANTHROPIC_PROVIDER`: `deepseek | anthropic | custom`, used by the log analysis agent
-- `ANTHROPIC_API_KEY`: required for the log analysis agent
+- `ANTHROPIC_API_KEYS`: optional primary key pool as a JSON array; new Agent runs use shared round-robin selection
+- `ANTHROPIC_API_KEY`: legacy single-key fallback when `ANTHROPIC_API_KEYS` is empty
+- The Admin model-settings page can replace and test the primary pool at runtime; backup DeepSeek remains single-key
 - `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`: configure for a custom provider or to override provider defaults
 - `PROMPTS_CONFIG_PATH`
 

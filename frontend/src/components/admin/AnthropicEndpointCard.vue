@@ -30,6 +30,8 @@ const props = defineProps<{
   profiles: ModelProviderProfile[]
   /** Whether a secret is already stored server-side (it is never sent back). */
   keySet: boolean
+  /** Number of primary keys stored server-side. Backup stays single-key. */
+  keyCount?: number
   testing: boolean
   testResult: ModelSettingsTestResult | null
   /** Backup only: dim + block the fields while the slot is switched off. */
@@ -43,7 +45,8 @@ const { t } = useI18n()
 // Backend key names per slot. Mirrors ``model_settings_service.AnthropicSlot``;
 // deliberately an explicit map rather than string concatenation, because
 // ``anthropic_backup_model`` also starts with ``anthropic_``.
-const KEYS: Record<'primary' | 'backup', Record<keyof EndpointForm, string>> = {
+type SharedField = Exclude<keyof EndpointForm, 'api_keys'>
+const KEYS: Record<'primary' | 'backup', Record<SharedField, string>> = {
   primary: {
     provider: 'anthropic_provider',
     api_key: 'anthropic_api_key',
@@ -60,16 +63,21 @@ const KEYS: Record<'primary' | 'backup', Record<keyof EndpointForm, string>> = {
   },
 }
 
-const keyOf = (field: keyof EndpointForm) => KEYS[props.slotName][field]
+const keyOf = (field: SharedField) => KEYS[props.slotName][field]
 
-const sourceOf = (field: keyof EndpointForm) =>
+const sourceOf = (field: SharedField) =>
   props.fields?.[keyOf(field)]?.source ?? 'env'
-const sourceLabel = (field: keyof EndpointForm) => {
+const sourceLabel = (field: SharedField) => {
   const src = sourceOf(field)
   if (src === 'override') return t('admin.modelSettings.sourceOverride')
   if (src === 'unset') return t('admin.modelSettings.sourceUnset')
   return t('admin.modelSettings.sourceEnv')
 }
+const primaryKeySource = computed(() => {
+  const pool = props.fields?.anthropic_api_keys
+  if (pool?.is_set) return pool.source
+  return props.fields?.anthropic_api_key?.source ?? 'unset'
+})
 
 const profileOf = (name: string) => props.profiles.find((p) => p.name === name) ?? null
 const selectedProfile = computed(() => profileOf(props.form.provider))
@@ -145,17 +153,34 @@ const testBtnLabel = computed(() =>
 
     <label class="block text-sm text-slate-700">
       <span class="flex items-center gap-2">
-        {{ t('admin.modelSettings.apiKeyLabel') }}
-        <span class="ms-badge" :class="`ms-badge--${sourceOf('api_key')}`">{{ sourceLabel('api_key') }}</span>
+        {{ slotName === 'primary' ? t('admin.modelSettings.apiKeyPoolLabel') : t('admin.modelSettings.apiKeyLabel') }}
+        <span
+          class="ms-badge"
+          :class="`ms-badge--${slotName === 'primary' ? primaryKeySource : sourceOf('api_key')}`"
+        >
+          {{ slotName === 'primary' ? t('admin.modelSettings.apiKeyCount', { count: keyCount ?? 0 }) : sourceLabel('api_key') }}
+        </span>
       </span>
+      <textarea
+        v-if="slotName === 'primary'"
+        v-model="form.api_keys"
+        rows="5"
+        autocomplete="off"
+        spellcheck="false"
+        class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
+        :placeholder="keySet ? t('admin.modelSettings.apiKeyPoolSetPlaceholder') : t('admin.modelSettings.apiKeyPoolUnsetPlaceholder')"
+      />
       <input
+        v-else
         v-model="form.api_key"
         type="password"
         autocomplete="off"
         class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none"
         :placeholder="keySet ? t('admin.modelSettings.apiKeySetPlaceholder') : t('admin.modelSettings.apiKeyUnsetPlaceholder')"
       />
-      <p class="text-xs text-slate-500 mt-1">{{ t('admin.modelSettings.apiKeyHint') }}</p>
+      <p class="text-xs text-slate-500 mt-1">
+        {{ slotName === 'primary' ? t('admin.modelSettings.apiKeyPoolHint') : t('admin.modelSettings.apiKeyHint') }}
+      </p>
     </label>
 
     <label class="block text-sm text-slate-700">
@@ -249,7 +274,9 @@ const testBtnLabel = computed(() =>
       <div class="min-w-0">
         <p class="ms-test-title">
           {{
-            testResult.ok
+            testResult.tested_key_count
+              ? t('admin.modelSettings.testPoolResult', { healthy: testResult.healthy_key_count ?? 0, total: testResult.tested_key_count })
+              : testResult.ok
               ? t('admin.modelSettings.testOk', { ms: testResult.latency_ms ?? 0 })
               : t('admin.modelSettings.testFailed')
           }}
@@ -258,9 +285,10 @@ const testBtnLabel = computed(() =>
         <p v-if="testResult.ok && testResult.reply" class="ms-test-meta">
           {{ t('admin.modelSettings.testReply') }}: {{ testResult.reply }}
         </p>
-        <p v-if="!testResult.ok" class="ms-test-meta">
+        <p v-if="!testResult.ok && !testResult.tested_key_count" class="ms-test-meta">
           [{{ testResult.error_kind }}] {{ testResult.detail }}
         </p>
+        <p v-if="testResult.tested_key_count" class="ms-test-meta">{{ testResult.detail }}</p>
       </div>
     </div>
   </div>
