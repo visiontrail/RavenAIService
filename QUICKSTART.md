@@ -46,11 +46,11 @@ HTTP_PORT=18085 ./scripts/docker-start.sh
 
 当项目仓库只能通过 SSH 克隆时，使用 `docker-compose.ssh.yml` 覆盖层。它通过独立的 `raven-ssh-agent` 容器加载私钥；`raven-backend`、`raven-worker` 和 `raven-worker-bugfix` 只挂载 SSH agent socket 与公开的 `known_hosts`，不会直接挂载私钥。
 
-先在宿主机准备专用目录。私钥应优先使用只具备目标仓库只读权限的 GitLab Deploy Key；私钥在宿主机上保持 `root` 专有，只会挂载到隔离的 SSH agent 容器：
+先在宿主机准备专用目录。私钥应优先使用只具备目标仓库只读权限的 GitLab Deploy Key；父目录保持 `root` 专有，私钥文件使用 Raven 容器内 `appuser` 的固定 UID/GID（`1000:1000`），且只会挂载到隔离的 SSH agent 容器：
 
 ```bash
 sudo install -d -m 0700 -o root -g root /etc/raven-ai/ssh
-sudo install -m 0600 -o root -g root /secure/source/id_ed25519 /etc/raven-ai/ssh/id_ed25519
+sudo install -m 0600 -o 1000 -g 1000 /secure/source/id_ed25519 /etc/raven-ai/ssh/id_ed25519
 sudo install -m 0644 -o root -g root /secure/source/known_hosts /etc/raven-ai/ssh/known_hosts
 ```
 

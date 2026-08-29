@@ -25,7 +25,7 @@ services:
       dockerfile: Dockerfile
     image: ${DOCKERHUB_NAMESPACE:-galaxyspaceai}/raven-backend:${IMAGE_TAG:-local}
     container_name: raven-ssh-agent
-    user: "0:0"
+    user: "1000:1000"
     security_opt:
       - no-new-privileges:true
     entrypoint: ["/bin/sh", "-ec"]
@@ -34,7 +34,6 @@ services:
         rm -f /run/raven-ssh-agent/agent.sock
         eval "$$(ssh-agent -s -a /run/raven-ssh-agent/agent.sock)"
         ssh-add /run/raven-ssh/id_ed25519
-        chown 1000:1000 /run/raven-ssh-agent/agent.sock
         chmod 0600 /run/raven-ssh-agent/agent.sock
         exec sleep infinity
     volumes:
