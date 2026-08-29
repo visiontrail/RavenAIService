@@ -501,8 +501,36 @@ class TestRuntimeTooling:
 
         dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
 
-        for package in ("git", "ripgrep", "jq"):
+        for package in ("git", "openssh-client", "ripgrep", "jq"):
             assert package in dockerfile
+
+    def test_ssh_compose_overlay_keeps_private_key_out_of_agent_containers(self):
+        from pathlib import Path
+
+        import yaml
+
+        compose = yaml.safe_load(
+            Path("docker-compose.ssh.yml").read_text(encoding="utf-8")
+        )
+        services = compose["services"]
+
+        assert any(
+            "/run/raven-ssh/id_ed25519:ro" in volume
+            for volume in services["ssh-agent"]["volumes"]
+        )
+
+        for name in ("backend", "worker", "worker-bugfix"):
+            service = services[name]
+            assert service["environment"]["SSH_AUTH_SOCK"].endswith("/agent.sock")
+            assert (
+                "StrictHostKeyChecking=yes"
+                in service["environment"]["GIT_SSH_COMMAND"]
+            )
+            assert any(
+                "ssh_agent_runtime:/run/raven-ssh-agent:ro" == volume
+                for volume in service["volumes"]
+            )
+            assert not any("id_ed25519" in volume for volume in service["volumes"])
 
 
 class TestRunSync:
