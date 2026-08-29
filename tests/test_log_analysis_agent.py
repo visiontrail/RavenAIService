@@ -514,7 +514,7 @@ class TestRuntimeTooling:
         )
         services = compose["services"]
 
-        assert services["ssh-agent"]["user"] == "1000:1000"
+        assert "setpriv --reuid=1000" in services["ssh-agent"]["command"][0]
         assert any(
             "/run/raven-ssh/id_ed25519:ro" in volume
             for volume in services["ssh-agent"]["volumes"]
