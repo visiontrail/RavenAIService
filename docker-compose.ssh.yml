@@ -36,8 +36,7 @@ services:
         ssh-add /run/raven-ssh/id_ed25519
         chown 1000:1000 /run/raven-ssh-agent/agent.sock
         chmod 0600 /run/raven-ssh-agent/agent.sock
-        trap 'kill "$$SSH_AGENT_PID"' EXIT INT TERM
-        wait "$$SSH_AGENT_PID"
+        exec sleep infinity
     volumes:
       - ${CODE_REPO_SSH_PRIVATE_KEY_PATH:-/etc/raven-ai/ssh/id_ed25519}:/run/raven-ssh/id_ed25519:ro
       - ssh_agent_runtime:/run/raven-ssh-agent
