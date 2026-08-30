@@ -19,6 +19,6 @@
 ## 4. Commit, production deployment, and end-to-end verification
 
 - [x] 4.1 Review the scoped diff, verify no credential or unrelated change is included, and commit the RavenAIService implementation
-- [ ] 4.2 Inspect `nr-test` production Git/Docker state, deploy the exact commit with the SSH overlay, and verify scoped container/image/health/API state
-- [ ] 4.3 Verify the new tool clones `LX07A-协议栈` through the production container and persists the expected multi-repository workspace provenance
+- [x] 4.2 Inspect `nr-test` production Git/Docker state, deploy the exact commit with the SSH overlay, and verify scoped container/image/health/API state
+- [x] 4.3 Verify the new tool clones `LX07A-协议栈` through the production container and persists the expected multi-repository workspace provenance
 - [ ] 4.4 In Browser/Computer, select `灵犀07A操作维护`, run the specified Project Expert ephemeris-log request, and confirm discovery, additional protocol-stack clone, source-grounded answer, persisted trace/result, and browser-visible completion
