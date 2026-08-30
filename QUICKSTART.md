@@ -27,7 +27,7 @@
 ./scripts/docker-start.sh
 ```
 
-脚本会自动从 `.env.example` 创建 `.env`。请把私有密钥、模型 Key、生产数据库密码等只写入 `.env`，不要提交到代码库。
+脚本会自动从 `.env.example` 创建 `.env`。请把模型 Key、生产数据库密码等只写入 `.env`，不要提交到代码库。SSH 私钥使用下文的独立运行时目录，不写入 `.env` 或代码仓库。
 
 启动后访问：
 
@@ -40,6 +40,32 @@
 
 ```bash
 HTTP_PORT=18085 ./scripts/docker-start.sh
+```
+
+## SSH 私有仓库
+
+当项目仓库只能通过 SSH 克隆时，使用 `docker-compose.ssh.yml` 覆盖层。它通过独立的 `raven-ssh-agent` 容器加载私钥；`raven-backend`、`raven-worker` 和 `raven-worker-bugfix` 只挂载 SSH agent socket 与公开的 `known_hosts`，不会直接挂载私钥。
+
+先在宿主机准备专用目录。私钥应优先使用只具备目标仓库只读权限的 GitLab Deploy Key；父目录保持 `root` 专有，私钥文件使用 Raven 容器内 `appuser` 的固定 UID/GID（`1000:1000`），且只会挂载到隔离的 SSH agent 容器：
+
+```bash
+sudo install -d -m 0700 -o root -g root /etc/raven-ai/ssh
+sudo install -m 0600 -o 1000 -g 1000 /secure/source/id_ed25519 /etc/raven-ai/ssh/id_ed25519
+sudo install -m 0644 -o root -g root /secure/source/known_hosts /etc/raven-ai/ssh/known_hosts
+```
+
+然后用基础编排和 SSH 覆盖层一起启动：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ssh.yml up -d --build
+```
+
+如需使用其他宿主机路径，在 `.env` 中设置 `CODE_REPO_SSH_PRIVATE_KEY_PATH` 和 `CODE_REPO_SSH_KNOWN_HOSTS_PATH`。这两个变量只保存路径，不保存密钥内容。验证 SSH agent 已加载且目标仓库可读：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ssh.yml exec backend ssh-add -l
+docker compose -f docker-compose.yml -f docker-compose.ssh.yml exec backend \
+  git ls-remote --symref 'ssh://git@example.internal:2222/group/project.git' HEAD
 ```
 
 ## 常用命令

@@ -1,0 +1,69 @@
+name: raven-ai-service
+
+# Optional production overlay for SSH-only project repositories.
+#
+# The private key is mounted only into raven-ssh-agent. Agent-capable Raven
+# containers receive the ssh-agent socket and the public known_hosts file, so
+# the key itself is not readable from their Bash/Read tools.
+x-ssh-client: &ssh_client
+  environment:
+    SSH_AUTH_SOCK: /run/raven-ssh-agent/agent.sock
+    GIT_SSH_COMMAND: >-
+      ssh -o BatchMode=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/run/raven-ssh-known-hosts
+  volumes:
+    - ssh_agent_runtime:/run/raven-ssh-agent:ro
+    - ${CODE_REPO_SSH_KNOWN_HOSTS_PATH:-/etc/raven-ai/ssh/known_hosts}:/run/raven-ssh-known-hosts:ro
+  depends_on:
+    ssh-agent:
+      condition: service_healthy
+
+services:
+  ssh-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${DOCKERHUB_NAMESPACE:-galaxyspaceai}/raven-backend:${IMAGE_TAG:-local}
+    container_name: raven-ssh-agent
+    user: "0:0"
+    security_opt:
+      - no-new-privileges:true
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        install -d -m 0700 -o 1000 -g 1000 /run/raven-ssh-agent
+        rm -f /run/raven-ssh-agent/agent.sock
+        eval "$$(setpriv --reuid=1000 --regid=1000 --clear-groups ssh-agent -s -a /run/raven-ssh-agent/agent.sock)"
+        setpriv --reuid=1000 --regid=1000 --clear-groups env SSH_AUTH_SOCK=/run/raven-ssh-agent/agent.sock ssh-add /run/raven-ssh/id_ed25519
+        exec sleep infinity
+    volumes:
+      - ${CODE_REPO_SSH_PRIVATE_KEY_PATH:-/etc/raven-ai/ssh/id_ed25519}:/run/raven-ssh/id_ed25519:ro
+      - ssh_agent_runtime:/run/raven-ssh-agent
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "setpriv --reuid=1000 --regid=1000 --clear-groups env SSH_AUTH_SOCK=/run/raven-ssh-agent/agent.sock ssh-add -l >/dev/null 2>&1",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    <<: *ssh_client
+
+  worker:
+    <<: *ssh_client
+
+  worker-bugfix:
+    <<: *ssh_client
+
+volumes:
+  ssh_agent_runtime:

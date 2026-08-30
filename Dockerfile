@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     libarchive-tools \
     libreoffice-calc \
+    openssh-client \
     python3-dev \
     ripgrep \
     tar \
