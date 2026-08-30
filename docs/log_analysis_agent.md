@@ -53,6 +53,12 @@
 | Step 5 | 同时基于日志和源码进行调查 | **强制** |
 | Step 6 | 输出 fenced JSON（schema 见提示词） | 强制 |
 
+当 Provider 支持进程内 MCP 工具时，第 4 步优先调用工作区绑定的
+`mcp__project_repo__clone_project_repo`，而不是让模型接触 clone URL。主项目仍使用
+`repo/`；项目卡片表明问题还需要其他项目时，工具将其克隆到
+`related_repos/<project_code>/` 并返回路径、分支和 commit。项目专家复用同一工具与
+路径约定。
+
 仓库信息查找优先级（高→低）：
 
 1. `repo_info.clone_url` / `repo_info.repo_url` + `repo_info.default_branch`
@@ -79,6 +85,21 @@
 提问由聊天服务通过 `clarification_binding` 注入；Celery 批处理入口不传该参数，因此
 不会提问（没有人在 SSE 那头作答）。事件与 broker 机制见
 [agent_trace_protocol.md](agent_trace_protocol.md#clarification-askuserquestion)。
+
+### 2.2 项目卡片发现与多项目工作区
+
+项目专家和日志分析在作出项目相关结论前先调用
+`mcp__project_repo__discover_projects` 读取完整的已启用项目卡片目录：
+
+- 当前项目已覆盖问题：克隆/复用 `repo/`，不追加无关项目。
+- 当前项目选错、另一个项目明确匹配：在当前会话调用
+  `clone_project_repo(project_code)`，从返回的 `related_repos/...` 检出中回答，不再要求用户重开会话。
+- 问题确实跨项目：只克隆完成问题所必需的项目，并在证据中标明项目与仓库路径。
+- 无匹配或证据含糊：如实报告无匹配或请求澄清，不试探性克隆最相近项目。
+
+克隆工具只接受 `project_code`，目标路径由服务端决定；HTTPS token、SSH 身份与仓库
+URL 不会出现在工具响应。重复调用复用已有检出，成功后在 `task.json.related_repos`
+保存不含凭据的项目卡片、相对路径、分支与 commit，供后续轮次和运行态核验。
 
 ---
 
@@ -118,11 +139,12 @@
 
 ## 4. Provider / MCP 能力矩阵
 
-`mcp__project_repo__lookup_project_repo` 在不同 Provider 下的可用性见 [app/agents/anthropic_client.py](../app/agents/anthropic_client.py) 的 `PROVIDER_PROFILES`。当 `supports_mcp_server_tools=False` 时：
+`discover_projects`、`lookup_project_repo` 与工作区绑定的 `clone_project_repo` 在不同 Provider 下的可用性见 [app/agents/anthropic_client.py](../app/agents/anthropic_client.py) 的 `PROVIDER_PROFILES`。当 `supports_mcp_server_tools=False` 时：
 
-- 该工具从 `allowed_tools` 中剔除；
+- 三个 MCP 工具都从 `allowed_tools` 中剔除；
 - 系统提示词追加 *Runtime Constraint* 段落，提示 Agent 仅使用显式的 `repo_info` / `metadata.json` 字段；
 - 仍**强制**克隆与代码查阅；找不到显式仓库信息时输出 `project_repo_not_registered` 终止。
+- 该运行不能追加其他项目，且不得声称已完成多项目分析。
 
 ---
 

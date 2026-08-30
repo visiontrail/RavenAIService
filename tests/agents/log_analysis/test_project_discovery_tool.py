@@ -9,7 +9,7 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_discover_projects_mcp_tool_returns_only_safe_catalog(monkeypatch):
+async def test_discover_projects_mcp_tool_returns_only_safe_catalog(monkeypatch, tmp_path):
     from app.agents.log_analysis import mcp_tools
 
     registered = {}
@@ -31,6 +31,7 @@ async def test_discover_projects_mcp_tool_returns_only_safe_catalog(monkeypatch)
     monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_sdk)
     monkeypatch.setattr(mcp_tools, "_server", None)
     monkeypatch.setattr(mcp_tools, "_discovery_server", None)
+    monkeypatch.setattr(mcp_tools, "_base_tools", None)
 
     safe_payload = {
         "projects": [
@@ -52,6 +53,11 @@ async def test_discover_projects_mcp_tool_returns_only_safe_catalog(monkeypatch)
         new=AsyncMock(return_value=safe_payload),
     ):
         server = mcp_tools.get_mcp_server()
+        bound_server = mcp_tools.get_mcp_server(
+            workspace_dir=str(tmp_path),
+            primary_project_code="alpha",
+            agent_key="project_expert",
+        )
         discovery_server = mcp_tools.get_project_discovery_mcp_server()
         response = await registered["discover_projects"]({})
 
@@ -61,7 +67,16 @@ async def test_discover_projects_mcp_tool_returns_only_safe_catalog(monkeypatch)
         "_discover_projects",
         "_lookup_project_repo",
     ]
-    assert set(registered) == {"discover_projects", "lookup_project_repo"}
+    assert [tool.__name__ for tool in bound_server["tools"]] == [
+        "_discover_projects",
+        "_lookup_project_repo",
+        "_clone_project_repo",
+    ]
+    assert set(registered) == {
+        "discover_projects",
+        "lookup_project_repo",
+        "clone_project_repo",
+    }
     payload = json.loads(response["content"][0]["text"])
     assert payload == safe_payload
     serialized = json.dumps(payload)
@@ -71,3 +86,4 @@ async def test_discover_projects_mcp_tool_returns_only_safe_catalog(monkeypatch)
     # Avoid leaking the fake server into later tests in the same process.
     mcp_tools._server = None
     mcp_tools._discovery_server = None
+    mcp_tools._base_tools = None

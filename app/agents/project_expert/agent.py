@@ -1,9 +1,10 @@
 """
 Claude Agent SDK 项目专家 Agent。
 
-与 ``LogAnalysisAgent`` 同构，但去掉附件日志分析这一环：工作区只含
-``repo/`` + ``task.json``，不解压归档、不校验 metadata.json。项目身份
-来自用户显式选择的项目仓库（写入 ``task.json.repo_info``）。
+与 ``LogAnalysisAgent`` 同构，但去掉附件日志分析这一环：工作区初始包含
+``repo/`` + ``task.json``，不解压归档、不校验 metadata.json；运行中可以通过
+工作区绑定工具增加 ``related_repos/<project_code>/``。项目身份来自用户显式
+选择的项目仓库（写入 ``task.json.repo_info``）。
 
 主入口：
   ProjectExpertAgent().run(ctx)       — async, returns dict
@@ -63,6 +64,7 @@ from app.agents.log_analysis.agent import (
 from app.agents.project_expert.workspace import WorkspaceContext
 from app.agents.log_analysis.mcp_tools import (
     PROJECT_DISCOVERY_MCP_TOOL,
+    PROJECT_REPO_CLONE_MCP_TOOL,
     PROJECT_REPO_LOOKUP_MCP_TOOL,
     build_project_fit_guidance,
 )
@@ -80,6 +82,7 @@ ALLOWED_TOOLS = [
     "Skill",  # 允许模型调用通过 setting_sources 加载的用户自定义 Skill
     PROJECT_DISCOVERY_MCP_TOOL,
     PROJECT_REPO_MCP_TOOL,
+    PROJECT_REPO_CLONE_MCP_TOOL,
 ]
 
 # Agent 唯一键，与 skills_service.SUPPORTED_AGENTS 对应。
@@ -200,7 +203,21 @@ class ProjectExpertAgent:
         mcp_servers = None
         if supports_mcp:
             from app.agents.log_analysis.mcp_tools import get_mcp_server
-            mcp_servers = {"project_repo": get_mcp_server()}
+            primary_repo_info = (
+                task_data.get("repo_info") if isinstance(task_data, dict) else None
+            )
+            primary_project_code = (
+                primary_repo_info.get("project_code")
+                if isinstance(primary_repo_info, dict)
+                else None
+            )
+            mcp_servers = {
+                "project_repo": get_mcp_server(
+                    workspace_dir=ctx.temp_dir,
+                    primary_project_code=primary_project_code,
+                    agent_key=AGENT_KEY,
+                )
+            }
         else:
             allowed_tools = [
                 name for name in allowed_tools if not name.startswith("mcp__")
@@ -208,7 +225,8 @@ class ProjectExpertAgent:
             system_prompt += (
                 "\n\n## 运行时约束\n"
                 f"当前 provider `{provider}` 不支持 MCP server 工具。"
-                "本次运行中项目目录和仓库查询 MCP 工具不可用。"
+                "本次运行中项目目录、仓库查询和工作区克隆 MCP 工具不可用，"
+                "因此不能在当前会话追加其他项目仓库。"
                 "请直接使用 `task.json` 中 `repo_info.repo_url` 克隆仓库。"
             )
             logger.info(
@@ -237,8 +255,10 @@ class ProjectExpertAgent:
             system_prompt += (
                 "\n\n## 未关联代码仓库\n"
                 "本项目没有关联的代码仓库（repo_info.repo_url 为空）。"
-                "不要尝试 clone 任何仓库，`repo/` 目录是空的。"
-                "请基于项目级系统提示词、已启用的 Skill 以及用户提供的上下文来回答。\n"
+                "不要为当前项目执行 lookup 或手工 clone，`repo/` 目录是空的。"
+                "如果项目适配性检查发现另一个已注册项目明确匹配，仍可通过"
+                "工作区克隆工具把它加入 `related_repos/`；否则请基于当前项目级"
+                "系统提示词、已启用的 Skill 以及用户上下文回答。\n"
             )
 
         # 项目级附加系统提示词：像 Skill 一样分级处理——在通用（Agent 级）系统
@@ -297,7 +317,7 @@ class ProjectExpertAgent:
             project_code=project_code,
             project_card=project_card,
             catalog_available=supports_mcp,
-            switch_instruction="当前会话已绑定项目，必须请用户新建会话并选择该匹配项目。",
+            locale=ctx.locale,
         )
 
         setting_sources = ["project"] if materialized_skills else None

@@ -54,6 +54,7 @@ from app.agents.usage import accumulate_usage, new_token_usage
 from app.agents.log_analysis.workspace import WorkspaceContext
 from app.agents.log_analysis.mcp_tools import (
     PROJECT_DISCOVERY_MCP_TOOL,
+    PROJECT_REPO_CLONE_MCP_TOOL,
     PROJECT_REPO_LOOKUP_MCP_TOOL,
     build_project_fit_guidance,
 )
@@ -75,6 +76,7 @@ ALLOWED_TOOLS = [
     "Skill",  # 允许模型调用通过 setting_sources 加载的用户自定义 Skill
     PROJECT_DISCOVERY_MCP_TOOL,
     PROJECT_REPO_MCP_TOOL,
+    PROJECT_REPO_CLONE_MCP_TOOL,
 ]
 
 # Agent 唯一键，与 skills_service.SUPPORTED_AGENTS 对应
@@ -1072,7 +1074,18 @@ class LogAnalysisAgent:
         mcp_servers = None
         if supports_mcp:
             from app.agents.log_analysis.mcp_tools import get_mcp_server
-            mcp_servers = {"project_repo": get_mcp_server()}
+            primary_project_code = (
+                repo_info.get("project_code")
+                if isinstance(repo_info, dict)
+                else None
+            )
+            mcp_servers = {
+                "project_repo": get_mcp_server(
+                    workspace_dir=ctx.temp_dir,
+                    primary_project_code=primary_project_code,
+                    agent_key=AGENT_KEY,
+                )
+            }
         else:
             allowed_tools = [
                 name for name in allowed_tools if not name.startswith("mcp__")
@@ -1080,7 +1093,8 @@ class LogAnalysisAgent:
             system_prompt += (
                 "\n\n## 运行时约束\n"
                 f"当前 provider `{provider}` 不支持 MCP server 工具。"
-                "本次运行中项目目录和仓库查询 MCP 工具不可用。"
+                "本次运行中项目目录、仓库查询和工作区克隆 MCP 工具不可用，"
+                "因此不能在当前任务追加其他项目仓库。"
                 "请使用 `task.json` / `metadata.json` 中的显式仓库字段或 "
                 "`repo_info` 来解析仓库。按基础工作流的规定，源代码侧的"
                 "查证依然是强制要求。如果任何地方都不存在显式仓库信息，"
@@ -1163,7 +1177,7 @@ class LogAnalysisAgent:
             project_code=project_code,
             project_card=project_card,
             catalog_available=supports_mcp,
-            switch_instruction="请用户重新选择该匹配项目后再发起分析。",
+            locale=ctx.locale,
         )
 
         user_prompt += "\n\nOutput language requirement:\n" + language_directive

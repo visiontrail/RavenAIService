@@ -1927,6 +1927,7 @@ export default {
     WebSearch: '联网搜索',
     ProjectRepo: '项目仓库查询',
     ProjectDiscovery: '项目目录发现',
+    ProjectClone: '项目仓库克隆',
     LogSearch: '日志搜索'
   },
 

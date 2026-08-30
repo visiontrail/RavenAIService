@@ -151,6 +151,8 @@ class Settings(BaseSettings):
     code_repo_git_token: Optional[str] = (
         None  # 全局 Git Token（私有仓库认证，可被 project_repo 单独 token 覆盖）
     )
+    agent_related_repo_max_count: int = 4
+    agent_repo_clone_timeout_seconds: int = 300
 
     # 上下文压缩/记忆配置
     agent_compression_strategy: str = (

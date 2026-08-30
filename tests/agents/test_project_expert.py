@@ -298,13 +298,47 @@ async def test_custom_provider_registers_project_discovery_tool(tmp_path):
         result = await ProjectExpertAgent().run(ctx)
 
     assert result["status"] == "ok"
-    get_mcp_server.assert_called_once_with()
+    get_mcp_server.assert_called_once_with(
+        workspace_dir=ctx.temp_dir,
+        primary_project_code="foo",
+        agent_key="project_expert",
+    )
     kwargs = build_options.call_args.kwargs
     assert kwargs["mcp_servers"] == {"project_repo": mcp_server}
     assert "mcp__project_repo__discover_projects" in kwargs["allowed_tools"]
     assert "mcp__project_repo__lookup_project_repo" in kwargs["allowed_tools"]
+    assert "mcp__project_repo__clone_project_repo" in kwargs["allowed_tools"]
     assert "当前 provider `custom` 不支持 MCP" not in kwargs["system_prompt"]
     assert "必须先调用 `mcp__project_repo__discover_projects`" in kwargs["system_prompt"]
+    assert "mcp__project_repo__clone_project_repo" in kwargs["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_unsupported_provider_disables_multi_project_tools(tmp_path):
+    from app.agents.project_expert.agent import ProjectExpertAgent
+
+    ctx = _make_ctx(tmp_path)
+    build_options = MagicMock(return_value=MagicMock())
+
+    async def fake_query(*_args, **_kwargs) -> AsyncIterator[Any]:
+        yield FakeResultMessage(result=_result_json())
+
+    with _patch_agent_common(fake_query), \
+        patch("app.agents.anthropic_client.build_options", build_options), \
+        patch("app.services.model_router.candidates", return_value=[]), \
+        patch("app.services.skills_service.materialize_enabled_skills", return_value=[]), \
+        patch("app.agents.log_analysis.mcp_tools.get_mcp_server") as get_mcp_server, \
+        patch("app.config.settings.anthropic_provider", "legacy-no-tools"), \
+        patch("app.config.settings.anthropic_model", "legacy-model"):
+        result = await ProjectExpertAgent().run(ctx)
+
+    assert result["status"] == "ok"
+    get_mcp_server.assert_not_called()
+    kwargs = build_options.call_args.kwargs
+    assert kwargs["mcp_servers"] is None
+    assert all(not name.startswith("mcp__") for name in kwargs["allowed_tools"])
+    assert "不能在当前会话追加其他项目仓库" in kwargs["system_prompt"]
+    assert "Do not claim" not in kwargs["system_prompt"]
 
 
 @pytest.mark.asyncio

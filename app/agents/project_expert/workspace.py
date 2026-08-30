@@ -2,8 +2,9 @@
 项目专家工作区准备与清理。
 
 职责：
-- 为每个会话在隔离临时目录下创建 **只含 `repo/` 占位目录 + `task.json`**
-  的工作区（**没有 `logs/`、不解压任何归档、不要求 metadata.json**）。
+- 为每个会话在隔离临时目录下创建 **`repo/` 占位目录 + `task.json`**
+  的工作区（**没有 `logs/`、不解压任何归档、不要求 metadata.json**）；运行中
+  工作区绑定的项目克隆工具可按需增加 `related_repos/<project_code>/`。
 - 把用户显式选择的项目仓库身份写入 `task.json.repo_info`
   （`source="user_selected_project_repo"`），**不写入任何 git token**。
 - 任务结束后幂等清理临时目录。
