@@ -1910,6 +1910,7 @@ export default {
     WebSearch: 'Web Search',
     ProjectRepo: 'Project Repo Query',
     ProjectDiscovery: 'Project Catalog Discovery',
+    ProjectClone: 'Project Repository Clone',
     LogSearch: 'Log Search'
   },
 

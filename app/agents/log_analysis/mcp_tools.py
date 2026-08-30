@@ -1,16 +1,22 @@
-"""
-Claude Agent SDK in-process MCP server: project discovery and repo lookup.
+"""Claude Agent SDK in-process MCP tools for registered project repositories.
 
 ``discover_projects`` 只返回可公开的项目卡片目录；``lookup_project_repo``
-将已确认的 project_code 解析为 git 仓库 URL 和默认分支。clone_url 注入 git
-token（若有），仅在 lookup 工具响应内传递，不写入 task.json。
+保留原有的仓库解析兼容接口；工作区绑定的 ``clone_project_repo`` 在服务端完成
+鉴权与克隆，只向模型返回无凭据的项目身份、工作区路径和提交信息。
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
+import os
 import re
+import shutil
+import subprocess
+import uuid
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
 
@@ -18,9 +24,11 @@ logger = logging.getLogger(__name__)
 
 _server = None  # full project server, lazily created
 _discovery_server = None  # discovery-only view for GeneralAgent
+_base_tools = None  # discover + lookup tool objects used by bound servers
 
 PROJECT_DISCOVERY_MCP_TOOL = "mcp__project_repo__discover_projects"
 PROJECT_REPO_LOOKUP_MCP_TOOL = "mcp__project_repo__lookup_project_repo"
+PROJECT_REPO_CLONE_MCP_TOOL = "mcp__project_repo__clone_project_repo"
 
 
 def build_project_fit_guidance(
@@ -30,9 +38,43 @@ def build_project_fit_guidance(
     project_code: Optional[str],
     project_card: Optional[str],
     catalog_available: bool,
-    switch_instruction: str,
+    locale: str = "zh",
 ) -> str:
     """Build the shared, high-priority project-fit policy for Agent prompts."""
+    if locale == "en":
+        selected = (
+            f"Current project: {project_name or 'unknown'} ({project_code or 'unknown'})\n"
+            f"Current project card: {project_card or 'Scope unavailable; do not infer a confident match'}"
+        )
+        if catalog_available:
+            evidence_rule = (
+                "Before cloning or using project-specific evidence, call "
+                "`mcp__project_repo__discover_projects` and read the complete enabled catalog."
+            )
+            catalog_rule = (
+                "For every additional project materially required by the question, call "
+                "`mcp__project_repo__clone_project_repo` with its project_code, then inspect only the returned path."
+            )
+        else:
+            evidence_rule = (
+                "Project catalog and workspace-bound clone tools are unavailable for this provider; "
+                "you can evaluate only the persisted current project card and repository."
+            )
+            catalog_rule = (
+                "Do not claim that a specific alternative exists, that no project exists, or that multi-project analysis was performed."
+            )
+        return (
+            "\n\n## Project fit and multi-project investigation (highest priority)\n"
+            f"This is a prerequisite for {workflow_name}. {selected}\n"
+            f"- {evidence_rule}\n"
+            "- If the current project is clearly unrelated and another card clearly matches, do not use the selected repository, project prompt, or project Skills as evidence. Clone the matching project in this workspace and answer from that checkout.\n"
+            "- If the question genuinely spans multiple cards, clone only the additional projects materially required and cite every finding with its project and returned repository path.\n"
+            "- If the current project fully covers the question, keep the existing single-project workflow and do not clone unrelated catalog entries.\n"
+            "- If the complete catalog has no match, state that no suitable project is registered. If evidence is ambiguous, explain the ambiguity and ask for clarification instead of cloning speculative projects.\n"
+            f"- {catalog_rule}\n"
+            "- A related project's card and cloned source are evidence; the current session's project-specific prompt and Skills are not automatically transferred to that project."
+        )
+
     selected = (
         f"当前项目：{project_name or '未知'}（{project_code or 'unknown'}）\n"
         f"当前项目卡片：{project_card or '项目范围未提供，不能据此作出确定匹配'}"
@@ -43,7 +85,8 @@ def build_project_fit_guidance(
             "`mcp__project_repo__discover_projects` 读取完整的已启用项目卡片目录。"
         )
         catalog_rule = (
-            "只有读到完整目录后，才可以推荐具体项目或断言没有合适项目。"
+            "每一个确实需要追加的项目，都必须调用 `mcp__project_repo__clone_project_repo`，"
+            "并只检查工具返回的工作区路径。"
         )
     else:
         evidence_rule = (
@@ -56,13 +99,13 @@ def build_project_fit_guidance(
         "\n\n## 项目适配性检查（最高优先级）\n"
         f"这是 {workflow_name} 的前置安全检查。{selected}\n"
         f"- {evidence_rule}\n"
-        "- 如果问题/日志与当前项目卡片明确不匹配，立即停止基于当前仓库、项目提示词或项目 Skill 作答；准确说明不匹配，不要从错误项目生成似是而非的结论。\n"
-        "- 如果目录中有明确匹配项，给出项目名称和 project_code，并说明为何它的项目卡片更匹配；"
-        f"{switch_instruction}\n"
+        "- 如果当前项目明确不匹配、另一个项目卡片明确匹配，不得把当前仓库、项目提示词或项目 Skill 当作证据；应在当前工作区克隆匹配项目并从该代码检出中作答。\n"
+        "- 如果问题确实跨越多个项目卡片，只克隆完成问题所必需的追加项目；每条结论必须标明项目及工具返回的仓库路径。\n"
+        "- 如果当前项目已完整覆盖问题，继续单项目流程，不要因为目录里存在其他项目就无关克隆。\n"
         "- 如果完整目录中没有任何项目卡片匹配，必须明确回答“当前系统还没有适合回答这个问题的项目”，不要勉强挑选最接近但无关的项目。\n"
-        "- 如果存在多个可能项目或证据不足，明确说明不确定性并请用户补充信息，不得制造唯一结论。\n"
+        "- 如果存在多个可能项目或证据不足，明确说明不确定性并请用户补充信息，不得制造唯一结论或试探性克隆无关项目。\n"
         f"- {catalog_rule}\n"
-        "- 只有当前项目确实匹配时，才继续原有分析流程与最终 JSON 输出契约。"
+        "- 追加项目的项目卡片和已克隆源码可以作为证据；当前会话的项目专属提示词与 Skill 不会自动转移到追加项目。"
     )
 
 
@@ -91,6 +134,351 @@ def _mask_clone_url(url: str) -> str:
     return re.sub(r"https://[^@]+@", "https://***@", url)
 
 
+def _tool_content(payload: dict) -> dict:
+    return {
+        "content": [
+            {"type": "text", "text": json.dumps(payload, ensure_ascii=False)}
+        ]
+    }
+
+
+def _safe_project_slug(project_code: str) -> str:
+    normalized = re.sub(r"[^a-z0-9._-]+", "-", project_code.strip().lower())
+    normalized = normalized.strip("._-")
+    if normalized:
+        return normalized[:120]
+    digest = hashlib.sha256(project_code.encode("utf-8")).hexdigest()[:16]
+    return f"project-{digest}"
+
+
+def _contained_path(workspace: Path, candidate: Path) -> Path:
+    workspace = workspace.resolve()
+    resolved = candidate.resolve()
+    if resolved == workspace or workspace not in resolved.parents:
+        raise ValueError("path escapes the bound workspace")
+    return resolved
+
+
+def _sanitize_git_error(
+    text: str,
+    *,
+    repo_url: str,
+    clone_url: str,
+    token: str,
+) -> str:
+    sanitized = str(text or "")
+    for secret in (clone_url, repo_url, token):
+        if secret:
+            sanitized = sanitized.replace(secret, "***")
+    sanitized = re.sub(r"https://[^@\s]+@", "https://***@", sanitized)
+    sanitized = " ".join(sanitized.split())
+    return sanitized[:800] or "git clone failed without diagnostic output"
+
+
+def _clone_error_kind(message: str) -> str:
+    lowered = message.lower()
+    if "host key verification failed" in lowered:
+        return "host_key_verification_failed"
+    if "permission denied" in lowered or "authentication failed" in lowered:
+        return "authentication_failed"
+    if "could not resolve host" in lowered or "connection timed out" in lowered:
+        return "network_error"
+    return "clone_failed"
+
+
+def _git_checkout_identity(target: Path) -> tuple[str, str]:
+    branch_result = subprocess.run(
+        ["git", "-C", str(target), "branch", "--show-current"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    commit_result = subprocess.run(
+        ["git", "-C", str(target), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if commit_result.returncode != 0:
+        raise RuntimeError("unable to read cloned repository commit")
+    return branch_result.stdout.strip(), commit_result.stdout.strip()
+
+
+def _persist_related_repo_manifest(
+    *,
+    workspace: Path,
+    project: dict,
+    target: Path,
+    branch: str,
+    commit_sha: str,
+    reused: bool,
+) -> None:
+    task_path = _contained_path(workspace, workspace / "task.json")
+    if not task_path.is_file():
+        raise RuntimeError("task.json is missing from the bound workspace")
+
+    data = json.loads(task_path.read_text(encoding="utf-8"))
+    entries = data.get("related_repos")
+    if not isinstance(entries, list):
+        entries = []
+    entry = {
+        "project_code": project["project_code"],
+        "project_name": project["project_name"],
+        "project_card": project["project_card"],
+        "path": target.relative_to(workspace).as_posix(),
+        "default_branch": project["default_branch"],
+        "branch": branch,
+        "commit_sha": commit_sha,
+        "reused": reused,
+    }
+    data["related_repos"] = [
+        existing
+        for existing in entries
+        if not isinstance(existing, dict)
+        or existing.get("project_code") != project["project_code"]
+    ] + [entry]
+
+    temp_path = _contained_path(
+        workspace,
+        task_path.with_name(f".{task_path.name}.tmp-{uuid.uuid4().hex}"),
+    )
+    try:
+        temp_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        os.replace(temp_path, task_path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def _clone_project_repo_sync(
+    *,
+    project: dict,
+    workspace_dir: str,
+    primary_project_code: Optional[str],
+    max_related_repos: int,
+    timeout_seconds: int,
+) -> dict:
+    workspace = Path(workspace_dir).resolve()
+    if not workspace.is_dir():
+        return {"error": "invalid_workspace", "message": "bound workspace does not exist"}
+
+    project_code = project["project_code"]
+    is_primary = bool(
+        primary_project_code
+        and project_code.strip().lower() == primary_project_code.strip().lower()
+    )
+    if is_primary:
+        target = _contained_path(workspace, workspace / "repo")
+    else:
+        related_root = _contained_path(workspace, workspace / "related_repos")
+        target = _contained_path(
+            workspace, related_root / _safe_project_slug(project_code)
+        )
+
+    if (target / ".git").is_dir():
+        try:
+            branch, commit_sha = _git_checkout_identity(target)
+            if not is_primary:
+                _persist_related_repo_manifest(
+                    workspace=workspace,
+                    project=project,
+                    target=target,
+                    branch=branch,
+                    commit_sha=commit_sha,
+                    reused=True,
+                )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": "invalid_checkout", "message": str(exc)[:300]}
+        return {
+            "status": "ok",
+            "project_code": project_code,
+            "project_name": project["project_name"],
+            "project_card": project["project_card"],
+            "path": target.relative_to(workspace).as_posix(),
+            "absolute_path": str(target),
+            "default_branch": project["default_branch"],
+            "branch": branch,
+            "commit_sha": commit_sha,
+            "reused": True,
+        }
+
+    if target.exists() and (
+        not target.is_dir() or any(target.iterdir())
+    ):
+        return {
+            "error": "target_conflict",
+            "project_code": project_code,
+            "message": "target path contains non-Git data and was not modified",
+        }
+
+    if not is_primary:
+        related_root.mkdir(parents=True, exist_ok=True)
+        existing = sum(
+            1
+            for child in related_root.iterdir()
+            if child.is_dir() and (child / ".git").is_dir()
+        )
+        if existing >= max(0, max_related_repos):
+            return {
+                "error": "related_repo_limit",
+                "project_code": project_code,
+                "message": f"workspace related repository limit reached ({max_related_repos})",
+            }
+
+    partial = _contained_path(
+        workspace,
+        target.with_name(f".{target.name}.partial-{uuid.uuid4().hex}"),
+    )
+    clone_url = project["clone_url"]
+    repo_url = project["repo_url"]
+    token = project["token"]
+    command = ["git", "clone", "--depth", "1"]
+    if project["default_branch"]:
+        command.extend(["--branch", project["default_branch"]])
+    command.extend(["--", clone_url, str(partial)])
+
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=max(1, timeout_seconds),
+            env=os.environ.copy(),
+        )
+        if result.returncode != 0:
+            message = _sanitize_git_error(
+                "\n".join(part for part in (result.stderr, result.stdout) if part),
+                repo_url=repo_url,
+                clone_url=clone_url,
+                token=token,
+            )
+            return {
+                "error": _clone_error_kind(message),
+                "project_code": project_code,
+                "message": message,
+                "exit_code": result.returncode,
+            }
+
+        branch, commit_sha = _git_checkout_identity(partial)
+        if target.exists():
+            target.rmdir()  # only the empty placeholder created by workspace setup
+        partial.replace(target)
+        if not is_primary:
+            _persist_related_repo_manifest(
+                workspace=workspace,
+                project=project,
+                target=target,
+                branch=branch,
+                commit_sha=commit_sha,
+                reused=False,
+            )
+        return {
+            "status": "ok",
+            "project_code": project_code,
+            "project_name": project["project_name"],
+            "project_card": project["project_card"],
+            "path": target.relative_to(workspace).as_posix(),
+            "absolute_path": str(target),
+            "default_branch": project["default_branch"],
+            "branch": branch,
+            "commit_sha": commit_sha,
+            "reused": False,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "error": "clone_timeout",
+            "project_code": project_code,
+            "message": f"git clone exceeded {max(1, timeout_seconds)} seconds",
+        }
+    except Exception as exc:  # noqa: BLE001
+        message = _sanitize_git_error(
+            str(exc), repo_url=repo_url, clone_url=clone_url, token=token
+        )
+        return {
+            "error": "clone_failed",
+            "project_code": project_code,
+            "message": message,
+        }
+    finally:
+        if partial.exists():
+            shutil.rmtree(partial, ignore_errors=True)
+
+
+async def clone_project_repo_payload(
+    *,
+    project_code: str,
+    workspace_dir: str,
+    primary_project_code: Optional[str],
+    agent_key: str,
+) -> dict:
+    """Resolve and clone one registered project without exposing credentials."""
+    from app.config import settings
+    from app.models.database import db_manager
+    from app.services import project_repo_service
+
+    code = (project_code or "").strip()
+    if not code:
+        return {"error": "invalid_input", "message": "project_code is required"}
+    if agent_key not in {"project_expert", "log_analysis"}:
+        return {"error": "agent_not_allowed", "project_code": code}
+
+    async with db_manager.session_factory() as db:
+        repo = await project_repo_service.get_by_project_code(
+            db, code, require_repo=False
+        )
+        if repo is None:
+            return {"error": "not_found", "project_code": code}
+        if not project_repo_service.has_repo(repo):
+            return {"error": "repo_not_configured", "project_code": repo.project_code}
+        if not await project_repo_service.supports_agent(db, repo, agent_key):
+            return {
+                "error": "agent_not_enabled",
+                "project_code": repo.project_code,
+                "agent_key": agent_key,
+            }
+        token = repo.git_token or settings.code_repo_git_token or ""
+        project = {
+            "project_code": repo.project_code,
+            "project_name": repo.project_name,
+            "project_card": repo.project_card,
+            "repo_url": repo.repo_url,
+            "clone_url": build_clone_url(repo.repo_url, token or None),
+            "default_branch": repo.default_branch,
+            "token": token,
+        }
+
+    payload = await asyncio.to_thread(
+        _clone_project_repo_sync,
+        project=project,
+        workspace_dir=workspace_dir,
+        primary_project_code=primary_project_code,
+        max_related_repos=settings.agent_related_repo_max_count,
+        timeout_seconds=settings.agent_repo_clone_timeout_seconds,
+    )
+    if payload.get("error"):
+        logger.warning(
+            "clone_project_repo failed code=%s agent=%s error=%s",
+            project["project_code"],
+            agent_key,
+            payload.get("error"),
+        )
+    else:
+        logger.info(
+            "clone_project_repo ready code=%s agent=%s path=%s reused=%s commit=%s",
+            project["project_code"],
+            agent_key,
+            payload.get("path"),
+            payload.get("reused"),
+            payload.get("commit_sha"),
+        )
+    return payload
+
+
 async def discover_projects_payload() -> dict:
     """Build the safe Agent-facing project catalog (public for focused tests)."""
     from app.models.database import db_manager
@@ -102,7 +490,7 @@ async def discover_projects_payload() -> dict:
 
 def _get_servers():
     """Lazily create the full and discovery-only in-process MCP servers."""
-    global _server, _discovery_server
+    global _server, _discovery_server, _base_tools
     if _server is not None and _discovery_server is not None:
         return _server, _discovery_server
 
@@ -163,12 +551,11 @@ def _get_servers():
         from app.services import project_repo_service
 
         code = (args.get("project_code") or "").strip()
-        name = (args.get("project_name") or "").strip() or None
 
         if not code:
-            return {
-                "content": [{"type": "text", "text": json.dumps({"error": "invalid_input", "message": "project_code is required"})}]
-            }
+            return _tool_content(
+                {"error": "invalid_input", "message": "project_code is required"}
+            )
 
         async with db_manager.session_factory() as db:
             # 日志分析 Agent 对「未关联代码仓库」的项目不可见。
@@ -178,9 +565,7 @@ def _get_servers():
 
         if not repo:
             logger.info("lookup_project_repo: not_found code=%s", code)
-            return {
-                "content": [{"type": "text", "text": json.dumps({"error": "not_found", "project_code": code})}]
-            }
+            return _tool_content({"error": "not_found", "project_code": code})
 
         effective_token = repo.git_token or settings.code_repo_git_token or ""
         clone_url = _build_clone_url(repo.repo_url, effective_token or None)
@@ -199,27 +584,82 @@ def _get_servers():
             repo.repo_url,
             bool(effective_token),
         )
-        return {"content": [{"type": "text", "text": json.dumps(payload)}]}
+        return _tool_content(payload)
 
+    _base_tools = (_discover_projects, _lookup_project_repo)
     _server = create_sdk_mcp_server(
         name="project_repo",
-        version="1.1.0",
-        tools=[_discover_projects, _lookup_project_repo],
+        version="1.2.0",
+        tools=list(_base_tools),
     )
     # ``allowed_tools`` is not a hard visibility boundary in every Claude Agent
     # SDK permission mode. GeneralAgent therefore receives a separate server
     # object that never exposes the credential-bearing lookup tool at all.
     _discovery_server = create_sdk_mcp_server(
         name="project_repo",
-        version="1.1.0",
+        version="1.2.0",
         tools=[_discover_projects],
     )
     return _server, _discovery_server
 
 
-def get_mcp_server():
-    """Return the full project_repo server used by project-bound Agents."""
-    return _get_servers()[0]
+def get_mcp_server(
+    *,
+    workspace_dir: Optional[str] = None,
+    primary_project_code: Optional[str] = None,
+    agent_key: Optional[str] = None,
+):
+    """Return a full server, optionally bound to one Agent workspace.
+
+    The unbound form preserves the discovery + lookup compatibility surface.
+    Project-bound Agents MUST use the bound form to receive the safe clone tool.
+    """
+    base_server, _ = _get_servers()
+    if workspace_dir is None:
+        return base_server
+    if not agent_key:
+        raise ValueError("agent_key is required for a workspace-bound project server")
+
+    try:
+        from claude_agent_sdk import tool, create_sdk_mcp_server
+    except ImportError as exc:
+        raise RuntimeError(
+            "claude-agent-sdk is required. Install with: pip install claude-agent-sdk>=0.1"
+        ) from exc
+
+    workspace = str(Path(workspace_dir).resolve())
+    clone_lock = asyncio.Lock()
+
+    @tool(
+        "clone_project_repo",
+        "Clone or reuse one enabled registered project inside this Agent's bound "
+        "workspace. Use the project_code returned by discover_projects. The tool "
+        "chooses a contained path, keeps repository credentials server-side, and "
+        "returns the project's complete card plus safe checkout path/branch/commit. "
+        "Use it for the selected project and for every additional project materially "
+        "required by a cross-project investigation.",
+        {
+            "type": "object",
+            "properties": {"project_code": {"type": "string"}},
+            "required": ["project_code"],
+            "additionalProperties": False,
+        },
+    )
+    async def _clone_project_repo(args):
+        async with clone_lock:
+            payload = await clone_project_repo_payload(
+                project_code=(args.get("project_code") or ""),
+                workspace_dir=workspace,
+                primary_project_code=primary_project_code,
+                agent_key=agent_key,
+            )
+        return _tool_content(payload)
+
+    return create_sdk_mcp_server(
+        name="project_repo",
+        version="1.2.0",
+        tools=[*_base_tools, _clone_project_repo],
+    )
 
 
 def get_project_discovery_mcp_server():

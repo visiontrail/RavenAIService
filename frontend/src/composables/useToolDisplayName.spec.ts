@@ -35,5 +35,6 @@ describe('useToolDisplayName', () => {
 
     expect(resolve('mcp__project_repo__discover_projects')).toBe(i18n.global.t('tools.ProjectDiscovery'))
     expect(resolve('mcp__project_repo__lookup_project_repo')).toBe(i18n.global.t('tools.ProjectRepo'))
+    expect(resolve('mcp__project_repo__clone_project_repo')).toBe(i18n.global.t('tools.ProjectClone'))
   })
 })

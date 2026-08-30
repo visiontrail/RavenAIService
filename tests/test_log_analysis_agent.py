@@ -413,12 +413,44 @@ class TestLogAnalysisAgentRun:
             await LogAnalysisAgent().run(workspace_ctx)
 
         mock_get_mcp_server.assert_called_once()
+        assert mock_get_mcp_server.call_args.kwargs == {
+            "workspace_dir": workspace_ctx.temp_dir,
+            "primary_project_code": None,
+            "agent_key": "log_analysis",
+        }
         kwargs = mock_build_options.call_args.kwargs
         assert kwargs["mcp_servers"] is not None
         assert "mcp__project_repo__lookup_project_repo" in kwargs["allowed_tools"]
         assert "mcp__project_repo__discover_projects" in kwargs["allowed_tools"]
+        assert "mcp__project_repo__clone_project_repo" in kwargs["allowed_tools"]
         assert "项目适配性检查（最高优先级）" in kwargs["system_prompt"]
         assert "当前系统还没有适合回答这个问题的项目" in kwargs["system_prompt"]
+        assert "在当前工作区克隆匹配项目" in kwargs["system_prompt"]
+
+    @pytest.mark.asyncio
+    async def test_unsupported_provider_disables_multi_project_tools(self, workspace_ctx):
+        from app.agents.log_analysis.agent import LogAnalysisAgent
+
+        fake_sdk = MagicMock()
+        fake_sdk.query = _fake_query_schema_mismatch
+
+        with _patch_build_options() as mock_build_options, \
+             _patch_mcp_server() as mock_get_mcp_server, \
+             _patch_prompts(), _patch_skills(), \
+             patch("app.services.model_router.candidates", return_value=[]), \
+             patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}), \
+             patch("app.config.settings", MagicMock(
+                 anthropic_model="legacy-model",
+                 anthropic_provider="legacy-no-tools",
+                 anthropic_request_timeout_seconds=600,
+             )):
+            await LogAnalysisAgent().run(workspace_ctx)
+
+        mock_get_mcp_server.assert_not_called()
+        kwargs = mock_build_options.call_args.kwargs
+        assert kwargs["mcp_servers"] is None
+        assert all(not name.startswith("mcp__") for name in kwargs["allowed_tools"])
+        assert "不能在当前任务追加其他项目仓库" in kwargs["system_prompt"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("locale", ["en", "zh"])

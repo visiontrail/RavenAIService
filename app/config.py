@@ -147,6 +147,8 @@ class Settings(BaseSettings):
     # 代码仓库配置（用于代码分析智能体克隆源码）
     code_repo_clone_base_dir: str = "temp/code_repos"
     code_repo_git_token: Optional[str] = None      # 全局 Git Token（私有仓库认证，可被 project_repo 单独 token 覆盖）
+    agent_related_repo_max_count: int = 4
+    agent_repo_clone_timeout_seconds: int = 300
 
     # 上下文压缩/记忆配置
     agent_compression_strategy: str = "map_reduce_summarize"  # 可选：map_reduce_summarize | extractive | hybrid
