@@ -7,11 +7,43 @@ The happy LLM path is exercised end-to-end via the chat integration tests.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from app.services import title_generator_service as tg
+
+
+class _TextBlock:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _AssistantMessage:
+    def __init__(self, *parts: str) -> None:
+        self.content = [_TextBlock(part) for part in parts]
+
+
+class _ResultMessage:
+    def __init__(self, result: str, *, is_error: bool = False) -> None:
+        self.result = result
+        self.is_error = is_error
+
+
+def test_extract_text_prefers_terminal_result_over_reasoning_text():
+    messages = [
+        _AssistantMessage("The user wants me to summarize the request."),
+        _ResultMessage("修复生产环境会话标题"),
+    ]
+
+    assert tg._extract_text_from_messages(messages) == "修复生产环境会话标题"
+
+
+def test_extract_text_falls_back_to_last_assistant_message():
+    messages = [
+        _AssistantMessage("intermediate reasoning"),
+        _AssistantMessage("最终标题"),
+    ]
+
+    assert tg._extract_text_from_messages(messages) == "最终标题"
 
 
 @pytest.mark.asyncio

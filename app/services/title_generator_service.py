@@ -50,19 +50,48 @@ def _resolve_small_fast_model() -> Optional[str]:
 
 
 def _extract_text_from_messages(messages: list[Any]) -> str:
-    """Pick the last assistant text block from a list of SDK messages."""
-    out_parts: list[str] = []
-    for message in messages:
+    """Pick the final answer from a list of SDK messages.
+
+    Compatible gateways may expose model reasoning as assistant text before
+    the SDK emits the authoritative ``ResultMessage.result``.  Persisting the
+    concatenated assistant blocks therefore leaks reasoning into session
+    titles (for example, ``"The user wants m"`` after truncation).  Prefer the
+    successful terminal result and only fall back to the last assistant frame
+    for SDK/provider variants that do not emit one.
+    """
+    for message in reversed(messages):
+        result = getattr(message, "result", None)
+        if (
+            isinstance(result, str)
+            and result.strip()
+            and getattr(message, "is_error", False) is not True
+        ):
+            return result
+        if isinstance(message, dict):
+            result = message.get("result")
+            if (
+                isinstance(result, str)
+                and result.strip()
+                and message.get("is_error") is not True
+            ):
+                return result
+
+    for message in reversed(messages):
         content = getattr(message, "content", None)
+        if content is None and isinstance(message, dict):
+            content = message.get("content")
         if not isinstance(content, list):
             continue
+        out_parts: list[str] = []
         for block in content:
             text = getattr(block, "text", None)
             if isinstance(text, str) and text.strip():
                 out_parts.append(text)
             elif isinstance(block, dict) and isinstance(block.get("text"), str):
                 out_parts.append(str(block["text"]))
-    return "".join(out_parts)
+        if out_parts:
+            return "".join(out_parts)
+    return ""
 
 
 async def _record_title_usage(
