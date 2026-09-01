@@ -86,6 +86,17 @@ async def test_summarize_user_message_uses_llm_output_when_available(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_summarize_user_message_rejects_reasoning_preamble(monkeypatch):
+    async def _reasoning(prompt, **kwargs):  # noqa: ARG001
+        return "The user wants me to create a concise title."
+
+    monkeypatch.setattr(tg, "_run_query", _reasoning)
+
+    out = await tg.summarize_user_message("请检查生产环境侧边栏标题异常", max_length=16)
+    assert out == "请检查生产环境侧边栏标题异常"
+
+
+@pytest.mark.asyncio
 async def test_generate_session_title_returns_none_for_empty_pair():
     """Both user and assistant content empty → return None (caller keeps default)."""
     out = await tg.generate_session_title("", "", max_length=16)
@@ -136,6 +147,21 @@ async def test_generate_session_title_uses_llm_output_when_available(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_generate_session_title_rejects_reasoning_preamble(monkeypatch):
+    async def _reasoning(prompt, **kwargs):  # noqa: ARG001
+        return "The user wants me to summarize the exchange."
+
+    monkeypatch.setattr(tg, "_run_query", _reasoning)
+    monkeypatch.setattr(
+        "app.services.prompts_config_service.get_chat_title_prompt_template",
+        lambda locale=None: "U:{user_content}\nA:{ai_content}\nN:{max_length}",
+    )
+
+    out = await tg.generate_session_title("检查侧边栏标题", "已经检查", max_length=16)
+    assert out == "检查侧边栏标题"
+
+
+@pytest.mark.asyncio
 async def test_generate_session_title_forwards_usage_context(monkeypatch):
     seen = {}
 
@@ -170,3 +196,8 @@ def test_normalize_title_strips_quotes_and_punctuation():
     assert tg._normalize_title("第一行\n第二行", 16) == "第一行 第二行"
     assert tg._normalize_title("非常非常非常非常长的标题文本", 4) == "非常非常"
     assert tg._normalize_title("", 16) == ""
+
+
+def test_reasoning_leak_detects_language_mismatch():
+    assert tg._looks_like_reasoning_leak("Review sidebar title", "检查侧边栏标题")
+    assert not tg._looks_like_reasoning_leak("检查侧边栏标题", "检查侧边栏标题")

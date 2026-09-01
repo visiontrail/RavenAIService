@@ -242,6 +242,41 @@ def _normalize_title(raw: str, max_length: int) -> str:
     return normalized[:max_length]
 
 
+_REASONING_PREFIXES = (
+    "the user wants",
+    "the user is asking",
+    "we need",
+    "we should",
+    "i need",
+    "i should",
+    "let me",
+    "用户想让我",
+    "用户希望我",
+    "我们需要",
+    "我需要",
+    "让我",
+)
+
+
+def _looks_like_reasoning_leak(title: str, source_text: str) -> bool:
+    """Reject model preambles that cannot be valid titles.
+
+    Some OpenAI-compatible gateways put the chain-of-thought preamble in both
+    the assistant frame and the SDK terminal result.  The result can therefore
+    still start with text such as ``"The user wants me ..."`` even when the
+    prompt explicitly asks for a Chinese title.  Besides known preambles, a
+    title with no Han characters is rejected when the source contains Han text;
+    falling back to the user's own words is safer than persisting reasoning.
+    """
+    folded = (title or "").strip().casefold()
+    if any(folded.startswith(prefix) for prefix in _REASONING_PREFIXES):
+        return True
+
+    source_has_han = any("\u4e00" <= char <= "\u9fff" for char in source_text)
+    title_has_han = any("\u4e00" <= char <= "\u9fff" for char in title)
+    return source_has_han and not title_has_han
+
+
 async def summarize_user_message(
     user_content: str,
     max_length: int = 16,
@@ -270,6 +305,9 @@ async def summarize_user_message(
         return fallback
 
     title = _normalize_title(raw, max_length)
+    if _looks_like_reasoning_leak(title, cleaned_input):
+        logger.warning("title_generator: 检测到推理文本，使用用户输入回退")
+        return fallback
     return title or fallback
 
 
@@ -313,4 +351,7 @@ async def generate_session_title(
         return None
 
     title = _normalize_title(raw, max_length)
+    if _looks_like_reasoning_leak(title, user_clean):
+        logger.warning("title_generator: 检测到推理文本，使用用户输入回退")
+        return user_clean[:max_length] or None
     return title or None
