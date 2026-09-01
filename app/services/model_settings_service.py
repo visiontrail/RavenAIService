@@ -82,6 +82,11 @@ _URL_PLACEHOLDER_RE = re.compile(r"\{[^}]+\}")
 # Connectivity probes must fail fast — the agent-facing
 # ``anthropic_request_timeout_seconds`` (1h) would hang the Admin page.
 _TEST_TIMEOUT_SECONDS = 30
+# Yinhe's reasoning queue can return valid completions after the fast
+# credential-check window (36.8s observed during acceptance).  Only the single
+# representative Messages probe gets this larger allowance; per-key auth stays
+# fast and the Agent runtime itself already permits much longer requests.
+_TEST_COMPATIBILITY_TIMEOUT_SECONDS = 120
 # Connectivity needs to exercise the same authenticated Messages path as the
 # Agent SDK, not buy a full answer.  A large budget makes reasoning models keep
 # the non-streaming probe open past the Admin timeout even though the key is
@@ -605,6 +610,7 @@ async def _probe(
     body: Dict[str, Any],
     context: Dict[str, Any],
     parse_reply,
+    timeout_seconds: int = _TEST_TIMEOUT_SECONDS,
 ) -> Dict[str, Any]:
     """POST a minimal completion request and classify the outcome.
 
@@ -615,13 +621,13 @@ async def _probe(
 
     start = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=_TEST_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             response = await client.post(url, json=body, headers=headers)
     except httpx.TimeoutException:
         return _fail(
             target,
             "timeout",
-            f"请求超时（{_TEST_TIMEOUT_SECONDS}s）：端点不可达或响应过慢",
+            f"请求超时（{timeout_seconds}s）：端点不可达或响应过慢",
             **context,
         )
     except httpx.HTTPError as exc:
@@ -831,7 +837,11 @@ async def _test_anthropic(slot: AnthropicSlot, payload: Dict[str, Any]) -> Dict[
             **context,
         )
 
-    async def probe_key(api_key: str) -> Dict[str, Any]:
+    async def probe_key(
+        api_key: str,
+        *,
+        timeout_seconds: int = _TEST_TIMEOUT_SECONDS,
+    ) -> Dict[str, Any]:
         result = await _probe(
             target=target,
             url=f"{base_url.rstrip('/')}/v1/messages",
@@ -849,6 +859,7 @@ async def _test_anthropic(slot: AnthropicSlot, payload: Dict[str, Any]) -> Dict[
             },
             context={**context, "key_id": key_identifier(api_key)},
             parse_reply=_anthropic_reply_text,
+            timeout_seconds=timeout_seconds,
         )
         # A provider is not trusted to keep credentials out of its own error
         # body. Strip the exact submitted secret before either a single-key or
@@ -883,7 +894,10 @@ async def _test_anthropic(slot: AnthropicSlot, payload: Dict[str, Any]) -> Dict[
             None,
         )
         if first_healthy is not None:
-            compatibility_result = await probe_key(first_healthy)
+            compatibility_result = await probe_key(
+                first_healthy,
+                timeout_seconds=_TEST_COMPATIBILITY_TIMEOUT_SECONDS,
+            )
     else:
         results = [await probe_key(api_key) for api_key in api_keys]
     if len(results) == 1:

@@ -413,7 +413,15 @@ def fake_upstream(monkeypatch):
             return False
 
         async def post(self, url, json=None, headers=None):  # noqa: A002
-            calls.append({"method": "POST", "url": url, "body": json, "headers": headers})
+            calls.append(
+                {
+                    "method": "POST",
+                    "url": url,
+                    "body": json,
+                    "headers": headers,
+                    "timeout": self.kwargs.get("timeout"),
+                }
+            )
             box["in_flight"] += 1
             box["max_in_flight"] = max(box["max_in_flight"], box["in_flight"])
             try:
@@ -544,6 +552,7 @@ async def test_primary_pool_probe_tests_every_key_without_returning_secrets(
     assert message_calls[0]["headers"]["x-api-key"] in keys
     assert box["max_in_flight"] == 1
     assert message_calls[0]["body"]["max_tokens"] == 8
+    assert message_calls[0]["timeout"] == 120
     assert result["compatibility_result"]["ok"] is True
     rendered = json.dumps(result)
     assert all(key not in rendered for key in keys)
