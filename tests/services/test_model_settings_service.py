@@ -396,6 +396,7 @@ def fake_upstream(monkeypatch):
     calls: list = []
     box: dict = {
         "response": _FakeResponse(payload={"content": [{"type": "text", "text": "pong"}]}),
+        "models_response": _FakeResponse(payload={"data": [{"id": "yinhe-thinking"}]}),
         "exc": None,
         "in_flight": 0,
         "max_in_flight": 0,
@@ -412,7 +413,7 @@ def fake_upstream(monkeypatch):
             return False
 
         async def post(self, url, json=None, headers=None):  # noqa: A002
-            calls.append({"url": url, "body": json, "headers": headers})
+            calls.append({"method": "POST", "url": url, "body": json, "headers": headers})
             box["in_flight"] += 1
             box["max_in_flight"] = max(box["max_in_flight"], box["in_flight"])
             try:
@@ -424,6 +425,12 @@ def fake_upstream(monkeypatch):
                 return box["response"]
             finally:
                 box["in_flight"] -= 1
+
+        async def get(self, url, headers=None):
+            calls.append({"method": "GET", "url": url, "headers": headers})
+            if box["exc"] is not None:
+                raise box["exc"]
+            return box["models_response"]
 
     monkeypatch.setattr(httpx, "AsyncClient", _Client)
     return box, calls
@@ -530,11 +537,63 @@ async def test_primary_pool_probe_tests_every_key_without_returning_secrets(
     assert result["tested_key_count"] == 3
     assert result["healthy_key_count"] == 3
     assert len(result["key_results"]) == 3
-    assert {call["headers"]["x-api-key"] for call in calls} == set(keys)
+    model_calls = [call for call in calls if call["method"] == "GET"]
+    message_calls = [call for call in calls if call["method"] == "POST"]
+    assert {call["headers"]["x-api-key"] for call in model_calls} == set(keys)
+    assert len(message_calls) == 1
+    assert message_calls[0]["headers"]["x-api-key"] in keys
     assert box["max_in_flight"] == 1
-    assert all(call["body"]["max_tokens"] == 8 for call in calls)
+    assert message_calls[0]["body"]["max_tokens"] == 8
+    assert result["compatibility_result"]["ok"] is True
     rendered = json.dumps(result)
     assert all(key not in rendered for key in keys)
+
+
+async def test_yinhe_pool_separates_key_health_from_shared_completion_limit(
+    isolated_store, blank_model_env, fake_upstream
+):
+    box, calls = fake_upstream
+    keys = ["sk-pool-a", "sk-pool-b", "sk-pool-c"]
+    box["response"] = _FakeResponse(
+        status_code=429,
+        payload={"error": {"message": "shared RPM exhausted"}},
+    )
+
+    result = await mss.test_connection(
+        {"target": "anthropic", "provider": "yinhe", "api_keys": keys}
+    )
+
+    assert result["ok"] is False
+    assert result["tested_key_count"] == 3
+    assert result["healthy_key_count"] == 3
+    assert result["failed_key_count"] == 0
+    assert result["compatibility_result"]["error_kind"] == "http_429"
+    assert "3/3" in result["detail"]
+    assert len([call for call in calls if call["method"] == "GET"]) == 3
+    assert len([call for call in calls if call["method"] == "POST"]) == 1
+
+
+async def test_yinhe_pool_requires_each_key_to_authorize_the_configured_model(
+    isolated_store, blank_model_env, fake_upstream
+):
+    box, calls = fake_upstream
+    box["models_response"] = _FakeResponse(payload={"data": [{"id": "other-model"}]})
+
+    result = await mss.test_connection(
+        {
+            "target": "anthropic",
+            "provider": "yinhe",
+            "api_keys": ["sk-pool-a", "sk-pool-b"],
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["healthy_key_count"] == 0
+    assert all(
+        item["error_kind"] == "model_not_authorized"
+        for item in result["key_results"]
+    )
+    assert not [call for call in calls if call["method"] == "POST"]
 
 
 # ──────────────────────── Backup endpoint (failover slot) ───────────────────

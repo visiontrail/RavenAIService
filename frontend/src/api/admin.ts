@@ -141,6 +141,13 @@ export interface ModelSettingsTestResult {
     error_kind?: string
     detail?: string
   }>
+  compatibility_result?: {
+    ok: boolean
+    status_code?: number
+    latency_ms?: number
+    error_kind?: string
+    detail?: string
+  } | null
 }
 
 export interface UpdateModelSettingsPayload {

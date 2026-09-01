@@ -18,6 +18,7 @@ without touching call sites again.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -686,6 +687,102 @@ def _openai_reply_text(data: Dict[str, Any]) -> str:
     return str(message.get("content") or "").strip()
 
 
+async def _probe_yinhe_key_access(
+    *,
+    target: str,
+    base_url: str,
+    model: str,
+    api_key: str,
+    context: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Verify one Yinhe/OneAPI key without consuming completion RPM.
+
+    OneAPI applies its generation limit to the account shared by the whole key
+    pool.  A completion per key therefore proves only that the verifier can
+    exhaust that shared quota.  ``GET /v1/models`` still authenticates the
+    exact key and verifies that the configured model is authorized; one
+    representative Messages request below separately proves protocol/runtime
+    compatibility for the shared endpoint.
+    """
+    import httpx
+
+    key_context = {**context, "key_id": key_identifier(api_key)}
+    started = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=_TEST_TIMEOUT_SECONDS) as client:
+            response = await client.get(
+                f"{base_url.rstrip('/')}/v1/models",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+            )
+    except httpx.TimeoutException:
+        return _fail(
+            target,
+            "timeout",
+            f"Key 鉴权请求超时（{_TEST_TIMEOUT_SECONDS}s）",
+            **key_context,
+        )
+    except httpx.HTTPError as exc:
+        return _fail(
+            target,
+            "network_error",
+            f"Key 鉴权网络错误：{_excerpt(type(exc).__name__ + ': ' + str(exc), 200)}",
+            **key_context,
+        )
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    if response.status_code >= 400:
+        detail = _excerpt(response.text)
+        if api_key in detail:
+            detail = detail.replace(api_key, "[REDACTED]")
+        return _fail(
+            target,
+            f"http_{response.status_code}",
+            f"Key 鉴权返回 HTTP {response.status_code}：{detail}",
+            status_code=response.status_code,
+            latency_ms=latency_ms,
+            **key_context,
+        )
+
+    try:
+        data = response.json()
+    except ValueError:
+        return _fail(
+            target,
+            "bad_response",
+            "Key 鉴权返回了非 JSON 响应",
+            status_code=response.status_code,
+            latency_ms=latency_ms,
+            **key_context,
+        )
+
+    rows = data.get("data") if isinstance(data, dict) else None
+    model_ids = {
+        str(row.get("id") or "").strip()
+        for row in rows or []
+        if isinstance(row, dict)
+    }
+    if model not in model_ids:
+        return _fail(
+            target,
+            "model_not_authorized",
+            f"Key 已鉴权，但未获模型 {model} 的访问权限",
+            status_code=response.status_code,
+            latency_ms=latency_ms,
+            **key_context,
+        )
+    return {
+        "ok": True,
+        "target": target,
+        "status_code": response.status_code,
+        "latency_ms": latency_ms,
+        "model_authorized": True,
+        **key_context,
+    }
+
+
 async def _test_anthropic(slot: AnthropicSlot, payload: Dict[str, Any]) -> Dict[str, Any]:
     """Probe one endpoint slot with the form's values (saved config fills gaps)."""
     target = slot.group
@@ -762,13 +859,33 @@ async def _test_anthropic(slot: AnthropicSlot, payload: Dict[str, Any]) -> Dict[
                 result[field] = value.replace(api_key, "[REDACTED]")
         return result
 
-    # Probe the pool one key at a time.  These credentials commonly share an
-    # upstream account-wide request/concurrency budget; firing the whole pool
-    # with ``gather`` makes the verifier itself trigger 429s and queue enough
-    # reasoning requests to hit the timeout, reporting every healthy key as
-    # broken.  Sequential probes are slower but make each per-key verdict
-    # independent and mirror the runtime's one-key-per-run routing.
-    results = [await probe_key(api_key) for api_key in api_keys]
+    # Yinhe is a OneAPI gateway whose whole key pool shares a generation RPM
+    # budget.  Verify every key through the authenticated model catalogue, then
+    # spend exactly one completion on the shared Messages/model path.  Other
+    # providers keep the conservative per-key completion probe because their
+    # model-list semantics are not guaranteed to match OneAPI's.
+    compatibility_result: Optional[Dict[str, Any]] = None
+    if len(api_keys) > 1 and provider == "yinhe":
+        results = await asyncio.gather(
+            *(
+                _probe_yinhe_key_access(
+                    target=target,
+                    base_url=base_url,
+                    model=model,
+                    api_key=api_key,
+                    context=context,
+                )
+                for api_key in api_keys
+            )
+        )
+        first_healthy = next(
+            (api_key for api_key, result in zip(api_keys, results) if result.get("ok")),
+            None,
+        )
+        if first_healthy is not None:
+            compatibility_result = await probe_key(first_healthy)
+    else:
+        results = [await probe_key(api_key) for api_key in api_keys]
     if len(results) == 1:
         return results[0]
 
@@ -778,13 +895,38 @@ async def _test_anthropic(slot: AnthropicSlot, payload: Dict[str, Any]) -> Dict[
     key_results = [
         {
             key: result.get(key)
-            for key in ("key_id", "ok", "status_code", "latency_ms", "error_kind", "detail")
+            for key in (
+                "key_id",
+                "ok",
+                "status_code",
+                "latency_ms",
+                "model_authorized",
+                "error_kind",
+                "detail",
+            )
             if result.get(key) is not None
         }
         for result in results
     ]
+    compatibility_ok = bool(
+        compatibility_result is None or compatibility_result.get("ok")
+    )
+    if healthy == len(results) and compatibility_ok:
+        detail = (
+            f"全部 {len(results)} 个 API Key 鉴权及模型授权通过，"
+            "消息接口兼容性测试通过"
+            if compatibility_result is not None
+            else f"全部 {len(results)} 个 API Key 连接测试通过"
+        )
+    elif healthy == len(results) and compatibility_result is not None:
+        detail = (
+            f"{healthy}/{len(results)} 个 API Key 鉴权及模型授权通过；"
+            f"消息接口兼容性测试失败：{compatibility_result.get('detail', '未知错误')}"
+        )
+    else:
+        detail = f"{healthy}/{len(results)} 个 API Key 鉴权及模型授权通过"
     return {
-        "ok": healthy == len(results),
+        "ok": healthy == len(results) and compatibility_ok,
         "target": target,
         **context,
         "key_count": len(results),
@@ -792,11 +934,22 @@ async def _test_anthropic(slot: AnthropicSlot, payload: Dict[str, Any]) -> Dict[
         "healthy_key_count": healthy,
         "failed_key_count": len(results) - healthy,
         "key_results": key_results,
-        "detail": (
-            f"{healthy}/{len(results)} 个 API Key 连接测试通过"
-            if healthy != len(results)
-            else f"全部 {len(results)} 个 API Key 连接测试通过"
+        "compatibility_result": (
+            {
+                key: compatibility_result.get(key)
+                for key in (
+                    "ok",
+                    "status_code",
+                    "latency_ms",
+                    "error_kind",
+                    "detail",
+                )
+                if compatibility_result.get(key) is not None
+            }
+            if compatibility_result is not None
+            else None
         ),
+        "detail": detail,
     }
 
 
