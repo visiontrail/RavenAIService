@@ -9,6 +9,7 @@ overlay), that secrets are masked on read, that validation fires, and that
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -396,6 +397,8 @@ def fake_upstream(monkeypatch):
     box: dict = {
         "response": _FakeResponse(payload={"content": [{"type": "text", "text": "pong"}]}),
         "exc": None,
+        "in_flight": 0,
+        "max_in_flight": 0,
     }
 
     class _Client:
@@ -410,9 +413,17 @@ def fake_upstream(monkeypatch):
 
         async def post(self, url, json=None, headers=None):  # noqa: A002
             calls.append({"url": url, "body": json, "headers": headers})
-            if box["exc"] is not None:
-                raise box["exc"]
-            return box["response"]
+            box["in_flight"] += 1
+            box["max_in_flight"] = max(box["max_in_flight"], box["in_flight"])
+            try:
+                # Give concurrently scheduled probes a chance to overlap.  The
+                # pool regression below therefore fails if ``gather`` returns.
+                await asyncio.sleep(0)
+                if box["exc"] is not None:
+                    raise box["exc"]
+                return box["response"]
+            finally:
+                box["in_flight"] -= 1
 
     monkeypatch.setattr(httpx, "AsyncClient", _Client)
     return box, calls
@@ -504,7 +515,7 @@ async def test_anthropic_probe_redacts_key_echoed_by_upstream(
 async def test_primary_pool_probe_tests_every_key_without_returning_secrets(
     isolated_store, blank_model_env, fake_upstream
 ):
-    _box, calls = fake_upstream
+    box, calls = fake_upstream
     keys = ["sk-pool-a", "sk-pool-b", "sk-pool-c"]
 
     result = await mss.test_connection(
@@ -520,6 +531,8 @@ async def test_primary_pool_probe_tests_every_key_without_returning_secrets(
     assert result["healthy_key_count"] == 3
     assert len(result["key_results"]) == 3
     assert {call["headers"]["x-api-key"] for call in calls} == set(keys)
+    assert box["max_in_flight"] == 1
+    assert all(call["body"]["max_tokens"] == 8 for call in calls)
     rendered = json.dumps(result)
     assert all(key not in rendered for key in keys)
 

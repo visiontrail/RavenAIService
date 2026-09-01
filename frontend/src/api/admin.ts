@@ -280,9 +280,10 @@ export const adminApi = {
   testModelSettings: (
     payload: TestModelSettingsPayload
   ): Promise<ApiResponse<ModelSettingsTestResult>> =>
-    // The probe waits on an upstream completion; allow more than the 20s
-    // client default so a slow-but-working endpoint still reports success.
-    adminClient.post('/admin/model-settings/test', payload, { timeout: 40000 }),
+    // A primary pool is deliberately checked one key at a time so the verifier
+    // does not manufacture upstream concurrency/rate-limit failures. Allow the
+    // full nginx Admin proxy window for a real multi-key pool.
+    adminClient.post('/admin/model-settings/test', payload, { timeout: 300000 }),
 
   createUser: (payload: {
     username: string

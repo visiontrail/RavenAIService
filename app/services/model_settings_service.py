@@ -18,7 +18,6 @@ without touching call sites again.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 import time
@@ -82,8 +81,12 @@ _URL_PLACEHOLDER_RE = re.compile(r"\{[^}]+\}")
 # Connectivity probes must fail fast — the agent-facing
 # ``anthropic_request_timeout_seconds`` (1h) would hang the Admin page.
 _TEST_TIMEOUT_SECONDS = 30
-# Generous enough that a thinking-by-default model still produces a reply.
-_TEST_MAX_TOKENS = 256
+# Connectivity needs to exercise the same authenticated Messages path as the
+# Agent SDK, not buy a full answer.  A large budget makes reasoning models keep
+# the non-streaming probe open past the Admin timeout even though the key is
+# valid (observed with ``yinhe-thinking``).  ``_probe`` treats any valid 2xx
+# JSON response as success, so a deliberately tiny budget is sufficient.
+_TEST_MAX_TOKENS = 8
 _TEST_PROMPT = "ping"
 
 
@@ -759,7 +762,13 @@ async def _test_anthropic(slot: AnthropicSlot, payload: Dict[str, Any]) -> Dict[
                 result[field] = value.replace(api_key, "[REDACTED]")
         return result
 
-    results = await asyncio.gather(*(probe_key(api_key) for api_key in api_keys))
+    # Probe the pool one key at a time.  These credentials commonly share an
+    # upstream account-wide request/concurrency budget; firing the whole pool
+    # with ``gather`` makes the verifier itself trigger 429s and queue enough
+    # reasoning requests to hit the timeout, reporting every healthy key as
+    # broken.  Sequential probes are slower but make each per-key verdict
+    # independent and mirror the runtime's one-key-per-run routing.
+    results = [await probe_key(api_key) for api_key in api_keys]
     if len(results) == 1:
         return results[0]
 
