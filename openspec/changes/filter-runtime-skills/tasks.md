@@ -19,4 +19,4 @@
 
 - [x] 4.1 Update the trace/log-analysis documentation for candidate selection and availability/invocation semantics.
 - [x] 4.2 Run focused backend tests, frontend unit/type checks, formatting/diff checks, and the relevant full suites.
-- [ ] 4.3 Commit the scoped RavenAIService change, deploy the exact commit to nr-test, and verify health plus a Browser-visible production task trace that excludes unrelated Skills.
+- [x] 4.3 Commit the scoped RavenAIService change, deploy the exact commit to nr-test, and verify health plus a Browser-visible production task trace that excludes unrelated Skills.
