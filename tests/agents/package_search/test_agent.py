@@ -369,7 +369,8 @@ def test_agent_materializes_skills_layers_prompts_and_reuses_trace_seq(
             {
                 "name": "full-package-build",
                 "description": "分类并构建已确认的软件升级整包",
-            }
+            },
+            {"name": "package-audit", "description": "只读审计版本包"},
         ]
     )
     monkeypatch.setattr(
@@ -409,11 +410,7 @@ def test_agent_materializes_skills_layers_prompts_and_reuses_trace_seq(
     assert materialize.call_args.args == ("package_search", ctx.temp_dir)
     assert materialize.call_args.kwargs["project_code"] == PROJECT
     assert "请制作整包" in materialize.call_args.kwargs["query_text"]
-    overviews.assert_called_once_with(
-        "package_search",
-        project_code=PROJECT,
-        names=["full-package-build"],
-    )
+    overviews.assert_called_once_with("package_search", project_code=PROJECT)
     assert "可用的 Skill（按需加载）" in captured["system_prompt"]
     assert "可用的 Skill（按需加载）" in captured["user_prompt"]
     assert "`full-package-build`：分类并构建已确认的软件升级整包" in (
@@ -430,10 +427,10 @@ def test_agent_materializes_skills_layers_prompts_and_reuses_trace_seq(
         if event["type"] == "system_notice" and event.get("kind") == "skills_available"
     )
     assert run_start["seq"] == 3
-    assert run_start["available_skills"] == ["full-package-build"]
+    assert run_start["available_skills"] == ["full-package-build", "package-audit"]
     assert run_start["loaded_skills"] == ["full-package-build"]
     assert skills_notice["seq"] == 4
-    assert skills_notice["available_skills"] == ["full-package-build"]
+    assert skills_notice["available_skills"] == ["full-package-build", "package-audit"]
     assert skills_notice["loaded_skills"] == ["full-package-build"]
     assert result["loaded_skills"] == ["full-package-build"]
     assert shared_counter.value == max(event["seq"] for event in result["trace_events"])

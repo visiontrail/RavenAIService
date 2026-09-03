@@ -317,11 +317,16 @@ class DeviceAgent:
                 session_id, run_id=ctx.run_id, owner_scope=ctx.owner_scope
             )
 
+            available_skills: List[str] = []
             materialized: List[str] = []
             try:
                 from app.agents.skill_prompting import build_skill_relevance_query
                 from app.services import skills_service
 
+                available_skills = [
+                    item["name"]
+                    for item in skills_service.enabled_skill_overviews(AGENT_KEY)
+                ]
                 skill_query = build_skill_relevance_query(
                     question=ctx.user_message,
                     extra_text=[
@@ -341,14 +346,15 @@ class DeviceAgent:
                         len(materialized),
                         ", ".join(materialized),
                     )
+                if available_skills:
                     emit(
                         build_event(
                             SYSTEM_NOTICE,
                             task_id=task_id,
                             seq_counter=seq_counter,
                             kind="skills_available",
-                            detail=", ".join(materialized),
-                            available_skills=list(materialized),
+                            detail=", ".join(available_skills),
+                            available_skills=list(available_skills),
                             loaded_skills=list(materialized),
                         )
                     )

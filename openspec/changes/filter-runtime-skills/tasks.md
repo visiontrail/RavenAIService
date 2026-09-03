@@ -19,4 +19,5 @@
 
 - [x] 4.1 Update the trace/log-analysis documentation for candidate selection and availability/invocation semantics.
 - [x] 4.2 Run focused backend tests, frontend unit/type checks, formatting/diff checks, and the relevant full suites.
-- [x] 4.3 Commit the scoped RavenAIService change, deploy the exact commit to nr-test, and verify health plus a Browser-visible production task trace that excludes unrelated Skills.
+- [x] 4.3 Commit the scoped RavenAIService change, deploy the exact commit to nr-test, and verify health plus a Browser-visible production task trace that excludes unrelated Skills from materialization and actual loading.
+- [ ] 4.4 Report the full enabled Agent/project catalog as available and collapsed by default while keeping filtered materialization and actual invocation separate; add regressions and verify the corrected production UI.

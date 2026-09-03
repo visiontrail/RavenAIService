@@ -1000,9 +1000,9 @@ def enabled_skill_overviews(
 ) -> List[Dict[str, str]]:
     """Return name/description pairs for the combined enabled skill pool.
 
-    Mirrors the materialization order (built-in, Agent, then project; later
-    layers override on name conflict) so agents advertise exactly what was
-    materialized. ``names`` optionally restricts the result to a subset.
+    Mirrors the catalog precedence (built-in, Agent, then project; later
+    layers override on name conflict). Without ``names`` this is the complete
+    enabled catalog; ``names`` optionally restricts it to a materialized subset.
     """
     wanted = {str(n) for n in names} if names is not None else None
     order: List[str] = []

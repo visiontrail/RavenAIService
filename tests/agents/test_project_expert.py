@@ -242,7 +242,10 @@ async def test_agent_uses_expected_tools_materializes_project_skills_and_masks_t
         ) as materialize, \
         patch(
             "app.services.skills_service.enabled_skill_overviews",
-            return_value=[{"name": "repo-reader", "description": "读取仓库源码文件"}],
+            return_value=[
+                {"name": "repo-reader", "description": "读取仓库源码文件"},
+                {"name": "db-helper", "description": "数据库维护"},
+            ],
         ), \
         patch("app.agents.log_analysis.mcp_tools.get_mcp_server", return_value=MagicMock()), \
         patch("app.config.settings.anthropic_provider", "anthropic"):
@@ -267,6 +270,10 @@ async def test_agent_uses_expected_tools_materializes_project_skills_and_masks_t
     assert "`repo-reader`：读取仓库源码文件" in captured_prompt["prompt"]
     assert '"skill": "repo-reader"' in captured_prompt["prompt"]
     assert "最终输出仍必须遵守第 5 步的围栏 JSON schema" in captured_prompt["prompt"]
+    run_start = next(ev for ev in trace_events if ev["type"] == "run_start")
+    assert run_start["available_skills"] == ["repo-reader", "db-helper"]
+    assert run_start["loaded_skills"] == ["repo-reader"]
+    assert "db-helper" not in captured_prompt["prompt"]
     assert "项目适配性检查（最高优先级）" in kwargs["system_prompt"]
     assert "Foo service authentication and account APIs" in kwargs["system_prompt"]
     assert "当前系统还没有适合回答这个问题的项目" in kwargs["system_prompt"]

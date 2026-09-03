@@ -57,7 +57,7 @@ function addSkillName(names: Set<string>, raw: unknown) {
   if (typeof raw === 'string' && raw.trim()) names.add(raw.trim())
 }
 
-/** Collect selected/materialized candidates, including historical aliases. */
+/** Collect the full enabled catalog, with historical materialization aliases. */
 export function collectAvailableSkills(events: AgentTraceEvent[]): string[] {
   const names = new Set<string>()
 

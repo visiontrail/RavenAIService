@@ -41,7 +41,7 @@ export interface RunStartEvent extends BaseTraceEvent {
   model?: string
   provider?: string
   available_skills?: string[]
-  /** @deprecated lifecycle alias for available_skills */
+  /** @deprecated lifecycle alias for the materialized candidate subset */
   loaded_skills?: string[]
 }
 
@@ -121,7 +121,7 @@ export interface SystemNoticeEvent extends BaseTraceEvent {
   subtype?: string
   detail?: string
   available_skills?: string[]
-  /** @deprecated lifecycle alias for available_skills */
+  /** @deprecated lifecycle alias for the materialized candidate subset */
   loaded_skills?: string[]
 }
 

@@ -134,7 +134,11 @@ def _patch_settings(provider: str = "deepseek"):
     )
 
 
-def _patch_environment(*, loaded_skills: Optional[List[str]] = None):
+def _patch_environment(
+    *,
+    loaded_skills: Optional[List[str]] = None,
+    available_skills: Optional[List[str]] = None,
+):
     """Patch all the side-effect modules we don't want exercised in unit tests."""
     return [
         patch("app.agents.anthropic_client.build_options", return_value=MagicMock()),
@@ -153,21 +157,33 @@ def _patch_environment(*, loaded_skills: Optional[List[str]] = None):
         patch(
             "app.services.skills_service.enabled_skill_overviews",
             return_value=[
-                {"name": n, "description": ""} for n in (loaded_skills or [])
+                {"name": n, "description": ""}
+                for n in (available_skills or loaded_skills or [])
             ],
         ),
         patch("app.services.model_router.candidates", return_value=[]),
     ]
 
 
-def _run_agent(workspace_ctx, fake_query, *, emitter=None, cancel_event=None, loaded_skills=None):
+def _run_agent(
+    workspace_ctx,
+    fake_query,
+    *,
+    emitter=None,
+    cancel_event=None,
+    loaded_skills=None,
+    available_skills=None,
+):
     """Run LogAnalysisAgent.run synchronously, with all SDK dependencies mocked."""
     from app.agents.log_analysis.agent import LogAnalysisAgent
 
     fake_sdk = MagicMock()
     fake_sdk.query = fake_query
 
-    patches = _patch_environment(loaded_skills=loaded_skills) + [
+    patches = _patch_environment(
+        loaded_skills=loaded_skills,
+        available_skills=available_skills,
+    ) + [
         patch.dict("sys.modules", {"claude_agent_sdk": fake_sdk}),
         _patch_settings(),
     ]
@@ -224,7 +240,9 @@ class TestEmitterEventSequence:
             "cache_write_tokens": 3,
         }
 
-    def test_available_skills_are_emitted_and_returned(self, workspace_ctx):
+    def test_full_available_catalog_is_separate_from_materialized_skills(
+        self, workspace_ctx
+    ):
         captured_prompt: Dict[str, str] = {}
 
         async def fake_query(*args, **kwargs):
@@ -236,23 +254,38 @@ class TestEmitterEventSequence:
             workspace_ctx,
             fake_query,
             emitter=captured.append,
-            loaded_skills=["smu-baseband-interfaces"],
+            loaded_skills=["ka-phased-array-antenna"],
+            available_skills=[
+                "ka-phased-array-antenna",
+                "payload-management-unit",
+                "tcpt027-db-modify",
+            ],
         )
 
-        assert result["loaded_skills"] == ["smu-baseband-interfaces"]
+        assert result["loaded_skills"] == ["ka-phased-array-antenna"]
         assert captured[0]["type"] == "run_start"
-        assert captured[0]["available_skills"] == ["smu-baseband-interfaces"]
-        assert captured[0]["loaded_skills"] == ["smu-baseband-interfaces"]
+        assert captured[0]["available_skills"] == [
+            "ka-phased-array-antenna",
+            "payload-management-unit",
+            "tcpt027-db-modify",
+        ]
+        assert captured[0]["loaded_skills"] == ["ka-phased-array-antenna"]
         skill_events = [
             ev for ev in captured
             if ev["type"] == "system_notice" and ev.get("kind") == "skills_available"
         ]
         assert len(skill_events) == 1
-        assert skill_events[0]["available_skills"] == ["smu-baseband-interfaces"]
-        assert skill_events[0]["loaded_skills"] == ["smu-baseband-interfaces"]
+        assert skill_events[0]["available_skills"] == [
+            "ka-phased-array-antenna",
+            "payload-management-unit",
+            "tcpt027-db-modify",
+        ]
+        assert skill_events[0]["loaded_skills"] == ["ka-phased-array-antenna"]
         assert "可用的 Skill（按需加载）" in captured_prompt["prompt"]
-        assert '"skill": "smu-baseband-interfaces"' in captured_prompt["prompt"]
-        assert ".claude/skills/smu-baseband-interfaces/" in captured_prompt["prompt"]
+        assert '"skill": "ka-phased-array-antenna"' in captured_prompt["prompt"]
+        assert ".claude/skills/ka-phased-array-antenna/" in captured_prompt["prompt"]
+        assert "payload-management-unit" not in captured_prompt["prompt"]
+        assert "tcpt027-db-modify" not in captured_prompt["prompt"]
         assert "最终输出仍必须遵守第 6 步的围栏 JSON schema" in captured_prompt["prompt"]
 
     def test_seq_strictly_monotonic(self, workspace_ctx):

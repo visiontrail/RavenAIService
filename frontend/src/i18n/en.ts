@@ -683,7 +683,7 @@ export default {
     thinking: 'Thinking',
     cancelling: 'Cancelling…',
     cancel: 'Cancel',
-    availableSkillsTitle: 'Candidate Skills made available to this agent run',
+    availableSkillsTitle: 'All Skills enabled for this agent and project; they are not all loaded',
     availableSkillsLabel: 'Available Skills',
     loadedSkillsTitle: 'Skills whose instructions were loaded by this agent run',
     loadedSkillsLabel: 'Loaded Skills',

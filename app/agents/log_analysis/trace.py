@@ -105,11 +105,11 @@ class AgentTraceEvent(TypedDict, total=False):
     subtype: str
     detail: str
 
-    # lifecycle: run_start
+    # lifecycle: full enabled Agent/project catalog (not materialization proof)
     model: str
     provider: str
     available_skills: List[str]
-    # Deprecated lifecycle alias retained while old clients are deployed.
+    # Deprecated lifecycle alias for the filtered materialized subset.
     loaded_skills: List[str]
 
     # lifecycle: run_complete / cancelled / error

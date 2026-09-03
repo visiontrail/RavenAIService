@@ -173,8 +173,9 @@ touching the agent loop itself.
 | Persisted events for a finished task                 | `select ai_analysis_result -> 'trace_events' from log_records where id = …;`  |
 
 When investigating the Skill chips, do not treat a lifecycle
-`loaded_skills` field as proof of invocation. New traces expose that list as
-`available_skills`; actual use requires a `step_start` whose `tool_name` is
+`loaded_skills` field as proof of invocation. New traces expose the complete
+enabled Agent/project catalog as `available_skills`; actual use requires a
+`step_start` whose `tool_name` is
 `Skill`. See the protocol's “Skill availability and actual use” section.
 
 For schema details, sequencing invariants, and the cancellation

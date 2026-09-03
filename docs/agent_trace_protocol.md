@@ -42,11 +42,15 @@ keys gracefully.
 
 ### Skill availability and actual use
 
-`available_skills` contains only the enabled Skills selected as relevant to the
-current request and materialized into the run workspace. The compatibility field
-`loaded_skills` on lifecycle events carries the same list; it does **not** prove
-that the model read or used those Skills. A `system_notice` with
-`kind: "skills_available"` reports the same lifecycle state.
+`available_skills` contains the complete enabled Skill catalog for the selected
+Agent/project; it is independent from the smaller request-relevant subset
+materialized into the run workspace. The compatibility field `loaded_skills`
+may carry that filtered subset; it does **not** prove that the model read or used
+those Skills. A `system_notice` with `kind: "skills_available"` reports the
+enabled catalog.
+
+The trace UI keeps the full available catalog collapsed by default and shows its
+item count; users can expand it without changing the Skills exposed to the model.
 
 Actual use is represented only by a normal `step_start` event whose `tool_name`
 is `Skill`; the invoked Skill name is read from `tool_input.skill`. The frontend

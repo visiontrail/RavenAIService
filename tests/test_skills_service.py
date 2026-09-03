@@ -357,8 +357,21 @@ def test_relevant_selection_excludes_unrelated_production_like_skills(
         ),
         project_code="oam_lx10",
     )
+    available = skills_service.enabled_skill_overviews(
+        "log_analysis",
+        project_code="oam_lx10",
+    )
 
     assert selected == ["ka-phased-array-antenna"]
+    assert [item["name"] for item in available] == [
+        "xlsx",
+        "docx",
+        "ka-phased-array-antenna",
+        "smu-baseband-interfaces",
+        "lx10-telemetry",
+        "payload-management-unit",
+        "tcpt027-db-modify",
+    ]
     assert not (cwd / ".claude" / "skills" / "payload-management-unit").exists()
     assert not (cwd / ".claude" / "skills" / "tcpt027-db-modify").exists()
     assert not (cwd / ".claude" / "skills" / "xlsx").exists()

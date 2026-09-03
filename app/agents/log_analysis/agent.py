@@ -1136,12 +1136,18 @@ class LogAnalysisAgent:
                 len(project_prompt_addendum),
             )
 
+        available_skills: List[str] = []
         materialized_skills: List[str] = []
         skill_overviews: List[Dict[str, str]] = []
         try:
             from app.agents.skill_prompting import build_skill_relevance_query
             from app.services import skills_service
 
+            all_skill_overviews = skills_service.enabled_skill_overviews(
+                AGENT_KEY,
+                project_code=project_code,
+            )
+            available_skills = [item["name"] for item in all_skill_overviews]
             issue_info = ctx.metadata.get("issue_info")
             issue_extra = []
             if isinstance(issue_info, dict):
@@ -1166,11 +1172,12 @@ class LogAnalysisAgent:
                 project_code=project_code,
             )
             if materialized_skills:
-                skill_overviews = skills_service.enabled_skill_overviews(
-                    AGENT_KEY,
-                    project_code=project_code,
-                    names=materialized_skills,
-                )
+                selected_names = set(materialized_skills)
+                skill_overviews = [
+                    item
+                    for item in all_skill_overviews
+                    if item["name"] in selected_names
+                ]
                 logger.info(
                     "LogAnalysisAgent: materialized %d skill(s): %s",
                     len(materialized_skills),
@@ -1263,19 +1270,19 @@ class LogAnalysisAgent:
                 seq_counter=state.seq_counter,
                 model=effective_model,
                 provider=str(provider),
-                available_skills=list(materialized_skills),
+                available_skills=list(available_skills),
                 loaded_skills=list(materialized_skills),
             )
         )
-        if materialized_skills:
+        if available_skills:
             state.emit(
                 build_event(
                     SYSTEM_NOTICE,
                     task_id=ctx.task_id,
                     seq_counter=state.seq_counter,
                     kind="skills_available",
-                    detail=", ".join(materialized_skills),
-                    available_skills=list(materialized_skills),
+                    detail=", ".join(available_skills),
+                    available_skills=list(available_skills),
                     loaded_skills=list(materialized_skills),
                 )
             )

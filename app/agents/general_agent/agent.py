@@ -281,12 +281,17 @@ class GeneralAgent:
 
         try:
             with tempfile.TemporaryDirectory(prefix="general-agent-") as tmpdir:
+                available_skills: List[str] = []
                 materialized_skills: List[str] = []
                 skill_overviews: List[Dict[str, str]] = []
                 try:
                     from app.agents.skill_prompting import build_skill_relevance_query
                     from app.services import skills_service
 
+                    all_skill_overviews = skills_service.enabled_skill_overviews(
+                        AGENT_KEY,
+                    )
+                    available_skills = [item["name"] for item in all_skill_overviews]
                     # Deliberately omit project_code: GeneralAgent supports only
                     # Agent-level Skills and never acquires project context.
                     skill_query = build_skill_relevance_query(
@@ -303,10 +308,12 @@ class GeneralAgent:
                         query_text=skill_query,
                     )
                     if materialized_skills:
-                        skill_overviews = skills_service.enabled_skill_overviews(
-                            AGENT_KEY,
-                            names=materialized_skills,
-                        )
+                        selected_names = set(materialized_skills)
+                        skill_overviews = [
+                            item
+                            for item in all_skill_overviews
+                            if item["name"] in selected_names
+                        ]
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "GeneralAgent: failed to materialize Agent Skills: %s", exc
@@ -318,16 +325,16 @@ class GeneralAgent:
                     "model": model,
                     "provider": provider,
                     "agent_key": AGENT_KEY,
-                    "available_skills": list(materialized_skills),
+                    "available_skills": list(available_skills),
                     "loaded_skills": list(materialized_skills),
                 }
-                if materialized_skills:
+                if available_skills:
                     yield {
                         "type": "system_notice",
                         "task_id": run_id,
                         "kind": "skills_available",
-                        "detail": ", ".join(materialized_skills),
-                        "available_skills": list(materialized_skills),
+                        "detail": ", ".join(available_skills),
+                        "available_skills": list(available_skills),
                         "loaded_skills": list(materialized_skills),
                     }
 

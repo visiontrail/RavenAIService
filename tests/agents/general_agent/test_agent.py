@@ -302,7 +302,10 @@ async def test_general_agent_materializes_agent_skills_without_project(monkeypat
     build_options = MagicMock(return_value=MagicMock())
     materialize = MagicMock(return_value=["routing_helper"])
     overviews = MagicMock(
-        return_value=[{"name": "routing_helper", "description": "路由规则"}]
+        return_value=[
+            {"name": "routing_helper", "description": "路由规则"},
+            {"name": "unrelated_helper", "description": "无关能力"},
+        ]
     )
 
     monkeypatch.setattr("claude_agent_sdk.query", fake_query)
@@ -332,7 +335,10 @@ async def test_general_agent_materializes_agent_skills_without_project(monkeypat
         "Skill",
     ]
     assert kwargs["setting_sources"] == ["project"]
-    assert events[0]["available_skills"] == ["routing_helper"]
+    assert events[0]["available_skills"] == [
+        "routing_helper",
+        "unrelated_helper",
+    ]
     assert events[0]["loaded_skills"] == ["routing_helper"]
     assert events[-1]["loaded_skills"] == ["routing_helper"]
 

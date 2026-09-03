@@ -1,15 +1,25 @@
 <template>
   <div v-if="hasContent" class="agent-trace">
-    <div v-if="availableSkills.length" class="agent-trace__skills" :title="t('agentTrace.availableSkillsTitle')">
-      <span class="agent-trace__skills-label">{{ t('agentTrace.availableSkillsLabel') }}</span>
-      <span
-        v-for="skill in availableSkills"
-        :key="skill"
-        class="agent-trace__skill-pill"
-      >
-        {{ skill }}
-      </span>
-    </div>
+    <details
+      v-if="availableSkills.length"
+      class="agent-trace__available-skills"
+      :title="t('agentTrace.availableSkillsTitle')"
+    >
+      <summary class="agent-trace__available-summary">
+        <span class="agent-trace__skills-label">{{ t('agentTrace.availableSkillsLabel') }}</span>
+        <span class="agent-trace__available-count">{{ availableSkills.length }}</span>
+        <ChevronDown class="agent-trace__available-chevron" aria-hidden="true" />
+      </summary>
+      <div class="agent-trace__skills agent-trace__skills--available">
+        <span
+          v-for="skill in availableSkills"
+          :key="skill"
+          class="agent-trace__skill-pill"
+        >
+          {{ skill }}
+        </span>
+      </div>
+    </details>
     <div v-if="loadedSkills.length" class="agent-trace__skills" :title="t('agentTrace.loadedSkillsTitle')">
       <span class="agent-trace__skills-label">{{ t('agentTrace.loadedSkillsLabel') }}</span>
       <span
@@ -225,6 +235,51 @@ const summaryLine = computed(() => {
   flex-wrap: wrap;
   gap: 6px;
   padding: 2px 0;
+}
+
+.agent-trace__available-skills {
+  padding: 2px 0;
+}
+
+.agent-trace__available-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--el-text-color-secondary, #6b7280);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.agent-trace__available-summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-trace__available-count {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--el-fill-color-light, #f5f7fa);
+  color: var(--el-text-color-regular, #4b5563);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.agent-trace__available-chevron {
+  width: 13px;
+  height: 13px;
+  transition: transform 0.15s ease;
+}
+
+.agent-trace__available-skills[open] .agent-trace__available-chevron {
+  transform: rotate(180deg);
+}
+
+.agent-trace__skills--available {
+  padding-top: 7px;
 }
 
 .agent-trace__skills-label {

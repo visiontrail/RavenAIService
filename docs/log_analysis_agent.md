@@ -76,7 +76,8 @@
 全局 Skill，再参与排序。只保留有正向证据且达到最高分 65% 的候选，最多 3 个；没有
 匹配时保持空集，不回退为“全部加载”。Skill 正文仅在服务端用于匹配，不拼进提示词。
 
-运行开始事件中的 `available_skills` 表示已物化、可供模型调用的候选；只有 trace 中
+运行开始事件中的 `available_skills` 表示当前 Agent/项目已启用的完整 Skill 清单，
+请求相关性筛选仍只物化最多 3 个候选，因此该清单不会整体进入模型上下文。只有 trace 中
 出现 `Skill` 工具调用，才表示对应说明被模型实际读取。协议细节见
 [agent_trace_protocol.md](agent_trace_protocol.md#skill-availability-and-actual-use)。
 

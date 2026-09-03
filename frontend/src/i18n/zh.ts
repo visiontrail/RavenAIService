@@ -682,7 +682,7 @@ export default {
     thinking: '思考中',
     cancelling: '正在取消…',
     cancel: '取消',
-    availableSkillsTitle: '本次 Agent 运行筛选并提供给模型的候选 Skills',
+    availableSkillsTitle: '当前 Agent 和项目中已启用的全部 Skills；不会因此全部加载',
     availableSkillsLabel: '可用 Skills',
     loadedSkillsTitle: '本次 Agent 运行实际读取指令的 Skills',
     loadedSkillsLabel: '已加载 Skills',

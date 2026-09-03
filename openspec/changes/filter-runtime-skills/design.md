@@ -28,7 +28,7 @@ All enabled Agent and project Skills are currently merged and materialized befor
 
 4. **Bound selection to three Skills.** Three preserves room for cross-domain questions while preventing a seven-Skill project from appearing almost entirely selected. Callers may override the bound for a narrowly justified workflow.
 
-5. **Separate trace concepts.** `available_skills` means selected/materialized candidates. A Skill is actually loaded only when a `step_start` event invokes tool `Skill`. New traces use `skills_available`; the frontend interprets legacy `run_start.loaded_skills` and `skills_loaded` notices as historical availability metadata.
+5. **Separate trace concepts.** `available_skills` means the full enabled catalog for the selected Agent/project, regardless of request filtering. Selection still controls which Skills are materialized, so listing the catalog does not inflate model context. The UI keeps the full catalog collapsed by default. A Skill is actually loaded only when a `step_start` event invokes tool `Skill`. New traces use `skills_available`; the frontend interprets legacy `run_start.loaded_skills` and `skills_loaded` notices as historical availability metadata.
 
 6. **Keep wire compatibility during rollout.** New backend lifecycle events include `available_skills` and retain the legacy `loaded_skills` candidate alias temporarily. The new frontend never counts that alias as actual invocation.
 
@@ -42,8 +42,8 @@ All enabled Agent and project Skills are currently merged and materialized befor
 ## Migration Plan
 
 1. Deploy backend and frontend from one commit/image set.
-2. Verify a Ka log-analysis run exposes only relevant candidates and invokes the Ka Skill.
-3. Confirm unrelated `payload-management-unit`, `tcpt027-db-modify`, `xlsx`, and `docx` are absent from the candidate set.
+2. Verify a Ka log-analysis run exposes the full enabled Agent/project catalog and invokes the Ka Skill.
+3. Confirm the available catalog is collapsed by default; after expansion, unrelated `payload-management-unit`, `tcpt027-db-modify`, `xlsx`, and `docx` may be visible there but remain absent from materialization and actual `Skill` calls.
 4. Roll back to the previous image if candidate selection prevents a required workflow; no data migration is involved.
 
 ## Open Questions
