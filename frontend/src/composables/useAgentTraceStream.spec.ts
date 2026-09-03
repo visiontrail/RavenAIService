@@ -4,6 +4,7 @@ import { ref } from 'vue'
 import type { AgentTraceEvent } from '@/types/agentTrace'
 import {
   buildCards,
+  collectAvailableSkills,
   collectLoadedSkills,
   computeFallbackSummary,
   normaliseEvents,
@@ -75,22 +76,24 @@ describe('normaliseEvents', () => {
   })
 })
 
-describe('collectLoadedSkills', () => {
-  it('aggregates run metadata, skills_loaded notices, and historical Skill calls', () => {
+describe('Skill availability and invocation', () => {
+  it('keeps lifecycle candidates separate from actual Skill calls', () => {
     const events: AgentTraceEvent[] = [
       {
         type: 'run_start',
         task_id: TASK_ID,
         seq: 1,
         timestamp: 1,
-        loaded_skills: ['full-package-build', 'shared-skill'],
+        available_skills: ['full-package-build', 'shared-skill'],
+        loaded_skills: ['legacy-candidate-alias'],
       },
       {
         type: 'system_notice',
         task_id: TASK_ID,
         seq: 2,
         timestamp: 2,
-        kind: 'skills_loaded',
+        kind: 'skills_available',
+        available_skills: ['project-override', 'shared-skill'],
         loaded_skills: ['project-override', 'shared-skill'],
       },
       {
@@ -104,12 +107,39 @@ describe('collectLoadedSkills', () => {
       },
     ]
 
-    expect(collectLoadedSkills(events)).toEqual([
+    expect(collectAvailableSkills(events)).toEqual([
       'full-package-build',
       'shared-skill',
+      'legacy-candidate-alias',
       'project-override',
-      'legacy-invoked-skill',
     ])
+    expect(collectLoadedSkills(events)).toEqual(['legacy-invoked-skill'])
+  })
+
+  it('treats historical lifecycle loaded_skills as availability only', () => {
+    const events: AgentTraceEvent[] = [
+      {
+        type: 'run_start',
+        task_id: TASK_ID,
+        seq: 1,
+        timestamp: 1,
+        loaded_skills: ['historical-candidate'],
+      },
+      {
+        type: 'system_notice',
+        task_id: TASK_ID,
+        seq: 2,
+        timestamp: 2,
+        kind: 'skills_loaded',
+        loaded_skills: ['historical-candidate-2'],
+      },
+    ]
+
+    expect(collectAvailableSkills(events)).toEqual([
+      'historical-candidate',
+      'historical-candidate-2',
+    ])
+    expect(collectLoadedSkills(events)).toEqual([])
   })
 })
 

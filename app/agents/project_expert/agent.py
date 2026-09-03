@@ -283,10 +283,21 @@ class ProjectExpertAgent:
         materialized_skills: List[str] = []
         skill_overviews: List[Dict[str, str]] = []
         try:
+            from app.agents.skill_prompting import build_skill_relevance_query
             from app.services import skills_service
-            materialized_skills = skills_service.materialize_enabled_skills(
+
+            skill_query = build_skill_relevance_query(
+                question=ctx.metadata.get("question") or task_data.get("question", ""),
+                hints=ctx.metadata.get("hints") or task_data.get("hints", ""),
+                attachments=(
+                    ctx.metadata.get("attachments")
+                    or task_data.get("attachments")
+                ),
+            )
+            materialized_skills = skills_service.materialize_relevant_enabled_skills(
                 AGENT_KEY,
                 ctx.temp_dir,
+                query_text=skill_query,
                 project_code=project_code,
             )
             if materialized_skills:
@@ -377,6 +388,7 @@ class ProjectExpertAgent:
                 seq_counter=state.seq_counter,
                 model=effective_model,
                 provider=str(provider),
+                available_skills=list(materialized_skills),
                 loaded_skills=list(materialized_skills),
             )
         )
@@ -386,8 +398,9 @@ class ProjectExpertAgent:
                     SYSTEM_NOTICE,
                     task_id=ctx.task_id,
                     seq_counter=state.seq_counter,
-                    kind="skills_loaded",
+                    kind="skills_available",
                     detail=", ".join(materialized_skills),
+                    available_skills=list(materialized_skills),
                     loaded_skills=list(materialized_skills),
                 )
             )

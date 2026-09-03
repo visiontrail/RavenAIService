@@ -372,7 +372,9 @@ def test_agent_materializes_skills_layers_prompts_and_reuses_trace_seq(
             }
         ]
     )
-    monkeypatch.setattr(skills_service, "materialize_enabled_skills", materialize)
+    monkeypatch.setattr(
+        skills_service, "materialize_relevant_enabled_skills", materialize
+    )
     monkeypatch.setattr(skills_service, "enabled_skill_overviews", overviews)
 
     captured: dict[str, str] = {}
@@ -403,11 +405,10 @@ def test_agent_materializes_skills_layers_prompts_and_reuses_trace_seq(
     agent._run_sdk_loop = fake_loop.__get__(agent, PackageSearchAgent)  # type: ignore[method-assign]
     result = asyncio.run(agent.run(ctx))
 
-    materialize.assert_called_once_with(
-        "package_search",
-        ctx.temp_dir,
-        project_code=PROJECT,
-    )
+    materialize.assert_called_once()
+    assert materialize.call_args.args == ("package_search", ctx.temp_dir)
+    assert materialize.call_args.kwargs["project_code"] == PROJECT
+    assert "请制作整包" in materialize.call_args.kwargs["query_text"]
     overviews.assert_called_once_with(
         "package_search",
         project_code=PROJECT,
@@ -426,11 +427,13 @@ def test_agent_materializes_skills_layers_prompts_and_reuses_trace_seq(
     skills_notice = next(
         event
         for event in result["trace_events"]
-        if event["type"] == "system_notice" and event.get("kind") == "skills_loaded"
+        if event["type"] == "system_notice" and event.get("kind") == "skills_available"
     )
     assert run_start["seq"] == 3
+    assert run_start["available_skills"] == ["full-package-build"]
     assert run_start["loaded_skills"] == ["full-package-build"]
     assert skills_notice["seq"] == 4
+    assert skills_notice["available_skills"] == ["full-package-build"]
     assert skills_notice["loaded_skills"] == ["full-package-build"]
     assert result["loaded_skills"] == ["full-package-build"]
     assert shared_counter.value == max(event["seq"] for event in result["trace_events"])

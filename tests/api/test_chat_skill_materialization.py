@@ -111,7 +111,7 @@ def _minimal_skill_zip() -> bytes:
     skill_md = (
         "---\n"
         "name: device-troubleshooter\n"
-        "description: Minimal test skill\n"
+        "description: 设备故障检查与排查测试 Skill\n"
         "---\n"
         "\n"
         "# device-troubleshooter\n"
@@ -126,10 +126,10 @@ def _minimal_skill_zip() -> bytes:
 # ───────────────────────── Test ────────────────────────────────────
 
 
-def test_enabled_device_agent_skill_is_materialized_before_query(
+def test_relevant_enabled_device_agent_skill_is_materialized_before_query(
     tmp_path, client, anthropic_ok, fake_device, monkeypatch
 ):
-    """An enabled Skill for ``device_agent`` is materialized at
+    """A relevant enabled Skill for ``device_agent`` is materialized at
     ``<workspace>/.claude/skills/<name>/SKILL.md`` *during* the SDK ``query``
     call (workspace is wiped on ``finally``, so we must observe it mid-run)."""
 

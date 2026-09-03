@@ -517,17 +517,23 @@ class PackageSearchAgent:
             hints=ctx.metadata.get("hints") or task_data.get("hints", ""),
         )
 
-        # 物化全部启用的 built-in / Agent / project Skill。相关性判定由模型
-        # 完成；name+description 菜单同时进入 system/user prompt，SDK 则通过
-        # setting_sources=["project"] 发现对应 Skill 工具内容。
+        # 根据当前问题与上传清单筛选 built-in / Agent / project Skill；只有
+        # 候选集会进入提示词并被 SDK 发现。
         materialized_skills: List[str] = []
         skill_overviews: List[Dict[str, str]] = []
         try:
+            from app.agents.skill_prompting import build_skill_relevance_query
             from app.services import skills_service
 
-            materialized_skills = skills_service.materialize_enabled_skills(
+            skill_query = build_skill_relevance_query(
+                question=ctx.metadata.get("question") or task_data.get("question", ""),
+                hints=ctx.metadata.get("hints") or task_data.get("hints", ""),
+                attachments=task_data.get("inputs_manifest"),
+            )
+            materialized_skills = skills_service.materialize_relevant_enabled_skills(
                 AGENT_KEY,
                 ctx.temp_dir,
+                query_text=skill_query,
                 project_code=ctx.project_code or None,
             )
             if materialized_skills:
@@ -621,6 +627,7 @@ class PackageSearchAgent:
                 seq_counter=state.seq_counter,
                 model=effective_model,
                 provider=provider,
+                available_skills=list(materialized_skills),
                 loaded_skills=list(materialized_skills),
             )
         )
@@ -630,8 +637,9 @@ class PackageSearchAgent:
                     SYSTEM_NOTICE,
                     task_id=ctx.task_id,
                     seq_counter=state.seq_counter,
-                    kind="skills_loaded",
+                    kind="skills_available",
                     detail=", ".join(materialized_skills),
+                    available_skills=list(materialized_skills),
                     loaded_skills=list(materialized_skills),
                 )
             )

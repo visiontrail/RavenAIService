@@ -311,7 +311,7 @@ async def test_general_agent_materializes_agent_skills_without_project(monkeypat
     monkeypatch.setattr("app.config.settings.anthropic_small_fast_model", "small-model")
 
     with patch("app.agents.anthropic_client.build_options", build_options), patch(
-        "app.services.skills_service.materialize_enabled_skills", materialize
+        "app.services.skills_service.materialize_relevant_enabled_skills", materialize
     ), patch(
         "app.services.skills_service.enabled_skill_overviews", overviews
     ):
@@ -324,7 +324,7 @@ async def test_general_agent_materializes_agent_skills_without_project(monkeypat
 
     materialize.assert_called_once()
     assert materialize.call_args.args[0] == "general_agent"
-    assert materialize.call_args.kwargs.get("project_code") is None
+    assert "怎么用" in materialize.call_args.kwargs["query_text"]
     kwargs = build_options.call_args.kwargs
     assert kwargs["model"] == "small-model"
     assert kwargs["allowed_tools"] == [
@@ -332,6 +332,7 @@ async def test_general_agent_materializes_agent_skills_without_project(monkeypat
         "Skill",
     ]
     assert kwargs["setting_sources"] == ["project"]
+    assert events[0]["available_skills"] == ["routing_helper"]
     assert events[0]["loaded_skills"] == ["routing_helper"]
     assert events[-1]["loaded_skills"] == ["routing_helper"]
 

@@ -69,7 +69,18 @@
 
 无任何可解析仓库信息时，直接输出 `"status": "error", "error_kind": "missing_project_identity"`，**不允许仅凭日志答题**。
 
-### 2.1 澄清提问优先于工作流
+### 2.1 Skill 相关性预选
+
+每次运行不会再把所有已启用 Skill 都物化到工作区。服务端先根据当前问题、hints、
+`issue_info` 的描述/服务/环境，以及附件**文件名**做确定性打分；项目同名 Skill 先覆盖
+全局 Skill，再参与排序。只保留有正向证据且达到最高分 65% 的候选，最多 3 个；没有
+匹配时保持空集，不回退为“全部加载”。Skill 正文仅在服务端用于匹配，不拼进提示词。
+
+运行开始事件中的 `available_skills` 表示已物化、可供模型调用的候选；只有 trace 中
+出现 `Skill` 工具调用，才表示对应说明被模型实际读取。协议细节见
+[agent_trace_protocol.md](agent_trace_protocol.md#skill-availability-and-actual-use)。
+
+### 2.2 澄清提问优先于工作流
 
 当用户开启了全局偏好「指令不清晰时允许 Agent 向我提问」时，本 Agent 会额外拿到
 `mcp__ask__AskUserQuestion` 工具，以及一段说明「澄清优先于上面的强制工作流」的提示词
@@ -86,7 +97,7 @@
 不会提问（没有人在 SSE 那头作答）。事件与 broker 机制见
 [agent_trace_protocol.md](agent_trace_protocol.md#clarification-askuserquestion)。
 
-### 2.2 项目卡片发现与多项目工作区
+### 2.3 项目卡片发现与多项目工作区
 
 项目专家和日志分析在作出项目相关结论前先调用
 `mcp__project_repo__discover_projects` 读取完整的已启用项目卡片目录：

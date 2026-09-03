@@ -40,6 +40,8 @@ export interface RunStartEvent extends BaseTraceEvent {
   type: 'run_start'
   model?: string
   provider?: string
+  available_skills?: string[]
+  /** @deprecated lifecycle alias for available_skills */
   loaded_skills?: string[]
 }
 
@@ -118,6 +120,8 @@ export interface SystemNoticeEvent extends BaseTraceEvent {
   kind?: string
   subtype?: string
   detail?: string
+  available_skills?: string[]
+  /** @deprecated lifecycle alias for available_skills */
   loaded_skills?: string[]
 }
 

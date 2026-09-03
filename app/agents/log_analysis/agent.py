@@ -1106,10 +1106,8 @@ class LogAnalysisAgent:
                 provider,
             )
 
-        # 物化全部启用的 Skill 到 cwd/.claude/skills/<name>/，配合
-        # setting_sources=["project"] 让 Claude Agent SDK 按官方约定发现 Skill。
-        # 相关性判定交给模型在推理中完成：提示词只给出 name+description 菜单，
-        # 模型按需调用 Skill 工具加载，后端不再预筛候选集。
+        # 先按用户问题、提示和附件名筛选候选 Skill，再物化到工作区供 SDK
+        # 按需调用。未命中时保持为空，不能回退为全部启用 Skill。
         project_code: Optional[str] = None
         project_name: Optional[str] = None
         project_card: Optional[str] = None
@@ -1141,10 +1139,30 @@ class LogAnalysisAgent:
         materialized_skills: List[str] = []
         skill_overviews: List[Dict[str, str]] = []
         try:
+            from app.agents.skill_prompting import build_skill_relevance_query
             from app.services import skills_service
-            materialized_skills = skills_service.materialize_enabled_skills(
+
+            issue_info = ctx.metadata.get("issue_info")
+            issue_extra = []
+            if isinstance(issue_info, dict):
+                issue_extra = [
+                    issue_info.get("issue_description"),
+                    issue_info.get("service_name"),
+                    issue_info.get("environment_info"),
+                ]
+            skill_query = build_skill_relevance_query(
+                question=ctx.metadata.get("question") or task_data.get("question", ""),
+                hints=ctx.metadata.get("hints") or task_data.get("hints", ""),
+                attachments=(
+                    ctx.metadata.get("attachments")
+                    or task_data.get("attachments")
+                ),
+                extra_text=issue_extra,
+            )
+            materialized_skills = skills_service.materialize_relevant_enabled_skills(
                 AGENT_KEY,
                 ctx.temp_dir,
+                query_text=skill_query,
                 project_code=project_code,
             )
             if materialized_skills:
@@ -1245,6 +1263,7 @@ class LogAnalysisAgent:
                 seq_counter=state.seq_counter,
                 model=effective_model,
                 provider=str(provider),
+                available_skills=list(materialized_skills),
                 loaded_skills=list(materialized_skills),
             )
         )
@@ -1254,8 +1273,9 @@ class LogAnalysisAgent:
                     SYSTEM_NOTICE,
                     task_id=ctx.task_id,
                     seq_counter=state.seq_counter,
-                    kind="skills_loaded",
+                    kind="skills_available",
                     detail=", ".join(materialized_skills),
+                    available_skills=list(materialized_skills),
                     loaded_skills=list(materialized_skills),
                 )
             )

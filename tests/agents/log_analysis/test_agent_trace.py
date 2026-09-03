@@ -147,7 +147,7 @@ def _patch_environment(*, loaded_skills: Optional[List[str]] = None):
             ),
         ),
         patch(
-            "app.services.skills_service.materialize_enabled_skills",
+            "app.services.skills_service.materialize_relevant_enabled_skills",
             return_value=list(loaded_skills or []),
         ),
         patch(
@@ -156,6 +156,7 @@ def _patch_environment(*, loaded_skills: Optional[List[str]] = None):
                 {"name": n, "description": ""} for n in (loaded_skills or [])
             ],
         ),
+        patch("app.services.model_router.candidates", return_value=[]),
     ]
 
 
@@ -223,7 +224,7 @@ class TestEmitterEventSequence:
             "cache_write_tokens": 3,
         }
 
-    def test_loaded_skills_are_emitted_and_returned(self, workspace_ctx):
+    def test_available_skills_are_emitted_and_returned(self, workspace_ctx):
         captured_prompt: Dict[str, str] = {}
 
         async def fake_query(*args, **kwargs):
@@ -240,12 +241,14 @@ class TestEmitterEventSequence:
 
         assert result["loaded_skills"] == ["smu-baseband-interfaces"]
         assert captured[0]["type"] == "run_start"
+        assert captured[0]["available_skills"] == ["smu-baseband-interfaces"]
         assert captured[0]["loaded_skills"] == ["smu-baseband-interfaces"]
         skill_events = [
             ev for ev in captured
-            if ev["type"] == "system_notice" and ev.get("kind") == "skills_loaded"
+            if ev["type"] == "system_notice" and ev.get("kind") == "skills_available"
         ]
         assert len(skill_events) == 1
+        assert skill_events[0]["available_skills"] == ["smu-baseband-interfaces"]
         assert skill_events[0]["loaded_skills"] == ["smu-baseband-interfaces"]
         assert "可用的 Skill（按需加载）" in captured_prompt["prompt"]
         assert '"skill": "smu-baseband-interfaces"' in captured_prompt["prompt"]

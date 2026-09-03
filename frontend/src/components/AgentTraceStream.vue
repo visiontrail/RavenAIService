@@ -1,5 +1,15 @@
 <template>
   <div v-if="hasContent" class="agent-trace">
+    <div v-if="availableSkills.length" class="agent-trace__skills" :title="t('agentTrace.availableSkillsTitle')">
+      <span class="agent-trace__skills-label">{{ t('agentTrace.availableSkillsLabel') }}</span>
+      <span
+        v-for="skill in availableSkills"
+        :key="skill"
+        class="agent-trace__skill-pill"
+      >
+        {{ skill }}
+      </span>
+    </div>
     <div v-if="loadedSkills.length" class="agent-trace__skills" :title="t('agentTrace.loadedSkillsTitle')">
       <span class="agent-trace__skills-label">{{ t('agentTrace.loadedSkillsLabel') }}</span>
       <span
@@ -112,6 +122,7 @@ import { AlertTriangle, Ban, Check, ChevronDown } from 'lucide-vue-next'
 import type { AgentTraceEvent, TraceSummary } from '@/types/agentTrace'
 import type { AgentCompletionSummary } from '@/utils/agentResultSummary'
 import {
+  collectAvailableSkills,
   collectLoadedSkills,
   useAgentTraceStream,
 } from '@/composables/useAgentTraceStream'
@@ -146,6 +157,7 @@ const hasContent = computed(
     cards.value.length > 0 ||
     running.value ||
     !!terminal.value ||
+    availableSkills.value.length > 0 ||
     loadedSkills.value.length > 0 ||
     !!props.completionSummary ||
     !!props.visualAnalysis,
@@ -153,6 +165,7 @@ const hasContent = computed(
 
 const summaryExpanded = ref(false)
 
+const availableSkills = computed(() => collectAvailableSkills(props.events || []))
 const loadedSkills = computed(() => collectLoadedSkills(props.events || []))
 
 const cancelling = ref(false)

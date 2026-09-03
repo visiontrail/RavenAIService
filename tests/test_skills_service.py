@@ -304,6 +304,148 @@ def test_xlsx_skill_with_runtime_scripts_is_materialized_with_scripts(
     assert (skill_dir / "scripts" / "office" / "soffice.py").is_file()
 
 
+def _named_skill_md(name: str, description: str, body: str = "") -> bytes:
+    return (
+        f"---\nname: {name}\ndescription: {description}\n---\n{body}\n"
+    ).encode("utf-8")
+
+
+def test_relevant_selection_excludes_unrelated_production_like_skills(
+    isolated_skills_dir, tmp_path
+):
+    from app.services import skills_service
+
+    for name, description in (
+        ("xlsx", "Excel xlsx spreadsheet workbook analysis"),
+        ("docx", "Word docx document editing"),
+    ):
+        skills_service.install_skill(
+            "log_analysis",
+            zip_bytes=_build_zip(
+                {"SKILL.md": _named_skill_md(name, description)}
+            ),
+            source_filename=f"{name}.zip",
+        )
+
+    project_skills = (
+        (
+            "ka-phased-array-antenna",
+            "Ka相控阵接收天线、波束和变频状态日志分析",
+        ),
+        ("smu-baseband-interfaces", "SMU与基带接口及RS422文件传输"),
+        ("lx10-telemetry", "灵犀10平台通用遥测字典"),
+        ("payload-management-unit", "载荷管理单元PMU软件维护"),
+        ("tcpt027-db-modify", "TCPT027数据库字段修改流程"),
+    )
+    for name, description in project_skills:
+        skills_service.install_project_skill(
+            "oam_lx10",
+            zip_bytes=_build_zip(
+                {"SKILL.md": _named_skill_md(name, description)}
+            ),
+            source_filename=f"{name}.zip",
+        )
+
+    cwd = tmp_path / "production_like"
+    cwd.mkdir()
+    selected = skills_service.materialize_relevant_enabled_skills(
+        "log_analysis",
+        cwd,
+        query_text=(
+            "分析当前日志，确认Ka接收天线波束3的变频状态控制字是否配置成功\n"
+            "0902-ka-ra-01.tar.gz"
+        ),
+        project_code="oam_lx10",
+    )
+
+    assert selected == ["ka-phased-array-antenna"]
+    assert not (cwd / ".claude" / "skills" / "payload-management-unit").exists()
+    assert not (cwd / ".claude" / "skills" / "tcpt027-db-modify").exists()
+    assert not (cwd / ".claude" / "skills" / "xlsx").exists()
+    assert not (cwd / ".claude" / "skills" / "docx").exists()
+
+
+def test_relevant_selection_uses_attachment_suffix_and_no_match_is_empty(
+    isolated_skills_dir, tmp_path
+):
+    from app.services import skills_service
+
+    for name, description in (
+        ("xlsx", "Excel xlsx spreadsheet workbook analysis"),
+        ("docx", "Word docx document editing"),
+    ):
+        skills_service.install_skill(
+            "project_expert",
+            zip_bytes=_build_zip(
+                {"SKILL.md": _named_skill_md(name, description)}
+            ),
+            source_filename=f"{name}.zip",
+        )
+
+    assert skills_service.select_relevant_skill_names(
+        "project_expert", query_text="请汇总附件中的数据\nstatus-report.xlsx"
+    ) == ["xlsx"]
+    assert skills_service.select_relevant_skill_names(
+        "project_expert", query_text="解释今天的天气"
+    ) == []
+
+    cwd = tmp_path / "no_match"
+    cwd.mkdir()
+    assert skills_service.materialize_relevant_enabled_skills(
+        "project_expert", cwd, query_text="解释今天的天气"
+    ) == []
+    assert not (cwd / ".claude" / "skills").exists()
+
+
+def test_relevant_selection_is_bounded_and_project_override_is_scored(
+    isolated_skills_dir, tmp_path
+):
+    from app.services import skills_service
+
+    for index in range(5):
+        name = f"beam-helper-{index}"
+        skills_service.install_skill(
+            "log_analysis",
+            zip_bytes=_build_zip(
+                {"SKILL.md": _named_skill_md(name, "beam antenna helper")}
+            ),
+            source_filename=f"{name}.zip",
+        )
+    assert len(
+        skills_service.select_relevant_skill_names(
+            "log_analysis", query_text="beam antenna failure"
+        )
+    ) == 3
+
+    agent_md = _named_skill_md(
+        "shared-skill", "generic maintenance", "unrelated agent body"
+    )
+    project_md = _named_skill_md(
+        "shared-skill", "Ka波束变频专项排查", "project override body"
+    )
+    skills_service.install_skill(
+        "project_expert",
+        zip_bytes=_build_zip({"SKILL.md": agent_md}),
+        source_filename="agent.zip",
+    )
+    skills_service.install_project_skill(
+        "sat1",
+        zip_bytes=_build_zip({"SKILL.md": project_md}),
+        source_filename="project.zip",
+    )
+    cwd = tmp_path / "project_override_relevant"
+    cwd.mkdir()
+    assert skills_service.materialize_relevant_enabled_skills(
+        "project_expert",
+        cwd,
+        query_text="排查Ka波束变频状态",
+        project_code="sat1",
+    ) == ["shared-skill"]
+    assert "project override body" in (
+        cwd / ".claude" / "skills" / "shared-skill" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+
 def test_unknown_agent_rejected(isolated_skills_dir):
     from app.services import skills_service
     with pytest.raises(skills_service.UnknownAgentError):

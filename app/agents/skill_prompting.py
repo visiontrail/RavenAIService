@@ -3,7 +3,56 @@
 from __future__ import annotations
 
 import json
+from pathlib import PurePath
 from typing import Any, Dict, Iterable, List, Optional
+
+
+_FILENAME_KEYS = {
+    "filename",
+    "filenames",
+    "original_filename",
+    "original_name",
+    "relative_path",
+    "path",
+}
+
+
+def _collect_filename_evidence(value: Any, output: List[str]) -> None:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if str(key).lower() in _FILENAME_KEYS:
+                _collect_filename_evidence(nested, output)
+            elif isinstance(nested, (dict, list, tuple)):
+                _collect_filename_evidence(nested, output)
+        return
+    if isinstance(value, (list, tuple)):
+        for nested in value:
+            _collect_filename_evidence(nested, output)
+        return
+    if isinstance(value, str) and value.strip():
+        # Preserve basename and suffix without copying workspace directories
+        # into prompts or relevance logs.
+        name = PurePath(value.strip()).name
+        if name:
+            output.append(name)
+
+
+def build_skill_relevance_query(
+    *,
+    question: Any,
+    hints: Any = "",
+    attachments: Any = None,
+    extra_text: Iterable[Any] = (),
+) -> str:
+    """Compose request-owned text and attachment names for Skill selection."""
+    parts: List[str] = []
+    for value in (question, hints, *extra_text):
+        if value is not None and str(value).strip():
+            parts.append(str(value).strip())
+    filenames: List[str] = []
+    _collect_filename_evidence(attachments, filenames)
+    parts.extend(filenames)
+    return "\n".join(parts)
 
 
 def build_skill_availability_prompt(

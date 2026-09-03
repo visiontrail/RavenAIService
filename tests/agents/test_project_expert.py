@@ -237,7 +237,7 @@ async def test_agent_uses_expected_tools_materializes_project_skills_and_masks_t
     with _patch_agent_common(fake_query_with_prompt_capture), \
         patch("app.agents.anthropic_client.build_options", build_options), \
         patch(
-            "app.services.skills_service.materialize_enabled_skills",
+            "app.services.skills_service.materialize_relevant_enabled_skills",
             return_value=["repo-reader"],
         ) as materialize, \
         patch(
@@ -254,6 +254,8 @@ async def test_agent_uses_expected_tools_materializes_project_skills_and_masks_t
     materialize.assert_called_once()
     assert materialize.call_args.args[0] == "project_expert"
     assert materialize.call_args.args[1] == ctx.temp_dir
+    assert "鉴权在哪里实现" in materialize.call_args.kwargs["query_text"]
+    assert materialize.call_args.kwargs["project_code"] == "foo"
 
     kwargs = build_options.call_args.kwargs
     assert kwargs["allowed_tools"] == ALLOWED_TOOLS
@@ -288,7 +290,7 @@ async def test_custom_provider_registers_project_discovery_tool(tmp_path):
 
     with _patch_agent_common(fake_query), \
         patch("app.agents.anthropic_client.build_options", build_options), \
-        patch("app.services.skills_service.materialize_enabled_skills", return_value=[]), \
+        patch("app.services.skills_service.materialize_relevant_enabled_skills", return_value=[]), \
         patch(
             "app.agents.log_analysis.mcp_tools.get_mcp_server",
             return_value=mcp_server,
@@ -326,7 +328,7 @@ async def test_unsupported_provider_disables_multi_project_tools(tmp_path):
     with _patch_agent_common(fake_query), \
         patch("app.agents.anthropic_client.build_options", build_options), \
         patch("app.services.model_router.candidates", return_value=[]), \
-        patch("app.services.skills_service.materialize_enabled_skills", return_value=[]), \
+        patch("app.services.skills_service.materialize_relevant_enabled_skills", return_value=[]), \
         patch("app.agents.log_analysis.mcp_tools.get_mcp_server") as get_mcp_server, \
         patch("app.config.settings.anthropic_provider", "legacy-no-tools"), \
         patch("app.config.settings.anthropic_model", "legacy-model"):
@@ -350,7 +352,7 @@ async def test_agent_followup_reuses_existing_repo_without_clone(tmp_path):
 
     with _patch_agent_common(_fake_query_reuse_existing_repo), \
         patch("app.agents.anthropic_client.build_options", return_value=MagicMock()), \
-        patch("app.services.skills_service.materialize_enabled_skills", return_value=[]), \
+        patch("app.services.skills_service.materialize_relevant_enabled_skills", return_value=[]), \
         patch("app.agents.log_analysis.mcp_tools.get_mcp_server", return_value=MagicMock()):
         result = await ProjectExpertAgent().run(ctx)
 
@@ -368,7 +370,7 @@ async def test_agent_recovers_grounded_answer_with_unescaped_inner_quotes(tmp_pa
 
     with _patch_agent_common(_fake_query_unescaped_answer_quotes), \
         patch("app.agents.anthropic_client.build_options", return_value=MagicMock()), \
-        patch("app.services.skills_service.materialize_enabled_skills", return_value=[]), \
+        patch("app.services.skills_service.materialize_relevant_enabled_skills", return_value=[]), \
         patch("app.agents.log_analysis.mcp_tools.get_mcp_server", return_value=MagicMock()):
         result = await ProjectExpertAgent().run(ctx)
 
@@ -389,7 +391,7 @@ async def test_agent_wraps_plain_text_skill_answer(tmp_path):
     with _patch_agent_common(_fake_query_plain_skill_answer), \
         patch("app.agents.anthropic_client.build_options", return_value=MagicMock()), \
         patch(
-            "app.services.skills_service.materialize_enabled_skills",
+            "app.services.skills_service.materialize_relevant_enabled_skills",
             return_value=["skill-verifier"],
         ), \
         patch(

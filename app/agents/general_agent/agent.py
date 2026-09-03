@@ -284,13 +284,23 @@ class GeneralAgent:
                 materialized_skills: List[str] = []
                 skill_overviews: List[Dict[str, str]] = []
                 try:
+                    from app.agents.skill_prompting import build_skill_relevance_query
                     from app.services import skills_service
 
                     # Deliberately omit project_code: GeneralAgent supports only
                     # Agent-level Skills and never acquires project context.
-                    materialized_skills = skills_service.materialize_enabled_skills(
+                    skill_query = build_skill_relevance_query(
+                        question=ctx.user_message,
+                        extra_text=[
+                            item.get("content", "")
+                            for item in ctx.history[-4:]
+                            if isinstance(item, dict)
+                        ],
+                    )
+                    materialized_skills = skills_service.materialize_relevant_enabled_skills(
                         AGENT_KEY,
                         tmpdir,
+                        query_text=skill_query,
                     )
                     if materialized_skills:
                         skill_overviews = skills_service.enabled_skill_overviews(
@@ -308,14 +318,16 @@ class GeneralAgent:
                     "model": model,
                     "provider": provider,
                     "agent_key": AGENT_KEY,
+                    "available_skills": list(materialized_skills),
                     "loaded_skills": list(materialized_skills),
                 }
                 if materialized_skills:
                     yield {
                         "type": "system_notice",
                         "task_id": run_id,
-                        "kind": "skills_loaded",
+                        "kind": "skills_available",
                         "detail": ", ".join(materialized_skills),
+                        "available_skills": list(materialized_skills),
                         "loaded_skills": list(materialized_skills),
                     }
 

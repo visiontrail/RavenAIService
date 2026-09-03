@@ -25,7 +25,7 @@ keys gracefully.
 
 | `type`            | Per-type fields                                                                                                              | Notes                                                                                  |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `run_start`       | `model`, `provider`                                                                                                          | Emitted once, before any SDK message is processed.                                     |
+| `run_start`       | `model`, `provider`, `available_skills`; deprecated alias `loaded_skills`                                                    | Emitted once, before any SDK message is processed.                                     |
 | `run_complete`    | `trace_summary`, `final_text`                                                                                                | Terminal. Emitted on successful exit.                                                  |
 | `cancelled`       | `trace_summary`, `message`                                                                                                   | Terminal. Always preceded by a `system_notice{kind: "cancel_requested"}`.              |
 | `error`           | `trace_summary`, `error_kind`, `message`                                                                                     | Terminal. Emitted on unhandled exception.                                              |
@@ -39,6 +39,20 @@ keys gracefully.
 | `system_notice`   | `kind`, `subtype`, `detail`                                                                                                  | Used for `heartbeat`, `cancel_requested`, SDK system messages, and `subtype: "endpoint_switch"` (see below). |
 | `clarification_request`  | `request_id`, `questions`, `run_id`, `session_id`; optional `mandatory`, `purpose`, `plan_hash`                       | The agent or service paused to ask the user. Blocks until `POST /chat/clarifications/{request_id}/resolve`, timeout, or run end. Configuration Manager packaging uses `mandatory=true`, `purpose="package_build_confirmation"`. |
 | `clarification_resolved` | `request_id`, `outcome` (`answered`/`timeout`/`cancelled`/`rejected`), `reason`; optional `mandatory`, `purpose`        | Always follows its `clarification_request`; clears the question card.                   |
+
+### Skill availability and actual use
+
+`available_skills` contains only the enabled Skills selected as relevant to the
+current request and materialized into the run workspace. The compatibility field
+`loaded_skills` on lifecycle events carries the same list; it does **not** prove
+that the model read or used those Skills. A `system_notice` with
+`kind: "skills_available"` reports the same lifecycle state.
+
+Actual use is represented only by a normal `step_start` event whose `tool_name`
+is `Skill`; the invoked Skill name is read from `tool_input.skill`. The frontend
+therefore displays “Available Skills” and “Loaded Skills” separately. It still
+accepts legacy `skills_loaded` notices and lifecycle `loaded_skills` as
+availability data when replaying older traces.
 
 ### Clarification (AskUserQuestion)
 

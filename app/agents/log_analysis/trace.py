@@ -108,6 +108,8 @@ class AgentTraceEvent(TypedDict, total=False):
     # lifecycle: run_start
     model: str
     provider: str
+    available_skills: List[str]
+    # Deprecated lifecycle alias retained while old clients are deployed.
     loaded_skills: List[str]
 
     # lifecycle: run_complete / cancelled / error

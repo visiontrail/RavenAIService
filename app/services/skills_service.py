@@ -42,13 +42,14 @@ from __future__ import annotations
 import io
 import json
 import logging
+import math
 import os
 import re
 import shutil
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,8 @@ MAX_SKILL_EXTRACTED_BYTES = 200 * 1024 * 1024
 MAX_SKILL_FILE_COUNT = 1000
 
 _SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_ASCII_TERM_RE = re.compile(r"[a-z0-9][a-z0-9_-]{1,}", re.IGNORECASE)
+_CJK_TERM_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
 _REGISTRY_FILENAME = "_registry.json"
 _STORE_DIRNAME = "store"
 
@@ -863,6 +866,132 @@ def _enabled_skill_sources(
             yield entry, _base_skill_dir_for_entry(project_root, entry)
 
 
+def _extract_terms(text: str) -> Set[str]:
+    """Return stable ASCII identifiers and short CJK phrases from *text*."""
+    lowered = (text or "").lower()
+    terms: Set[str] = set()
+    for term in _ASCII_TERM_RE.findall(lowered):
+        cleaned = term.strip("_-")
+        if len(cleaned) < 2:
+            continue
+        terms.add(cleaned)
+        for part in re.split(r"[_-]+", cleaned):
+            if len(part) >= 2:
+                terms.add(part)
+    for phrase in _CJK_TERM_RE.findall(lowered):
+        terms.add(phrase)
+        # Bigrams catch compact domain phrases (天线/波束/遥测); trigrams make
+        # specific evidence outweigh a generic shared bigram.
+        for width in (2, 3):
+            if len(phrase) < width:
+                continue
+            for index in range(0, len(phrase) - width + 1):
+                terms.add(phrase[index:index + width])
+    return terms
+
+
+def _read_skill_body(skill_dir: Path, max_chars: int = 12000) -> str:
+    try:
+        text = (skill_dir / "SKILL.md").read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return ""
+    return _FRONTMATTER_RE.sub("", text, count=1)[:max_chars]
+
+
+def _merged_enabled_skill_sources(
+    agent_key: str,
+    *,
+    project_code: Optional[str] = None,
+) -> List[Tuple[Dict[str, Any], Path]]:
+    """Return the effective candidate per name in stable precedence order."""
+    order: List[str] = []
+    merged: Dict[str, Tuple[Dict[str, Any], Path]] = {}
+    for entry, source in _enabled_skill_sources(
+        agent_key, project_code=project_code
+    ):
+        name = str(entry["name"])
+        if name not in merged:
+            order.append(name)
+        # Project entries arrive last and replace shadowed Agent/built-in data.
+        merged[name] = (entry, source)
+    return [merged[name] for name in order]
+
+
+def select_relevant_skill_names(
+    agent_key: str,
+    *,
+    query_text: str,
+    max_skills: int = 3,
+    project_code: Optional[str] = None,
+) -> List[str]:
+    """Select a bounded request-relevant subset from enabled Skills.
+
+    Name and description matches are stronger than bounded body-only matches.
+    Terms shared by many candidates are down-weighted so generic project words
+    do not make the whole catalog relevant. No positive match returns no Skill.
+    """
+    if max_skills <= 0:
+        return []
+    candidates = _merged_enabled_skill_sources(
+        agent_key, project_code=project_code
+    )
+    query_terms = _extract_terms(query_text)
+    if not candidates or not query_terms:
+        return []
+
+    indexed: List[Tuple[Dict[str, Any], Set[str], Set[str], Set[str]]] = []
+    document_frequency: Dict[str, int] = {}
+    for entry, source in candidates:
+        name_terms = _extract_terms(str(entry.get("name") or ""))
+        description_terms = _extract_terms(str(entry.get("description") or ""))
+        body_terms = _extract_terms(_read_skill_body(source))
+        all_terms = name_terms | description_terms | body_terms
+        indexed.append((entry, name_terms, description_terms, body_terms))
+        for term in query_terms & all_terms:
+            document_frequency[term] = document_frequency.get(term, 0) + 1
+
+    candidate_count = len(candidates)
+    scored: List[Tuple[float, str]] = []
+    for entry, name_terms, description_terms, body_terms in indexed:
+        score = 0.0
+        for term in query_terms:
+            frequency = document_frequency.get(term, 0)
+            if not frequency:
+                continue
+            rarity = 1.0 + math.log((candidate_count + 1) / (frequency + 1))
+            if term in name_terms:
+                score += 8.0 * rarity
+            if term in description_terms:
+                score += 4.0 * rarity
+            if term in body_terms:
+                score += 1.0 * rarity
+        if score > 0:
+            scored.append((score, str(entry["name"])))
+
+    if not scored:
+        logger.info(
+            "skill relevance: no positive match for agent=%s query_terms=%s",
+            agent_key,
+            sorted(query_terms)[:20],
+        )
+        return []
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    best = scored[0][0]
+    threshold = best * 0.65
+    selected = [name for score, name in scored if score >= threshold][:max_skills]
+    logger.info(
+        "skill relevance selected for agent=%s: %s (best_score=%.2f max=%d)",
+        agent_key,
+        ", ".join(selected) if selected else "-",
+        best,
+        max_skills,
+    )
+    return selected
+
+
 def enabled_skill_overviews(
     agent_key: str,
     *,
@@ -943,3 +1072,28 @@ def materialize_enabled_skills(
         _link_skill(name, source)
 
     return materialized
+
+
+def materialize_relevant_enabled_skills(
+    agent_key: str,
+    target_dir: str | Path,
+    *,
+    query_text: str,
+    max_skills: int = 3,
+    project_code: Optional[str] = None,
+) -> List[str]:
+    """Select and materialize only request-relevant enabled Skills."""
+    selected_names = select_relevant_skill_names(
+        agent_key,
+        query_text=query_text,
+        max_skills=max_skills,
+        project_code=project_code,
+    )
+    if not selected_names:
+        return []
+    return materialize_enabled_skills(
+        agent_key,
+        target_dir,
+        skill_names=selected_names,
+        project_code=project_code,
+    )

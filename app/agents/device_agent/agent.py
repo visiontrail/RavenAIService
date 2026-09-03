@@ -52,6 +52,7 @@ from app.agents.log_analysis.trace import (
     ERROR,
     RUN_COMPLETE,
     RUN_START,
+    SYSTEM_NOTICE,
 )
 
 logger = logging.getLogger(__name__)
@@ -318,16 +319,38 @@ class DeviceAgent:
 
             materialized: List[str] = []
             try:
+                from app.agents.skill_prompting import build_skill_relevance_query
                 from app.services import skills_service
 
-                materialized = skills_service.materialize_enabled_skills(
-                    AGENT_KEY, str(workspace_path)
+                skill_query = build_skill_relevance_query(
+                    question=ctx.user_message,
+                    extra_text=[
+                        item.get("content", "")
+                        for item in ctx.history[-4:]
+                        if isinstance(item, dict)
+                    ],
+                )
+                materialized = skills_service.materialize_relevant_enabled_skills(
+                    AGENT_KEY,
+                    str(workspace_path),
+                    query_text=skill_query,
                 )
                 if materialized:
                     logger.info(
                         "DeviceAgent: loaded %d skill(s): %s",
                         len(materialized),
                         ", ".join(materialized),
+                    )
+                    emit(
+                        build_event(
+                            SYSTEM_NOTICE,
+                            task_id=task_id,
+                            seq_counter=seq_counter,
+                            kind="skills_available",
+                            detail=", ".join(materialized),
+                            available_skills=list(materialized),
+                            loaded_skills=list(materialized),
+                        )
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("DeviceAgent: failed to materialize skills: %s", exc)

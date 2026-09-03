@@ -53,27 +53,32 @@ export interface AgentTraceStreamView {
   terminal: ComputedRef<TerminalTraceEvent | null>
 }
 
-/**
- * Collect the Skills made available to a run.
- *
- * ``run_start`` and ``system_notice(kind=skills_loaded)`` are authoritative
- * availability metadata. ``step_start(tool_name=Skill)`` remains a useful
- * fallback for historical traces that only recorded Skills once invoked.
- */
-export function collectLoadedSkills(events: AgentTraceEvent[]): string[] {
+function addSkillName(names: Set<string>, raw: unknown) {
+  if (typeof raw === 'string' && raw.trim()) names.add(raw.trim())
+}
+
+/** Collect selected/materialized candidates, including historical aliases. */
+export function collectAvailableSkills(events: AgentTraceEvent[]): string[] {
   const names = new Set<string>()
-  const add = (raw: unknown) => {
-    if (typeof raw === 'string' && raw.trim()) names.add(raw.trim())
-  }
 
   for (const event of events || []) {
     if (event.type === 'run_start' || event.type === 'system_notice') {
-      for (const skill of event.loaded_skills || []) add(skill)
+      for (const skill of event.available_skills || []) addSkillName(names, skill)
+      // Before available_skills existed, lifecycle loaded_skills represented
+      // materialization/availability rather than a verified Skill invocation.
+      for (const skill of event.loaded_skills || []) addSkillName(names, skill)
     }
-    if (event.type === 'step_start' && event.tool_name === 'Skill') {
-      const input = event.tool_input || {}
-      add(input.skill ?? input.name ?? input.value)
-    }
+  }
+  return Array.from(names)
+}
+
+/** Collect only Skills whose instructions were actually requested by the SDK. */
+export function collectLoadedSkills(events: AgentTraceEvent[]): string[] {
+  const names = new Set<string>()
+  for (const event of events || []) {
+    if (event.type !== 'step_start' || event.tool_name !== 'Skill') continue
+    const input = event.tool_input || {}
+    addSkillName(names, input.skill ?? input.name ?? input.value)
   }
   return Array.from(names)
 }
