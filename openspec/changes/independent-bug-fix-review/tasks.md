@@ -14,4 +14,4 @@
 - [x] 3.1 Add and run focused behavioral regressions and frontend checks.
 - [x] 3.2 Replay both existing production scenarios with the advanced model in local Docker; verify the enum repair, independent model settings and evidence-based rejection in the browser.
 - [x] 3.3 Review scoped diff and commit implementation on main without pushing.
-- [ ] 3.4 Verify the completed SMC replay detail and final container health after Docker Desktop recovers from its internal API outage.
+- [x] 3.4 Verify the completed SMC replay detail and final container health after Docker Desktop recovers from its internal API outage.
