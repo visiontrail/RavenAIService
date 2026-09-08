@@ -1700,8 +1700,8 @@ export default {
       metadataErrorBefore: '无法从该附件自动识别项目（压缩包内缺少 ',
       metadataErrorAfter: '，或上传的是纯文本日志）。请在下方「关联项目」下拉菜单中手动选择关联项目，或改用包含 metadata.json 的日志压缩包后重试。',
       logAttachmentBefore: ' 需要上传日志附件，支持压缩包',
-      logAttachmentMiddle: '等，也支持纯文本日志',
-      logAttachmentAfter: '等（纯文本日志需手动选择关联项目）。如需直接提问，可切换至',
+      logAttachmentMiddle: '等，也支持日志文本、Markdown、配置文件和 Excel',
+      logAttachmentAfter: '等（非压缩包附件需手动选择关联项目）。如需直接提问，可切换至',
     },
     status: {
       online: '在线',

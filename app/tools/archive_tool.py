@@ -16,12 +16,15 @@ from app.tools.fs_tools import safe_listdir
 SUPPORTED_ARCHIVE_EXTS = {".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar", ".zip", ".7z", ".rar"}
 
 # Plain-text log formats that can be analyzed directly without decompression.
-SUPPORTED_TEXT_EXTS = {".log", ".txt", ".out", ".err", ".trace", ".json", ".xml", ".csv", ".tsv"}
+SUPPORTED_TEXT_EXTS = {
+    ".log", ".txt", ".out", ".err", ".trace", ".json", ".xml", ".csv", ".tsv",
+    ".md", ".markdown", ".ini", ".cfg", ".conf", ".yaml", ".yml", ".toml", ".properties",
+}
 
 # Binary spreadsheet files that must be copied into the workspace verbatim.
 # .xlsx/.xlsm are ZIP containers internally, so they must be detected before
 # archive probing or they will be decompressed into Office XML internals.
-SUPPORTED_SPREADSHEET_EXTS = {".xlsx", ".xlsm"}
+SUPPORTED_SPREADSHEET_EXTS = {".xls", ".xlsx", ".xlsm"}
 
 # (magic_bytes, byte_offset) for each supported extension
 ArchiveMagic = Union[Tuple[bytes, int], List[Tuple[bytes, int]]]

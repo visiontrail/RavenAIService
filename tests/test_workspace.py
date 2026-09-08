@@ -438,33 +438,34 @@ class TestPrepareTextUpload:
 
         assert (Path(ctx.logs_dir) / "service.log").exists()
 
+    @pytest.mark.parametrize("extension", ["xls", "xlsx", "xlsm"])
     def test_spreadsheet_upload_is_copied_verbatim_and_listed_in_task(
-        self, tmp_path, mock_settings
+        self, tmp_path, mock_settings, extension
     ):
         from app.agents.log_analysis.workspace import prepare
 
-        src = tmp_path / "upload.xlsx"
+        src = tmp_path / f"upload.{extension}"
         # Minimal ZIP-looking bytes are enough for this unit: spreadsheet
         # detection is extension-based because real xlsx files are ZIP
         # containers and must not be decompressed by the log workspace.
-        payload = b"PK\x03\x04spreadsheet payload"
+        payload = (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" if extension == "xls" else b"PK\x03\x04") + b"spreadsheet payload"
         src.write_bytes(payload)
         record = _make_log_record(
             archive_path=str(src),
-            original_filename="report.xlsx",
+            original_filename=f"report.{extension}",
         )
 
         with patch("app.agents.log_analysis.workspace.settings", mock_settings):
             ctx = prepare(record, require_metadata=False)
 
-        placed = Path(ctx.logs_dir) / "report.xlsx"
+        placed = Path(ctx.logs_dir) / f"report.{extension}"
         assert placed.read_bytes() == payload
         task_data = json.loads(Path(ctx.task_json_path).read_text())
         assert task_data["upload_kind"] == "spreadsheet"
         assert task_data["attachments"] == [
             {
-                "filename": "report.xlsx",
-                "path": "logs/report.xlsx",
+                "filename": f"report.{extension}",
+                "path": f"logs/report.{extension}",
                 "kind": "spreadsheet",
             }
         ]

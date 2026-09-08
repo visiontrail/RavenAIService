@@ -36,6 +36,7 @@ from app.agents.log_analysis.workspace import (
     prepare_many,
 )
 from app.config import settings
+from app.exceptions import FileSizeExceededError, UnsupportedFileTypeError, ValidationError
 from app.i18n import DEFAULT as I18N_DEFAULT, normalize as normalize_locale
 from app.agents.clarification import ClarificationBinding
 from app.i18n.prompts import response_language_directive
@@ -45,6 +46,7 @@ from app.models.user import User
 from app.services import chat_image_store, ocr_service
 from app.services.chat_history_service import chat_history_service
 from app.services.log_service import log_service
+from app.utils.validation import file_validator
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +237,20 @@ class LogAnalysisChatService:
         # Start a new Job.
         try:
             if uploaded_filenames:
+                # Validate the complete batch before any upload is persisted.
+                # Preserve typed errors instead of losing them in FileUploadError.
+                upload_locale = normalize_locale(locale or getattr(user, "language", None))
+                for upload_file in uploaded_files:
+                    try:
+                        await file_validator.validate_upload_file_or_raise(upload_file)
+                    except (UnsupportedFileTypeError, FileSizeExceededError, ValidationError) as exc:
+                        error = self._upload_validation_error(upload_file, exc, upload_locale)
+                        logger.info(
+                            "log-analysis chat: upload rejected session_id=%s filename=%s reason=%s: %s",
+                            effective_session_id, upload_file.filename, error["reason"], exc,
+                        )
+                        yield self._sse_event(error)
+                        return
                 attachment_summary = "、".join(
                     f"`{filename}`" for filename in uploaded_filenames
                 )
@@ -534,6 +550,44 @@ class LogAnalysisChatService:
                 effective_session_id,
             )
             raise
+
+    @staticmethod
+    def _upload_validation_error(upload_file: UploadFile, exc: Exception, locale: str) -> Dict[str, Any]:
+        """Only expose known validation failures; never return internal exceptions."""
+        filename = upload_file.filename or ("未命名文件" if locale == "zh" else "unnamed file")
+        if isinstance(exc, UnsupportedFileTypeError):
+            supported = ", ".join(file_validator.supported_extensions)
+            file_type = exc.file_type
+            if file_type == "unknown":
+                file_type = "无扩展名" if locale == "zh" else "no extension"
+            message = (
+                f"无法上传附件「{filename}」：不支持的文件类型（{file_type}）。"
+                f"支持的文件扩展名：{supported}。请移除该附件或转换为支持的格式后重新上传；"
+                "本批附件尚未保存，分析未启动。"
+                if locale == "zh" else
+                f'Cannot upload "{filename}": unsupported file type ({file_type}). '
+                f"Supported file extensions: {supported}. Remove this attachment or convert it "
+                "to a supported format and upload again. No files in this batch were saved; analysis has not started."
+            )
+            reason = "unsupported_format"
+        elif isinstance(exc, FileSizeExceededError):
+            message = (
+                f"无法上传附件「{filename}」：文件大小 {exc.file_size / 1024 / 1024:.1f} MB，"
+                f"超过单文件上限 {exc.max_size / 1024 / 1024:.1f} MB。请拆分或精简后重新上传。"
+                if locale == "zh" else
+                f'Cannot upload "{filename}": {exc.file_size / 1024 / 1024:.1f} MB exceeds '
+                f"the per-file limit of {exc.max_size / 1024 / 1024:.1f} MB. Split or reduce the file and upload again."
+            )
+            reason = "file_too_large"
+        else:
+            message = (
+                f"无法上传附件「{filename}」：{exc}。请修改文件名后重新上传。"
+                if locale == "zh" else
+                f'Cannot upload "{filename}": invalid filename. Use a name of at most 255 characters '
+                "with letters, numbers, spaces, dots, hyphens or brackets; avoid hidden names and path separators."
+            )
+            reason = "invalid_filename"
+        return {"event": "error", "reason": reason, "filename": filename, "message": message}
 
     async def _run_job_async(self, job: AgentJob, ctx: WorkspaceContext) -> None:
         """Background Agent task. Survives SSE disconnects; persists to DB on completion."""

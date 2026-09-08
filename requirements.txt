@@ -23,6 +23,7 @@ rarfile>=4.2
 # Spreadsheet/Excel processing for dynamically loaded Agent Skills
 pandas>=2.2.0
 openpyxl>=3.1.2
+xlrd>=2.0.1
 
 # Agent framework and LLM clients
 claude-agent-sdk>=0.2  # >=0.2.82 provides include_partial_messages / StreamEvent for answer_delta streaming

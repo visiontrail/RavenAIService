@@ -13,6 +13,16 @@
 
 ## 1. 工作区布局
 
+主对话支持直接上传 Markdown（`.md`、`.markdown`）、配置文本（`.ini`、`.cfg`、
+`.conf`、`.yaml`、`.yml`、`.toml`、`.properties`）以及 Excel（`.xls`、`.xlsx`、
+`.xlsm`），并保留已有日志文本和压缩包格式。文本原样放入 `logs/`；Excel 按
+`spreadsheet` 识别并完整保留，旧版 `.xls` 可通过运行镜像中的 `xlrd` 读取。
+
+主对话在保存任何附件前校验整批文件。格式不支持时，SSE 返回 `event=error`、
+`reason=unsupported_format`、`filename`，以及包含文件名、拒绝类型、支持扩展名和
+处理建议的中英文 `message`。文件大小超限与文件名非法分别返回 `file_too_large`
+和 `invalid_filename`；这些校验失败不启动 Agent，不再显示通用的工作区准备失败。
+
 每次任务在 `code_repo_clone_base_dir/<task_id>/` 下创建独立工作区：
 
 ```

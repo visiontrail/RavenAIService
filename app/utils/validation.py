@@ -20,12 +20,22 @@ from app.exceptions import (
 SUPPORTED_LOG_EXTENSIONS = [
     '.log', '.txt', '.out', '.err', '.trace',
     '.json', '.xml', '.csv', '.tsv',
+    '.md', '.markdown', '.ini', '.cfg', '.conf', '.yaml', '.yml', '.toml', '.properties',
     '.gz', '.zip', '.tar', '.bz2', '.tgz', '.rar',
-    '.xlsx', '.xlsm',
+    '.xls', '.xlsx', '.xlsm',
 ]
 
 SUPPORTED_MIME_TYPES = [
     'text/plain',
+    'text/markdown',
+    'text/x-markdown',
+    'application/yaml',
+    'application/x-yaml',
+    'text/yaml',
+    'text/x-yaml',
+    'application/toml',
+    'text/x-toml',
+    'application/vnd.ms-excel',
     'text/csv',
     'application/json',
     'application/xml',
@@ -69,19 +79,18 @@ class FileValidator:
             Tuple[bool, str]: (是否有效, 错误信息)
         """
         try:
-            # 验证文件名
-            self._validate_filename(file.filename)
-            
-            # 验证文件类型
-            self._validate_file_type(file.filename, file.content_type)
-            
-            # 验证文件大小
-            await self._validate_file_size(file)
+            await self.validate_upload_file_or_raise(file)
             
             return True, ""
             
         except Exception as e:
             return False, str(e)
+
+    async def validate_upload_file_or_raise(self, file: UploadFile) -> None:
+        """Keep typed validation errors for callers that return actionable feedback."""
+        self._validate_filename(file.filename)
+        self._validate_file_type(file.filename, file.content_type)
+        await self._validate_file_size(file)
 
     def _validate_filename(self, filename: str):
         """验证文件名"""

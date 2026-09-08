@@ -1705,8 +1705,8 @@ export default {
       metadataErrorBefore: 'The project cannot be detected from this attachment (the archive is missing ',
       metadataErrorAfter: ', or the upload is a plain-text log). Choose a related project from the dropdown below, or retry with a log archive that contains metadata.json.',
       logAttachmentBefore: ' requires a log attachment. Supported archives include',
-      logAttachmentMiddle: 'and plain-text logs include',
-      logAttachmentAfter: '(plain-text logs require manually selecting a related project). For direct questions, switch to',
+      logAttachmentMiddle: 'as well as text logs, Markdown, configuration files and Excel',
+      logAttachmentAfter: '(non-archive attachments require manually selecting a related project). For direct questions, switch to',
     },
     status: {
       online: 'Online',
