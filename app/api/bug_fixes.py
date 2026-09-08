@@ -70,6 +70,8 @@ class BugFixMergeRequestData(BaseModel):
 
 
 class BugFixTaskDetail(BugFixTaskSummary):
+    model: Optional[str] = None
+    context_availability: Optional[str] = None
     summary: Optional[str] = None
     source_analysis_task_id: Optional[str] = None
     error: Optional[str] = None
@@ -265,6 +267,8 @@ async def get_bug_fix(
         finished_at=_iso(task.finished_at),
         started_at=_iso(task.started_at),
         summary=task.summary,
+        model=task.model,
+        context_availability=(_parse_json(task.source_context_json, {}).get("availability", "snapshot") if task.source_context_json else "legacy_reconstructed"),
         error=task.error,
         proposed_fixes=_parse_json(task.proposed_fixes_json, []),
         fix_outcomes=_parse_json(task.fix_outcomes_json, []),

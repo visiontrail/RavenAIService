@@ -52,6 +52,15 @@ OVERRIDABLE_MODEL_KEYS: frozenset = frozenset(
         "model_router_hard_failure_trip",
         "model_router_cooldown_seconds",
         "model_router_sample_ttl_seconds",
+        # BugFix 独立端点和执行预算
+        "bug_fix_agent_provider",
+        "bug_fix_agent_api_key",
+        "bug_fix_agent_base_url",
+        "bug_fix_agent_model",
+        "bug_fix_agent_small_fast_model",
+        "bug_fix_agent_max_tokens",
+        "bug_fix_agent_max_turns",
+        "bug_fix_agent_request_timeout_seconds",
         # OCR / 视觉模型
         "ocr_enabled",
         "ocr_api_key",
@@ -234,11 +243,15 @@ class Settings(BaseSettings):
 
     # Bug Fix Coding Agent（分析判定需要代码修复时自动派发的写入型 Agent）
     bug_fix_auto_dispatch: bool = False  # 自动派发总开关，默认关闭，灰度可控
-    bug_fix_agent_model: Optional[str] = (
-        None  # None 时复用 anthropic_model / provider 默认
-    )
+    bug_fix_agent_provider: Optional[str] = 'deepseek'
+    bug_fix_agent_api_key: Optional[str] = None
+    bug_fix_agent_base_url: Optional[str] = None
+    bug_fix_agent_model: Optional[str] = 'deepseek-v4-pro'
+    bug_fix_agent_small_fast_model: Optional[str] = None
+    bug_fix_agent_max_tokens: int = 16384
+    bug_fix_agent_max_turns: int = 150
     bug_fix_agent_request_timeout_seconds: int = 3600
-    bug_fix_agent_max_turns: int = 150  # 写入型任务回合多（定位/编辑/提交/推送/建 MR × 多个修复项）；实测 60 回合不够修完 2 个修复项
+    bug_fix_context_dir: str = "data/bug_fix_context"
     bug_fix_git_provider: Optional[str] = (
         None  # None 时由 repo_url host 推断（gitlab|github）
     )

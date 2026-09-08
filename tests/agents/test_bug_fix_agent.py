@@ -6,9 +6,20 @@ provider/API-base inference, and the system-prompt contract guarantees.
 
 from __future__ import annotations
 
+import pytest
+
 from app.agents.bug_fix import agent as bf_agent
 from app.agents.bug_fix import git_tools
 from app.agents.bug_fix import prompts
+
+
+@pytest.fixture(autouse=True)
+def dedicated_model(monkeypatch, tmp_path):
+    from app.config import settings
+    monkeypatch.setattr(settings, "runtime_settings_path", str(tmp_path / "models.json"))
+    monkeypatch.setattr(settings, "bug_fix_agent_provider", "anthropic")
+    monkeypatch.setattr(settings, "bug_fix_agent_api_key", "test-dedicated-key")
+    monkeypatch.setattr(settings, "bug_fix_agent_model", "advanced-test-model")
 
 
 # ───────────────────── output JSON extraction ──────────────────────
@@ -83,7 +94,7 @@ def test_normalize_fix_outcomes_basic_and_coercion():
              "reason": "done in 9b750d5"},
             # 无 outcome 但有 mr_url → created_mr；fix_index 字符串可强转
             {"fix_index": "2", "title": "b", "mr_url": "https://h/mr/1"},
-            # 非法 outcome 且无 mr_url → skipped
+            # 非法 outcome 且无 mr_url 不得伪装为无需修改
             {"title": "c", "outcome": "weird"},
             "not-a-dict",
         ]
@@ -91,7 +102,7 @@ def test_normalize_fix_outcomes_basic_and_coercion():
     assert len(out) == 3
     assert out[0]["outcome"] == "already_implemented" and out[0]["fix_index"] == 1
     assert out[1]["outcome"] == "created_mr" and out[1]["fix_index"] == 2
-    assert out[2]["outcome"] == "skipped"
+    assert out[2]["outcome"] == "failed"
 
 
 def test_normalize_fix_outcomes_redacts_tokens():
@@ -365,7 +376,7 @@ def test_run_salvages_json_emitted_before_sdk_error(monkeypatch):
     monkeypatch.setattr(anthropic_client, "build_options", lambda **kw: object())
 
     result = asyncio.run(bf_agent.BugFixCodingAgent().run(_make_ctx("t-4")))
-    assert result["status"] == "succeeded"
+    assert result["status"] == "partial"
     assert len(result["merge_requests"]) == 1
     assert result["merge_requests"][0]["branch_name"] == "bugfix/ai-t-4-1"
 
@@ -420,3 +431,87 @@ def test_run_still_fails_when_zero_mr_without_clean_outcomes(monkeypatch):
     result = asyncio.run(bf_agent.BugFixCodingAgent().run(_make_ctx("t-6")))
     assert result["status"] == "failed"
     assert result["error_kind"] == "no_merge_requests"
+
+
+def test_review_requires_complete_decisions():
+    proposals = [{"title": "a"}, {"title": "b"}]
+    out, error = bf_agent._validate_outcomes([
+        {"fix_index": 1, "outcome": "rejected", "reason": "src/a.c:42 contradicts the diagnosis"}
+    ], proposals, [])
+    assert error == "incomplete_fix_outcomes"
+    assert [o["outcome"] for o in out] == ["rejected", "failed"]
+
+
+def test_rejected_review_requires_evidence_and_unique_indices():
+    for outcomes in ([{"fix_index": 1, "outcome": "rejected"}],
+                     [{"fix_index": 1, "outcome": "rejected", "reason": "proof"}] * 2):
+        _, error = bf_agent._validate_outcomes(outcomes, [{"title": "a"}], [])
+        assert error == "incomplete_fix_outcomes"
+
+
+def test_independent_model_does_not_fall_back(monkeypatch):
+    import asyncio
+    from app.config import settings
+    monkeypatch.setattr(settings, "bug_fix_agent_api_key", None)
+    monkeypatch.setattr(settings, "anthropic_api_key", "general-key")
+    result = asyncio.run(bf_agent.BugFixCodingAgent().run(_make_ctx("no-model")))
+    assert result["error_kind"] == "bug_fix_model_unconfigured"
+
+
+async def test_dedicated_endpoint_and_rejected_result(monkeypatch):
+    import claude_agent_sdk
+    from types import SimpleNamespace
+    from app.agents import anthropic_client
+    seen = {}
+    def options(**kwargs):
+        seen.update(kwargs)
+        return object()
+    async def query(**kwargs):
+        yield SimpleNamespace(content='{"status":"succeeded","merge_requests":[],"fix_outcomes":[{"fix_index":1,"outcome":"rejected","reason":"Header and log values agree; proposal reverses correct behavior"}]}')
+    monkeypatch.setattr(anthropic_client, "build_options", options)
+    monkeypatch.setattr(claude_agent_sdk, "query", query)
+    ctx = _make_ctx("review")
+    ctx.metadata["proposed_fixes"] = [{"title": "Reverse enum"}]
+    result = await bf_agent.BugFixCodingAgent().run(ctx)
+    assert result["status"] == "succeeded"
+    assert result["fix_outcomes"][0]["outcome"] == "rejected"
+    assert seen["endpoint"].slot == "bug_fix"
+    assert seen["endpoint"].api_key == "test-dedicated-key"
+    assert result["model"] == "advanced-test-model"
+
+
+async def test_terminal_sdk_error_without_exception(monkeypatch):
+    import claude_agent_sdk
+    from types import SimpleNamespace
+    from app.agents import anthropic_client
+    async def query(**kwargs):
+        yield SimpleNamespace(is_error=True, result="API Error: 500 upstream unavailable", content=None)
+    monkeypatch.setattr(claude_agent_sdk, "query", query)
+    monkeypatch.setattr(anthropic_client, "build_options", lambda **kw: object())
+    result = await bf_agent.BugFixCodingAgent().run(_make_ctx("sdk-500"))
+    assert result["status"] == "failed"
+    assert "500 upstream" in result["error"]
+
+
+async def test_checkpoint_recovers_published_mr_and_marks_missing_item_failed(tmp_path, monkeypatch):
+    import json
+    import claude_agent_sdk
+    from app.agents import anthropic_client
+    checkpoint = {'merge_requests': [{'branch_name': 'bugfix/1', 'mr_url': 'https://host/mr/1'}],
+                  'fix_outcomes': [{'fix_index': 1, 'outcome': 'created_mr', 'mr_url': 'https://host/mr/1'}]}
+    (tmp_path / 'bug_fix_result.json').write_text(json.dumps(checkpoint))
+    async def query(**kwargs):
+        if False:
+            yield None
+        raise RuntimeError('Reached maximum number of turns (150)')
+    monkeypatch.setattr(claude_agent_sdk, 'query', query)
+    monkeypatch.setattr(anthropic_client, 'build_options', lambda **kw: object())
+    ctx = _make_ctx('checkpoint')
+    ctx.temp_dir = str(tmp_path)
+    ctx.metadata['proposed_fixes'] = [{'title': 'a'}, {'title': 'b'}]
+    result = await bf_agent.BugFixCodingAgent().run(ctx)
+    assert result['status'] == 'partial'
+    assert len(result['merge_requests']) == 1
+    assert result['fix_outcomes'][1]['outcome'] == 'failed'
+    assert result['error_kind'] == 'max_turns_exceeded'
+    assert 'maximum number of turns' in result['error']

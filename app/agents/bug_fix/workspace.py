@@ -117,6 +117,7 @@ def prepare(
     source_analysis_task_id: Optional[str] = None,
     source_log_archive_path: Optional[str] = None,
     source_log_filename: Optional[str] = None,
+    source_context: Optional[Dict[str, Any]] = None,
 ) -> BugFixWorkspaceContext:
     """准备隔离工作区并浅克隆仓库。
 
@@ -128,7 +129,7 @@ def prepare(
         CloneFailedError: git clone 失败（错误信息已脱敏）
     """
     workspace_id = str(uuid.uuid4())
-    base_dir = Path(settings.code_repo_clone_base_dir)
+    base_dir = Path(settings.code_repo_clone_base_dir).resolve()
     temp_dir = base_dir / workspace_id
     repo_dir = temp_dir / "repo"
 
@@ -172,6 +173,14 @@ def prepare(
                     f"git clone failed: {mask_tokens(proc.stderr or proc.stdout or '')}"
                 )
 
+        # Clone fallback may select the remote's real default branch.
+        branch_result = subprocess.run(
+            ["git", "-C", str(repo_dir), "symbolic-ref", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if branch_result.returncode == 0 and branch_result.stdout.strip():
+            default_branch = branch_result.stdout.strip()
+
         # 配置提交身份（仅在该 clone 内生效）。
         identity = _git_identity()
         for key, value in (("user.name", identity["name"]), ("user.email", identity["email"])):
@@ -182,12 +191,24 @@ def prepare(
                 timeout=30,
             )
 
-        logs_dir = _sync_source_logs(
-            temp_dir,
-            bug_fix_task_id=bug_fix_task_id,
-            source_log_archive_path=source_log_archive_path,
-            source_log_filename=source_log_filename,
-        )
+        context_metadata = {}
+        if source_context:
+            from app.services.bug_fix_context import restore
+            try:
+                context_metadata = restore(source_context, temp_dir)
+            except (OSError, ValueError, KeyError) as exc:
+                raise BugFixWorkspaceError(f"source_context_unavailable: {exc}") from exc
+            logs_dir = temp_dir / "logs"
+        else:
+            logs_dir = _sync_source_logs(
+                temp_dir, bug_fix_task_id=bug_fix_task_id,
+                source_log_archive_path=source_log_archive_path,
+                source_log_filename=source_log_filename,
+            )
+            context_metadata["availability"] = "legacy_reconstructed"
+            (temp_dir / "source_analysis.json").write_text(
+                json.dumps(context_metadata, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
 
         task_data = {
             "bug_fix_task_id": bug_fix_task_id,
@@ -198,6 +219,9 @@ def prepare(
             "source_analysis_task_id": source_analysis_task_id,
             "default_branch": default_branch,
             "git_identity": identity,
+            "source_analysis": "source_analysis.json",
+            "context_availability": source_context.get("availability", "snapshot") if source_context else "legacy_reconstructed",
+            "images_dir": "images" if (temp_dir / "images").exists() else None,
             # 相对 temp_dir 的路径；None 表示本次没有可用的来源日志。
             "logs_dir": "logs" if logs_dir is not None else None,
         }
@@ -219,7 +243,7 @@ def prepare(
             task_json_path=str(task_json_path),
             default_branch=default_branch,
             logs_dir=str(logs_dir) if logs_dir is not None else None,
-            metadata={"title": title, "proposed_fixes": proposed_fixes},
+            metadata={"title": title, "proposed_fixes": proposed_fixes, "source_context": context_metadata},
         )
     except BugFixWorkspaceError:
         shutil.rmtree(str(temp_dir), ignore_errors=True)

@@ -524,9 +524,13 @@ def build_options(
 
     if max_tokens is not None:
         options_kwargs["max_tokens"] = max_tokens
+        # The bundled CLI consumes this even when the Python SDK version has
+        # no max_tokens constructor field (and _instantiate_options drops it).
+        options_kwargs["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(max_tokens)
 
     if request_timeout_seconds is not None:
         options_kwargs["request_timeout_seconds"] = request_timeout_seconds
+        options_kwargs["env"]["API_TIMEOUT_MS"] = str(request_timeout_seconds * 1000)
 
     # Chunked streaming: enables native content_block_delta events so agents
     # can translate the assistant answer body into incremental answer_delta

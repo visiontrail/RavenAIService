@@ -795,6 +795,12 @@ export default {
       statusNote: 'Markdown is rendered safely; dismissal is saved to the user account and applies across devices.',
     },
     modelSettings: {
+      bugFixTitle: 'Dedicated BugFix model',
+      bugFixDesc: 'Configure an advanced model to review analysis proposals and repair confirmed defects. Missing credentials never fall back to the general model.',
+      bugFixTokens: 'Output token limit',
+      bugFixTurns: 'Maximum turns',
+      bugFixTimeout: 'Request timeout (seconds)',
+
       subtitle: 'Model settings',
       badge: 'Runtime config',
       loading: 'Loading model settings…',
@@ -807,13 +813,13 @@ export default {
         'Clear all admin model overrides and revert to the environment / .env defaults?',
       anthropicSectionTitle: 'Anthropic primary model',
       anthropicSectionDesc:
-        'All agents (log analysis, device linkage, bug fix, …) call Anthropic-compatible endpoints via the Claude Agent SDK. Values set here override the .env defaults immediately — no restart required.',
+        'Log analysis and conversational agents use this Anthropic-compatible endpoint. BugFix uses its dedicated configuration below. Values set here override the .env defaults immediately — no restart required.',
       backupSectionTitle: 'Anthropic backup model (failover)',
       backupSectionDesc:
         'Automatically takes over when the primary endpoint degrades or becomes unavailable, and hands back once it recovers. Built for the "primary is free but slow at peak, backup costs money but is always available" trade-off. Fields mean exactly what they do for the primary.',
       backupEnabledLabel: 'Enable backup endpoint',
       backupEnabledHint:
-        'While off, every request goes to the primary only — identical to having no backup configured. You can still fill the fields below and leave them dormant.',
+        'While off, general-agent requests go to the primary only; BugFix keeps its dedicated endpoint. You can still fill the fields below and leave them dormant.',
       testBackupBtn: 'Test backup connection',
       backupRoutingNote:
         '· Routing policy (when to switch, breaker cooldown, recovery probing) is under "Routing policy" below; saved changes take effect in every process immediately, no restart.',
@@ -919,9 +925,9 @@ export default {
       envFallbackNote:
         '· Fields not configured here (shown as “env”) fall back to the .env / app/config.py defaults. Finer-grained tuning params (history turns, timeouts, byte caps) remain env-controlled.',
       ocrComplianceNote:
-        '· Compliance note: images are sent to the upstream OCR provider (Alibaba Cloud Beijing region by default). Raw image bytes are never stored — only the recognized text is persisted; region/compliance is the deployer’s responsibility per provider.',
+        '· Compliance note: images are sent to the upstream OCR provider (Alibaba Cloud Beijing region by default). Originals are retained with chat attachments and BugFix evidence snapshots; region/compliance is the deployer’s responsibility per provider.',
       providerCapabilityNote:
-        '· Third-party Anthropic-compatible gateways (DeepSeek, Bailian, Zhipu, Kimi, MiniMax, StepFun, MiMo, Hunyuan, internal Yinhe) all support standard tool use and MCP tools, but extensions such as thinking budget and document input do not apply; image recognition always goes through the OCR model above.',
+        '· Third-party Anthropic-compatible gateways (DeepSeek, Bailian, Zhipu, Kimi, MiniMax, StepFun, MiMo, Hunyuan, internal Yinhe) all support standard tool use and MCP tools, but extensions such as thinking budget and document input do not apply; OCR text is shared with downstream agents; a vision-capable BugFix model can also read the saved originals.',
     },
     users: {
       subtitle: 'User management',
@@ -1823,6 +1829,11 @@ export default {
   },
 
   bugFix: {
+    model: 'Repair model',
+    context: 'Source context',
+    contextSnapshot: 'Original evidence snapshot',
+    contextLegacy: 'Reconstructed legacy context (may be incomplete)',
+
     listTitle: 'Bug Fixes',
     detailTitle: 'Bug Fix Detail',
     totalTasks: '{count} total tasks',
@@ -1859,6 +1870,8 @@ export default {
     analysisTask: 'Analysis task',
     error: 'Error',
     noMr: 'No MRs',
+    reviewComplete: 'Review completed',
+    reviewNoChanges: 'All proposals have been reviewed and require no code changes, so no MR was created. See each decision for the evidence.',
     noMrDesc: 'The Agent has not produced a displayable Merge Request yet.',
     openMr: 'Open MR',
     noStats: 'No changed files stats.',
@@ -1866,6 +1879,7 @@ export default {
     fileStats: '{count} files · +{added} / -{removed}',
     viewOutcomeMr: 'View MR',
     outcome: {
+      rejected: 'Repair rejected',
       created_mr: 'MR created',
       already_implemented: 'Already in baseline',
       skipped: 'No change needed',

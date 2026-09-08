@@ -795,6 +795,12 @@ export default {
       statusNote: 'Markdown 会经过安全渲染；用户关闭公告后，确认状态会保存在账号中并跨设备生效。',
     },
     modelSettings: {
+      bugFixTitle: 'BugFix 独立模型',
+      bugFixDesc: '独立配置高级修复模型，用于审核日志分析建议并修复确认的缺陷。未配置密钥时不会回退到通用模型。',
+      bugFixTokens: '输出 Token 上限',
+      bugFixTurns: '最大执行回合',
+      bugFixTimeout: '请求超时（秒）',
+
       subtitle: '模型设置',
       badge: '运行期配置',
       loading: '正在加载模型设置…',
@@ -806,13 +812,13 @@ export default {
       resetConfirm: '确定要清除后台的所有模型覆盖、恢复为环境变量 / .env 默认值吗？',
       anthropicSectionTitle: 'Anthropic 主力模型',
       anthropicSectionDesc:
-        '各智能体（日志分析、设备联动、代码修复等）统一通过 Claude Agent SDK 调用 Anthropic 兼容端点。此处配置会立即覆盖 .env 默认值，无需重启。',
+        '日志分析、设备联动等对话智能体使用此 Anthropic 兼容端点。BugFix 使用下方独立配置。此处配置会立即覆盖 .env 默认值，无需重启。',
       backupSectionTitle: 'Anthropic 备用模型（故障转移）',
       backupSectionDesc:
         '主力端点降级或不可用时自动切换到此端点，恢复后自动切回。适合「主力免费但高峰期慢、备用付费但随时可用」的成本优化场景。字段含义与主力完全一致。',
       backupEnabledLabel: '启用备用端点',
       backupEnabledHint:
-        '关闭时所有请求只走主力端点，行为与未配置备用完全一致；此时下方字段可以先填好备用配置而不生效。',
+        '关闭时通用智能体请求只走主力端点，BugFix 仍使用独立端点；此时下方字段可以先填好备用配置而不生效。',
       testBackupBtn: '测试备用连接',
       backupRoutingNote:
         '· 路由策略（何时切换、熔断冷却、恢复探测）见下方「路由策略」，保存后各进程立即生效，无需重启。',
@@ -914,9 +920,9 @@ export default {
       envFallbackNote:
         '· 未在此配置（显示为「环境变量」）的项，将回退到 .env / app/config.py 的默认值。其余细粒度调优参数（历史轮数、超时、字节上限等）仍由环境变量控制。',
       ocrComplianceNote:
-        '· 合规提示：图片会发往上游 OCR provider（默认阿里云北京地域）；系统不落库原始图片字节，仅持久化识别后的文本，区域 / 合规由部署方按 provider 负责。',
+        '· 合规提示：图片会发往上游 OCR provider（默认阿里云北京地域）；原图随聊天附件与 BugFix 证据快照保留，区域 / 合规由部署方按 provider 负责。',
       providerCapabilityNote:
-        '· 第三方 Anthropic 兼容网关（DeepSeek / 百炼 / 智谱 / Kimi / MiniMax / 阶跃 / MiMo / 混元 / 银河内部）均支持标准 tool use 与 MCP 工具，但 thinking budget、文档输入等扩展能力不生效；图片识别统一走上方 OCR 模型。',
+        '· 第三方 Anthropic 兼容网关（DeepSeek / 百炼 / 智谱 / Kimi / MiniMax / 阶跃 / MiMo / 混元 / 银河内部）均支持标准 tool use 与 MCP 工具，但 thinking budget、文档输入等扩展能力不生效；OCR 文本会传递给下游智能体，支持视觉的 BugFix 模型还可读取保存的原图。',
     },
     users: {
       subtitle: '用户管理中心',
@@ -1818,6 +1824,11 @@ export default {
   },
 
   bugFix: {
+    model: '修复模型',
+    context: '来源上下文',
+    contextSnapshot: '原始证据快照',
+    contextLegacy: '旧任务上下文重建（可能不完整）',
+
     listTitle: 'Bug 修复',
     detailTitle: 'Bug 修复详情',
     totalTasks: '共 {count} 个任务',
@@ -1854,6 +1865,8 @@ export default {
     analysisTask: '分析任务',
     error: '错误',
     noMr: '暂无 MR',
+    reviewComplete: '审核已完成',
+    reviewNoChanges: '所有建议均已审核，无需代码变更，因此没有创建 MR。具体依据见各项审核结论。',
     noMrDesc: 'Agent 还没有产出可展示的 Merge Request。',
     openMr: '打开 MR',
     noStats: '暂无改动文件统计。',
@@ -1861,6 +1874,7 @@ export default {
     fileStats: '{count} 文件 · +{added} / -{removed}',
     viewOutcomeMr: '查看对应 MR',
     outcome: {
+      rejected: '已拒绝修复',
       created_mr: '已提交 MR',
       already_implemented: '基线已实现',
       skipped: '无需修改',

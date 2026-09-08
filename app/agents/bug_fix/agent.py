@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.agents.bug_fix.workspace import BugFixWorkspaceContext
@@ -113,10 +114,10 @@ def _normalize_merge_requests(value: Any) -> List[Dict[str, Any]]:
 # 逐个拟修复项的处理结局取值。created_mr=产出了 MR；already_implemented=基线已
 # 实现、无需改动；skipped=判断无需修改；failed=尝试修复但失败。
 _FIX_OUTCOME_VALUES = frozenset(
-    {"created_mr", "already_implemented", "skipped", "failed"}
+    {"created_mr", "already_implemented", "skipped", "rejected", "failed"}
 )
 # 视为「无需改动」的结局：全为此类且无 MR 时，0 MR 属正常「已确认无需修复」而非失败。
-_NO_ACTION_OUTCOMES = frozenset({"already_implemented", "skipped"})
+_NO_ACTION_OUTCOMES = frozenset({"already_implemented", "skipped", "rejected"})
 
 
 def _normalize_fix_outcomes(value: Any) -> List[Dict[str, Any]]:
@@ -126,7 +127,7 @@ def _normalize_fix_outcomes(value: Any) -> List[Dict[str, Any]]:
     项），使详情页能逐项解释「为何没有 MR」，而不是静默丢弃。
 
     - ``outcome`` 归一到 ``_FIX_OUTCOME_VALUES``；缺失/非法时：带 ``mr_url`` 视为
-      ``created_mr``，否则退化为 ``skipped``。
+      ``created_mr``，否则退化为 ``failed``。
     - 非 dict 元素跳过；``reason``/``mr_url`` 做 token 脱敏兜底。
     """
     if not isinstance(value, list):
@@ -138,7 +139,7 @@ def _normalize_fix_outcomes(value: Any) -> List[Dict[str, Any]]:
         mr_url = item.get("mr_url")
         outcome = str(item.get("outcome") or "").strip().lower()
         if outcome not in _FIX_OUTCOME_VALUES:
-            outcome = "created_mr" if mr_url else "skipped"
+            outcome = "created_mr" if mr_url else "failed"
         fix_index = item.get("fix_index")
         try:
             fix_index = int(fix_index) if fix_index is not None else None
@@ -161,6 +162,48 @@ def _normalize_fix_outcomes(value: Any) -> List[Dict[str, Any]]:
             }
         )
     return out
+
+
+def _validate_outcomes(outcomes: list, proposals: list, merge_requests: list) -> tuple:
+    """Reject missing/duplicate/unsupported decisions instead of inventing success."""
+    if not proposals:
+        return outcomes, None  # Compatibility for legacy callers without a manifest.
+    by_index = {}
+    invalid = False
+    for item in outcomes:
+        index = item.get("fix_index")
+        if index not in range(1, len(proposals) + 1) or index in by_index:
+            invalid = True
+            continue
+        by_index[index] = item
+    result = []
+    for index, proposal in enumerate(proposals, 1):
+        item = by_index.get(index)
+        if item is None:
+            invalid = True
+            item = {"fix_index": index, "title": proposal.get("title"), "outcome": "failed",
+                    "reason": "Agent did not account for this proposal"}
+        elif item["outcome"] in _NO_ACTION_OUTCOMES and not item.get("reason"):
+            invalid = True
+            item = {**item, "outcome": "failed", "reason": "Review decision has no evidence or reason"}
+        elif item["outcome"] == "created_mr" and not any(
+            mr.get("mr_url") and mr.get("mr_url") == item.get("mr_url") for mr in merge_requests
+        ):
+            invalid = True
+            item = {**item, "outcome": "failed", "reason": "No matching created merge request"}
+        result.append(item)
+    return result, "incomplete_fix_outcomes" if invalid else None
+
+
+def _sdk_error_kind(error: Exception) -> str:
+    text = str(error).lower()
+    if isinstance(error, TimeoutError):
+        return "request_timeout"
+    if "maximum number of turns" in text or "error_max_turns" in text:
+        return "max_turns_exceeded"
+    if "api error:" in text or "upstream error" in text:
+        return "upstream_error"
+    return "sdk_error"
 
 
 def _result(
@@ -190,7 +233,7 @@ class BugFixCodingAgent:
     """写入型 Bug 修复 Agent。"""
 
     async def run(self, ctx: BugFixWorkspaceContext) -> Dict[str, Any]:
-        from app.agents.anthropic_client import PROVIDER_PROFILES, build_options
+        from app.agents.anthropic_client import build_options
         from app.agents.bug_fix.prompts import get_prompts, render_user_prompt
         from app.config import settings
 
@@ -244,13 +287,21 @@ class BugFixCodingAgent:
             mask_tokens(user_prompt),
         )
 
-        provider = settings.anthropic_provider
-        profile = PROVIDER_PROFILES.get(provider)
-        effective_model = (
-            settings.bug_fix_agent_model
-            or settings.anthropic_model
-            or (profile.default_model if profile else "unknown")
-        )
+        from app.services.model_router import _resolve
+        from app.services.model_settings_service import BUG_FIX_SLOT
+
+        endpoint = _resolve(BUG_FIX_SLOT)
+        if endpoint is None:
+            return _result(status="failed", merge_requests=[],
+                           error_kind="bug_fix_model_unconfigured",
+                           error="请在后台配置 BugFix 独立模型端点和密钥 / Configure the dedicated BugFix endpoint and key in Admin")
+        effective_model = endpoint.model
+        if not endpoint.profile.supports_image_input:
+            system_prompt["append"] += (
+                "\n当前模型不支持原图输入。截图原件保存在 images/ 供追溯，"
+                "不要 Read 图片二进制；请读取 source_analysis.json 中的 OCR/用户描述。"
+                "若视觉证据不足，不得臆测，必须说明限制并拒绝缺乏依据的修复。\n"
+            )
 
         options = build_options(
             system_prompt=system_prompt,
@@ -258,7 +309,8 @@ class BugFixCodingAgent:
             cwd=ctx.temp_dir,
             permission_mode="bypassPermissions",
             max_turns=settings.bug_fix_agent_max_turns,
-            model=settings.bug_fix_agent_model or None,
+            endpoint=endpoint,
+            max_tokens=settings.bug_fix_agent_max_tokens,
             request_timeout_seconds=settings.bug_fix_agent_request_timeout_seconds,
         )
 
@@ -272,11 +324,16 @@ class BugFixCodingAgent:
 
         run_error: Optional[Exception] = None
         try:
-            async for message in _query(prompt=user_prompt, options=options):
-                _log_message(ctx.task_id, message)
-                text = _message_text(message)
-                if text:
-                    collected_text.append(text)
+            async with asyncio.timeout(settings.bug_fix_agent_request_timeout_seconds):
+                async for message in _query(prompt=user_prompt, options=options):
+                    _log_message(ctx.task_id, message)
+                    if getattr(message, "is_error", False):
+                        errors = getattr(message, "errors", None) or []
+                        detail = _message_text(message) or "; ".join(map(str, errors)) or str(getattr(message, "subtype", "sdk_error"))
+                        run_error = RuntimeError(detail)
+                    text = _message_text(message)
+                    if text:
+                        collected_text.append(text)
         except Exception as exc:  # noqa: BLE001
             # SDK 在 CLI 报错（如超出 max_turns）时抛裸异常。此前已收集的输出里
             # 可能已有可用的最终 JSON（如 MR 已建好、只是收尾超回合）；没有时也
@@ -291,19 +348,24 @@ class BugFixCodingAgent:
         duration = time.monotonic() - start
         full_text = "\n".join(collected_text)
         parsed = _extract_final_json(full_text)
+        # A turn-limit/transport failure must not discard already-published MRs.
+        # The prompt maintains a structured checkpoint after each proposal.
+        if not isinstance(parsed, dict) or not any(key in parsed for key in ("merge_requests", "fix_outcomes")):
+            checkpoint = Path(ctx.temp_dir) / "bug_fix_result.json"
+            if checkpoint.is_file() and not checkpoint.is_symlink():
+                try:
+                    parsed = json.loads(checkpoint.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    pass
 
         if not isinstance(parsed, dict):
             if run_error is not None:
-                error_kind = (
-                    "max_turns_exceeded"
-                    if "maximum number of turns" in str(run_error).lower()
-                    else "sdk_error"
-                )
+                error_kind = _sdk_error_kind(run_error)
                 return _result(
                     status="failed",
                     merge_requests=[],
                     error_kind=error_kind,
-                    error=str(run_error),
+                    error=str(run_error) or _sdk_error_kind(run_error),
                     model=effective_model,
                     duration_seconds=duration,
                 )
@@ -321,21 +383,21 @@ class BugFixCodingAgent:
 
         merge_requests = _normalize_merge_requests(parsed.get("merge_requests"))
         fix_outcomes = _normalize_fix_outcomes(parsed.get("fix_outcomes"))
+        fix_outcomes, validation_error = _validate_outcomes(
+            fix_outcomes, ctx.metadata.get("proposed_fixes") or [], merge_requests
+        )
         status = parsed.get("status")
         error_kind = parsed.get("error_kind")
         if status not in ("succeeded", "partial", "failed"):
             status = "succeeded" if merge_requests else "failed"
-        # 自洽校正：声称成功却无 MR，仅当每个拟修复项都给出「无需改动」类结局
-        # （already_implemented/skipped）时才可信——这是「已确认无需修复」而非失败；
-        # 否则（无结局解释或存在其它结局）仍判失败。
-        if status == "succeeded" and not merge_requests:
-            if fix_outcomes and all(
-                o["outcome"] in _NO_ACTION_OUTCOMES for o in fix_outcomes
-            ):
-                pass  # 全部已在基线实现/无需改动
-            else:
-                status = "failed"
-                error_kind = error_kind or "no_merge_requests"
+        failed_items = any(o["outcome"] == "failed" for o in fix_outcomes)
+        if validation_error or failed_items or run_error is not None:
+            status = "partial" if any(mr.get("mr_url") for mr in merge_requests) else "failed"
+            error_kind = _sdk_error_kind(run_error) if run_error else (validation_error or error_kind or "fix_failed")
+        elif fix_outcomes and all(o["outcome"] in _NO_ACTION_OUTCOMES for o in fix_outcomes):
+            status = "succeeded"
+        elif status == "succeeded" and not merge_requests:
+            status, error_kind = "failed", "no_merge_requests"
 
         logger.info(
             "BugFixCodingAgent run_complete task=%s status=%s mrs=%d outcomes=%d duration=%.1fs",
@@ -350,7 +412,7 @@ class BugFixCodingAgent:
             merge_requests=merge_requests,
             fix_outcomes=fix_outcomes,
             error_kind=error_kind,
-            error=parsed.get("error"),
+            error=(str(run_error) or _sdk_error_kind(run_error)) if run_error else parsed.get("error"),
             model=effective_model,
             duration_seconds=duration,
         )

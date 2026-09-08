@@ -61,6 +61,10 @@ const form = reactive({
     model: '',
     small_fast_model: '',
   } as EndpointForm,
+  bug_fix: { provider: 'deepseek', api_key: '', api_keys: '', base_url: '', model: 'deepseek-v4-pro', small_fast_model: '' } as EndpointForm,
+  bug_fix_agent_max_tokens: 16384,
+  bug_fix_agent_max_turns: 150,
+  bug_fix_agent_request_timeout_seconds: 3600,
   backup: {
     provider: 'anthropic',
     api_key: '',
@@ -92,6 +96,7 @@ const form = reactive({
 // Secrets are never returned by the API; only whether one is currently set.
 const anthropicKeySet = ref(false)
 const anthropicKeyCount = ref(0)
+const bugFixKeySet = ref(false)
 const backupKeySet = ref(false)
 const ocrKeySet = ref(false)
 
@@ -116,18 +121,21 @@ const primaryWindow = computed(() => {
 const testing = reactive<Record<ModelSettingsTarget, boolean>>({
   anthropic: false,
   anthropic_backup: false,
+  bug_fix: false,
   ocr: false,
 })
 const testResults = reactive<Record<ModelSettingsTarget, ModelSettingsTestResult | null>>({
   anthropic: null,
   anthropic_backup: null,
+  bug_fix: null,
   ocr: null,
 })
 
 // ── Connectivity test ─────────────────────────────────────────────────────
-const ENDPOINT_SLOT: Partial<Record<ModelSettingsTarget, 'primary' | 'backup'>> = {
+const ENDPOINT_SLOT: Partial<Record<ModelSettingsTarget, 'primary' | 'backup' | 'bug_fix'>> = {
   anthropic: 'primary',
   anthropic_backup: 'backup',
+  bug_fix: 'bug_fix',
 }
 
 const parseKeyPool = (value: string) =>
@@ -202,6 +210,15 @@ const populateForm = (data: ModelSettingsData) => {
   form.backup.base_url = String(f.anthropic_backup_base_url?.value ?? '')
   form.backup.model = String(f.anthropic_backup_model?.value ?? '')
   form.backup.small_fast_model = String(f.anthropic_backup_small_fast_model?.value ?? '')
+  form.bug_fix.provider = String(f.bug_fix_agent_provider?.value || 'deepseek')
+  form.bug_fix.base_url = String(f.bug_fix_agent_base_url?.value || '')
+  form.bug_fix.model = String(f.bug_fix_agent_model?.value || '')
+  form.bug_fix.small_fast_model = String(f.bug_fix_agent_small_fast_model?.value || '')
+  form.bug_fix.api_key = ''
+  bugFixKeySet.value = Boolean(f.bug_fix_agent_api_key?.is_set)
+  form.bug_fix_agent_max_tokens = Number(f.bug_fix_agent_max_tokens?.value ?? 16384)
+  form.bug_fix_agent_max_turns = Number(f.bug_fix_agent_max_turns?.value ?? 150)
+  form.bug_fix_agent_request_timeout_seconds = Number(f.bug_fix_agent_request_timeout_seconds?.value ?? 3600)
   const routerNum = (key: string, fallback: number) => Number(f[key]?.value ?? fallback)
   form.model_router_enabled = Boolean(f.model_router_enabled?.value ?? true)
   form.model_router_first_token_deadline_ms = routerNum('model_router_first_token_deadline_ms', 20000)
@@ -252,6 +269,13 @@ const handleSaveSettings = async () => {
   savingSettings.value = true
   try {
     const payload: UpdateModelSettingsPayload = {
+      bug_fix_agent_provider: form.bug_fix.provider,
+      bug_fix_agent_base_url: form.bug_fix.base_url.trim(),
+      bug_fix_agent_model: form.bug_fix.model.trim(),
+      bug_fix_agent_small_fast_model: form.bug_fix.small_fast_model.trim(),
+      bug_fix_agent_max_tokens: Number(form.bug_fix_agent_max_tokens),
+      bug_fix_agent_max_turns: Number(form.bug_fix_agent_max_turns),
+      bug_fix_agent_request_timeout_seconds: Number(form.bug_fix_agent_request_timeout_seconds),
       anthropic_provider: form.primary.provider,
       anthropic_base_url: form.primary.base_url.trim(),
       anthropic_model: form.primary.model.trim(),
@@ -279,6 +303,7 @@ const handleSaveSettings = async () => {
     // Only send secrets when the admin typed a new value; blank keeps the old.
     const primaryKeys = parseKeyPool(form.primary.api_keys)
     if (primaryKeys.length) payload.anthropic_api_keys = primaryKeys
+    if (form.bug_fix.api_key.trim()) payload.bug_fix_agent_api_key = form.bug_fix.api_key.trim()
     if (form.backup.api_key.trim()) payload.anthropic_backup_api_key = form.backup.api_key.trim()
     if (form.ocr_api_key.trim()) payload.ocr_api_key = form.ocr_api_key.trim()
 
@@ -311,6 +336,7 @@ const handleResetSettings = async () => {
     // The form now describes a different upstream; any earlier probe is stale.
     testResults.anthropic = null
     testResults.anthropic_backup = null
+    testResults.bug_fix = null
     testResults.ocr = null
     appStore.showNotification({ title: t('admin.modelSettings.resetDone'), type: 'success' })
   } catch (err: any) {
@@ -607,6 +633,28 @@ onMounted(() => {
             />
 
             <p class="text-xs text-slate-500 mt-3">{{ t('admin.modelSettings.backupRoutingNote') }}</p>
+          </div>
+
+          <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+            <div class="mb-4">
+              <h2 class="text-lg font-semibold text-slate-900">{{ t('admin.modelSettings.bugFixTitle') }}</h2>
+              <p class="text-sm text-slate-500">{{ t('admin.modelSettings.bugFixDesc') }}</p>
+            </div>
+            <AnthropicEndpointCard slot-name="bug_fix" :form="form.bug_fix"
+              :fields="settingsData?.fields" :provider-options="providerOptions" :profiles="providerProfiles"
+              :key-set="bugFixKeySet" :testing="testing.bug_fix" :test-result="testResults.bug_fix"
+              @test="runTest('bug_fix')" />
+            <div class="grid gap-4 lg:grid-cols-3 mt-4">
+              <label class="block text-sm text-slate-700">{{ t('admin.modelSettings.bugFixTokens') }}
+                <input v-model.number="form.bug_fix_agent_max_tokens" type="number" min="1" max="200000" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none" />
+              </label>
+              <label class="block text-sm text-slate-700">{{ t('admin.modelSettings.bugFixTurns') }}
+                <input v-model.number="form.bug_fix_agent_max_turns" type="number" min="1" max="1000" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none" />
+              </label>
+              <label class="block text-sm text-slate-700">{{ t('admin.modelSettings.bugFixTimeout') }}
+                <input v-model.number="form.bug_fix_agent_request_timeout_seconds" type="number" min="30" max="14400" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100 outline-none" />
+              </label>
+            </div>
           </div>
 
           <!-- 路由策略：何时离开主力、何时切回 -->

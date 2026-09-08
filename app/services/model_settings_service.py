@@ -158,7 +158,14 @@ BACKUP_SLOT = AnthropicSlot(
     enabled_key="anthropic_backup_enabled",
 )
 
-ANTHROPIC_SLOTS: Tuple[AnthropicSlot, ...] = (PRIMARY_SLOT, BACKUP_SLOT)
+BUG_FIX_SLOT = AnthropicSlot(
+    name="bug_fix", group="bug_fix",
+    provider_key="bug_fix_agent_provider", api_key_key="bug_fix_agent_api_key",
+    api_keys_key=None, base_url_key="bug_fix_agent_base_url",
+    model_key="bug_fix_agent_model", small_fast_model_key="bug_fix_agent_small_fast_model",
+)
+
+ANTHROPIC_SLOTS: Tuple[AnthropicSlot, ...] = (PRIMARY_SLOT, BACKUP_SLOT, BUG_FIX_SLOT)
 SLOT_BY_GROUP: Dict[str, AnthropicSlot] = {slot.group: slot for slot in ANTHROPIC_SLOTS}
 SLOT_BY_NAME: Dict[str, AnthropicSlot] = {slot.name: slot for slot in ANTHROPIC_SLOTS}
 
@@ -182,6 +189,14 @@ _SPECS: Tuple[FieldSpec, ...] = (
     FieldSpec("anthropic_backup_base_url", "str", "anthropic_backup"),
     FieldSpec("anthropic_backup_model", "str", "anthropic_backup"),
     FieldSpec("anthropic_backup_small_fast_model", "str", "anthropic_backup"),
+    FieldSpec("bug_fix_agent_provider", "str", "bug_fix"),
+    FieldSpec("bug_fix_agent_api_key", "secret", "bug_fix", secret=True),
+    FieldSpec("bug_fix_agent_base_url", "str", "bug_fix"),
+    FieldSpec("bug_fix_agent_model", "str", "bug_fix"),
+    FieldSpec("bug_fix_agent_small_fast_model", "str", "bug_fix"),
+    FieldSpec("bug_fix_agent_max_tokens", "int", "bug_fix"),
+    FieldSpec("bug_fix_agent_max_turns", "int", "bug_fix"),
+    FieldSpec("bug_fix_agent_request_timeout_seconds", "int", "bug_fix"),
     # ── Routing policy (when to leave the primary, when to come back) ─────
     # Shares the runtime store with the endpoints above, so every process sees
     # one set of thresholds; the danger is the *values*, which _validate_router
@@ -430,6 +445,14 @@ def save(payload: Dict[str, Any]) -> Dict[str, Any]:
     # ── Cross-field validation against the post-save effective state ────────
     for slot in ANTHROPIC_SLOTS:
         _validate_slot(slot, coerced)
+
+    for key, lower, upper in (
+        ("bug_fix_agent_max_tokens", 1, 200_000),
+        ("bug_fix_agent_max_turns", 1, 1000),
+        ("bug_fix_agent_request_timeout_seconds", 30, 14400),
+    ):
+        if not lower <= int(_effective_after(coerced, key)) <= upper:
+            raise ValueError(f"{key} 必须在 {lower}~{upper} 之间")
 
     max_tokens = _effective_after(coerced, "anthropic_max_tokens")
     try:

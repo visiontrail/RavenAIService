@@ -39,7 +39,7 @@ export interface RegistrationEmailSettings {
 }
 
 /** Endpoint slots the Admin page can configure; mirrors FieldSpec.group. */
-export type ModelSettingsTarget = 'anthropic' | 'anthropic_backup' | 'ocr'
+export type ModelSettingsTarget = 'anthropic' | 'anthropic_backup' | 'bug_fix' | 'ocr'
 
 export interface ModelSettingFieldEntry {
   group: ModelSettingsTarget
@@ -151,6 +151,15 @@ export interface ModelSettingsTestResult {
 }
 
 export interface UpdateModelSettingsPayload {
+  bug_fix_agent_provider?: string
+  bug_fix_agent_api_key?: string
+  bug_fix_agent_base_url?: string
+  bug_fix_agent_model?: string
+  bug_fix_agent_small_fast_model?: string
+  bug_fix_agent_max_tokens?: number
+  bug_fix_agent_max_turns?: number
+  bug_fix_agent_request_timeout_seconds?: number
+
   anthropic_provider?: string
   anthropic_api_key?: string | null
   anthropic_api_keys?: string[] | null

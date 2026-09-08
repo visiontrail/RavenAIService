@@ -86,6 +86,7 @@ class AgentJob:
     # Metadata for images attached to this turn; persisted with the user
     # message so history reloads can re-render the thumbnails.
     images_json: Optional[str] = None
+    source_context: Optional[Dict[str, Any]] = None
     # AskUserQuestion wiring for this run (user preference + broker registry +
     # cancel hook). ``None`` when the user turned clarification off, which is
     # exactly what makes the agent unable to ask.
@@ -342,11 +343,13 @@ class LogAnalysisChatService:
                     }
                 )
 
+            source_images = list(stored_images)
             history_hint = await self._build_history_hint(
                 db=db,
                 user=user,
                 session_id=effective_session_id,
                 history_json=history_json,
+                source_images=source_images,
             )
             self._bind_question_and_hints(ctx, question=question, hints=history_hint)
 
@@ -369,6 +372,8 @@ class LogAnalysisChatService:
             effective_owner_scope = owner_scope or (
                 f"user:{user.id}" if getattr(user, "id", None) else "anon:legacy"
             )
+            from app.services.bug_fix_context import capture_source
+
             job = AgentJob(
                 session_id=effective_session_id,
                 task_id=ctx.task_id,
@@ -378,6 +383,7 @@ class LogAnalysisChatService:
                 user_snapshot=self._user_snapshot(user),
                 remember=bool(remember),
                 images_json=images_json,
+                source_context=capture_source(ctx, images=source_images),
                 filename=self._display_filenames(context_meta),
                 started_at=time.monotonic(),
                 started_at_utc=datetime.utcnow().isoformat(),
@@ -648,6 +654,7 @@ class LogAnalysisChatService:
             _maybe_dispatch_bug_fix(
                 session,
                 analysis_result=job.result or {},
+                source_context=job.source_context,
                 log_record=log_record,
                 analysis_task_id=job.task_id,
                 project_repo_id=project_repo_id,
@@ -1231,8 +1238,10 @@ class LogAnalysisChatService:
         user: Optional[User],
         session_id: str,
         history_json: Optional[str],
+        source_images: Optional[List[chat_image_store.StoredImage]] = None,
     ) -> str:
         messages: List[ChatMessage] = []
+        missing_image_ids: List[str] = []
         if user and db:
             try:
                 records = await chat_history_service.fetch_messages(
@@ -1241,6 +1250,22 @@ class LogAnalysisChatService:
                     session_id=session_id,
                 )
                 messages = chat_history_service.to_chat_messages(records)
+                # Text-only analysis providers do not materialize images/.
+                # Preserve earlier turns' originals for the independent reviewer.
+                if source_images is not None:
+                    known_ids = {image.id for image in source_images}
+                    for record in records:
+                        for item in chat_image_store.parse_meta_json(record.images_json):
+                            image_id = item.get("id", "")
+                            path = chat_image_store.resolve_path(session_id, image_id)
+                            if path is None:
+                                missing_image_ids.append(image_id)
+                            if path is not None and image_id not in known_ids:
+                                source_images.append(chat_image_store.StoredImage(
+                                    image_id, item.get("media_type", "image/png"),
+                                    item.get("name", ""), item.get("size", 0), str(path),
+                                ))
+                                known_ids.add(image_id)
             except Exception:
                 messages = []
 
@@ -1248,7 +1273,7 @@ class LogAnalysisChatService:
             messages = self._parse_client_history(history_json)
 
         if not messages:
-            return ""
+            return "历史截图原件不可用，仅可依据 OCR/描述：" + ", ".join(missing_image_ids) if missing_image_ids else ""
 
         recent = messages[-12:]
         lines = ["以下是同一对话中此前的上下文。用户可能会用“刚才/这个/继续”等指代，请结合这些内容理解当前问题："]
@@ -1259,6 +1284,8 @@ class LogAnalysisChatService:
                 content = content[:1600] + "..."
             if content:
                 lines.append(f"- {role}: {content}")
+        if missing_image_ids:
+            lines.append("历史截图原件不可用，仅可依据 OCR/描述：" + ", ".join(missing_image_ids))
         return "\n".join(lines)
 
     def _parse_client_history(self, history_json: Optional[str]) -> List[ChatMessage]:

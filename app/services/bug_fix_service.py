@@ -67,6 +67,7 @@ def create_task_from_analysis(
     analysis_result: Dict[str, Any],
     source_log_id: Optional[str] = None,
     source_analysis_task_id: Optional[str] = None,
+    source_context: Optional[Dict[str, Any]] = None,
 ) -> BugFixTask:
     """从一次分析结果创建一个 ``pending`` 的 Bug 修复任务（同步 Session）。
 
@@ -87,6 +88,11 @@ def create_task_from_analysis(
     )
     session.add(task)
     session.flush()  # 取得 task.id
+    if source_context is not None:
+        from app.services.bug_fix_context import persist
+        reference = persist(task.id, source_context, analysis_result)
+        task.source_context_json = json.dumps(reference)
+        session.flush()
     logger.info(
         "Created bug_fix_task id=%s repo=%s log=%s fixes=%d",
         task.id,

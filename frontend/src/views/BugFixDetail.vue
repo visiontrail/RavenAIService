@@ -24,6 +24,11 @@ const { t } = useI18n()
 const taskId = computed(() => String(route.params.id || ''))
 const task = computed(() => bugFixStore.currentTask)
 const canRetry = computed(() => String(task.value?.status || '') === 'failed')
+const reviewWithoutChanges = computed(() => {
+  const outcomes = task.value?.fix_outcomes || []
+  return task.value?.status === 'succeeded' && outcomes.length > 0 &&
+    outcomes.every(item => ['rejected', 'already_implemented', 'skipped'].includes(item.outcome))
+})
 const topbarMeta = computed(() => {
   if (!task.value) return t('bugFix.loading')
   const project = task.value.project_name || task.value.project_code || t('bugFix.noProject')
@@ -63,6 +68,7 @@ const mrStatusClass = (status: BugFixMergeRequestStatus) =>
 const outcomeMeta: Record<string, { text: string; className: string }> = {
   created_mr: { text: t('bugFix.outcome.created_mr'), className: 'rw-pill-success' },
   already_implemented: { text: t('bugFix.outcome.already_implemented'), className: 'rw-pill-info' },
+  rejected: { text: t('bugFix.outcome.rejected'), className: 'rw-pill-warning' },
   skipped: { text: t('bugFix.outcome.skipped'), className: 'rw-pill-neutral' },
   failed: { text: t('bugFix.outcome.failed'), className: 'rw-pill-danger' },
 }
@@ -288,6 +294,13 @@ onUnmounted(() => {
               <h2>{{ $t('bugFix.executionInfo') }}</h2>
             </div>
             <dl class="info-list">
+              <div v-if="task.model">
+                <dt>{{ $t('bugFix.model') }}</dt><dd>{{ task.model }}</dd>
+              </div>
+              <div v-if="task.context_availability">
+                <dt>{{ $t('bugFix.context') }}</dt>
+                <dd>{{ $t(task.context_availability === 'snapshot' ? 'bugFix.contextSnapshot' : 'bugFix.contextLegacy') }}</dd>
+              </div>
               <div>
                 <dt>{{ $t('bugFix.startTime') }}</dt>
                 <dd>{{ formatDateTime(task.started_at) }}</dd>
@@ -315,8 +328,8 @@ onUnmounted(() => {
           </div>
 
           <div v-if="!task.merge_requests.length" class="rw-card empty-card compact">
-            <h2>{{ $t('bugFix.noMr') }}</h2>
-            <p>{{ $t('bugFix.noMrDesc') }}</p>
+            <h2>{{ $t(reviewWithoutChanges ? 'bugFix.reviewComplete' : 'bugFix.noMr') }}</h2>
+            <p>{{ $t(reviewWithoutChanges ? 'bugFix.reviewNoChanges' : 'bugFix.noMrDesc') }}</p>
           </div>
 
           <article

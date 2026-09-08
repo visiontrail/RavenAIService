@@ -15,6 +15,7 @@ from sqlalchemy.pool import StaticPool
 from app.models.database import Base
 from app.models.bug_fix import BugFixMergeRequest, BugFixTask, BugFixTaskStatus
 from app.models.project_repo import ProjectRepo
+from app.models.log import LogRecord
 from app.services import bug_fix_service
 
 
@@ -52,7 +53,7 @@ def _seed(Session, *, fixes=None):
             "proposed_fixes": fixes or [{"title": "fix"}],
             "summary": "s",
         },
-        source_log_id="log-1",
+        source_log_id="log-1" if s.get(LogRecord, "log-1") else None,
     )
     s.commit()
     task_id = task.id
@@ -215,6 +216,8 @@ def test_run_bug_fix_task_forwards_source_log_archive(monkeypatch, session_facto
     s.commit()
     s.close()
 
+    from app.services import bug_fix_context
+    monkeypatch.setattr(bug_fix_context, "recover_legacy", lambda *args: {"snapshot_id": "test-snapshot"})
     captured = {}
 
     def _prepare(**kw):
@@ -264,3 +267,64 @@ def test_run_bug_fix_task_skips_finished_task(monkeypatch, session_factory):
     assert task.status == BugFixTaskStatus.SUCCEEDED
     assert s.query(BugFixMergeRequest).filter_by(task_id=task_id).count() == 0
     s.close()
+
+
+def test_snapshot_to_worker_preserves_context_and_rejected_review(tmp_path, monkeypatch, session_factory):
+    import json
+    import shutil
+    import subprocess
+    from types import SimpleNamespace
+    import claude_agent_sdk
+    from app.config import settings
+    from app.agents import anthropic_client
+    from app.services.bug_fix_context import capture_source
+    from app.services.chat_image_store import StoredImage
+    from app.tasks import bug_fix as bf
+    monkeypatch.setattr(settings, 'runtime_settings_path', str(tmp_path/'runtime.json'))
+    monkeypatch.setattr(settings, 'code_repo_clone_base_dir', str(tmp_path/'workspaces'))
+    monkeypatch.setattr(settings, 'bug_fix_context_dir', str(tmp_path/'evidence'))
+    monkeypatch.setattr(settings, 'bug_fix_agent_provider', 'anthropic')
+    monkeypatch.setattr(settings, 'bug_fix_agent_api_key', 'dedicated-test-key')
+    monkeypatch.setattr(settings, 'bug_fix_agent_model', 'advanced-review-model')
+    repo_path=tmp_path/'source-repo'
+    subprocess.run(['git', 'init', '-b', 'main', str(repo_path)], check=True, capture_output=True)
+    (repo_path/'enum.py').write_text('FEED_USER = 1\n')
+    subprocess.run(['git','-C',str(repo_path),'add','.'],check=True)
+    subprocess.run(['git','-C',str(repo_path),'-c','user.name=Test','-c','user.email=test@example.com','commit','-m','baseline'],check=True,capture_output=True)
+    source=tmp_path/'analysis'
+    (source/'logs/a').mkdir(parents=True)
+    (source/'logs/b').mkdir()
+    (source/'logs/a/test.log').write_text('a evidence')
+    (source/'logs/b/test.log').write_text('b evidence')
+    (source/'task.json').write_text(json.dumps({'question':'original question + OCR','hints':'history'}))
+    image=tmp_path/'screen.png';image.write_bytes(b'original-image')
+    context=capture_source(SimpleNamespace(temp_dir=source,task_json_path=source/'task.json'),images=[StoredImage('i','image/png','screen',14,str(image))])
+    session=session_factory()
+    repo=ProjectRepo(project_code='snapshot',project_name='Snapshot',project_card='Snapshot fixture',repo_url=str(repo_path),default_branch='main',enabled=True)
+    session.add(repo);session.flush()
+    task=bug_fix_service.create_task_from_analysis(session,project_repo_id=repo.id,
+        analysis_result={'status':'ok','proposed_fixes':[{'title':'unnecessary change'}]}, source_context=context)
+    session.commit();task_id=task.id;session.close()
+    shutil.rmtree(source);image.unlink()
+    seen={}
+    def options(**kwargs):
+        seen.update(kwargs)
+        return object()
+    async def query(**kwargs):
+        workspace=__import__('pathlib').Path(seen['cwd'])
+        assert (workspace/'logs/a/test.log').read_text()=='a evidence'
+        assert (workspace/'logs/b/test.log').read_text()=='b evidence'
+        assert (workspace/'images/screen.png').read_bytes()==b'original-image'
+        assert json.loads((workspace/'source_analysis.json').read_text())['task']['hints']=='history'
+        yield SimpleNamespace(content='{"status":"succeeded","merge_requests":[],"fix_outcomes":[{"fix_index":1,"outcome":"rejected","reason":"enum.py and original logs show correct behavior"}]}')
+    monkeypatch.setattr(bf,'SessionLocal',session_factory)
+    monkeypatch.setattr(anthropic_client,'build_options',options)
+    monkeypatch.setattr(claude_agent_sdk,'query',query)
+    bf.run_bug_fix_task.run(task_id)
+    session=session_factory();task=session.get(BugFixTask,task_id)
+    assert task.status=='succeeded'
+    assert task.model=='advanced-review-model'
+    assert json.loads(task.fix_outcomes_json)[0]['outcome']=='rejected'
+    assert session.query(BugFixMergeRequest).count()==0
+    assert not __import__('pathlib').Path(seen['cwd']).exists()
+    session.close()

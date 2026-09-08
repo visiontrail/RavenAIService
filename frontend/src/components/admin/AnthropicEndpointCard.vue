@@ -23,7 +23,7 @@ import type {
 
 const props = defineProps<{
   /** Which endpoint this card edits — also picks the backend key prefix. */
-  slotName: 'primary' | 'backup'
+  slotName: 'primary' | 'backup' | 'bug_fix'
   form: EndpointForm
   fields: Record<string, ModelSettingFieldEntry> | undefined
   providerOptions: string[]
@@ -46,13 +46,20 @@ const { t } = useI18n()
 // deliberately an explicit map rather than string concatenation, because
 // ``anthropic_backup_model`` also starts with ``anthropic_``.
 type SharedField = Exclude<keyof EndpointForm, 'api_keys'>
-const KEYS: Record<'primary' | 'backup', Record<SharedField, string>> = {
+const KEYS: Record<'primary' | 'backup' | 'bug_fix', Record<SharedField, string>> = {
   primary: {
     provider: 'anthropic_provider',
     api_key: 'anthropic_api_key',
     base_url: 'anthropic_base_url',
     model: 'anthropic_model',
     small_fast_model: 'anthropic_small_fast_model',
+  },
+  bug_fix: {
+    provider: 'bug_fix_agent_provider',
+    api_key: 'bug_fix_agent_api_key',
+    base_url: 'bug_fix_agent_base_url',
+    model: 'bug_fix_agent_model',
+    small_fast_model: 'bug_fix_agent_small_fast_model',
   },
   backup: {
     provider: 'anthropic_backup_provider',

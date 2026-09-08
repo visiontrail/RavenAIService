@@ -276,6 +276,14 @@ class UpdateModelSettingsRequest(BaseModel):
     anthropic_model: Optional[str] = None
     anthropic_small_fast_model: Optional[str] = None
     anthropic_max_tokens: Optional[int] = None
+    bug_fix_agent_provider: Optional[str] = None
+    bug_fix_agent_api_key: Optional[str] = None
+    bug_fix_agent_base_url: Optional[str] = None
+    bug_fix_agent_model: Optional[str] = None
+    bug_fix_agent_small_fast_model: Optional[str] = None
+    bug_fix_agent_max_tokens: Optional[int] = None
+    bug_fix_agent_max_turns: Optional[int] = None
+    bug_fix_agent_request_timeout_seconds: Optional[int] = None
     anthropic_backup_enabled: Optional[bool] = None
     anthropic_backup_provider: Optional[str] = None
     anthropic_backup_api_key: Optional[str] = None

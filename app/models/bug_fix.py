@@ -83,12 +83,14 @@ class BugFixTask(Base, TimestampMixin):
         nullable=True,
         comment="拟修复项 JSON 数组字符串",
     )
+    source_context_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     fix_outcomes_json: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,
         comment=(
             "逐个拟修复项的处理结局 JSON 数组"
-            "（created_mr/already_implemented/skipped/failed）"
+            "（created_mr/already_implemented/skipped/rejected/failed）"
         ),
     )
     status: Mapped[BugFixTaskStatus] = mapped_column(

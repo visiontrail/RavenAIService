@@ -318,6 +318,8 @@ class TestBuildOptionsExtensions:
         assert opts.model == "deepseek-v4-pro"
         assert "max_tokens" in caplog.text
         assert "request_timeout_seconds" in caplog.text
+        assert opts.env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "1024"
+        assert opts.env["API_TIMEOUT_MS"] == "30000"
 
 
 class TestEndpointOverride:

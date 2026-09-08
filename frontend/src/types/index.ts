@@ -392,6 +392,7 @@ export interface BugFixProposedFix {
 export type BugFixOutcomeKind =
   | 'created_mr'
   | 'already_implemented'
+  | 'rejected'
   | 'skipped'
   | 'failed'
   | string
@@ -454,6 +455,8 @@ export interface BugFixTaskSummary {
 }
 
 export interface BugFixTaskDetail extends BugFixTaskSummary {
+  model?: string | null
+  context_availability?: string | null
   summary?: string | null
   source_analysis_task_id?: string | null
   error?: string | null

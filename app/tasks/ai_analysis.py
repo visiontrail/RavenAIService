@@ -827,6 +827,8 @@ def _maybe_dispatch_bug_fix(
     log_record: LogRecord,
     analysis_task_id: Optional[str],
     project_repo_id: Optional[int],
+    source_context: Optional[Dict[str, Any]] = None,
+    source_workspace: Optional[Any] = None,
 ) -> None:
     """Best-effort: 当分析判定需要代码修复时创建 Bug 修复任务并异步派发。
 
@@ -851,10 +853,14 @@ def _maybe_dispatch_bug_fix(
             )
             return
 
+        if source_context is None and source_workspace is not None:
+            from app.services.bug_fix_context import capture_source
+            source_context = capture_source(source_workspace)
         task = bug_fix_service.create_task_from_analysis(
             session,
             project_repo_id=int(repo_id),
             analysis_result=analysis_result,
+            source_context=source_context,
             source_log_id=str(getattr(log_record, "id", None)) if getattr(log_record, "id", None) else None,
             source_analysis_task_id=str(analysis_task_id) if analysis_task_id else None,
         )
@@ -993,14 +999,13 @@ def run_ai_analysis_task(
         )
 
         trace_emitter = _build_trace_emitter(task_id, collected_trace_events)
-        try:
-            analysis_result = LogAnalysisAgent().run_sync(
-                workspace_ctx,
-                None,
-                trace_emitter,
-            )
-        finally:
-            cleanup(workspace_ctx)
+        # Keep evidence alive until asynchronous repair dispatch has copied it.
+        # The outer finally owns workspace cleanup.
+        analysis_result = LogAnalysisAgent().run_sync(
+            workspace_ctx,
+            None,
+            trace_emitter,
+        )
 
         # Defense-in-depth: if the Agent did not populate trace fields
         # (e.g. timeout-fallback dict in run_sync), backfill from the
@@ -1073,6 +1078,7 @@ def run_ai_analysis_task(
             log_record=log_record,
             analysis_task_id=task_id,
             project_repo_id=project_repo_id,
+            source_workspace=workspace_ctx,
         )
 
         logger.info(
@@ -1123,6 +1129,8 @@ def run_ai_analysis_task(
             pass
         raise
     finally:
+        if workspace_ctx is not None:
+            cleanup(workspace_ctx)
         try:
             session.close()
         except Exception:

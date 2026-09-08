@@ -806,3 +806,31 @@ async def test_ocr_probe_hits_chat_completions(isolated_store, blank_model_env, 
 async def test_unknown_target_rejected(isolated_store, blank_model_env, fake_upstream):
     with pytest.raises(ValueError, match="target"):
         await mss.test_connection({"target": "nope"})
+
+
+def test_bugfix_slot_is_independent_masked_and_runtime_editable(isolated_store):
+    from app.services.model_router import _resolve
+    before = (settings.anthropic_provider, settings.anthropic_model, settings.anthropic_api_key)
+    mss.save({'bug_fix_agent_provider': 'anthropic', 'bug_fix_agent_model': 'advanced-review',
+              'bug_fix_agent_api_key': 'dedicated-secret', 'bug_fix_agent_max_turns': 220})
+    endpoint = _resolve(mss.BUG_FIX_SLOT)
+    assert endpoint.slot == 'bug_fix'
+    assert endpoint.model == 'advanced-review'
+    assert endpoint.api_key == 'dedicated-secret'
+    assert settings.bug_fix_agent_max_turns == 220
+    assert before == (settings.anthropic_provider, settings.anthropic_model, settings.anthropic_api_key)
+    assert 'dedicated-secret' not in json.dumps(mss.describe())
+    mss.save({'bug_fix_agent_api_key': ''})
+    assert settings.bug_fix_agent_api_key == 'dedicated-secret'
+
+
+@pytest.mark.parametrize('payload', [
+    {'bug_fix_agent_provider': 'unknown'},
+    {'bug_fix_agent_max_turns': 0},
+    {'bug_fix_agent_max_tokens': 200001},
+    {'bug_fix_agent_request_timeout_seconds': 0},
+    {'bug_fix_agent_provider': 'custom', 'bug_fix_agent_base_url': '', 'bug_fix_agent_model': ''},
+])
+def test_bugfix_invalid_settings_rejected(isolated_store, payload):
+    with pytest.raises(ValueError):
+        mss.save(payload)

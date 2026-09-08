@@ -215,3 +215,19 @@ Agent 运行期间通过 `trace_emitter` 回调推送 `AgentTraceEvent`，事件
 - [app/tasks/ai_analysis.py](../app/tasks/ai_analysis.py) — `repo_info` 注入逻辑
 - [app/agents/clarification.py](../app/agents/clarification.py) — 澄清提问工具与提示词（四个对话 Agent 共用，改动会同时影响它们）
 - 本文档 — 行为对比表与错误码表
+
+## BugFix 独立审核与上下文交接
+
+日志分析的 `requires_code_fix` / `proposed_fixes` 表示修复建议。BugFix 使用后台“模型设置”中的独立端点（`bug_fix_agent_provider/api_key/base_url/model`），不会回退到分析主备模型。API Key 留空保留已保存值，连接测试 target 为 `bug_fix`。Token 上限、最大回合与超时也可独立调整；未配置专用密钥会返回 `bug_fix_model_unconfigured`。
+
+兼容不支持 Token/超时构造参数的 Python SDK 版本：底层 CLI 同时接收 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` 与 `API_TIMEOUT_MS`，BugFix 编排另有总执行时限，避免后台保存成功但预算参数在 SDK 层被忽略。
+
+新派发任务在共享 `data/bug_fix_context/<task-id>/` 保存不可变证据快照：原始 task 的 question/hints/附件清单、完整分析结果、所有日志文件以及用户截图原件。日志分析工作区清理或会话图片删除后，BugFix 与重试仍从快照恢复并校验 SHA-256。快照不会复制源码仓库或 Git 凭据。原图能力由 BugFix 自己的 provider 决定；文本模型使用同一份 OCR/描述，必须说明视觉证据限制，不得凭空补全图片信息。
+
+`source_analysis.json` 是便于读取的证据索引，保留问题、历史、分析结论与附件清单；完整分析结果及历史工具输出另存 `analysis_result.json` 供定向查阅，避免长工具轨迹超过 SDK 的单次读取限制。即使分析模型不支持原图，已授权会话中早先轮次的可用截图也会交给 BugFix。
+
+旧任务从原日志附件分组、匹配修复项的历史分析结果、任务创建前的聊天消息与可用截图重建上下文。详情标记“旧任务上下文重建”，并在源上下文中列出未保留的提示词及缺失截图；无法读取必需日志或快照校验失败时直接记录错误。
+
+每项修复建议必须得到唯一、完整的 `fix_outcomes` 结局。`rejected` 表示 BugFix 独立审核后拒绝分析建议，必须提供日志/源码反证或明确缺失证据；`already_implemented` 表示基线已实现。全部有据拒绝可成功完成审核且不创建 MR。缺失/重复编号、无理由拒绝、没有对应 MR 的 `created_mr` 均不得报告全部成功。
+
+执行过程按项写 `bug_fix_result.json` 检查点，超回合或 SDK 异常时可恢复已产出的 MR 并将未完成项标记失败。详情保存实际模型以及脱敏后的错误类型和原始错误说明；部分产出不会因错误标签被吞掉而误判为全部成功。写入型运行不自动重新调用模型以重放工具副作用。

@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 from celery import current_task
 
 from app.agents.bug_fix.agent import BugFixCodingAgent
+from app.agents.log_analysis.trace import mask_tokens
 from app.agents.bug_fix.workspace import BugFixWorkspaceError, cleanup, prepare
 from app.celery_app import celery_app
 from app.config import settings
@@ -73,6 +74,7 @@ def run_bug_fix_task(self, bug_fix_task_id: str) -> Dict[str, Any]:
 
         # 来源日志归档：用于在修复工作区重建与日志分析一致的 logs/。日志
         # 分析工作区在分析结束后已清理，这里从持久化归档重新解压。
+        source_context = json.loads(task.source_context_json) if task.source_context_json else None
         source_log_archive_path = None
         source_log_filename = None
         if task.source_log_id:
@@ -83,6 +85,13 @@ def run_bug_fix_task(self, bug_fix_task_id: str) -> Dict[str, Any]:
                     or getattr(log_record, "file_path", None)
                 )
                 source_log_filename = getattr(log_record, "original_filename", None)
+                if source_context is None:
+                    from app.services.bug_fix_context import recover_legacy
+                    source_context = recover_legacy(session, task, log_record)
+                    task.source_context_json = json.dumps(source_context)
+                    session.commit()
+            elif source_context is None:
+                raise BugFixWorkspaceError("source_context_unavailable: original log is missing or deleted")
 
         try:
             ctx = prepare(
@@ -97,6 +106,7 @@ def run_bug_fix_task(self, bug_fix_task_id: str) -> Dict[str, Any]:
                 source_analysis_task_id=task.source_analysis_task_id,
                 source_log_archive_path=source_log_archive_path,
                 source_log_filename=source_log_filename,
+                source_context=source_context,
             )
         except BugFixWorkspaceError as exc:
             bug_fix_service.finalize(
@@ -110,11 +120,18 @@ def run_bug_fix_task(self, bug_fix_task_id: str) -> Dict[str, Any]:
         finally:
             cleanup(ctx)
 
+        task.model = result.get("model")
         merge_requests = result.get("merge_requests") or []
+        recorded_mrs = 0
+        recording_errors = []
         for mr in merge_requests:
             try:
-                bug_fix_service.record_merge_request(session, bug_fix_task_id, mr)
+                with session.begin_nested():
+                    bug_fix_service.record_merge_request(session, bug_fix_task_id, mr)
+                if mr.get("mr_url"):
+                    recorded_mrs += 1
             except Exception as exc:  # noqa: BLE001
+                recording_errors.append(mask_tokens(str(exc)))
                 logger.warning(
                     "run_bug_fix_task: failed to record MR for task=%s: %s",
                     bug_fix_task_id, exc,
@@ -124,7 +141,9 @@ def run_bug_fix_task(self, bug_fix_task_id: str) -> Dict[str, Any]:
         agent_status = result.get("status")
         error = None
         if agent_status in ("partial", "failed"):
-            error = result.get("error_kind") or result.get("error")
+            error = ": ".join(str(value) for value in (result.get("error_kind"), result.get("error")) if value) or "agent_failed"
+        if recording_errors:
+            error = "mr_persistence_failed: " + "; ".join(recording_errors)
 
         # 逐项结局：解释每个拟修复项为何有/没有 MR（already_implemented 等）。
         fix_outcomes = result.get("fix_outcomes") or []
@@ -133,9 +152,11 @@ def run_bug_fix_task(self, bug_fix_task_id: str) -> Dict[str, Any]:
         no_action_needed = (
             not merge_requests
             and not error
+            and agent_status == "succeeded"
             and bool(fix_outcomes)
+            and len(fix_outcomes) == len(proposed_fixes)
             and all(
-                (o or {}).get("outcome") in ("already_implemented", "skipped")
+                (o or {}).get("outcome") in ("already_implemented", "skipped", "rejected")
                 for o in fix_outcomes
             )
         )
@@ -143,7 +164,7 @@ def run_bug_fix_task(self, bug_fix_task_id: str) -> Dict[str, Any]:
         bug_fix_service.finalize(
             session,
             bug_fix_task_id,
-            merge_request_count=len(merge_requests),
+            merge_request_count=recorded_mrs,
             error=error,
             fix_outcomes=fix_outcomes,
             no_action_needed=no_action_needed,
@@ -174,7 +195,7 @@ def run_bug_fix_task(self, bug_fix_task_id: str) -> Dict[str, Any]:
             session.rollback()
             bug_fix_service.finalize(
                 session, bug_fix_task_id, merge_request_count=0,
-                error=f"task_exception: {exc}",
+                error=mask_tokens(f"task_exception: {exc}"),
             )
             session.commit()
         except Exception:
