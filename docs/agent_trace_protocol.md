@@ -235,3 +235,16 @@ entry point.
 - The TypeScript discriminated union (`AgentTraceEvent`) is the only
   shared schema between the two channels — keep both ends aligned
   when adding new event types or fields.
+
+## User-facing model errors
+
+The workbench formats standalone SDK/API failure messages with
+`frontend/src/utils/agentErrorMessage.ts` before rendering, copying, or exporting
+an assistant message. This also applies to historical conversation messages.
+The active UI locale selects the explanation; HTTP status and a bounded,
+alphanumeric request ID remain available for support. Upstream 5xx errors do
+not imply a specific timeout cause or prove that automatic retries occurred.
+Rate limits, billing, authentication, request size, and turn limits have separate
+messages. Ordinary answers and quoted diagnostic examples are left unchanged.
+Raw persisted errors and server diagnostics are retained; this presentation
+change does not alter the trace schema or endpoint retry policy.

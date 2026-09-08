@@ -6,6 +6,19 @@
 // common + language-switcher strings.
 
 export default {
+  agentError: {
+    upstream: "The AI model service encountered an error and could not complete this answer. The model gateway or its upstream service returned an error; an administrator needs to check the gateway logs for the specific cause. Please try again later. If it persists, send the request ID below to your administrator.",
+    rateLimit: "The AI model service has reached a request or concurrency limit and could not complete this answer. Please try again later. If it persists, ask your administrator to check the service rate limits.",
+    balance: "The AI model service has a quota or billing issue and could not complete this answer. Ask your administrator to check the model service balance and quota.",
+    auth: "The AI model service rejected authentication or access and could not complete this answer. Ask your administrator to check the service credentials and permissions.",
+    tooLarge: "The content sent to the AI model exceeds the service size limit. Reduce attachments or context and try again.",
+    timeout: "The AI model request timed out and could not complete this answer. Please try again later. If it persists, ask your administrator to check the model service.",
+    rejected: "The AI model service rejected this request and could not complete the answer. Send the status code and request ID (if available) below to your administrator.",
+    unknown: "AI analysis failed and could not complete this answer. Please try again later. If it persists, ask your administrator to check the service logs for this conversation.",
+    turns: "AI analysis reached the execution limit for this task ({count} turns) before completing the answer. Narrow the scope or split the question and try again.",
+    status: "Service status: HTTP {status}",
+    requestId: "Diagnostic request ID: {requestId}",
+  },
   language: {
     label: 'Language',
     switchTo: 'Switch language',

@@ -5,6 +5,7 @@ import { deviceLinkApi } from '@/api/deviceLink'
 import { userApi, userToken } from '@/api/user'
 import type { DeviceInfo } from '@/types'
 import { renderMarkdown, processMermaidBlocks } from '@/utils/markdownRenderer'
+import { formatAgentErrorMessage } from '@/utils/agentErrorMessage'
 import { loadMermaid } from '@/utils/mermaidLoader'
 import { jsPDF } from 'jspdf'
 import html2canvas from 'html2canvas-pro'
@@ -1040,7 +1041,7 @@ const agentMessageViewCache = new Map<string, AgentMessageView>()
 const AI_MESSAGE_CACHE_LIMIT = 200
 
 const getAgentMessageView = (content: string): AgentMessageView => {
-  const key = content || ''
+  const key = formatAgentErrorMessage(content || '', t)
   const cached = agentMessageViewCache.get(key)
   if (cached !== undefined) return cached
   const view = parseAgentMessage(key)
