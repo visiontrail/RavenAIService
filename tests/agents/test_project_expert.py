@@ -271,8 +271,8 @@ async def test_agent_uses_expected_tools_materializes_project_skills_and_masks_t
     assert '"skill": "repo-reader"' in captured_prompt["prompt"]
     assert "最终输出仍必须遵守第 5 步的围栏 JSON schema" in captured_prompt["prompt"]
     run_start = next(ev for ev in trace_events if ev["type"] == "run_start")
-    assert run_start["available_skills"] == ["repo-reader", "db-helper"]
-    assert run_start["loaded_skills"] == ["repo-reader"]
+    assert run_start["available_skills"] == ["repo-reader", "db-helper", "humanizer-zh"]
+    assert run_start["loaded_skills"] == ["repo-reader", "humanizer-zh"]
     assert "db-helper" not in captured_prompt["prompt"]
     assert "项目适配性检查（最高优先级）" in kwargs["system_prompt"]
     assert "Foo service authentication and account APIs" in kwargs["system_prompt"]
@@ -413,7 +413,7 @@ async def test_agent_wraps_plain_text_skill_answer(tmp_path):
     assert result["answer"] == "TURQUOISE-MONGOOSE-9"
     assert result["summary"] == "TURQUOISE-MONGOOSE-9"
     assert result["parse_warning"] == "plain_text_skill_answer_wrapped"
-    assert result["loaded_skills"] == ["skill-verifier"]
+    assert result["loaded_skills"] == ["skill-verifier", "humanizer-zh"]
 
 
 @pytest.mark.asyncio

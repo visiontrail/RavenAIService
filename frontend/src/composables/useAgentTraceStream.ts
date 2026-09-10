@@ -72,10 +72,14 @@ export function collectAvailableSkills(events: AgentTraceEvent[]): string[] {
   return Array.from(names)
 }
 
-/** Collect only Skills whose instructions were actually requested by the SDK. */
+/** Collect instructions loaded through an SDK call or the server's required policy. */
 export function collectLoadedSkills(events: AgentTraceEvent[]): string[] {
   const names = new Set<string>()
   for (const event of events || []) {
+    if (event.type === 'system_notice' && event.kind === 'required_skill_loaded' && event.load_method === 'server_prompt') {
+      addSkillName(names, event.name)
+      continue
+    }
     if (event.type !== 'step_start' || event.tool_name !== 'Skill') continue
     const input = event.tool_input || {}
     addSkillName(names, input.skill ?? input.name ?? input.value)

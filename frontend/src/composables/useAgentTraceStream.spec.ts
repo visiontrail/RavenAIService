@@ -77,6 +77,16 @@ describe('normaliseEvents', () => {
 })
 
 describe('Skill availability and invocation', () => {
+  it('shows server-loaded required rules without synthesizing a tool call', () => {
+    const event: AgentTraceEvent = {
+      type: 'system_notice', task_id: TASK_ID, seq: 1, timestamp: 1,
+      kind: 'required_skill_loaded', name: 'humanizer-zh', load_method: 'server_prompt',
+    }
+    expect(collectLoadedSkills([event, event])).toEqual(['humanizer-zh'])
+    expect(collectLoadedSkills([{ ...event, load_method: undefined }])).toEqual([])
+    expect(buildCards([event]).cards.filter((card) => card.toolName === 'Skill')).toHaveLength(0)
+  })
+
   it('keeps lifecycle candidates separate from actual Skill calls', () => {
     const events: AgentTraceEvent[] = [
       {

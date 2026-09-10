@@ -494,6 +494,7 @@ export interface AgentSkill {
   name: string
   description: string
   enabled: boolean
+  required?: boolean
   source_filename: string
   size_bytes: number
   installed_at?: string | null

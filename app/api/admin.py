@@ -838,6 +838,7 @@ class SkillData(BaseModel):
     name: str
     description: str = ""
     enabled: bool = True
+    required: bool = False
     source_filename: str = ""
     size_bytes: int = 0
     installed_at: Optional[str] = None
@@ -971,6 +972,8 @@ async def update_agent_skill(
         entry = skills_service.set_skill_enabled(
             agent_key, skill_id, enabled=payload.enabled
         )
+    except skills_service.SkillConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except skills_service.SkillNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return SkillResponse(data=SkillData(**entry), message="更新成功")
@@ -1035,6 +1038,8 @@ async def delete_agent_skill(
     _ensure_known_agent(agent_key)
     try:
         skills_service.delete_skill(agent_key, skill_id)
+    except skills_service.SkillConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except skills_service.SkillNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

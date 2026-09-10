@@ -321,9 +321,25 @@ class ProjectExpertAgent:
         except Exception as exc:  # noqa: BLE001
             logger.warning("ProjectExpertAgent: failed to materialize skills: %s", exc)
 
-        if materialized_skills:
+        # Required response rules must survive optional-Skill failures and
+        # execute on every invocation, including resumed/follow-up workspaces.
+        from app.agents.required_skill_policy import (
+            load_required_skill_prompt,
+            required_skill_names,
+        )
+
+        required_names = required_skill_names(AGENT_KEY)
+        required_skill_prompt, required_skill_evidence = load_required_skill_prompt(
+            AGENT_KEY, ctx.temp_dir,
+        )
+        available_skills = list(dict.fromkeys([*available_skills, *required_names]))
+        materialized_skills = list(dict.fromkeys([*materialized_skills, *required_names]))
+        optional_skills = [name for name in materialized_skills if name not in required_names]
+        optional_overviews = [item for item in skill_overviews if item["name"] not in required_names]
+
+        if optional_skills:
             skill_availability_prompt = build_skill_availability_prompt(
-                skill_overviews or materialized_skills,
+                optional_overviews or optional_skills,
                 final_output_contract="第 5 步的围栏 JSON schema",
             )
             system_prompt += skill_availability_prompt
@@ -365,6 +381,8 @@ class ProjectExpertAgent:
         if clarification is not None:
             mcp_servers, allowed_tools = clarification.apply(mcp_servers, allowed_tools)
             system_prompt += "\n\n" + clarification.prompt_addendum
+
+        system_prompt += required_skill_prompt
 
         def _make_options(endpoint: Optional[Any]) -> Any:
             return build_options(
@@ -409,6 +427,18 @@ class ProjectExpertAgent:
                     detail=", ".join(available_skills),
                     available_skills=list(available_skills),
                     loaded_skills=list(materialized_skills),
+                )
+            )
+
+        for evidence in required_skill_evidence:
+            state.emit(
+                build_event(
+                    SYSTEM_NOTICE,
+                    task_id=ctx.task_id,
+                    seq_counter=state.seq_counter,
+                    kind="required_skill_loaded",
+                    detail=f"{evidence['name']}: complete rules loaded for this response",
+                    **evidence,
                 )
             )
 
@@ -516,7 +546,7 @@ class ProjectExpertAgent:
         if parsed is None:
             wrapped_skill_answer = build_plain_text_skill_answer_fields(
                 final_text,
-                materialized_skills,
+                optional_skills,
             )
             if wrapped_skill_answer:
                 logger.warning(

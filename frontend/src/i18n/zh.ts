@@ -1442,6 +1442,7 @@ export default {
       colStatus: '状态',
       colUpdatedAt: '更新时间',
       colActions: '操作',
+      requiredBuiltin: '内置必需 · 每轮加载',
       previewSkillTitleAttr: '预览 {name} 的文件',
       statusEnabled: '启用',
       statusDisabled: '停用',

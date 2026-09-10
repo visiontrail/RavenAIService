@@ -116,6 +116,11 @@ export interface AnswerDeltaEvent extends BaseTraceEvent {
 }
 
 export interface SystemNoticeEvent extends BaseTraceEvent {
+  /** Server-side required Skill activation; distinct from SDK tool calls. */
+  name?: string
+  load_method?: 'server_prompt'
+  sha256?: string
+  policy_sha256?: string
   type: 'system_notice'
   kind?: string
   subtype?: string

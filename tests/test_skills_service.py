@@ -56,6 +56,10 @@ _XLSX_SKILL_MD = (
 def isolated_skills_dir(tmp_path, monkeypatch):
     """Point skills_service at a fresh tmp dir for each test."""
     from app.config import settings
+    from app.agents import required_skill_policy
+
+    # Optional catalog tests; required defaults have their own integration suite.
+    monkeypatch.setattr(required_skill_policy, "_REQUIRED_SKILLS", {})
 
     monkeypatch.setattr(settings, "skills_data_dir", str(tmp_path / "agent_skills"))
     monkeypatch.setattr(settings, "project_skills_data_dir", str(tmp_path / "project_skills"))

@@ -52,11 +52,19 @@ enabled catalog.
 The trace UI keeps the full available catalog collapsed by default and shows its
 item count; users can expand it without changing the Skills exposed to the model.
 
-Actual use is represented only by a normal `step_start` event whose `tool_name`
+On-demand loading is represented by a normal `step_start` event whose `tool_name`
 is `Skill`; the invoked Skill name is read from `tool_input.skill`. The frontend
 therefore displays “Available Skills” and “Loaded Skills” separately. It still
 accepts legacy `skills_loaded` notices and lifecycle `loaded_skills` as
 availability data when replaying older traces.
+
+Required response policies have a distinct `system_notice` with
+`kind: "required_skill_loaded"`, `name`, `load_method: "server_prompt"`,
+`sha256` (full upstream SKILL.md bytes) and `policy_sha256` (integration prompt).
+Log Analysis and Project Expert emit one after server-side full loading on every
+run, before the model request. The UI includes it in Loaded Skills, without
+creating a fake tool step or increasing tool-call counts. This proves prompt
+loading, not that the model made a Skill tool call or achieved a writing score.
 
 ### Clarification (AskUserQuestion)
 

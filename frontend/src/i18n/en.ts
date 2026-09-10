@@ -1447,6 +1447,7 @@ export default {
       colStatus: 'Status',
       colUpdatedAt: 'Updated at',
       colActions: 'Actions',
+      requiredBuiltin: 'Built-in required · loaded every turn',
       previewSkillTitleAttr: 'Preview files of {name}',
       statusEnabled: 'Enabled',
       statusDisabled: 'Disabled',

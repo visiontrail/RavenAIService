@@ -1064,7 +1064,7 @@ const handleUserLogout = () => {
     </div>
 
     <!-- Login modal -->
-    <div v-if="showLoginModal" class="rw-modal-backdrop" @click.self="closeAuthModal">
+    <div v-if="showLoginModal" class="rw-modal-backdrop">
       <div class="rw-modal rw-auth-modal" role="dialog" aria-modal="true" aria-labelledby="rw-auth-title">
         <div class="rw-modal-head">
           <div>

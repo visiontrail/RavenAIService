@@ -713,7 +713,7 @@ onMounted(() => bootstrap())
                   </td>
                   <td class="py-3 pr-4">
                     <span class="block max-w-[260px] truncate font-mono text-xs text-slate-500" :title="skill.source_filename">
-                      {{ skill.source_filename || '--' }}
+                      {{ skill.required ? t('admin.skills.requiredBuiltin') : (skill.source_filename || '--') }}
                     </span>
                   </td>
                   <td class="py-3 pr-4 text-xs text-slate-500">{{ formatSize(skill.size_bytes) }}</td>
@@ -737,7 +737,7 @@ onMounted(() => bootstrap())
                       </button>
                       <button
                         class="admin-action-btn"
-                        :disabled="togglingId === skill.id"
+                        :disabled="skill.required || togglingId === skill.id"
                         :title="skill.enabled ? t('admin.skills.statusDisabled') : t('admin.skills.statusEnabled')"
                         @click.stop="toggleSkill(skill)"
                       >
@@ -745,7 +745,7 @@ onMounted(() => bootstrap())
                       </button>
                       <button
                         class="admin-action-btn danger"
-                        :disabled="deletingId === skill.id"
+                        :disabled="skill.required || deletingId === skill.id"
                         :title="t('common.delete')"
                         @click.stop="deleteSkill(skill)"
                       >

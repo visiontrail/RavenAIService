@@ -262,14 +262,15 @@ class TestEmitterEventSequence:
             ],
         )
 
-        assert result["loaded_skills"] == ["ka-phased-array-antenna"]
+        assert result["loaded_skills"] == ["ka-phased-array-antenna", "humanizer-zh"]
         assert captured[0]["type"] == "run_start"
         assert captured[0]["available_skills"] == [
             "ka-phased-array-antenna",
             "payload-management-unit",
             "tcpt027-db-modify",
+            "humanizer-zh",
         ]
-        assert captured[0]["loaded_skills"] == ["ka-phased-array-antenna"]
+        assert captured[0]["loaded_skills"] == ["ka-phased-array-antenna", "humanizer-zh"]
         skill_events = [
             ev for ev in captured
             if ev["type"] == "system_notice" and ev.get("kind") == "skills_available"
@@ -279,8 +280,9 @@ class TestEmitterEventSequence:
             "ka-phased-array-antenna",
             "payload-management-unit",
             "tcpt027-db-modify",
+            "humanizer-zh",
         ]
-        assert skill_events[0]["loaded_skills"] == ["ka-phased-array-antenna"]
+        assert skill_events[0]["loaded_skills"] == ["ka-phased-array-antenna", "humanizer-zh"]
         assert "可用的 Skill（按需加载）" in captured_prompt["prompt"]
         assert '"skill": "ka-phased-array-antenna"' in captured_prompt["prompt"]
         assert ".claude/skills/ka-phased-array-antenna/" in captured_prompt["prompt"]

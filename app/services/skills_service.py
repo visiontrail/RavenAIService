@@ -32,9 +32,9 @@ Built-in Skills（源码内置、只读）布局：
         ├── SKILL.md
         └── ...
 
-运行时合并优先级固定为 built-in → Agent → project；同名 Skill 由后层
-覆盖前层。overview 与 materialization 共享同一份合并源，避免提示词宣告
-的 Skill 与实际物化内容不一致。
+可选 Skill 合并优先级为 built-in → Agent → project；同名 Skill 由后层
+覆盖前层。required_skill_policy 中的必需 Skill 最后合并，不能被上传内容
+覆盖。overview 与 materialization 共享同一份合并源。
 """
 
 from __future__ import annotations
@@ -446,6 +446,7 @@ def _public_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
         "size_bytes": int(entry.get("size_bytes", 0) or 0),
         "installed_at": entry.get("installed_at"),
         "updated_at": entry.get("updated_at"),
+        "required": entry.get("source") == "required",
     }
 
 
@@ -482,7 +483,20 @@ def list_skills(agent_key: str) -> List[Dict[str, Any]]:
             logger.warning("skill missing on disk, dropping: agent=%s id=%s", agent_key, e.get("id"))
     if len(alive) != len(entries):
         _save_registry(agent_key, [_internal_entry(e) for e in alive])
-    return alive
+    from app.agents.required_skill_policy import required_skill_sources
+
+    required = [_public_entry(entry) for entry, _ in required_skill_sources(agent_key)]
+    required_ids = {entry["id"] for entry in required}
+    return required + [entry for entry in alive if entry["id"] not in required_ids]
+
+
+def _ensure_optional_skill(agent_key: str, name: str) -> None:
+    from app.agents.required_skill_policy import required_skill_names
+
+    if name in required_skill_names(agent_key):
+        raise SkillConflictError(
+            "内置必需 Skill 不可覆盖、禁用或删除 / Required built-in Skill is read-only"
+        )
 
 
 def install_skill(
@@ -509,6 +523,7 @@ def install_skill(
         skill_root = _find_skill_root(tmp_path)
         fm = _parse_skill_frontmatter(skill_root / "SKILL.md")
         name = fm["name"]
+        _ensure_optional_skill(agent_key, name)
         description = fm.get("description", "")
 
         target_dir = store / name
@@ -560,6 +575,7 @@ def install_skill(
 
 
 def delete_skill(agent_key: str, skill_id: str) -> None:
+    _ensure_optional_skill(agent_key, skill_id)
     registry = _load_registry(agent_key)
     idx = next((i for i, e in enumerate(registry) if e.get("id") == skill_id), -1)
     if idx < 0:
@@ -573,6 +589,7 @@ def delete_skill(agent_key: str, skill_id: str) -> None:
 
 
 def set_skill_enabled(agent_key: str, skill_id: str, enabled: bool) -> Dict[str, Any]:
+    _ensure_optional_skill(agent_key, skill_id)
     registry = _load_registry(agent_key)
     entry = next((e for e in registry if e.get("id") == skill_id), None)
     if entry is None:
@@ -698,15 +715,24 @@ def _read_file_content(skill_dir: Path, rel_path: str) -> Dict[str, Any]:
 
 def list_skill_files(agent_key: str, skill_id: str) -> Dict[str, Any]:
     _ = _agent_root(agent_key)
-    entry, skill_dir = _base_resolve_skill_dir(_agent_root(agent_key), skill_id)
+    entry, skill_dir = _resolve_agent_skill_dir(agent_key, skill_id)
     tree = _build_file_tree(skill_dir, entry["name"])
     return {"name": entry["name"], "tree": tree}
 
 
 def read_skill_file(agent_key: str, skill_id: str, rel_path: str) -> Dict[str, Any]:
     _ = _agent_root(agent_key)
-    _, skill_dir = _base_resolve_skill_dir(_agent_root(agent_key), skill_id)
+    _, skill_dir = _resolve_agent_skill_dir(agent_key, skill_id)
     return _read_file_content(skill_dir, rel_path)
+
+
+def _resolve_agent_skill_dir(agent_key: str, skill_id: str) -> Tuple[Dict[str, Any], Path]:
+    from app.agents.required_skill_policy import required_skill_sources
+
+    for entry, directory in required_skill_sources(agent_key):
+        if entry["id"] == skill_id:
+            return entry, directory
+    return _base_resolve_skill_dir(_agent_root(agent_key), skill_id)
 
 
 # ─────────────────────── Project Skill Public API ─────────────────
@@ -864,6 +890,11 @@ def _enabled_skill_sources(
         project_root = _project_root(project_code)
         for entry in _project_enabled_entries(project_code):
             yield entry, _base_skill_dir_for_entry(project_root, entry)
+    # Mandatory response policy is source-controlled and cannot be shadowed by
+    # an uploaded Agent/project Skill with the same name.
+    from app.agents.required_skill_policy import required_skill_sources
+
+    yield from required_skill_sources(agent_key)
 
 
 def _extract_terms(text: str) -> Set[str]:
@@ -926,20 +957,25 @@ def select_relevant_skill_names(
     max_skills: int = 3,
     project_code: Optional[str] = None,
 ) -> List[str]:
-    """Select a bounded request-relevant subset from enabled Skills.
+    """Select required Skills plus a bounded request-relevant optional subset.
 
     Name and description matches are stronger than bounded body-only matches.
     Terms shared by many candidates are down-weighted so generic project words
-    do not make the whole catalog relevant. No positive match returns no Skill.
+    do not make the whole catalog relevant. No match returns only required Skills;
+    required Skills do not consume ``max_skills`` optional slots.
     """
+    from app.agents.required_skill_policy import required_skill_names
+
+    required = list(required_skill_names(agent_key))
     if max_skills <= 0:
-        return []
+        return required
     candidates = _merged_enabled_skill_sources(
         agent_key, project_code=project_code
     )
+    candidates = [item for item in candidates if item[0]["name"] not in required]
     query_terms = _extract_terms(query_text)
     if not candidates or not query_terms:
-        return []
+        return required
 
     indexed: List[Tuple[Dict[str, Any], Set[str], Set[str], Set[str]]] = []
     document_frequency: Dict[str, int] = {}
@@ -976,7 +1012,7 @@ def select_relevant_skill_names(
             agent_key,
             sorted(query_terms)[:20],
         )
-        return []
+        return required
 
     scored.sort(key=lambda item: (-item[0], item[1]))
     best = scored[0][0]
@@ -989,7 +1025,7 @@ def select_relevant_skill_names(
         best,
         max_skills,
     )
-    return selected
+    return required + selected
 
 
 def enabled_skill_overviews(
@@ -1031,6 +1067,26 @@ def materialize_enabled_skills(
     skill_names: Optional[Iterable[str]] = None,
     project_code: Optional[str] = None,
 ) -> List[str]:
+    return _materialize_skill_sources(
+        _enabled_skill_sources(agent_key, project_code=project_code),
+        target_dir,
+        skill_names=skill_names,
+    )
+
+
+def materialize_required_skills(agent_key: str, target_dir: str | Path) -> List[str]:
+    """Materialize mandatory source packages without reading optional registries."""
+    from app.agents.required_skill_policy import required_skill_sources
+
+    return _materialize_skill_sources(required_skill_sources(agent_key), target_dir)
+
+
+def _materialize_skill_sources(
+    sources: Iterable[Tuple[Dict[str, Any], Path]],
+    target_dir: str | Path,
+    *,
+    skill_names: Optional[Iterable[str]] = None,
+) -> List[str]:
     target = Path(target_dir)
     skills_dir = target / ".claude" / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
@@ -1060,12 +1116,9 @@ def materialize_enabled_skills(
         if name not in materialized:
             materialized.append(name)
 
-    # built-in → Agent → project; every later same-name source overwrites the
+    # built-in → Agent → project → required; later same-name sources overwrite the
     # previously materialized directory while preserving the stable name order.
-    for entry, source in _enabled_skill_sources(
-        agent_key,
-        project_code=project_code,
-    ):
+    for entry, source in sources:
         name = entry["name"]
         if selected_names is not None and name not in selected_names:
             continue
