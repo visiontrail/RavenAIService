@@ -1,6 +1,6 @@
 """Metrics query APIs.
 
-Read-only endpoints that expose the aggregation queries in
+Read-only metrics queries plus isolated temporary admin review in
 ``app/services/metrics_service.py``:
 
 - ``GET /admin/metrics/overview``           — system-wide token / invocation rollup
@@ -9,6 +9,7 @@ Read-only endpoints that expose the aggregation queries in
 - ``GET /admin/metrics/events``             — raw (sanitized) event audit feed
 - ``GET /admin/metrics/events/{id}/conversation`` — admin-only linked chat detail
 - ``GET /admin/metrics/events/{id}/chat-images/{image_id}`` — an attached original
+- ``POST /admin/metrics/events/{id}/conversation/follow-up`` — transient review
 - ``GET /api/v1/users/me/metrics``          — the caller's own metrics only
 
 Admin endpoints reuse the existing admin bearer auth; the self endpoint reuses
@@ -47,6 +48,7 @@ from app.models.metrics import (
     UserMetricsRow,
 )
 from app.models.user import ChatMessage, ChatSession, User
+from app.services.admin_follow_up_service import FollowUpRequest
 from app.services import metrics_service
 from app.services.conversation_share_service import conversation_share_service
 
@@ -472,6 +474,44 @@ async def get_event_chat_image(
         str(path),
         # Private user content: never let a shared cache hold on to it.
         headers={"Cache-Control": "private, max-age=3600"},
+    )
+
+
+@admin_router.post("/events/{event_id}/conversation/follow-up")
+async def follow_up_event_conversation(
+    event_id: str,
+    payload: FollowUpRequest,
+    _admin: str = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """临时审阅流：禁止调用持久化聊天服务，连接关闭即取消。"""
+    import json
+    from fastapi.responses import StreamingResponse
+    from app.services.admin_follow_up_service import resolve_context, stream_follow_up
+
+    context = await resolve_context(db, event_id)
+    # 所有上下文均已物化，流式生成期间不占用数据库连接/只读事务。
+    await db.rollback()
+
+    async def events():
+        yield 'data: {"type":"start"}\n\n'
+        iterator = stream_follow_up(context, payload)
+        try:
+            async for event in iterator:
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception:
+            # 不输出异常原文：其中可能包含提示词、工作空间内容或上游凭据。
+            yield 'data: {"type":"error","message":"临时追问失败，请重试 / Temporary follow-up failed; please retry"}\n\n'
+        finally:
+            await iterator.aclose()
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

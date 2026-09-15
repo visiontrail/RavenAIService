@@ -683,3 +683,204 @@ def test_self_metrics_user_with_no_events(client: TestClient, auth_state) -> Non
     assert data["user_id"] == lonely.id
     assert data["tokens"]["total_tokens"] == 0
     assert data["invocation_count"] == 0
+
+
+@pytest.fixture
+def follow_up_source(client, tmp_path, monkeypatch):
+    from app.agents.device_agent import workspace as workspace_module
+
+    base = tmp_path / "workspaces"
+    workspace = base / "original"
+    workspace.mkdir(parents=True)
+    (workspace / "evidence.txt").write_text(
+        "original workspace evidence", encoding="utf-8"
+    )
+    monkeypatch.setattr(workspace_module, "_resolve_base_dir", lambda: base)
+    user = _make_user("temporary-review-owner")
+    session = ChatSession(
+        id=str(uuid.uuid4()),
+        user_id=user.id,
+        title="Original conversation",
+        last_message_at=datetime.utcnow(),
+        message_count=2,
+    )
+    run = ChatAgentRun(
+        id=str(uuid.uuid4()),
+        session_id=session.id,
+        user_id=user.id,
+        owner_scope=f"user:{user.id}",
+        agent_kind="project_expert",
+        status="succeeded",
+        user_message="Original question",
+        answer="Original answer",
+        workspace_path=str(workspace),
+    )
+    event = _ai_event(user_id=user.id, session_id=session.id)
+    event.run_id = run.id
+    _seed([user, session])
+    _seed(
+        [
+            run,
+            event,
+            ChatMessage(
+                session_id=session.id, role="user", content="Original question"
+            ),
+            ChatMessage(session_id=session.id, role="ai", content="Original answer"),
+        ]
+    )
+    return event, run, workspace
+
+
+def test_admin_follow_up_is_transient_and_reuses_original_workspace(
+    client, follow_up_source, monkeypatch
+):
+    from app.services import admin_follow_up_service as service
+    from sqlalchemy import select
+
+    event, run, workspace = follow_up_source
+    seen = []
+
+    async def database_snapshot():
+        async with db_manager.session_factory() as db:
+            return {
+                table.name: [
+                    dict(row) for row in (await db.execute(select(table))).mappings()
+                ]
+                for table in Base.metadata.sorted_tables
+            }
+
+    before = asyncio.run(database_snapshot())
+
+    async def fake_stream(context, payload):
+        seen.append((context, payload))
+        assert (
+            service.WorkspaceReader(context.workspace).read("evidence.txt")
+            == "original workspace evidence"
+        )
+        yield {"type": "delta", "text": "Temporary answer"}
+        yield {"type": "done", "answer": "Temporary answer"}
+
+    monkeypatch.setattr(service, "stream_follow_up", fake_stream)
+    url = f"/admin/metrics/events/{event.id}/conversation/follow-up"
+    first = client.post(url, json={"question": "Review this"})
+    assert first.status_code == 200
+    assert first.headers["cache-control"] == "no-store"
+    assert '"type": "done"' in first.text
+    history = [
+        {"role": "user", "content": "Review this"},
+        {"role": "assistant", "content": "Temporary answer"},
+    ]
+    assert (
+        client.post(url, json={"question": "Why?", "history": history}).status_code
+        == 200
+    )
+    assert seen[1][1].history[1].content == "Temporary answer"
+    assert all(context.workspace == workspace for context, _ in seen)
+    assert seen[0][0].transcript == [
+        {"role": "user", "content": "Original question"},
+        {"role": "ai", "content": "Original answer"},
+    ]
+    assert asyncio.run(database_snapshot()) == before
+    assert list(workspace.iterdir()) == [workspace / "evidence.txt"]
+    assert (workspace / "evidence.txt").read_text() == "original workspace evidence"
+
+
+@pytest.mark.parametrize(
+    "problem", ["missing", "outside", "wrong_owner", "wrong_run", "unlinked"]
+)
+def test_follow_up_rejects_invalid_workspace(
+    client, follow_up_source, monkeypatch, tmp_path, problem
+):
+    from app.services import admin_follow_up_service as service
+
+    event, run, workspace = follow_up_source
+
+    async def alter():
+        async with db_manager.session_factory() as db:
+            row = await db.get(ChatAgentRun, run.id)
+            if problem == "missing":
+                row.workspace_path = str(workspace / "cleaned")
+            elif problem == "outside":
+                row.workspace_path = str(tmp_path)
+            elif problem == "wrong_owner":
+                row.user_id = "another-user"
+            elif problem == "wrong_run":
+                (await db.get(MetricEvent, event.id)).run_id = str(uuid.uuid4())
+            else:
+                (await db.get(MetricEvent, event.id)).session_id = None
+            await db.commit()
+
+    asyncio.run(alter())
+
+    async def never(*args):
+        pytest.fail("AI must not run without a valid source workspace")
+        yield
+
+    monkeypatch.setattr(service, "stream_follow_up", never)
+    response = client.post(
+        f"/admin/metrics/events/{event.id}/conversation/follow-up",
+        json={"question": "Review"},
+    )
+    assert response.status_code == (404 if problem == "unlinked" else 409)
+
+
+def test_follow_up_requires_admin_and_validates_input(app, client, follow_up_source):
+    event, _, _ = follow_up_source
+    url = f"/admin/metrics/events/{event.id}/conversation/follow-up"
+    for body in [
+        {"question": " "},
+        {"question": "x" * 8001},
+        {"question": "x", "history": [{"role": "assistant", "content": "orphan"}]},
+        {"question": "x", "history": [{"role": "user", "content": "x" * 32001}]},
+    ]:
+        assert client.post(url, json=body).status_code == 422
+    app.dependency_overrides.pop(require_admin)
+    assert client.post(url, json={"question": "Review"}).status_code in (401, 403)
+
+
+def test_follow_up_errors_do_not_leak_content(client, follow_up_source, monkeypatch):
+    from app.services import admin_follow_up_service as service
+
+    event, _, _ = follow_up_source
+
+    async def failed(*args):
+        raise RuntimeError("SECRET_PROMPT_AND_CREDENTIAL")
+        yield
+
+    monkeypatch.setattr(service, "stream_follow_up", failed)
+    response = client.post(
+        f"/admin/metrics/events/{event.id}/conversation/follow-up",
+        json={"question": "Review"},
+    )
+    assert '"type":"error"' in response.text
+    assert "SECRET_PROMPT_AND_CREDENTIAL" not in response.text
+
+
+def test_raw_events_exclude_package_download_before_pagination(client):
+    user = _make_user("download-event-owner")
+    upload = _log_upload_event(user_id=user.id)
+    upload.source = "package_upload"
+    upload.event_type = "package_activity"
+    download = _log_upload_event(user_id=user.id)
+    download.source = "package_download"
+    download.event_type = "package_activity"
+    _seed([user, upload, download, _ai_event(user_id=user.id)])
+    response = client.get("/admin/metrics/events?per_page=1").json()["data"]
+    assert response["total"] == 2
+    second = client.get("/admin/metrics/events?per_page=1&page=2").json()["data"]
+    assert {response["events"][0]["source"], second["events"][0]["source"]} == {
+        "package_upload",
+        "general_agent",
+    }
+    assert (
+        client.get("/admin/metrics/events?source=package_download").json()["data"][
+            "total"
+        ]
+        == 0
+    )
+
+    async def still_stored():
+        async with db_manager.session_factory() as db:
+            return await db.get(MetricEvent, download.id) is not None
+
+    assert asyncio.run(still_stored())

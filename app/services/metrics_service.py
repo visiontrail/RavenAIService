@@ -1416,9 +1416,9 @@ async def list_metric_events(
 ) -> Dict[str, Any]:
     """Paginated raw (sanitized) event listing for admin audit.
 
-    Log-upload activity events are intentionally excluded because they are not
-    AI/agent invocations. Internal AI helper events are also excluded because they
-    are paired with user-facing agent runs and would duplicate request activity.
+    Log-upload and package-download events are intentionally excluded from
+    this audit feed; their stored records and business aggregates are retained.
+    Internal AI helper events are also excluded because they are paired with user-facing agent runs and would duplicate request activity.
 
     Image-OCR events are folded into the agent run they preprocess for (see
     :func:`_not_merged_ocr_filter`) so one user request is one row; the merged
@@ -1432,7 +1432,7 @@ async def list_metric_events(
     filters: List[ColumnElement] = [
         MetricEvent.occurred_at >= from_time,
         MetricEvent.occurred_at < to_time,
-        MetricEvent.source != "log_upload",
+        MetricEvent.source.not_in(("log_upload", "package_download")),
         MetricEvent.source.not_in(_INTERNAL_AI_SOURCES),
     ]
     if merge_ocr:

@@ -1,5 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { ElDialog } from 'element-plus'
+import AdminMermaidPreview from '@/components/AdminMermaidPreview.vue'
+import { streamAdminFollowUp, type TemporaryTurn } from '@/api/adminFollowUp'
+import { useMermaidPreview } from '@/composables/useMermaidPreview'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ArrowLeft, LogOut, Menu, PanelLeftClose, RefreshCw, X } from 'lucide-vue-next'
@@ -8,7 +12,6 @@ import ThemeToggle from '@/components/ThemeToggle.vue'
 import { useAppStore } from '@/stores/app'
 import { resolveAdminNavKey, type AdminNavItem } from '@/utils/adminNav'
 import { useAdminScope } from '@/composables/useAdminScope'
-import { useMermaidOnMount } from '@/composables/useMermaidOnMount'
 import AgentTraceStream from '@/components/AgentTraceStream.vue'
 import { renderMarkdown } from '@/utils/markdownRenderer'
 import type { AgentTraceEvent } from '@/types/agentTrace'
@@ -92,17 +95,98 @@ const eventSourceFilter = ref('')
 
 const conversationVisible = ref(false)
 const loadingConversation = ref(false)
+const conversationLoadError = ref('')
 const conversation = ref<AdminConversationDetail | null>(null)
 const conversationThreadRef = ref<HTMLElement | null>(null)
 
 // The transcript is behind the loading branch, so render Mermaid only after
 // its template ref is actually mounted (rather than while the loader is shown).
-useMermaidOnMount(conversationThreadRef)
+const followUpHistory = ref<TemporaryTurn[]>([])
+const followUpQuestion = ref('')
+const followUpPendingQuestion = ref('')
+const followUpAnswer = ref('')
+const followUpError = ref('')
+const followUpRunning = ref(false)
+const followUpInput = ref<HTMLTextAreaElement | null>(null)
+const diagramSource = ref<string | null>(null)
+let followUpController: AbortController | null = null
+let conversationRevision = 0
+useMermaidPreview(conversationThreadRef, computed(() => JSON.stringify([
+  conversation.value?.messages, followUpHistory.value, followUpAnswer.value,
+])))
+
+const resetFollowUp = () => {
+  followUpController?.abort()
+  followUpController = null
+  followUpRunning.value = false
+  followUpHistory.value = []
+  followUpQuestion.value = ''
+  followUpPendingQuestion.value = ''
+  followUpAnswer.value = ''
+  followUpError.value = ''
+  diagramSource.value = null
+}
+
+const sendFollowUp = async () => {
+  const question = followUpQuestion.value.trim()
+  if (!question || !conversation.value || followUpRunning.value) return
+  const controller = new AbortController()
+  followUpController = controller
+  followUpRunning.value = true
+  followUpPendingQuestion.value = question
+  followUpAnswer.value = ''
+  followUpError.value = ''
+  await nextTick()
+  conversationThreadRef.value?.scrollTo({ top: conversationThreadRef.value.scrollHeight })
+  try {
+    const answer = await streamAdminFollowUp(conversation.value.event_id, question,
+      followUpHistory.value, controller.signal, (text) => {
+        if (followUpController === controller) {
+          const thread = conversationThreadRef.value
+          const nearBottom = thread && thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80
+          followUpAnswer.value = text
+          if (nearBottom) void nextTick(() => thread.scrollTo({ top: thread.scrollHeight }))
+        }
+      })
+    if (followUpController !== controller) return
+    followUpHistory.value.push({ role: 'user', content: question }, { role: 'assistant', content: answer })
+    followUpQuestion.value = ''
+  } catch (error) {
+    if (followUpController !== controller || controller.signal.aborted) return
+    followUpError.value = parseErrorMessage(error)
+  } finally {
+    if (followUpController === controller) {
+      followUpController = null
+      followUpRunning.value = false
+      followUpPendingQuestion.value = ''
+      followUpAnswer.value = ''
+      await nextTick()
+      followUpInput.value?.focus()
+    }
+  }
+}
+
+const onConversationClick = async (event: MouseEvent) => {
+  if (!(event.target instanceof Element)) return
+  const target = event.target
+  const copy = target.closest('.mermaid-copy-btn, .table-copy-btn')
+  if (copy) {
+    const block = copy.closest<HTMLElement>('.mermaid-container, .table-block')
+    const source = block?.dataset.mermaidSource || block?.dataset.tableMd
+    if (source) {
+      try { await navigator.clipboard.writeText(source) }
+      catch { appStore.showNotification({ title: t('aiChat.mermaid.copySourceFailed'), type: 'error' }) }
+    }
+    return
+  }
+  const diagram = target.closest<HTMLElement>('.mermaid-container[data-mermaid-state="done"]')
+  if (diagram) diagramSource.value = diagram.dataset.mermaidSource || null
+}
 
 /**
  * Blob object URLs for the images attached to the open conversation, keyed by
  * image id. The bytes endpoint needs the admin bearer token, so `<img src>`
- * cannot point at it directly. Revoked when the drawer closes — a different
+ * cannot point at it directly. Revoked when the modal closes — a different
  * event means a different conversation, so nothing here is worth keeping.
  */
 const conversationImageUrls = ref<Record<string, string>>({})
@@ -347,6 +431,8 @@ const setChartRef = (el: unknown) => {
 }
 onBeforeUnmount(() => {
   chartResizeObserver?.disconnect()
+  resetFollowUp()
+  conversationRevision++
   releaseConversationImages()
 })
 
@@ -500,6 +586,7 @@ const closeDetail = () => {
  * image just keeps no URL, which renders as the "unavailable" placeholder.
  */
 const loadConversationImages = async (detail: AdminConversationDetail) => {
+  const revision = conversationRevision
   const ids = detail.messages.flatMap((message) =>
     (message.images || []).map((image) => image.id)
   )
@@ -507,9 +594,9 @@ const loadConversationImages = async (detail: AdminConversationDetail) => {
     ids.map(async (imageId) => {
       try {
         const blob = await adminApi.metricsEventChatImage(detail.event_id, imageId)
-        // The drawer may have been closed (or reopened on another event) while
+        // The modal may have been closed or reopened while
         // this was in flight; dropping the bytes avoids a leaked object URL.
-        if (conversation.value?.event_id !== detail.event_id) return
+        if (revision !== conversationRevision || conversation.value?.event_id !== detail.event_id) return
         conversationImageUrls.value[imageId] = URL.createObjectURL(blob)
       } catch {
         // Cleaned-up or unreadable image: leave it out, the template covers it.
@@ -526,12 +613,16 @@ const releaseConversationImages = () => {
 
 const openEventConversation = async (event: MetricsRawEvent) => {
   if (!event.conversation_available) return
+  const revision = ++conversationRevision
+  resetFollowUp()
   conversationVisible.value = true
   loadingConversation.value = true
+  conversationLoadError.value = ''
   conversation.value = null
   releaseConversationImages()
   try {
     const resp = await adminApi.metricsEventConversation(event.id)
+    if (revision !== conversationRevision) return
     if (!resp?.success || !resp.data) {
       throw new Error(resp?.message || t('admin.metrics.loadConversationFail'))
     }
@@ -539,18 +630,21 @@ const openEventConversation = async (event: MetricsRawEvent) => {
     // Not awaited: thumbnails stream in behind the already-rendered transcript.
     void loadConversationImages(resp.data)
   } catch (err: any) {
+    if (revision !== conversationRevision) return
     appStore.showNotification({
       title: t('admin.loadFail'),
       message: parseErrorMessage(err),
       type: 'error',
     })
-    conversationVisible.value = false
+    conversationLoadError.value = parseErrorMessage(err)
   } finally {
-    loadingConversation.value = false
+    if (revision === conversationRevision) loadingConversation.value = false
   }
 }
 
 const closeConversation = () => {
+  conversationRevision++
+  resetFollowUp()
   conversationVisible.value = false
   conversation.value = null
   releaseConversationImages()
@@ -1277,9 +1371,12 @@ onMounted(() => {
       </div>
     </div>
 
-    <!-- Admin-only live conversation drawer -->
-    <div v-if="conversationVisible" class="admin-modal-backdrop" @click="closeConversation">
-      <div class="metrics-drawer conversation-drawer" @click.stop>
+    <!-- Only the explicit X closes this temporary conversation. -->
+    <ElDialog :model-value="conversationVisible" class="admin-conversation-dialog"
+      width="min(1100px, 94vw)" align-center :append-to-body="false" :z-index="2100"
+      :show-close="false" :close-on-click-modal="false" :close-on-press-escape="false"
+      :aria-label="t('admin.metrics.conversationTitle')" destroy-on-close @close="closeConversation">
+      <div class="conversation-modal">
         <div class="conversation-drawer-header">
           <div class="min-w-0">
             <div class="conversation-admin-badge">{{ t('admin.metrics.adminConversationBadge') }}</div>
@@ -1292,11 +1389,12 @@ onMounted(() => {
               <span v-if="conversation.is_deleted"> · {{ t('admin.metrics.deletedConversation') }}</span>
             </p>
           </div>
-          <button class="admin-icon-btn" @click="closeConversation"><X :size="16" /></button>
+          <button class="admin-icon-btn" :aria-label="t('common.close')" @click="closeConversation"><X :size="16" /></button>
         </div>
 
         <div v-if="loadingConversation" class="metrics-empty">{{ t('admin.metrics.loadingConversation') }}</div>
-        <div v-else-if="conversation" ref="conversationThreadRef" class="admin-conversation-thread">
+        <div v-else-if="conversationLoadError" class="metrics-empty follow-up-error" role="alert">{{ conversationLoadError }}</div>
+        <div v-else-if="conversation" ref="conversationThreadRef" class="admin-conversation-thread" @click="onConversationClick">
           <div
             v-for="(message, index) in conversation.messages"
             :key="`${message.created_at || 'message'}-${index}`"
@@ -1338,9 +1436,33 @@ onMounted(() => {
             </template>
           </div>
           <div v-if="!conversation.messages.length" class="metrics-empty">{{ t('admin.metrics.emptyConversation') }}</div>
+          <section class="admin-follow-up" :aria-label="t('admin.metrics.followUpTitle')">
+            <h4>{{ t('admin.metrics.followUpTitle') }}</h4>
+            <p class="follow-up-notice">{{ t('admin.metrics.followUpNotice') }}</p>
+            <div v-for="(turn, index) in followUpHistory" :key="index"
+              :class="['admin-conversation-message', turn.role === 'user' ? 'is-user' : 'is-ai']">
+              <div v-if="turn.role === 'user'" class="admin-user-bubble">{{ turn.content }}</div>
+              <div v-else class="admin-ai-content" v-html="renderConversationAi(turn.content)"></div>
+            </div>
+            <template v-if="followUpRunning">
+              <div class="admin-user-bubble">{{ followUpPendingQuestion }}</div>
+              <div class="admin-ai-content" v-html="renderConversationAi(followUpAnswer)"></div>
+              <p role="status">{{ t('admin.metrics.followUpRunning') }}</p>
+            </template>
+            <p v-if="followUpError" class="follow-up-error" role="alert">{{ followUpError }}</p>
+          </section>
         </div>
+        <form v-if="conversation && !loadingConversation" class="follow-up-form" @submit.prevent="sendFollowUp">
+          <textarea ref="followUpInput" v-model="followUpQuestion" rows="2" maxlength="8000"
+            :aria-label="t('admin.metrics.followUpTitle')" :placeholder="t('admin.metrics.followUpPlaceholder')"
+            :disabled="followUpRunning" @keydown.ctrl.enter.prevent="sendFollowUp" @keydown.meta.enter.prevent="sendFollowUp"></textarea>
+          <button type="submit" class="metrics-conversation-btn" :disabled="followUpRunning || !followUpQuestion.trim()">
+            {{ t('admin.metrics.followUpSend') }}
+          </button>
+        </form>
       </div>
-    </div>
+    </ElDialog>
+    <AdminMermaidPreview :source="diagramSource" @close="diagramSource = null" />
 
     <!-- Full-size view of a clicked attachment; screenshots are unreadable as thumbnails. -->
     <div
@@ -1969,10 +2091,27 @@ onMounted(() => {
   overflow-y: auto;
 }
 
-.conversation-drawer {
-  width: min(820px, 100%);
-  background: var(--admin-surface);
-  padding: 0;
+.conversation-modal {
+  display: flex; flex-direction: column; height: 84vh; max-height: 900px;
+  background: var(--admin-surface); color: var(--admin-ink); overflow: hidden;
+}
+.conversation-modal .conversation-drawer-header, .conversation-modal .follow-up-form { flex-shrink: 0; }
+.conversation-modal .admin-conversation-thread { overflow-y: auto; min-height: 0; flex: 1; }
+.admin-follow-up { border-top: 1px solid var(--admin-hairline); margin-top: 1.5rem; padding-top: 1rem; }
+.admin-follow-up h4 { font-weight: 700; }
+.follow-up-notice { font-size: .8rem; color: var(--admin-muted); margin: .5rem 0 1rem; }
+.follow-up-error { color: var(--el-color-danger); }
+.follow-up-form { display: flex; gap: .75rem; align-items: flex-end; padding: 1rem; border-top: 1px solid var(--admin-hairline); }
+.follow-up-form textarea { flex: 1; min-width: 0; resize: vertical; max-height: 160px; padding: .6rem; border: 1px solid var(--admin-hairline); border-radius: 8px; background: var(--admin-surface); color: var(--admin-ink); }
+:global(.el-dialog.admin-conversation-dialog) { margin: auto !important; padding: 0; overflow: hidden; border-radius: 16px; }
+:global(.admin-conversation-dialog .el-dialog__header) { display: none; }
+:global(.admin-conversation-dialog .el-dialog__body) { padding: 0; }
+.conversation-modal :deep(.mermaid-container.is-rendered) { cursor: zoom-in; }
+/* Mermaid is a block diagram inside Markdown's code-fence wrapper. */
+.admin-ai-content :deep(pre:has(> code.language-mermaid)),
+.admin-ai-content :deep(code.language-mermaid) {
+  display: block; padding: 0; border: 0; background: transparent;
+  box-shadow: none; white-space: normal;
 }
 
 .conversation-drawer-header {
@@ -2081,7 +2220,7 @@ onMounted(() => {
 .admin-image-preview {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: 2300;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2158,7 +2297,7 @@ html.dark .admin-ai-content :deep(del) {
   color: var(--admin-muted);
 }
 
-html.dark .admin-ai-content :deep(code:not(.hljs code)) {
+html.dark .admin-ai-content :deep(code:not(.hljs code):not(.language-mermaid)) {
   color: #ff7b72;
   background-color: var(--admin-surface-strong);
 }

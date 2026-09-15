@@ -278,6 +278,8 @@ def create_app() -> FastAPI:
         # privacy-sensitive even though their schema contains no content.
         "/api/v1/client-ai/capabilities",
         "/api/v1/client-ai/usage",
+        # Admin temporary answers must not be buffered or logged.
+        "/admin/metrics/events/",
     ])
     app.add_middleware(FileSizeLimitMiddleware, max_file_size=settings.max_file_size)
     

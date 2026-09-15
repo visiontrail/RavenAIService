@@ -317,3 +317,13 @@ Metrics never persist or export prompts, assistant answers, raw tool
 input/output, log content, credentialed headers, cookies, git tokens, or
 token-bearing URLs. Project attribution is limited to non-sensitive identifiers
 (e.g. `project_code`, `project_repo_id`), never a raw clone URL.
+
+### 管理员对话审阅与临时追问
+
+原始事件中的「查看对话」使用居中弹窗，仅点击右上角 X 关闭（遮罩及 Escape 不关闭）。正文中的 Mermaid 可点击打开可缩放大图。原始事件列表在计数、分页前排除 `log_upload` 和 `package_download`；下载记录及下载统计仍保留。
+
+`POST /admin/metrics/events/{event_id}/conversation/follow-up` 是管理员专用临时 SSE 接口，请求为 `{question, history: [{role: "user"|"assistant", content}]}`；history 只包含当前弹窗内已完成的临时问答对。原对话正文由服务端重新读取。服务端通过事件 `run_id` 校验会话及用户后定位 `ChatAgentRun.workspace_path`，旧事件缺少 run_id 时选择事件发生前最近的同会话运行。工作空间不存在、已清理或位于工作空间根目录外时返回 409，不创建替代工作空间。
+
+追问通过独立 SDK 调用读取原工作空间，只提供有路径边界检查的只读 list/read/search MCP 工具；禁用所有内置工具、项目设置/钩子、自动记忆及 SDK 会话持久化，CLI 配置使用独立临时目录并在结束/取消时清理。追问不调用普通聊天服务，不写入 ChatSession、ChatMessage、ChatAgentRun、分享快照或 metrics 正文日志，也不复用原用户 SDK session ID。当前弹窗仅在浏览器内存保留临时问答，关闭、卸载页面或切换对话会取消请求并清空。重新打开从空临时历史开始。
+
+流事件为 `start`、`delta(text)`、`done(answer)` 或 `error(message)`，连接意外结束不能作为完成答案。该路由排除请求/响应正文日志，响应使用 `Cache-Control: no-store`；异常原文不返回客户端。每个问题最多 8000 字符，临时历史最多 40 条/100000 字符，单条回答最多 32000 字符，原对话上下文最多 300000 字符，运行最多 300 秒。仅支持能提供 in-process MCP 的模型端点。临时追问可查询同一工作空间的日志/源码，但不执行原 Agent 的设备、写文件等操作。
