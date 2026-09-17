@@ -23,6 +23,17 @@
 处理建议的中英文 `message`。文件大小超限与文件名非法分别返回 `file_too_large`
 和 `invalid_filename`；这些校验失败不启动 Agent，不再显示通用的工作区准备失败。
 
+随消息附带的图片使用重复的 `image_files` 文件字段，与日志 `files` 字段分开。
+日志分析、项目专家和配置管理员三个 multipart 入口均采用此协议，仍兼容旧版
+`images` Base64 JSON 字段。单图大小和每轮图片数量沿用 `OCR_MAX_IMAGE_MB`
+及 `OCR_MAX_IMAGES`（包括管理界面的运行时覆盖）；不会叠加 1 MiB 的图片字段限制。
+旧字段解析容量至少 16 MiB，并随允许的全部图片 Base64 容量加 1 MiB JSON 余量扩展。
+图片在进入 OCR/Agent 前统一校验；单图超限返回 HTTP 413 / `image_too_large`，
+包含图片序号、实际大小、限额及压缩建议。旧字段超限返回 413 /
+`multipart_field_too_large`，数量和格式错误返回带可读原因的 HTTP 400。
+普通 JSON 对话继续使用 `images`，并共享图片校验。前端区分 HTTP 拒绝与网络故障，
+保留服务端错误原因；非 JSON 的代理 413 会提示压缩或分批上传。
+
 每次任务在 `code_repo_clone_base_dir/<task_id>/` 下创建独立工作区：
 
 ```

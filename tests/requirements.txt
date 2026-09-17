@@ -31,7 +31,8 @@ aiosqlite>=0.19.0
 python-dotenv>=1.0.1
 
 # Web 框架（app 模块需要）
-fastapi>=0.108.0
+fastapi>=0.136.1
+starlette>=1.0.0
 uvicorn[standard]>=0.25.0
 python-multipart>=0.0.6
 

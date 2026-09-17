@@ -10,13 +10,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.chat_uploads import ChatUploadRoute, parse_image_uploads
 from app.api.users import get_current_user, get_optional_user, get_request_locale
 from app.i18n.messages import t
 from app.models.chat import (
     ChatRequest,
     ChatResponse,
     ImageValidationError,
-    parse_images_form,
     validate_images,
 )
 from app.models.database import get_db
@@ -116,7 +116,7 @@ class ChatClarificationResolveResponse(BaseModel):
     request_id: str
 
 
-router = APIRouter()
+router = APIRouter(route_class=ChatUploadRoute)
 logger = logging.getLogger(__name__)
 
 
@@ -229,10 +229,10 @@ async def chat_stream_endpoint(
     # originals are also stored on disk so the frontend can re-render the
     # thumbnails when this conversation is reloaded from history.
     try:
-        validate_images(request.images)
+        validate_images(request.images, locale=locale)
     except ImageValidationError as exc:
         raise HTTPException(
-            status_code=400,
+            status_code=413 if exc.reason == "image_too_large" else 400,
             detail={"reason": exc.reason, "message": exc.message},
         ) from exc
 
@@ -735,6 +735,9 @@ async def log_analysis_stream_endpoint(
     images: Optional[str] = Form(
         None, description="可选：随消息附带图片的 JSON 数组字符串 [{media_type,data}]"
     ),
+    image_files: Optional[List[UploadFile]] = File(
+        None, description="可选：随消息附带的图片文件（推荐，重复 image_files 字段）"
+    ),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -758,11 +761,10 @@ async def log_analysis_stream_endpoint(
         user=current_user,
     )
     try:
-        parsed_images = parse_images_form(images)
-        validate_images(parsed_images)
+        parsed_images = await parse_image_uploads(images, image_files, locale=locale)
     except ImageValidationError as exc:
         raise HTTPException(
-            status_code=400,
+            status_code=413 if exc.reason == "image_too_large" else 400,
             detail={"reason": exc.reason, "message": exc.message},
         ) from exc
     try:
@@ -843,6 +845,9 @@ async def project_expert_stream_endpoint(
     images: Optional[str] = Form(
         None, description="可选：随消息附带图片的 JSON 数组字符串 [{media_type,data}]"
     ),
+    image_files: Optional[List[UploadFile]] = File(
+        None, description="可选：随消息附带的图片文件（推荐，重复 image_files 字段）"
+    ),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -874,11 +879,10 @@ async def project_expert_stream_endpoint(
         )
 
     try:
-        parsed_images = parse_images_form(images)
-        validate_images(parsed_images)
+        parsed_images = await parse_image_uploads(images, image_files, locale=locale)
     except ImageValidationError as exc:
         raise HTTPException(
-            status_code=400,
+            status_code=413 if exc.reason == "image_too_large" else 400,
             detail={"reason": exc.reason, "message": exc.message},
         ) from exc
 
@@ -962,6 +966,9 @@ async def package_search_stream_endpoint(
     images: Optional[str] = Form(
         None, description="可选：随消息附带图片的 JSON 数组字符串 [{media_type,data}]"
     ),
+    image_files: Optional[List[UploadFile]] = File(
+        None, description="可选：随消息附带的图片文件（推荐，重复 image_files 字段）"
+    ),
     files: Optional[List[UploadFile]] = File(
         None, description="可选：一个或多个待制作整包的组件文件（字段名可重复）"
     ),
@@ -997,11 +1004,10 @@ async def package_search_stream_endpoint(
         )
 
     try:
-        parsed_images = parse_images_form(images)
-        validate_images(parsed_images)
+        parsed_images = await parse_image_uploads(images, image_files, locale=locale)
     except ImageValidationError as exc:
         raise HTTPException(
-            status_code=400,
+            status_code=413 if exc.reason == "image_too_large" else 400,
             detail={"reason": exc.reason, "message": exc.message},
         ) from exc
 

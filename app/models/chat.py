@@ -88,7 +88,47 @@ def _base64_decoded_len(payload: str) -> int:
     return (n * 3) // 4 - padding
 
 
-def validate_images(images: Optional[List[ImageAttachment]]) -> None:
+def image_limits() -> tuple[int, int]:
+    from app.config import settings
+
+    return (
+        max(1, int(getattr(settings, "ocr_max_images", 6) or 6)),
+        max(1, int(getattr(settings, "ocr_max_image_mb", 5) or 5)) * 1024 * 1024,
+    )
+
+
+def validate_image_count(count: int, *, locale: str = "zh") -> None:
+    max_images, _ = image_limits()
+    if count > max_images:
+        raise ImageValidationError(
+            "too_many_images",
+            f"本轮共 {count} 张图片，超过 {max_images} 张上限，请分批发送。" if locale == "zh" else
+            f"This turn contains {count} images; the limit is {max_images}. Send them in separate turns.",
+        )
+
+
+def validate_image(media_type: str, size: int, *, index: int, locale: str = "zh") -> None:
+    _, max_bytes = image_limits()
+    if media_type not in ALLOWED_IMAGE_MIME_TYPES:
+        raise ImageValidationError(
+            "unsupported_type",
+            f"第 {index} 张图片类型 {media_type!r} 不受支持，请转换为 PNG、JPEG、WebP 或 GIF。" if locale == "zh" else
+            f"Image {index} has unsupported type {media_type!r}. Convert it to PNG, JPEG, WebP or GIF.",
+        )
+    if size > max_bytes:
+        # 向上保留两位小数，避免刚超限的文件显示成与限额相同的大小。
+        size_mb = ((size * 100 + 1024 * 1024 - 1) // (1024 * 1024)) / 100
+        max_mb = max_bytes // (1024 * 1024)
+        raise ImageValidationError(
+            "image_too_large",
+            f"第 {index} 张图片大小 {size_mb:.2f} MiB（{size} 字节），超过单图 {max_mb} MiB 上限。"
+            "请压缩图片，或拆分为多张图片后发送。" if locale == "zh" else
+            f"Image {index} is {size_mb:.2f} MiB ({size} bytes), exceeding the {max_mb} MiB per-image limit. "
+            "Compress it or split it into smaller images.",
+        )
+
+
+def validate_images(images: Optional[List[ImageAttachment]], *, locale: str = "zh") -> None:
     """Validate a list of image attachments against the OCR_* limits.
 
     Raises :class:`ImageValidationError` on the first violation (unsupported MIME
@@ -96,34 +136,14 @@ def validate_images(images: Optional[List[ImageAttachment]]) -> None:
     """
     if not images:
         return
-    from app.config import settings
-
-    max_images = int(getattr(settings, "ocr_max_images", 6) or 6)
-    max_mb = int(getattr(settings, "ocr_max_image_mb", 5) or 5)
-    max_bytes = max_mb * 1024 * 1024
-
-    if len(images) > max_images:
-        raise ImageValidationError(
-            "too_many_images",
-            f"最多支持 {max_images} 张图片，当前 {len(images)} 张。",
-        )
+    validate_image_count(len(images), locale=locale)
     for idx, img in enumerate(images, start=1):
         media_type = (getattr(img, "media_type", "") or "").strip().lower()
-        if media_type not in ALLOWED_IMAGE_MIME_TYPES:
-            raise ImageValidationError(
-                "unsupported_type",
-                f"第 {idx} 张图片类型 {getattr(img, 'media_type', '')!r} 不受支持，"
-                "仅支持 png / jpeg / webp / gif。",
-            )
         size = _base64_decoded_len(getattr(img, "data", "") or "")
-        if size > max_bytes:
-            raise ImageValidationError(
-                "image_too_large",
-                f"第 {idx} 张图片约 {size // (1024 * 1024)}MB，超过单图 {max_mb}MB 上限。",
-            )
+        validate_image(media_type, size, index=idx, locale=locale)
 
 
-def parse_images_form(raw: Optional[str]) -> List[ImageAttachment]:
+def parse_images_form(raw: Optional[str], *, locale: str = "zh") -> List[ImageAttachment]:
     """Parse the multipart ``images`` form field (a JSON string) into models.
 
     Returns an empty list for a missing/blank field. Raises
@@ -137,23 +157,27 @@ def parse_images_form(raw: Optional[str]) -> List[ImageAttachment]:
         parsed = json.loads(text)
     except Exception as exc:  # noqa: BLE001
         raise ImageValidationError(
-            "invalid_images_payload", "图片附件格式无效，无法解析。"
+            "invalid_images_payload", "图片附件格式无效，请重新选择图片。" if locale == "zh" else
+            "Invalid image attachment data. Select the images again."
         ) from exc
     if not isinstance(parsed, list):
         raise ImageValidationError(
-            "invalid_images_payload", "图片附件格式无效，应为图片数组。"
+            "invalid_images_payload", "图片附件格式无效，应为图片数组。" if locale == "zh" else
+            "Invalid image attachment data: expected an image array."
         )
     images: List[ImageAttachment] = []
     for item in parsed:
         if not isinstance(item, dict):
             raise ImageValidationError(
-                "invalid_images_payload", "图片附件格式无效，应为图片数组。"
+                "invalid_images_payload", "图片附件格式无效，应为图片数组。" if locale == "zh" else
+                "Invalid image attachment data: expected an image array."
             )
         media_type = str(item.get("media_type") or "").strip()
         data = str(item.get("data") or "")
         if not media_type or not data:
             raise ImageValidationError(
-                "invalid_images_payload", "图片附件缺少 media_type 或 data 字段。"
+                "invalid_images_payload", "图片附件缺少 media_type 或 data 字段。" if locale == "zh" else
+                "Image attachment is missing media_type or data."
             )
         images.append(ImageAttachment(media_type=media_type, data=data))
     return images

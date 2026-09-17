@@ -20,6 +20,9 @@ import type {
 import type { ChatMessageRecord } from '@/types'
 import { hasPersistedLogAttachmentMarker } from '@/utils/logWorkspaceReplacement'
 import { formatPackageAttachmentMessage } from '@/utils/packageAttachments'
+import { appendChatImageFiles } from '@/utils/chatImageUploads'
+
+class ChatHttpError extends Error {}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -383,7 +386,8 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       }
       bySession[sessionId] = state
     }
-    return state
+    // Return the proxy even on first creation so async upload failures repaint immediately.
+    return bySession[sessionId]
   }
 
   const localRunningSessionIds = computed(() => Array.from(localRunningSet.value))
@@ -887,13 +891,26 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     try {
       const body = await resp.json()
       const detail = body?.detail
-      if (typeof detail === 'string' && detail.trim()) return detail
-      if (detail?.message) return String(detail.message)
-      if (body?.message) return String(body.message)
+      const message = typeof detail === 'string' && detail.trim()
+        ? detail
+        : typeof detail?.message === 'string'
+          ? detail.message
+          : typeof body?.message === 'string' ? body.message : ''
+      // Older backends return this parser error before application validation.
+      const partLimit = message.match(/Part exceeded maximum size of (\d+)KB/i)
+      if (partLimit) return t('aiChat.runs.multipartTooLarge', { limit: Number(partLimit[1]) / 1024 })
+      if (message) return message
+      if (Array.isArray(detail)) {
+        const errors = detail.map((item) => typeof item?.msg === 'string' ? item.msg : '').filter(Boolean)
+        if (errors.length) return errors.join('; ')
+      }
     } catch {
       // ignore non-JSON error bodies
     }
-    return `HTTP ${resp.status}`
+    if (resp.status === 413) return t('aiChat.runs.uploadTooLarge')
+    if (resp.status === 429) return t('aiChat.runs.tooManyRequests')
+    if ([502, 503, 504].includes(resp.status)) return t('aiChat.runs.serviceUnavailable', { status: resp.status })
+    return t('aiChat.runs.httpRequestFailed', { status: resp.status })
   }
 
   /** Drop the in-memory state for a session (e.g. after deletion). */
@@ -1031,7 +1048,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
           signal: ac.signal,
         },
       )
-      if (!resp.ok) throw new Error(await readHttpErrorMessage(resp))
+      if (!resp.ok) throw new ChatHttpError(await readHttpErrorMessage(resp))
       const { terminal } = await pumpSSE(state, resp, ac.signal)
       if (terminal) markTerminal(state, state.runStatus === 'idle' ? 'succeeded' : state.runStatus)
     } catch (err: any) {
@@ -1132,7 +1149,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         return
       }
 
-      if (!resp.ok) throw new Error(await readHttpErrorMessage(resp))
+      if (!resp.ok) throw new ChatHttpError(await readHttpErrorMessage(resp))
 
       // Remap our pending placeholder to the run_id-keyed id once the backend
       // ``session`` frame arrives. We do this inline in pumpSSE via
@@ -1272,11 +1289,8 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
     if (payload.project_repo_id != null) {
       formData.append('project_repo_id', String(payload.project_repo_id))
     }
-    if (payload.images && payload.images.length) {
-      formData.append('images', JSON.stringify(payload.images))
-    }
-
     try {
+      appendChatImageFiles(formData, payload.images)
       const resp = await fetch(getServiceUrl('/api/v1/ai-chat/log-analysis/stream'), {
         method: 'POST',
         headers: buildAuthHeaders(opts.authToken),
@@ -1284,7 +1298,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         credentials: 'include',
         signal: ac.signal,
       })
-      if (!resp.ok) throw new Error(await readHttpErrorMessage(resp))
+      if (!resp.ok) throw new ChatHttpError(await readHttpErrorMessage(resp))
 
       // Re-key inline as we discover run_id. The log-analysis stream may not
       // emit a session prologue frame; we accept either run_id or session_id
@@ -1348,12 +1362,12 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
       console.error('Failed to start log-analysis run', err)
       const target = state.messages.find((m) => m.id === state.currentAnswerId)
       if (target) {
-        // Transport-level failure (network / non-2xx). Keep it friendly and
-        // actionable rather than surfacing the raw error string.
         const message = err?.message || String(err)
         target.content = message === t('aiChat.runs.sessionExpired')
           ? t('aiChat.runs.sessionExpired')
-          : t('aiChat.runs.logAnalysisUnavailable')
+          : err instanceof ChatHttpError
+            ? t('aiChat.runs.logAnalysisFailed', { error: message })
+            : t('aiChat.runs.logAnalysisUnavailable')
         target.traceRunning = false
       }
       markTerminal(state, 'failed')
@@ -1439,7 +1453,7 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
         signal: ac.signal,
       })
       if (!resp.ok) {
-        throw new Error(await readHttpErrorMessage(resp))
+        throw new ChatHttpError(await readHttpErrorMessage(resp))
       }
 
         if (!resp.body) throw new Error('Empty response body; cannot stream')

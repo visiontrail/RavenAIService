@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { API_BASE_URL, localeHeaderInterceptor } from '@/api'
 import { getActiveLocale, LOCALE_HEADER } from '@/i18n/runtime'
+import { appendChatImageFiles } from '@/utils/chatImageUploads'
 
 export type ChatPermissionDecision = 'allow' | 'deny'
 
@@ -193,7 +194,7 @@ export const projectExpertStream = (payload: ProjectExpertStreamPayload): Promis
   formData.append('remember', String(payload.remember ?? true))
   formData.append('project_repo_id', String(payload.projectRepoId))
   if (payload.history) formData.append('history', JSON.stringify(payload.history))
-  if (payload.images && payload.images.length) formData.append('images', JSON.stringify(payload.images))
+  appendChatImageFiles(formData, payload.images)
 
   const headers: Record<string, string> = { [LOCALE_HEADER]: getActiveLocale() }
   if (payload.authToken) headers.Authorization = `Bearer ${payload.authToken}`
@@ -252,7 +253,7 @@ export const packageSearchStream = (payload: PackageSearchStreamPayload): Promis
   }
   if (payload.history) formData.append('history', JSON.stringify(payload.history))
   for (const file of payload.files || []) formData.append('files', file)
-  if (payload.images && payload.images.length) formData.append('images', JSON.stringify(payload.images))
+  appendChatImageFiles(formData, payload.images)
 
   const headers: Record<string, string> = { [LOCALE_HEADER]: getActiveLocale() }
   if (payload.authToken) headers.Authorization = `Bearer ${payload.authToken}`

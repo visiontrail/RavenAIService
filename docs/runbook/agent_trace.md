@@ -11,6 +11,30 @@ touching the agent loop itself.
 
 ---
 
+## Upload rejected before the SSE stream starts
+
+For `/ai-chat/log-analysis/stream`, `/project-expert/stream` and
+`/package-search/stream`, first check the HTTP status. HTTP 413 with
+`image_too_large` identifies the image size and configured per-image limit;
+`multipart_field_too_large` identifies the legacy text-field capacity. These
+requests have not started an agent run. Refresh older pages to use `image_files`,
+compress the indicated image, shorten oversized messages/history, or start a new
+conversation as directed by the message. Image limits use the effective
+`OCR_MAX_IMAGE_MB` and `OCR_MAX_IMAGES` runtime settings; do not change nginx or
+restart workers based only on a parser error.
+
+If nginx returns an HTML 413, inspect its `client_max_body_size` and any upstream
+proxy limit. The UI provides an upload-size explanation even without a JSON
+body; it cannot report a numeric proxy limit unless the proxy supplies one.
+Malformed inputs return an explicit HTTP 400. A browser transport failure is
+reported separately from these HTTP responses.
+
+When deploying the binary upload contract, update the backend before the
+frontend. When rolling back, reverse this order. Old frontends remain supported
+by the backend's legacy `images` field.
+
+---
+
 ## Symptom 1 — Redis unavailable / trace SSE returns no events
 
 **What users see**

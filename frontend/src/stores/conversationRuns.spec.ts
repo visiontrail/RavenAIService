@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { nextTick, watchEffect } from 'vue'
 
 import { THINKING_PLACEHOLDER, useConversationRunsStore } from '@/stores/conversationRuns'
 import { userApi } from '@/api/user'
@@ -10,7 +11,8 @@ import {
   resolveChatClarification,
 } from '@/api/chat'
 import { mergeUniquePackageFiles } from '@/utils/packageAttachments'
-import { LOCALE_HEADER, setActiveLocale } from '@/i18n/runtime'
+import { LOCALE_HEADER } from '@/i18n/runtime'
+import { setI18nLocale } from '@/i18n'
 import type { ChatEntry, PendingPermission } from '@/stores/conversationRuns'
 import type { AgentTraceEvent } from '@/types/agentTrace'
 
@@ -73,7 +75,7 @@ describe('conversationRuns store', () => {
     setActivePinia(createPinia())
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
-    setActiveLocale('zh')
+    setI18nLocale('zh')
   })
 
   it('routes streamed events by session/run and keeps another selected session clean', () => {
@@ -602,6 +604,98 @@ describe('conversationRuns store', () => {
     expect(store.localRunningSessionIds).toEqual([])
   })
 
+  it('uploads large log-analysis images as binary files while preserving log attachments', async () => {
+    const store = useConversationRunsStore()
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([{ event: 'done', answer: 'ok' }]))
+    vi.stubGlobal('fetch', fetchMock)
+    const bytes = 'x'.repeat(700 * 1024)
+    const log = new File(['frequency=2080000'], 'lrun_oam4.log')
+    await store.startLogAnalysisRun('upload-images', {
+      message: '分析频点', files: [log],
+      images: [
+        { media_type: 'image/png', data: btoa(bytes) },
+        { media_type: 'image/png', data: `data:image/png;base64,${btoa(bytes)}` },
+      ],
+    })
+    const form = fetchMock.mock.calls[0][1].body as FormData
+    expect(form.has('images')).toBe(false)
+    expect(form.getAll('files')).toEqual([log])
+    const images = form.getAll('image_files') as File[]
+    expect(images.map((file) => file.size)).toEqual([bytes.length, bytes.length])
+    expect(images.map((file) => file.type)).toEqual(['image/png', 'image/png'])
+    expect(await images[1].text()).toBe(bytes)
+    expect(store.ensureState('upload-images').runStatus).toBe('succeeded')
+  })
+
+  it.each([
+    [400, { detail: { reason: 'unsupported_type', message: '请选择 PNG 图片' } }, '请选择 PNG 图片'],
+    [413, { message: '第 2 张图片超过单图 5 MiB 上限，请压缩图片。' }, '第 2 张图片超过单图 5 MiB 上限'],
+    [400, { message: 'Part exceeded maximum size of 1024KB.' }, '1 MiB'],
+    [422, { detail: [{ loc: ['body', 'project_repo_id'], msg: 'Project ID must be a number' }] }, 'Project ID must be a number'],
+    [401, { detail: 'Unauthorized' }, '登录会话已过期'],
+  ])('shows actionable log-upload HTTP %s details', async (status, body, expected) => {
+    const store = useConversationRunsStore()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status })))
+    await store.startLogAnalysisRun('upload-error', { message: '分析' })
+    const state = store.ensureState('upload-error')
+    const answer = state.messages.find((message) => message.role === 'ai')!
+    expect(answer.content).toContain(expected)
+    expect(answer.content).not.toContain('请检查网络')
+    expect(answer.traceRunning).toBe(false)
+    expect(state.runStatus).toBe('failed')
+    expect(store.localRunningSessionIds).toEqual([])
+  })
+
+  it.each([
+    [413, 'zh', '超过服务器允许的大小'],
+    [413, 'en', 'exceeds the server size limit'],
+    [502, 'zh', 'HTTP 502'],
+    [503, 'en', 'HTTP 503'],
+    [504, 'zh', 'HTTP 504'],
+    [429, 'zh', '请求过于频繁'],
+    [403, 'zh', 'HTTP 403'],
+  ])('explains non-JSON proxy HTTP %s in %s without showing HTML', async (status, locale, expected) => {
+    setI18nLocale(locale)
+    const store = useConversationRunsStore()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>nginx error</html>', { status })))
+    await store.startLogAnalysisRun('proxy-error', { message: '分析' })
+    const answer = store.ensureState('proxy-error').messages.find((message) => message.role === 'ai')!
+    expect(answer.content).toContain(expected)
+    expect(answer.content).not.toContain('<html>')
+    expect(answer.content).not.toContain('请检查网络')
+  })
+
+  it('reserves the connection failure message for failed log-analysis transport', async () => {
+    const store = useConversationRunsStore()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    await store.startLogAnalysisRun('offline', { message: '分析' })
+    const state = store.ensureState('offline')
+    expect(state.messages.find((message) => message.role === 'ai')?.content).toContain('请检查网络')
+    expect(state.isSending).toBe(false)
+  })
+
+  it('updates the visible error reactively on the first request in a new conversation', async () => {
+    const store = useConversationRunsStore()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let rejectUpload!: (response: Response) => void
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise<Response>((resolve) => { rejectUpload = resolve })))
+    let visibleAnswer: string | undefined
+    const stop = watchEffect(() => {
+      visibleAnswer = store.bySession['first-upload']?.messages.find((message) => message.role === 'ai')?.content
+    })
+    const pending = store.startLogAnalysisRun('first-upload', { message: '分析' })
+    await nextTick()
+    expect(visibleAnswer).toBe(THINKING_PLACEHOLDER)
+    rejectUpload(new Response(JSON.stringify({ message: '图片超过 5 MiB，请压缩后重试。' }), { status: 413 }))
+    await pending
+    await nextTick()
+    expect(visibleAnswer).toContain('图片超过 5 MiB，请压缩后重试。')
+    stop()
+  })
+
   it('falls back to whole-segment final_text render when no answer_delta arrives', () => {
     const store = useConversationRunsStore()
     const state = store.ensureState('session-a')
@@ -983,6 +1077,8 @@ describe('conversationRuns store', () => {
 
     expect(started).toBe(false)
     expect(store.ensureState('failed-package-session').runStatus).toBe('failed')
+    expect(store.ensureState('failed-package-session').messages.find((message) => message.role === 'ai')?.content)
+      .toContain('upload rejected')
   })
 
   it('restores component files when an HTTP 200 package stream ends with an error', async () => {
