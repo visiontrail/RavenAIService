@@ -9,11 +9,16 @@ import uuid
 from typing import List, Optional, Sequence
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chat import ChatMessage as ChatMessageSchema
-from app.models.user import ChatMessage, ChatSession
+from app.models.user import (
+    ChatMessage,
+    ChatSession,
+    ChatSessionSearchData,
+    ChatSessionSearchResult,
+)
 from app.services import chat_image_store
 from app.services.base import BaseService
 
@@ -183,6 +188,62 @@ class ChatHistoryService(BaseService):
             )
         )
         return result.scalars().all()
+
+    @staticmethod
+    def _search_snippet(content: str, query: str, max_length: int = 280) -> str:
+        # 在命中附近截取原文，保留字面匹配；只压平展示中的空白。
+        position = content.lower().find(query.lower()) if query else 0
+        start = max(0, position - 40)
+        end = min(len(content), start + max_length)
+        excerpt = " ".join(content[start:end].split())
+        return ("…" if start else "") + excerpt + ("…" if end < len(content) else "")
+
+    async def search_sessions(
+        self,
+        db: AsyncSession,
+        user_id: str,
+        *,
+        query: str = "",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> ChatSessionSearchData:
+        """检索当前用户的标题和可见正文，每个会话只返回一条摘要。"""
+        query = query.strip()
+        message_filter = [
+            ChatMessage.session_id == ChatSession.id,
+            ChatMessage.role.in_(("user", "ai", "assistant")),
+        ]
+        if query:
+            # autoescape 防止 %、_ 等用户输入被解释为 SQL 通配符。
+            message_filter.append(ChatMessage.content.icontains(query, autoescape=True))
+        matched_message = (
+            select(ChatMessage.id)
+            .where(*message_filter)
+            .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+            .limit(1)
+            .correlate(ChatSession)
+            .scalar_subquery()
+        )
+        stmt = (
+            select(ChatSession, ChatMessage.content)
+            .outerjoin(ChatMessage, ChatMessage.id == matched_message)
+            .where(ChatSession.user_id == user_id, ChatSession.is_deleted.is_(False))
+        )
+        if query:
+            stmt = stmt.where(or_(
+                ChatSession.title.icontains(query, autoescape=True),
+                ChatMessage.id.is_not(None),
+            ))
+        rows = (await db.execute(
+            stmt.order_by(ChatSession.last_message_at.desc(), ChatSession.id.desc())
+            .offset(offset).limit(limit + 1)
+        )).all()
+        items = []
+        for session, content in rows[:limit]:
+            item = ChatSessionSearchResult.model_validate(session)
+            item.snippet = self._search_snippet(content or "", query)
+            items.append(item)
+        return ChatSessionSearchData(items=items, has_more=len(rows) > limit)
 
     async def fetch_messages(
         self,

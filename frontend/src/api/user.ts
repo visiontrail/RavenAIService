@@ -6,6 +6,7 @@ import type {
   UserProfile,
   UserProfileRole,
   ChatSessionSummary,
+  ChatSessionSearchData,
   ChatMessageRecord,
   AnnouncementDismissData,
   SystemAnnouncement,
@@ -168,6 +169,11 @@ export const userApi = {
 
   listSessions: (): Promise<ApiResponse<ChatSessionSummary[]>> =>
     userClient.get('/api/v1/users/chat-sessions'),
+
+  searchSessions: (query: string, offset = 0, signal?: AbortSignal): Promise<ApiResponse<ChatSessionSearchData>> =>
+    userClient.get('/api/v1/users/chat-sessions/search', {
+      params: { q: query, offset, limit: 20 }, signal,
+    }),
 
   fetchMessages: (sessionId: string): Promise<ApiResponse<ChatMessageRecord[]>> =>
     userClient.get(`/api/v1/users/chat-sessions/${sessionId}/messages`),

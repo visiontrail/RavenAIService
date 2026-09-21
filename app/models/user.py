@@ -437,6 +437,21 @@ class ChatSessionListResponse(BaseResponse):
     data: list[ChatSessionSummary] = Field(default_factory=list)
 
 
+class ChatSessionSearchResult(ChatSessionSummary):
+    """搜索结果仅包含可显示的正文摘要，不携带内部 trace。"""
+
+    snippet: str = ""
+
+
+class ChatSessionSearchData(BaseModel):
+    items: list[ChatSessionSearchResult] = Field(default_factory=list)
+    has_more: bool = False
+
+
+class ChatSessionSearchResponse(BaseResponse):
+    data: ChatSessionSearchData
+
+
 class ChatMessagesResponse(BaseResponse):
     """会话消息响应"""
 

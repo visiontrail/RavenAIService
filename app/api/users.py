@@ -22,6 +22,7 @@ from app.models.user import (
     ChatMessageRecord,
     ChatMessagesResponse,
     ChatSessionListResponse,
+    ChatSessionSearchResponse,
     ChatSessionSummary,
     UserAuthPayload,
     UserAuthResponse,
@@ -565,6 +566,22 @@ async def list_chat_sessions(
             )
         summaries.append(summary)
     return ChatSessionListResponse(message="ok", data=summaries)
+
+
+@router.get("/chat-sessions/search", response_model=ChatSessionSearchResponse)
+async def search_chat_sessions(
+    q: str = Query("", max_length=200),
+    limit: int = Query(20, ge=1, le=50),
+    offset: int = Query(0, ge=0, le=100000),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ChatSessionSearchResponse:
+    return ChatSessionSearchResponse(
+        message="ok",
+        data=await chat_history_service.search_sessions(
+            db, current_user.id, query=q, limit=limit, offset=offset,
+        ),
+    )
 
 
 @router.get("/chat-sessions/{session_id}/messages", response_model=ChatMessagesResponse)

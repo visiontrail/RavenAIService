@@ -616,6 +616,15 @@ export interface ChatSessionSummary {
   run_updated_at?: string | null
 }
 
+export interface ChatSessionSearchResult extends ChatSessionSummary {
+  snippet: string
+}
+
+export interface ChatSessionSearchData {
+  items: ChatSessionSearchResult[]
+  has_more: boolean
+}
+
 export interface ReleaseItem {
   id: string
   platform: 'linux' | 'macos' | 'windows'

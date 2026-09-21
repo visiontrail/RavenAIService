@@ -105,3 +105,81 @@ def test_chat_session_summary_includes_latest_agent_kind(client_with_db) -> None
     assert rows[0]["run_agent_kind"] == "project_expert"
     assert rows[0]["run_status"] == "succeeded"
     assert rows[0]["active_run_id"] is None
+
+
+def test_search_sessions_matches_content_and_enforces_privacy(client_with_db) -> None:
+    from datetime import timedelta
+    from app.models.user import ChatMessage, User
+
+    client, factory = client_with_db
+    token, user_id = _register(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async def seed():
+        async with factory() as db:
+            db.add(User(id="other", username="other", password_hash="unused"))
+            for sid, title, owner, deleted, days in [
+                ("title", "部署 RavenAI Docker", user_id, False, 0),
+                ("content", "旧故障排查", user_id, False, 10),
+                ("deleted", "Docker deleted", user_id, True, 0),
+                ("foreign", "Docker private", "other", False, 0),
+                ("system", "内部消息", user_id, False, 0),
+                ("literal", "100%_path\\name", user_id, False, 2),
+            ]:
+                db.add(ChatSession(id=sid, user_id=owner, title=title, is_deleted=deleted,
+                                   last_message_at=datetime.utcnow() - timedelta(days=days)))
+            await db.flush()
+            for sid, role, text in [
+                ("content", "user", "分析网络"),
+                ("content", "ai", "前文" * 300 + "DoCkEr 网络故障已定位" + "后文" * 300),
+                ("content", "assistant", "第二条 docker 命中"),
+                ("foreign", "ai", "docker secret"),
+                ("deleted", "ai", "docker deleted"),
+                ("system", "system", "docker internal"),
+            ]:
+                db.add(ChatMessage(session_id=sid, role=role, content=text))
+            await db.commit()
+    asyncio.run(seed())
+    path = "/api/v1/users/chat-sessions/search"
+    assert client.get(path).status_code == 401
+    data = client.get(path, params={"q": "  DOCKER  "}, headers=headers).json()["data"]
+    assert [r["id"] for r in data["items"]] == ["title", "content"]
+    assert "docker" in data["items"][1]["snippet"].lower()
+    assert len(data["items"][1]["snippet"]) <= 282
+    assert not data["has_more"]
+    user_match = client.get(path, params={"q": "分析网络"}, headers=headers).json()["data"]["items"]
+    assert [r["id"] for r in user_match] == ["content"]
+    first = client.get(path, params={"q": "docker", "limit": 1}, headers=headers).json()["data"]
+    second = client.get(path, params={"q": "docker", "limit": 1, "offset": 1}, headers=headers).json()["data"]
+    assert first["has_more"] and not second["has_more"]
+    assert first["items"][0]["id"] == "title"
+    assert second["items"][0]["id"] == "content"
+    for term in ["%", "_", "\\", "100%_path\\name"]:
+        matches = client.get(path, params={"q": term}, headers=headers).json()["data"]["items"]
+        assert [r["id"] for r in matches] == ["literal"]
+    assert client.get(path, params={"q": "找不到"}, headers=headers).json()["data"]["items"] == []
+    recent = client.get(path, params={"q": "  "}, headers=headers).json()["data"]["items"]
+    assert len(recent) == 4
+    for params in [{"q": "x" * 201}, {"limit": 51}, {"offset": -1}]:
+        assert client.get(path, params=params, headers=headers).status_code == 422
+
+
+def test_search_long_chinese_excerpt_and_stable_order(client_with_db) -> None:
+    from app.models.user import ChatMessage
+    client, factory = client_with_db
+    token, user_id = _register(client)
+
+    async def seed():
+        async with factory() as db:
+            for sid in ["a", "b", "c"]:
+                db.add(ChatSession(id=sid, user_id=user_id, title="故障记录", last_message_at=datetime(2020, 1, 1)))
+                db.add(ChatMessage(session_id=sid, role="ai", content="背景" * 500 + "遥测检索关键字" + "后文" * 500))
+            await db.commit()
+    asyncio.run(seed())
+    rows = []
+    for offset in range(3):
+        response = client.get("/api/v1/users/chat-sessions/search", params={"q": "遥测检索关键字", "limit": 1, "offset": offset}, headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 200, response.text
+        rows.extend(response.json()["data"]["items"])
+    assert [r["id"] for r in rows] == ["c", "b", "a"]
+    assert all("遥测检索关键字" in r["snippet"] and len(r["snippet"]) <= 282 for r in rows)

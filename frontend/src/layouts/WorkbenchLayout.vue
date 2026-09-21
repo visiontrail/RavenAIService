@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
-import { MessageCircleQuestion, Save, ShieldCheck, UserRound } from 'lucide-vue-next'
+import { MessageCircleQuestion, Save, Search, ShieldCheck, UserRound } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
 import { useChatSessionStore } from '@/stores/chatSession'
@@ -21,6 +21,7 @@ import {
 import brandIcon from '@/assets/icon.png'
 import SystemAnnouncementDialog from '@/components/SystemAnnouncementDialog.vue'
 import ThemeToggle from '@/components/ThemeToggle.vue'
+import ConversationSearchDialog from '@/components/ConversationSearchDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -372,7 +373,19 @@ const handleClickOutside = (event: MouseEvent) => {
   }
 }
 
+const openConversationSearch = () => {
+  if (!isLoggedIn.value) { openAuthModal('login'); return }
+  showUserMenu.value = false
+  openRowMenuId.value = null
+  showSearchBox.value = true
+}
+
 const handleKey = (e: KeyboardEvent) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && !e.altKey && !e.isComposing) {
+    e.preventDefault()
+    if (!showLoginModal.value && !showSettingsModal.value) openConversationSearch()
+    return
+  }
   if (e.key === 'Escape') {
     showSettingsModal.value = false
     showUserMenu.value = false
@@ -410,6 +423,7 @@ watch(isLoggedIn, async (loggedIn) => {
     }
     try { await announcementStore.checkPending() } catch { /* retry on next trigger */ }
   } else {
+    showSearchBox.value = false
     sessionStore.reset()
     announcementStore.reset()
   }
@@ -425,11 +439,13 @@ watch(() => userStore.profile, () => {
 
 const handleSelectSession = (session: ChatSessionSummary) => {
   openRowMenuId.value = null
+  showSearchBox.value = false
   sessionStore.selectSession(session.id)
   if (!isHomeRoute.value) router.push('/workbench')
 }
 
 const startNewChat = () => {
+  showSearchBox.value = false
   sessionStore.startNewChat()
   if (!isHomeRoute.value) router.push('/workbench')
   if (isLoggedIn.value) {
@@ -636,6 +652,10 @@ const handleUserLogout = () => {
 
 <template>
   <div class="raven-workbench" :class="{ 'lang-en': activeLocale === 'en', 'is-embedded': isEmbedded }">
+    <ConversationSearchDialog
+      v-if="showSearchBox && isLoggedIn" :key="userStore.profile?.id"
+      @close="showSearchBox = false" @select="handleSelectSession" @new-chat="startNewChat"
+    />
     <!-- Sidebar — hidden when embedded in the Raven desktop client (Files tab),
          which provides its own navigation. -->
     <aside v-if="!isEmbedded" class="rw-sidebar">
@@ -648,7 +668,7 @@ const handleUserLogout = () => {
             <div class="rw-brand-sub">{{ t('workbench.brandSub') }}</div>
           </div>
         </div>
-        <button class="rw-icon-btn" :title="t('workbench.searchConversations')" @click="showSearchBox = !showSearchBox" :aria-label="t('workbench.searchConversations')">
+        <button class="rw-icon-btn" :title="`${t('workbench.searchConversations')} (⌘K / Ctrl+K)`" @click="openConversationSearch" aria-haspopup="dialog" :aria-expanded="showSearchBox" aria-keyshortcuts="Meta+K Control+K" :aria-label="t('workbench.searchConversations')">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
         </button>
       </div>
@@ -888,6 +908,10 @@ const handleUserLogout = () => {
 
     <!-- Main pane: routed content provides its own topbar + body -->
     <main class="rw-main">
+      <div v-if="!isEmbedded" class="rw-mobile-search-bar">
+        <span>RavenAI</span>
+        <button class="rw-icon-btn" :aria-label="t('workbench.searchConversations')" aria-haspopup="dialog" :aria-expanded="showSearchBox" @click="openConversationSearch"><Search :size="18" aria-hidden="true" /></button>
+      </div>
       <router-view />
     </main>
 
@@ -1510,6 +1534,8 @@ const handleUserLogout = () => {
 .rw-chevron { color: var(--rw-muted); transition: transform .15s; flex-shrink: 0; }
 .rw-chevron.flipped { transform: rotate(180deg); }
 
+.rw-mobile-search-bar { display: none; }
+
 /* ---------- Main pane ---------- */
 .rw-main {
   flex: 1; min-width: 0; min-height: 0;
@@ -1993,6 +2019,8 @@ const handleUserLogout = () => {
 
 @media (max-width: 720px) {
   .raven-workbench { position: relative; }
+  .rw-mobile-search-bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 16px; flex-shrink: 0; border-bottom: 1px solid var(--rw-hairline); font-weight: 600; }
+  .rw-mobile-search-bar + * { min-height: 0; flex: 1; }
   .rw-sidebar {
     position: absolute; left: 0; top: 0; bottom: 0;
     width: min(82vw, 320px);
