@@ -39,6 +39,7 @@ def build_project_fit_guidance(
     project_card: Optional[str],
     catalog_available: bool,
     locale: str = "zh",
+    selected_project_is_target: bool = False,
 ) -> str:
     """Build the shared, high-priority project-fit policy for Agent prompts."""
     if locale == "en":
@@ -52,7 +53,7 @@ def build_project_fit_guidance(
                 "`mcp__project_repo__discover_projects` and read the complete enabled catalog."
             )
             catalog_rule = (
-                "For every additional project materially required by the question, call "
+                "For every eligible additional project materially required by the question, call "
                 "`mcp__project_repo__clone_project_repo` with its project_code, then inspect only the returned path."
             )
         else:
@@ -63,11 +64,16 @@ def build_project_fit_guidance(
             catalog_rule = (
                 "Do not claim that a specific alternative exists, that no project exists, or that multi-project analysis was performed."
             )
+        mismatch_rule = (
+            "- If the selected project is clearly unrelated, explain the mismatch and ask the user to select the correct project; do not silently answer for a different project.\n"
+            if selected_project_is_target else
+            "- If the current project is clearly unrelated and another card clearly matches, do not use the selected repository, project prompt, or project Skills as evidence. Clone the matching project in this workspace and answer from that checkout.\n"
+        )
         return (
             "\n\n## Project fit and multi-project investigation (highest priority)\n"
             f"This is a prerequisite for {workflow_name}. {selected}\n"
             f"- {evidence_rule}\n"
-            "- If the current project is clearly unrelated and another card clearly matches, do not use the selected repository, project prompt, or project Skills as evidence. Clone the matching project in this workspace and answer from that checkout.\n"
+            f"{mismatch_rule}"
             "- If the question genuinely spans multiple cards, clone only the additional projects materially required and cite every finding with its project and returned repository path.\n"
             "- If the current project fully covers the question, keep the existing single-project workflow and do not clone unrelated catalog entries.\n"
             "- If the complete catalog has no match, state that no suitable project is registered. If evidence is ambiguous, explain the ambiguity and ask for clarification instead of cloning speculative projects.\n"
@@ -85,7 +91,7 @@ def build_project_fit_guidance(
             "`mcp__project_repo__discover_projects` 读取完整的已启用项目卡片目录。"
         )
         catalog_rule = (
-            "每一个确实需要追加的项目，都必须调用 `mcp__project_repo__clone_project_repo`，"
+            "每一个符合项目边界、确实需要追加的项目，都必须调用 `mcp__project_repo__clone_project_repo`，"
             "并只检查工具返回的工作区路径。"
         )
     else:
@@ -95,11 +101,16 @@ def build_project_fit_guidance(
         catalog_rule = (
             "不得声称某个替代项目一定存在，也不得断言整个系统没有合适项目。"
         )
+    mismatch_rule = (
+        "- 如果所选项目明确不匹配，应说明并请用户改选正确项目；不得悄悄改用其他项目作为本轮分析对象。\n"
+        if selected_project_is_target else
+        "- 如果当前项目明确不匹配、另一个项目卡片明确匹配，不得把当前仓库、项目提示词或项目 Skill 当作证据；应在当前工作区克隆匹配项目并从该代码检出中作答。\n"
+    )
     return (
         "\n\n## 项目适配性检查（最高优先级）\n"
         f"这是 {workflow_name} 的前置安全检查。{selected}\n"
         f"- {evidence_rule}\n"
-        "- 如果当前项目明确不匹配、另一个项目卡片明确匹配，不得把当前仓库、项目提示词或项目 Skill 当作证据；应在当前工作区克隆匹配项目并从该代码检出中作答。\n"
+        f"{mismatch_rule}"
         "- 如果问题确实跨越多个项目卡片，只克隆完成问题所必需的追加项目；每条结论必须标明项目及工具返回的仓库路径。\n"
         "- 如果当前项目已完整覆盖问题，继续单项目流程，不要因为目录里存在其他项目就无关克隆。\n"
         "- 如果完整目录中没有任何项目卡片匹配，必须明确回答“当前系统还没有适合回答这个问题的项目”，不要勉强挑选最接近但无关的项目。\n"

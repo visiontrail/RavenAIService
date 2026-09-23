@@ -12,8 +12,8 @@ analysis path removed entirely:
 - ``project_repo_id`` is REQUIRED for a new session; the service resolves the
   registered project and writes its non-sensitive identity into
   ``task.json.repo_info`` (``source == "user_selected_project_repo"``).
-- Session-scoped persistent workspace: the first turn clones into ``repo/``;
-  follow-up turns reuse the same workspace and the agent reuses ``repo/.git``.
+- Session-scoped persistent workspace: follow-ups reuse the checkout until the
+  user selects another project, which gets a fresh workspace in the same chat.
 """
 
 from __future__ import annotations
@@ -148,9 +148,8 @@ class ProjectExpertChatService:
           buffered events.
         - New session: ``project_repo_id`` is required; the selected project is
           resolved and a workspace is prepared (``repo/`` placeholder only).
-        - Follow-up turn: reuse the existing session workspace. A
-          ``project_repo_id`` different from the first turn does NOT switch the
-          project — a ``system_notice`` tells the user to start a new session.
+        - Follow-up turn: reuse the workspace for the same project, or create
+          a fresh workspace for a newly selected project in the same session.
 
         SSE client disconnects do NOT cancel the underlying Agent Job.
         """
@@ -171,6 +170,18 @@ class ProjectExpertChatService:
 
         # Subscribe path: in-flight Job already exists for this session.
         if existing_job is not None and not existing_job.done:
+            if question and project_repo_id is not None and (
+                existing_job.project_repo_id is None
+                or int(project_repo_id) != int(existing_job.project_repo_id)
+            ):
+                yield self._sse_event(
+                    {
+                        "event": "error",
+                        "reason": "project_switch_while_running",
+                        "message": "当前项目专家任务仍在运行，请待其结束后重试切换项目的这条消息。",
+                    }
+                )
+                return
             yield self._sse_event(
                 {
                     "event": "project_expert_status",
@@ -241,24 +252,54 @@ class ProjectExpertChatService:
                 )
             else:
                 ctx, context_meta = loaded
-                # Switching project mid-session is not silently honored.
                 bound_repo_id = context_meta.get("project_repo_id")
                 if (
                     project_repo_id is not None
-                    and bound_repo_id is not None
-                    and int(project_repo_id) != int(bound_repo_id)
+                    and (
+                        bound_repo_id is None
+                        or int(project_repo_id) != int(bound_repo_id)
+                    )
                 ):
+                    repo = await self._resolve_project_repo(db, project_repo_id)
+                    if repo is None:
+                        yield self._sse_event(
+                            {
+                                "event": "error",
+                                "reason": "project_repo_invalid",
+                                "message": "所选项目不存在、已禁用或未启用项目专家 Agent，请重新选择。",
+                            }
+                        )
+                        return
+                    previous_project = (
+                        context_meta.get("project_name")
+                        or context_meta.get("project_code")
+                    )
+                    ctx, context_meta = self._create_context_for_project(
+                        session_id=effective_session_id,
+                        question=question,
+                        repo=repo,
+                        user=user,
+                    )
                     yield self._sse_event(
                         {
                             "event": "agent_trace",
                             "type": "system_notice",
-                            "kind": "project_switch_ignored",
+                            "kind": "project_switched",
                             "task_id": ctx.task_id,
                             "message": (
-                                "本会话已绑定到首轮选择的项目，无法在追问中切换项目。"
-                                "如需就另一个项目提问，请新开一个会话。"
+                                f"已从项目 `{previous_project}` 切换到 "
+                                f"`{context_meta.get('project_name') or context_meta.get('project_code')}`，"
+                                "已建立独立代码工作区，并保留本会话的对话历史。"
                             ),
                             "timestamp": time.time(),
+                        }
+                    )
+                    yield self._sse_event(
+                        {
+                            "event": "project_expert_context",
+                            "session_id": effective_session_id,
+                            "project_repo_id": context_meta.get("project_repo_id"),
+                            "project_code": context_meta.get("project_code"),
                         }
                     )
                 if not question:
@@ -266,7 +307,7 @@ class ProjectExpertChatService:
                 yield self._sse_event(
                     {
                         "event": "project_expert_status",
-                        "message": "已复用当前对话的项目专家工作区，正在基于已克隆代码继续分析...",
+                        "message": "已准备当前选择项目的工作区，正在基于该项目代码继续分析...",
                     }
                 )
 
@@ -326,6 +367,7 @@ class ProjectExpertChatService:
                 user=user,
                 session_id=effective_session_id,
                 history_json=history_json,
+                workspace_dir=ctx.temp_dir,
             )
             # Drive prompt selection + the response-language directive for this
             # run. Resolved from the request/owner at the API layer; falls back
@@ -841,7 +883,11 @@ class ProjectExpertChatService:
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
         }
-        self._save_context(session_id, context_meta)
+        try:
+            self._save_context(session_id, context_meta)
+        except Exception:
+            cleanup(ctx)
+            raise
         if old_ctx and old_ctx.temp_dir != ctx.temp_dir:
             cleanup(old_ctx)
         return ctx, context_meta
@@ -860,6 +906,10 @@ class ProjectExpertChatService:
         task_data["question"] = question
         task_data["hints"] = hints
         task_data["conversation_context"] = hints
+        if (Path(ctx.temp_dir) / "conversation_history.json").is_file():
+            task_data["conversation_history_file"] = "conversation_history.json"
+        else:
+            task_data.pop("conversation_history_file", None)
         task_path.write_text(
             json.dumps(task_data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -873,6 +923,7 @@ class ProjectExpertChatService:
         user: Optional[User],
         session_id: str,
         history_json: Optional[str],
+        workspace_dir: Optional[str] = None,
     ) -> str:
         messages: List[ChatMessage] = []
         if user and db:
@@ -890,11 +941,23 @@ class ProjectExpertChatService:
             messages = self._parse_client_history(history_json)
 
         if not messages:
+            if workspace_dir:
+                (Path(workspace_dir) / "conversation_history.json").unlink(missing_ok=True)
             return ""
+
+        if workspace_dir:
+            transcript = [
+                {"role": msg.role, "content": str(msg.content or "")}
+                for msg in messages
+            ]
+            (Path(workspace_dir) / "conversation_history.json").write_text(
+                json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
 
         recent = messages[-12:]
         lines = [
-            "以下是同一对话中此前的上下文。用户可能会用“刚才/这个/继续”等指代，请结合这些内容理解当前问题："
+            "以下是同一对话中最近的上下文；完整历史在 conversation_history.json。"
+            "历史中旧项目的回答只用于理解指代，不能作为当前项目的源码证据："
         ]
         for msg in recent:
             role = "用户" if msg.role == "user" else "助手"

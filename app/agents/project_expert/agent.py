@@ -159,6 +159,8 @@ class ProjectExpertAgent:
             "读取文件和搜索时只使用这些路径或它们的相对路径 "
             "(`task.json`、`repo/...`)。"
             "第一次 Read 调用请使用 `{\"file_path\":\"task.json\"}`。"
+            "如果 `task.json` 中有 `conversation_history_file`，请在判断追问或项目切换的"
+            "指代时读取它；其中过去项目的回答不能作为当前项目源码的证据。"
             "本工作区没有 `logs/` 目录，也没有 metadata.json，不要去搜索它们。"
             "如果路径不确定，先用 `pwd` / `ls -la` 确认当前目录。\n"
         )
@@ -352,7 +354,33 @@ class ProjectExpertAgent:
             project_card=project_card,
             catalog_available=supports_mcp,
             locale=ctx.locale,
+            selected_project_is_target=True,
         )
+        if ctx.locale == "en":
+            system_prompt += (
+                "\n\n## Project Expert source boundary\n"
+                "The selected project in task.json.repo_info is the target of this turn. "
+                "For claims about its implementation, clone and use only verified repositories "
+                "from the same product/project series, based on project cards and identities; "
+                "do not infer series membership from a similar component name alone. "
+                "If a needed component has no registered same-series repository, say explicitly "
+                "that its implementation cannot be verified. You may inspect a different-series "
+                "repository for an explicit comparison or as a reference, but name that project, "
+                "label every such finding as reference only, and never attribute its behavior "
+                "to the selected series. If the series relationship is unclear, ask for "
+                "clarification before cloning. Prior chat answers are context, not source evidence."
+            )
+        else:
+            system_prompt += (
+                "\n\n## 项目专家的源码边界\n"
+                "`task.json.repo_info` 中的所选项目是本轮分析对象。对该项目实现作结论时，"
+                "只能把项目卡片和身份确认属于同一产品/项目系列的仓库作为实现证据；"
+                "不能仅凭组件名称相似推断同系列。若所需组件没有已注册的同系列仓库，"
+                "必须明确告知用户该组件的实现无法核实。其他系列仓库只能在用户明确要求比较时，"
+                "或确有参考价值时作为参考读取；必须标明参考项目和来源，明确这是参考，"
+                "不能把参考项目的行为写成所选项目的实现。系列归属不明确时先澄清，"
+                "不要猜测后克隆。历史对话中的旧回答仅用于理解问题，不能替代当前源码证据。"
+            )
 
         setting_sources = ["project"] if materialized_skills else None
 

@@ -671,7 +671,7 @@ claude_agent_project_expert:
         - 用户在对话中提供的上下文。
 
         ## 禁止事项
-        - 当前所选项目没有源代码仓库：不要为它解析 clone_url、调用 lookup 或手工执行 `git clone`。如果最高优先级的项目适配性检查发现另一个已注册项目明确匹配，仍可调用 `mcp__project_repo__clone_project_repo` 获取该追加项目源码。
+        - 当前所选项目没有源代码仓库：不要为它解析 clone_url、调用 lookup 或手工执行 `git clone`。若另一个项目更匹配，应请用户改选；其他系列仓库只可作为明确标注的参考，不能替代所选项目源码。
         - 不要因为缺少代码而臆造实现细节。当问题必须依赖源代码才能准确回答时，请在 `answer` 中如实说明「该项目未关联代码仓库，无法核对源码」，并基于已有信息给出力所能及的回答。
 
         ## 建议
@@ -687,7 +687,7 @@ claude_agent_project_expert:
         - Context the user provides in the conversation.
 
         ## Prohibited
-        - The selected project has no source repository: do not resolve clone_url, call lookup for it, or run manual `git clone`. If the highest-priority project-fit check identifies a different registered project as a clear match, you may still call `mcp__project_repo__clone_project_repo` for that additional project.
+        - The selected project has no source repository: do not resolve clone_url, call lookup for it, or run manual `git clone`. If another project is a clearer match, ask the user to select it. Other-series repositories are explicitly labeled references and cannot replace source for the selected project.
         - Do not fabricate implementation details to compensate for the missing code. When a question can only be answered accurately from source code, state honestly in `answer` that "this project has no linked code repository, so the source code cannot be verified," and give the best answer you can from the available information.
 
         ## Suggestion
@@ -697,12 +697,12 @@ claude_agent_project_expert:
       zh: |
         Task ID: {task_id} Workspace root: {workspace_dir} Question: {question} Hints: {hints}
 
-        请回答上述问题。首先执行第 0 步分类并读取 `task.json`；本工作区没有日志和 metadata.json。随后按最高优先级的项目适配性检查读取项目卡片目录：当前项目足够时复用/克隆 `repo/`；问题明确属于其他项目或跨项目时，用克隆工具获取必要的 `related_repos/...`，并按项目和真实路径引用证据。如果可用来源里没有相关内容，请如实说明。
+        请回答上述问题。首先执行第 0 步分类并读取 `task.json`；本工作区没有日志和 metadata.json。若有 `conversation_history_file`，读取它理解完整的既往对话，但以本轮所选项目为准。随后读取项目卡片目录：当前项目足够时复用/克隆 `repo/`；仅在同系列组件确有必要或需要明确标注的跨系列参考时，用克隆工具获取 `related_repos/...`，并按项目和真实路径引用证据。如果可用来源里没有相关内容，请如实说明。
 
       en: |
         Task ID: {task_id} Workspace root: {workspace_dir} Question: {question} Hints: {hints}
 
-        Answer the question above. Start with Step 0 classification and read `task.json`; this workspace has no logs or metadata.json. Then follow the highest-priority project-fit check and read the project catalog: reuse/clone `repo/` when the current project is sufficient, or use the clone tool for only the necessary `related_repos/...` when another or multiple projects clearly apply. Cite evidence by project and real path. If no relevant source exists, say so honestly.
+        Answer the question above. Start with Step 0 classification and read `task.json`; this workspace has no logs or metadata.json. If `conversation_history_file` exists, read it for the full prior conversation while treating this turn's selected project as authoritative. Then read the project catalog: reuse/clone `repo/` when the current project is sufficient; use the clone tool for `related_repos/...` only for a needed same-series component or a clearly labeled cross-series reference. Cite evidence by project and real path. If no relevant source exists, say so honestly.
 
 claude_agent_package_search:
   # ─── generic variant ──────────────────────────────────────────────

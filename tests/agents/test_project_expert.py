@@ -277,6 +277,10 @@ async def test_agent_uses_expected_tools_materializes_project_skills_and_masks_t
     assert "项目适配性检查（最高优先级）" in kwargs["system_prompt"]
     assert "Foo service authentication and account APIs" in kwargs["system_prompt"]
     assert "当前系统还没有适合回答这个问题的项目" in kwargs["system_prompt"]
+    assert "请用户改选正确项目" in kwargs["system_prompt"]
+    assert "应在当前工作区克隆匹配项目并从该代码检出中作答" not in kwargs["system_prompt"]
+    assert "其他系列仓库只能在用户明确要求比较时" in kwargs["system_prompt"]
+    assert "不能把参考项目的行为写成所选项目的实现" in kwargs["system_prompt"]
 
     trace_text = json.dumps(result["trace_events"], ensure_ascii=False)
     assert "secret-token" not in trace_text
@@ -442,10 +446,14 @@ async def test_service_requires_project_repo_for_new_session():
 
 
 @pytest.mark.asyncio
-async def test_service_reuses_workspace_and_emits_notice_on_project_switch(monkeypatch, tmp_path):
+async def test_service_switches_workspace_and_emits_context_on_project_switch(monkeypatch, tmp_path):
     from app.services.project_expert_chat_service import ProjectExpertChatService
 
     ctx = _make_ctx(tmp_path)
+    new_root = tmp_path / "new-project"
+    new_root.mkdir()
+    new_ctx = _make_ctx(new_root)
+    new_ctx.task_id = "task-2"
     meta = {
         "session_id": "session-followup",
         "task_id": ctx.task_id,
@@ -459,7 +467,7 @@ async def test_service_reuses_workspace_and_emits_notice_on_project_switch(monke
 
     class FastAgent:
         def run_sync(self, seen_ctx, _cancel_event=None, _trace_emitter=None, _clarification_binding=None):
-            assert seen_ctx.temp_dir == ctx.temp_dir
+            assert seen_ctx.temp_dir == new_ctx.temp_dir
             return {
                 "engine": "claude-agent-sdk",
                 "model": "fake-model",
@@ -483,6 +491,14 @@ async def test_service_reuses_workspace_and_emits_notice_on_project_switch(monke
 
     service = ProjectExpertChatService()
     monkeypatch.setattr(service, "_load_context", lambda *_a, **_kw: (ctx, meta))
+    async def resolve_repo(_db, project_repo_id):
+        return _repo(id=project_repo_id, project_code="bar", project_name="Bar Service")
+
+    monkeypatch.setattr(service, "_resolve_project_repo", resolve_repo)
+    new_meta = {**meta, "task_id": new_ctx.task_id, "temp_dir": new_ctx.temp_dir,
+                "repo_dir": new_ctx.repo_dir, "task_json_path": new_ctx.task_json_path,
+                "project_repo_id": 2, "project_code": "bar", "project_name": "Bar Service"}
+    monkeypatch.setattr(service, "_create_context_for_project", lambda **_kw: (new_ctx, new_meta))
     monkeypatch.setattr(service, "_save_context", lambda *_a, **_kw: None)
     monkeypatch.setattr(service, "_touch_context", lambda *_a, **_kw: None)
     monkeypatch.setattr(service, "_persist_exchange", lambda *_a, **_kw: None)
@@ -519,9 +535,123 @@ async def test_service_reuses_workspace_and_emits_notice_on_project_switch(monke
         event for event in events
         if event.get("event") == "agent_trace" and event.get("type") == "system_notice"
     ]
-    assert any(event.get("kind") == "project_switch_ignored" for event in notices)
+    assert any(event.get("kind") == "project_switched" for event in notices)
+    assert any(event.get("event") == "project_expert_context" and event.get("project_repo_id") == 2 for event in events)
     assert events[-1]["event"] == "done"
+    assert service.get_status("session-followup")["project_repo_id"] == 2
     assert service.get_status("session-followup")["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_same_project_followup_keeps_workspace(monkeypatch, tmp_path):
+    from app.services.project_expert_chat_service import ProjectExpertChatService
+
+    ctx = _make_ctx(tmp_path)
+    meta = {"project_repo_id": 1, "task_id": ctx.task_id, "project_code": "foo"}
+    service = ProjectExpertChatService()
+    monkeypatch.setattr(service, "_load_context", lambda *_a, **_kw: (ctx, meta))
+
+    def unexpected_switch(**_kwargs):
+        raise AssertionError("same project must reuse its workspace")
+
+    monkeypatch.setattr(service, "_create_context_for_project", unexpected_switch)
+
+    async def no_history(**_kwargs):
+        return ""
+
+    monkeypatch.setattr(service, "_build_history_hint", no_history)
+
+    class FastAgent:
+        def run_sync(self, seen_ctx, *_args):
+            assert seen_ctx.temp_dir == ctx.temp_dir
+            return {"status": "ok", "answer": "ok", "summary": "ok", "model": "fake-model"}
+
+    monkeypatch.setattr("app.services.project_expert_chat_service.ProjectExpertAgent", FastAgent)
+    events = [_decode_sse_event(chunk) async for chunk in service.stream(
+        message="继续看", session_id="session-same", history_json=None,
+        remember=False, project_repo_id=1, db=None, user=None,
+    )]
+    assert events[-1]["event"] == "done"
+    assert service.get_status("session-same")["project_repo_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_project_switch_replaces_checkout_but_retains_full_transcript(monkeypatch, tmp_path):
+    from app.agents.project_expert import workspace
+    from app.services.project_expert_chat_service import ProjectExpertChatService
+
+    monkeypatch.setattr(workspace.settings, "code_repo_clone_base_dir", str(tmp_path))
+    service = ProjectExpertChatService()
+    service.registry_dir = tmp_path / "contexts"
+    old_ctx, _ = service._create_context_for_project(
+        session_id="same-session", question="LX10 问题", repo=_repo(id=1), user=None,
+    )
+    (Path(old_ctx.repo_dir) / "old-source.txt").write_text("old", encoding="utf-8")
+    (Path(old_ctx.temp_dir) / "related_repos").mkdir()
+
+    new_ctx, meta = service._create_context_for_project(
+        session_id="same-session", question="LX06 问题",
+        repo=_repo(id=2, project_code="lx06_oam", project_name="LX06 OAM"), user=None,
+    )
+    assert new_ctx.temp_dir != old_ctx.temp_dir
+    assert meta["project_repo_id"] == 2
+    assert service._load_context("same-session", user=None)[0].temp_dir == new_ctx.temp_dir
+    assert sorted(p.name for p in Path(new_ctx.temp_dir).iterdir()) == ["repo", "task.json"]
+    assert not Path(old_ctx.temp_dir).exists()
+    assert json.loads(Path(new_ctx.task_json_path).read_text(encoding="utf-8"))["repo_info"]["project_code"] == "lx06_oam"
+
+    history = [{"role": "user", "content": f"历史问题 {n}"} for n in range(20)]
+    hint = await service._build_history_hint(
+        db=None, user=None, session_id="same-session",
+        history_json=json.dumps(history, ensure_ascii=False), workspace_dir=new_ctx.temp_dir,
+    )
+    service._bind_question_and_hints(new_ctx, question="LX06 问题", hints=hint)
+    transcript = json.loads((Path(new_ctx.temp_dir) / "conversation_history.json").read_text(encoding="utf-8"))
+    assert len(transcript) == 20
+    assert transcript[0]["content"] == "历史问题 0"
+    assert "历史问题 0" not in hint
+    assert "历史问题 19" in hint
+    assert json.loads(Path(new_ctx.task_json_path).read_text(encoding="utf-8"))["conversation_history_file"] == "conversation_history.json"
+
+
+@pytest.mark.asyncio
+async def test_invalid_project_switch_keeps_existing_context(monkeypatch, tmp_path):
+    from app.services.project_expert_chat_service import ProjectExpertChatService
+
+    ctx = _make_ctx(tmp_path)
+    meta = {"project_repo_id": 1, "task_id": ctx.task_id, "project_code": "foo"}
+    service = ProjectExpertChatService()
+    monkeypatch.setattr(service, "_load_context", lambda *_a, **_kw: (ctx, meta))
+
+    async def unavailable(_db, _project_repo_id):
+        return None
+
+    monkeypatch.setattr(service, "_resolve_project_repo", unavailable)
+    events = [_decode_sse_event(chunk) async for chunk in service.stream(
+        message="改看另一个项目", session_id="session-invalid", history_json=None,
+        remember=False, project_repo_id=2, db=None, user=None,
+    )]
+    assert events[-1]["reason"] == "project_repo_invalid"
+    assert service._load_context("session-invalid", user=None)[0].temp_dir == ctx.temp_dir
+    assert not service._jobs.get("session-invalid")
+
+
+@pytest.mark.asyncio
+async def test_project_switch_waits_for_active_run(monkeypatch, tmp_path):
+    from app.services.project_expert_chat_service import AgentJob, ProjectExpertChatService
+
+    service = ProjectExpertChatService()
+    service._jobs["session-active"] = AgentJob(
+        session_id="session-active", task_id="task-active", context_meta={},
+        question="old", user_id=None, remember=False, started_at=time.monotonic(),
+        project_repo_id=1,
+    )
+    events = [_decode_sse_event(chunk) async for chunk in service.stream(
+        message="新项目问题", session_id="session-active", history_json=None,
+        remember=False, project_repo_id=2, db=None, user=None,
+    )]
+    assert events[-1]["reason"] == "project_switch_while_running"
+    assert service._jobs["session-active"].project_repo_id == 1
 
 
 @pytest.mark.asyncio
