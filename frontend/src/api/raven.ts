@@ -8,6 +8,7 @@ import type {
   PackageAgentSearchResponse,
   PackageAgentTraceEvent,
   RavenPackage,
+  RavenComponent,
   RavenPackageList,
   RavenUploadMetadata,
 } from '@/types'
@@ -73,10 +74,11 @@ export const deleteRavenPackage = (id: string) =>
 export interface RavenPackageMetadataPatch {
   description?: string | null
   tags?: string[]
+  components?: RavenComponent[]
 }
 
 /**
- * Update only a package's `description` and/or `tags`. Requires an
+ * Update a package's description, tags and components metadata. Requires an
  * authenticated user authorized for the package's project (or a global admin);
  * the backend re-checks. Returns the saved package in the success envelope.
  */

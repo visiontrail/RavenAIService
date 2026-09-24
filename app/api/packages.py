@@ -35,6 +35,7 @@ from app.models.database import get_db
 from app.services.raven_package_service import (
     MetadataValidationError,
     normalize_description,
+    normalize_metadata_components,
     normalize_tags,
     raven_package_service,
     validate_project_code,
@@ -309,9 +310,9 @@ async def update_package_metadata(
     current_user=Depends(get_optional_user),
     locale: str = Depends(get_request_locale),
 ) -> dict[str, Any]:
-    """Update only the Raven package ``description`` and/or ``tags``.
+    """Update Raven package description, tags and components metadata.
 
-    Body: ``{description?: string | null, tags?: string[]}`` with at least one
+    Body accepts description, tags and/or components with at least one
     field present. Authorized for global admins and members of the package's
     enabled project. Non-editable package asset fields are never touched.
     """
@@ -343,7 +344,8 @@ async def update_package_metadata(
 
     has_description = "description" in body
     has_tags = "tags" in body
-    if not has_description and not has_tags:
+    has_components = "components" in body
+    if not has_description and not has_tags and not has_components:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=t("package.metadata_patch_empty", locale),
@@ -355,6 +357,8 @@ async def update_package_metadata(
             updates["description"] = normalize_description(body.get("description"))
         if has_tags:
             updates["tags"] = normalize_tags(body.get("tags"))
+        if has_components:
+            updates["components"] = normalize_metadata_components(body.get("components"))
     except MetadataValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

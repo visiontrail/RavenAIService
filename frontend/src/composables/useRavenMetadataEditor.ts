@@ -1,6 +1,6 @@
-import { computed, ref, type Ref } from 'vue'
+import { computed, ref, watch, type Ref } from 'vue'
 import { updateRavenPackageMetadata } from '@/api/raven'
-import type { RavenPackage } from '@/types'
+import type { RavenComponent, RavenPackage } from '@/types'
 
 type Translate = (key: string, named?: Record<string, unknown>) => string
 
@@ -32,8 +32,36 @@ const normalizeTags = (value?: unknown): string[] => {
   return []
 }
 
+export const normalizeComponents = (value?: unknown): RavenComponent[] => {
+  if (!value) return []
+  let components: any[] = []
+  if (Array.isArray(value)) {
+    components = value
+  } else if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      if (Array.isArray(parsed)) components = parsed
+    } catch {
+      components = []
+    }
+  }
+
+  return components
+    .map((item) => {
+      if (typeof item === 'string') return { name: item }
+      if (item && typeof item === 'object') {
+        const name = (item as any).name
+        const version = (item as any).version
+        if (!name) return null
+        return version ? { name: String(name), version: String(version) } : { name: String(name) }
+      }
+      return null
+    })
+    .filter(Boolean) as RavenComponent[]
+}
+
 /**
- * Description + tag editing for the Raven package detail page.
+ * Description, tag and component editing for the Raven package detail page.
  *
  * Holds draft state for each editable section, saves through the metadata
  * PATCH API, and keeps the draft intact on failure so the user can retry or
@@ -136,8 +164,53 @@ export function useRavenMetadataEditor(opts: RavenMetadataEditorOptions) {
     }
   }
 
+  // 组件草稿与持久化数据分离，取消时不影响详情。
+  const editingComponents = ref(false)
+  const componentsDraft = ref<RavenComponent[]>([])
+  const savingComponents = ref(false)
+  let componentGeneration = 0
+  watch(() => pkg.value?.id, () => {
+    componentGeneration++
+    editingComponents.value = false
+    componentsDraft.value = []
+    savingComponents.value = false
+  }, { flush: 'sync' })
+
+  const startEditComponents = () => {
+    if (!canEdit.value) return
+    componentsDraft.value = normalizeComponents(pkg.value?.metadata?.components)
+    editingComponents.value = true
+  }
+  const cancelEditComponents = () => { editingComponents.value = false }
+  const addComponent = () => { componentsDraft.value.push({ name: '', version: '' }) }
+  const removeComponent = (index: number) => { componentsDraft.value.splice(index, 1) }
+  const saveComponents = async () => {
+    if (!pkg.value || !canEdit.value || savingComponents.value) return
+    const draft = componentsDraft.value.map(item => ({ name: item.name.trim(), version: (item.version || '').trim() }))
+    if (draft.some(item => !item.name)) {
+      onWarn(t('raven.componentNameRequired'))
+      return
+    }
+    const generation = componentGeneration
+    savingComponents.value = true
+    try {
+      const { data } = await updateRavenPackageMetadata(pkg.value.id, { components: draft })
+      if (generation !== componentGeneration) return
+      if (!data?.success || !data.data) throw new Error(data?.message || t('raven.metadataSaveFail'))
+      apply(data.data)
+      editingComponents.value = false
+      onSuccess(t('raven.componentsSaveSuccess'))
+    } catch (error: any) {
+      if (generation === componentGeneration) onError(extractError(error))
+    } finally {
+      if (generation === componentGeneration) savingComponents.value = false
+    }
+  }
+
   return {
     canEdit,
+    editingComponents, componentsDraft, savingComponents,
+    startEditComponents, cancelEditComponents, addComponent, removeComponent, saveComponents,
     currentTags,
     // description
     editingDesc,

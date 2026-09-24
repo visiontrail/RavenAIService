@@ -7,7 +7,7 @@ vi.mock('@/api/raven', () => ({
   updateRavenPackageMetadata: (...args: unknown[]) => updateMock(...args),
 }))
 
-import { useRavenMetadataEditor } from './useRavenMetadataEditor'
+import { normalizeComponents, useRavenMetadataEditor } from './useRavenMetadataEditor'
 
 const t = (key: string) => key
 
@@ -133,5 +133,87 @@ describe('useRavenMetadataEditor', () => {
     expect(editor.editingTags.value).toBe(false)
     expect(pkg.value?.metadata?.tags).toEqual(['stable'])
     expect(onSuccess).toHaveBeenCalledWith('raven.tagsSaveSuccess')
+  })
+})
+
+describe('component metadata editing', () => {
+  it('normalizes legacy component strings and copies object rows', () => {
+    expect(normalizeComponents('["modem", {"name": "helper", "version": 2}]')).toEqual([
+      { name: 'modem' }, { name: 'helper', version: '2' },
+    ])
+    expect(normalizeComponents('invalid')).toEqual([])
+    expect(normalizeComponents([{ name: 123, version: 4 }])).toEqual([{ name: '123', version: '4' }])
+  })
+
+  it('isolates drafts, supports add/remove and restores saved rows after cancel', () => {
+    const { pkg, editor } = harness(makePkg({ metadata: { components: [{ name: 'modem', version: '1' }] } }))
+    editor.startEditComponents()
+    editor.componentsDraft.value[0].name = 'changed'
+    editor.addComponent()
+    editor.removeComponent(0)
+    editor.cancelEditComponents()
+    expect(pkg.value?.metadata?.components).toEqual([{ name: 'modem', version: '1' }])
+    editor.startEditComponents()
+    expect(editor.componentsDraft.value).toEqual([{ name: 'modem', version: '1' }])
+  })
+
+  it('saves trimmed names and optional versions and retains permission', async () => {
+    const { pkg, editor } = harness(makePkg())
+    const components = [{ name: 'netconf', version: '' }]
+    updateMock.mockResolvedValue({ data: { success: true, data: makePkg({ metadata: { components }, canEditMetadata: undefined }) } })
+    editor.startEditComponents()
+    editor.addComponent()
+    editor.componentsDraft.value[0].name = ' netconf '
+    await editor.saveComponents()
+    expect(updateMock).toHaveBeenCalledWith('pkg-1', { components })
+    expect(pkg.value?.metadata?.components).toEqual(components)
+    expect(pkg.value?.canEditMetadata).toBe(true)
+    expect(editor.editingComponents.value).toBe(false)
+  })
+
+  it('rejects blank names, keeps failed drafts, and allows clearing', async () => {
+    const { editor, onWarn, onError } = harness(makePkg())
+    editor.startEditComponents()
+    editor.addComponent()
+    await editor.saveComponents()
+    expect(onWarn).toHaveBeenCalledWith('raven.componentNameRequired')
+    expect(updateMock).not.toHaveBeenCalled()
+    editor.componentsDraft.value[0].name = 'draft'
+    updateMock.mockRejectedValue(new Error('failed'))
+    await editor.saveComponents()
+    expect(onError).toHaveBeenCalledWith('failed')
+    expect(editor.editingComponents.value).toBe(true)
+    expect(editor.componentsDraft.value[0].name).toBe('draft')
+    expect(editor.savingComponents.value).toBe(false)
+    editor.removeComponent(0)
+    updateMock.mockResolvedValue({ data: { success: true, data: makePkg({ metadata: { components: [] } }) } })
+    await editor.saveComponents()
+    expect(updateMock).toHaveBeenLastCalledWith('pkg-1', { components: [] })
+  })
+
+  it('discards drafts and ignores pending saves when the package changes', async () => {
+    const { pkg, editor, onSuccess } = harness(makePkg())
+    let resolve!: (value: unknown) => void
+    updateMock.mockImplementation(() => new Promise(r => { resolve = r }))
+    editor.startEditComponents()
+    const pending = editor.saveComponents()
+    expect(editor.savingComponents.value).toBe(true)
+    await editor.saveComponents()
+    expect(updateMock).toHaveBeenCalledTimes(1)
+    pkg.value = makePkg({ id: 'pkg-2' })
+    expect(editor.editingComponents.value).toBe(false)
+    expect(editor.componentsDraft.value).toEqual([])
+    resolve({ data: { success: true, data: makePkg() } })
+    await pending
+    expect(pkg.value.id).toBe('pkg-2')
+    expect(onSuccess).not.toHaveBeenCalled()
+  })
+
+  it('does not open or save components for read-only viewers', async () => {
+    const { editor } = harness(makePkg({ canEditMetadata: false }))
+    editor.startEditComponents()
+    await editor.saveComponents()
+    expect(editor.editingComponents.value).toBe(false)
+    expect(updateMock).not.toHaveBeenCalled()
   })
 })

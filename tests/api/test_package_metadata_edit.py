@@ -11,6 +11,7 @@ Covers the ``raven-package-metadata-editing`` capability:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Optional
 
 import pytest
@@ -358,3 +359,45 @@ def test_updated_description_used_by_search(client, isolated_store, tmp_path, re
     _patch(client, "pkg-1", {"description": "baseband hotfix"})
     body = client.get("/packages", params={"search": "baseband hotfix"}).json()
     assert [p["id"] for p in body["data"]["packages"]] == ["pkg-1"]
+
+
+def test_components_save_reload_search_and_clear(client, isolated_store, tmp_path, registry, auth):
+    _seed(isolated_store, tmp_path, [("pkg-1", "pkg-1.tgz", "alpha")])
+    auth.user = _FakeUser("alice")
+    registry.add((1, "alice"))
+    before = isolated_store.get_package("pkg-1")
+    archive = Path(before["path"]).read_bytes()
+    resp = _patch(client, "pkg-1", {"components": [{"name": " netconf-server ", "version": " 0.9.32 "}, {"name": "helper"}]})
+    assert resp.status_code == 200
+    expected = [{"name": "netconf-server", "version": "0.9.32"}, {"name": "helper", "version": ""}]
+    reloaded = client.get("/packages/pkg-1").json()["data"]
+    assert reloaded["metadata"]["components"] == expected
+    saved = isolated_store.get_package("pkg-1")
+    saved["metadata"]["components"] = before["metadata"]["components"]
+    assert saved == before
+    assert Path(before["path"]).read_bytes() == archive
+    matches, total = isolated_store.text_search("netconf-server", fields=["components"])
+    assert total == 1
+    assert matches[0]["id"] == "pkg-1"
+    assert _patch(client, "pkg-1", {"components": []}).status_code == 200
+    assert isolated_store.get_package("pkg-1")["metadata"]["components"] == []
+
+
+@pytest.mark.parametrize("components", [None, "x", ["legacy"], [None], [{}], [{"name": " "}], [{"name": 1}], [{"name": "x", "version": None}], [{"name": "x" * 257}], [{"name": "x", "version": "v" * 257}], [{"name": "x"}] * 101])
+def test_invalid_components_reject_entire_patch(client, isolated_store, tmp_path, registry, auth, components):
+    _seed(isolated_store, tmp_path, [("pkg-1", "pkg-1.tgz", "alpha")])
+    auth.user = _FakeUser("root", role="admin")
+    before = isolated_store.get_package("pkg-1")
+    resp = _patch(client, "pkg-1", {"components": components, "description": "must not persist"})
+    assert resp.status_code == 400
+    assert isolated_store.get_package("pkg-1") == before
+
+
+@pytest.mark.parametrize("role,expected", [(None, 401), ("user", 403), ("admin", 200)])
+def test_component_edit_authorization(client, isolated_store, tmp_path, registry, auth, role, expected):
+    _seed(isolated_store, tmp_path, [("pkg-1", "pkg-1.tgz", "alpha")])
+    auth.user = _FakeUser("outside", role=role) if role else None
+    before = isolated_store.get_package("pkg-1")
+    assert _patch(client, "pkg-1", {"components": []}).status_code == expected
+    if expected != 200:
+        assert isolated_store.get_package("pkg-1") == before

@@ -51,12 +51,14 @@ UNASSOCIATED_PROJECT = "__unassociated__"
 PACKAGE_UPLOAD_SUFFIXES = (".tgz", ".tar.gz", ".upkg")
 
 # ─────────────── Editable package metadata limits & validation ───────────────
-# These bound the only two fields the metadata-edit flow may change so a direct
+# These bound the editable fields the metadata-edit flow may change so a direct
 # API caller cannot bloat the JSON store. They are intentionally generous; the
 # UI never needs the full range.
 PACKAGE_DESCRIPTION_MAX_LEN = 4000
 PACKAGE_TAG_MAX_COUNT = 30
 PACKAGE_TAG_MAX_LEN = 64
+PACKAGE_COMPONENT_MAX_COUNT = 100
+PACKAGE_COMPONENT_FIELD_MAX_LEN = 256
 
 # Sentinel marking an editable field as "not supplied" so a caller can clear a
 # field to empty (``description=None`` / ``tags=[]``) without it being confused
@@ -212,6 +214,26 @@ def normalize_tags(value: Any) -> list[str]:
             "metadata_tags_too_many", max=PACKAGE_TAG_MAX_COUNT
         )
     return out
+
+
+def normalize_metadata_components(value: Any) -> list[dict[str, str]]:
+    """严格校验编辑输入；上传端的历史格式兼容逻辑保持独立。"""
+    if not isinstance(value, list):
+        raise MetadataValidationError("metadata_components_invalid")
+    if len(value) > PACKAGE_COMPONENT_MAX_COUNT:
+        raise MetadataValidationError("metadata_components_too_many", max=PACKAGE_COMPONENT_MAX_COUNT)
+    result = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise MetadataValidationError("metadata_components_invalid")
+        name, version = item.get("name"), item.get("version", "")
+        if not isinstance(name, str) or not name.strip() or not isinstance(version, str):
+            raise MetadataValidationError("metadata_components_invalid")
+        name, version = name.strip(), version.strip()
+        if max(len(name), len(version)) > PACKAGE_COMPONENT_FIELD_MAX_LEN:
+            raise MetadataValidationError("metadata_component_too_long", max=PACKAGE_COMPONENT_FIELD_MAX_LEN)
+        result.append({"name": name, "version": version})
+    return result
 
 
 def _normalize_project_code(package: dict[str, Any]) -> dict[str, Any]:
@@ -420,18 +442,20 @@ class RavenPackageService:
         *,
         description: Any = _UNSET,
         tags: Any = _UNSET,
+        components: Any = _UNSET,
     ) -> Optional[dict[str, Any]]:
-        """Update only ``metadata.description`` and/or ``metadata.tags``.
+        """Update description, tags and components metadata.
 
         Pass a value to change a field, omit it to leave it untouched. All
         non-editable package fields (``path``, ``size``, ``metadata.sha256``,
         ``version``, ``projectCode``, ``metadata.isPatch``,
-        ``metadata.components``, ``createdAt`` …) are preserved. The change is
+        ``createdAt`` …) are preserved. The change is
         persisted to the metadata JSON file and the saved package is returned.
         Returns ``None`` when no package matches ``package_id``.
 
         Values are expected to be already normalized by the caller
-        (:func:`normalize_description` / :func:`normalize_tags`).
+        (:func:`normalize_description`, :func:`normalize_tags`,
+        :func:`normalize_metadata_components`).
         """
         with self._repository_lock():
             packages = self.load_packages()
@@ -448,6 +472,8 @@ class RavenPackageService:
                 metadata["description"] = description
             if tags is not _UNSET:
                 metadata["tags"] = list(tags)
+            if components is not _UNSET:
+                metadata["components"] = [dict(item) for item in components]
             package["metadata"] = metadata
             packages[target_index] = package
 

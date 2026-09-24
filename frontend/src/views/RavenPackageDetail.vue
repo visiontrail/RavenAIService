@@ -13,8 +13,8 @@ import {
 import { projectRepoApi, type ProjectRepoOption } from '@/api'
 import { copyToClipboard, downloadFileByUrl, formatDateTime, formatFileSize } from '@/utils'
 import { renderMarkdown } from '@/utils/markdownRenderer'
-import { useRavenMetadataEditor } from '@/composables/useRavenMetadataEditor'
-import type { RavenComponent, RavenPackage } from '@/types'
+import { normalizeComponents, useRavenMetadataEditor } from '@/composables/useRavenMetadataEditor'
+import type { RavenPackage } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -48,34 +48,6 @@ const normalizeTags = (value?: unknown) => {
     }
   }
   return []
-}
-
-const normalizeComponents = (value?: unknown): RavenComponent[] => {
-  if (!value) return []
-  let components: any[] = []
-  if (Array.isArray(value)) {
-    components = value
-  } else if (typeof value === 'string') {
-    try {
-      const parsed = JSON.parse(value)
-      if (Array.isArray(parsed)) components = parsed
-    } catch {
-      components = []
-    }
-  }
-
-  return components
-    .map((item) => {
-      if (typeof item === 'string') return { name: item }
-      if (item && typeof item === 'object') {
-        const name = (item as any).name
-        const version = (item as any).version
-        if (!name) return null
-        return version ? { name, version: String(version) } : { name: String(name) }
-      }
-      return null
-    })
-    .filter(Boolean) as RavenComponent[]
 }
 
 const isPatchPackage = (value?: RavenPackage | null) => {
@@ -114,7 +86,7 @@ const renderedDescription = computed(() =>
 const tags = computed(() => normalizeTags(pkg.value?.metadata?.tags))
 const components = computed(() => normalizeComponents(pkg.value?.metadata?.components))
 
-// Inline description + tag editing. Only renders affordances when the backend
+// Inline metadata editing. Only renders affordances when the backend
 // reports `canEditMetadata`; the PATCH endpoint re-checks authorization.
 const {
   canEdit,
@@ -133,6 +105,8 @@ const {
   addTag,
   removeTag,
   saveTags,
+  editingComponents, componentsDraft, savingComponents,
+  startEditComponents, cancelEditComponents, addComponent, removeComponent, saveComponents,
 } = useRavenMetadataEditor({
   pkg,
   onSaved: (saved) => {
@@ -445,9 +419,12 @@ watch(
         <section class="rw-card">
           <div class="card-head">
             <h2 class="card-title">{{ t('raven.componentsSection') }}</h2>
-            <span v-if="components.length" class="card-subtitle">{{ t('raven.totalCount', { count: components.length }) }}</span>
+            <span v-if="!editingComponents && components.length" class="card-subtitle">{{ t('raven.totalCount', { count: components.length }) }}</span>
+            <button v-if="canEdit && !editingComponents" class="rw-btn-text card-head-action" @click="startEditComponents">
+              {{ t('raven.editAction') }}
+            </button>
           </div>
-          <div class="pill-group">
+          <div v-if="!editingComponents" class="pill-group">
             <span
               v-for="comp in components"
               :key="`${comp.name}-${comp.version || 'na'}`"
@@ -456,6 +433,25 @@ watch(
               {{ comp.name }}<span v-if="comp.version" class="rw-pill-sub"> · {{ comp.version }}</span>
             </span>
             <span v-if="!components.length" class="empty-inline">{{ t('raven.noComponents') }}</span>
+          </div>
+          <div v-else class="edit-block">
+            <div v-for="(component, index) in componentsDraft" :key="index" class="component-input-row">
+              <label>
+                <span>{{ t('raven.componentNamePlaceholder') }}</span>
+                <input v-model="component.name" class="rw-input" maxlength="256" :disabled="savingComponents" :placeholder="t('raven.componentNamePlaceholder')" />
+              </label>
+              <label>
+                <span>{{ t('raven.componentVersionOptional') }}</span>
+                <input v-model="component.version" class="rw-input" maxlength="256" :disabled="savingComponents" :placeholder="t('raven.componentVersionOptional')" />
+              </label>
+              <button class="rw-btn-secondary" :disabled="savingComponents" @click="removeComponent(index)">{{ t('raven.removeComponentAction') }}</button>
+            </div>
+            <span v-if="!componentsDraft.length" class="empty-inline">{{ t('raven.noComponents') }}</span>
+            <div class="edit-actions">
+              <button class="rw-btn-secondary" :disabled="savingComponents || componentsDraft.length >= 100" @click="addComponent">{{ t('raven.addComponentAction') }}</button>
+              <button class="rw-btn-primary" :disabled="savingComponents" @click="saveComponents">{{ savingComponents ? t('raven.savingAction') : t('raven.saveAction') }}</button>
+              <button class="rw-btn-secondary" :disabled="savingComponents" @click="cancelEditComponents">{{ t('raven.cancelAction') }}</button>
+            </div>
           </div>
         </section>
 
@@ -676,6 +672,11 @@ watch(
 }
 .rw-textarea:disabled,
 .rw-input:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.component-input-row { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
+.component-input-row label { flex: 1 1 180px; min-width: 0; }
+.component-input-row label span { display: block; margin-bottom: 6px; font-size: 12px; color: var(--rw-body); }
+.component-input-row .rw-input { box-sizing: border-box; }
 
 .tag-input-row {
   display: flex;
