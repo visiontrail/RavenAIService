@@ -39,3 +39,14 @@ Acceptance SHALL include webpage attachment selection, submission, complete conf
 #### Scenario: Three independent release requests
 - **WHEN** the three supplied release combinations are submitted in the browser
 - **THEN** each produces a downloadable package whose contents, manifest and source hashes agree
+
+### Requirement: Workspace paths remain valid across upload and build
+The system SHALL normalize new and restored workspace paths before upload staging, including when the configured base directory is relative. Upload manifest pointers and entries MUST be valid under the builder's absolute-or-workspace-relative containment contract.
+
+#### Scenario: Production default relative base
+- **WHEN** files are uploaded with `temp/code_repos` as the workspace base
+- **THEN** confirmation, signed build and publication succeed without duplicating the workspace prefix
+
+#### Scenario: Retry an existing failed conversation
+- **WHEN** a conversation saved relative context paths and the user submits a fresh attachment turn
+- **THEN** restored paths are normalized, fresh confirmation is required, and the package can be built and downloaded

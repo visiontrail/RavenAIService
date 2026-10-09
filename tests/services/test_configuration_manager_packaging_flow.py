@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import time
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from starlette.datastructures import UploadFile
 
 from app.agents.package_search.workspace import prepare
 from app.services.full_package_service import sha256_file
@@ -28,19 +31,29 @@ def _protocol_zip(path: Path) -> Path:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("relative_base", "restore_context"),
+    [(False, False), (True, False), (True, True)],
+    ids=["absolute-embedded", "relative-upload", "relative-restored-upload"],
+)
 async def test_mandatory_gate_precedes_build_and_publishes_downloadable_artifact(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, relative_base, restore_context
 ):
     from app.config import settings
     from app.services.chat_run_service import chat_run_service
     from app.services.raven_package_service import raven_package_service
 
-    monkeypatch.setattr(settings, "code_repo_clone_base_dir", str(tmp_path / "work"))
+    if relative_base:
+        monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        settings, "code_repo_clone_base_dir",
+        "./temp/code_repos" if relative_base else str(tmp_path / "work"),
+    )
     monkeypatch.setattr(settings, "disk_reserve_bytes", 0)
     monkeypatch.setattr(settings, "upload_max_size_mb", 50)
-    raven_package_service.data_dir = tmp_path / "raven"
-    raven_package_service.uploads_dir = tmp_path / "raven" / "uploads"
-    raven_package_service.metadata_file = tmp_path / "raven" / "package-metadata.json"
+    monkeypatch.setattr(raven_package_service, "data_dir", tmp_path / "raven")
+    monkeypatch.setattr(raven_package_service, "uploads_dir", tmp_path / "raven" / "uploads")
+    monkeypatch.setattr(raven_package_service, "metadata_file", tmp_path / "raven" / "package-metadata.json")
 
     service = PackageSearchChatService()
     service.registry_dir = tmp_path / "registry"
@@ -50,6 +63,27 @@ async def test_mandatory_gate_precedes_build_and_publishes_downloadable_artifact
         question="请制作整包",
         session_id="session-package",
     )
+    if restore_context:
+        service._save_context(
+            "session-package",
+            {
+                "session_id": "session-package",
+                "owner_user_id": "user-1",
+                "task_id": ctx.task_id,
+                "temp_dir": str(Path(ctx.temp_dir).relative_to(tmp_path)),
+                "repo_dir": str(Path(ctx.repo_dir).relative_to(tmp_path)),
+                "task_json_path": str(Path(ctx.task_json_path).relative_to(tmp_path)),
+            },
+        )
+        with pytest.raises(PermissionError):
+            service._load_context("session-package", user=SimpleNamespace(id="another-user"))
+        restored = service._load_context("session-package", user=SimpleNamespace(id="user-1"))
+        assert restored is not None
+        ctx, restored_meta = restored
+        assert all(
+            Path(restored_meta[key]).is_absolute()
+            for key in ("temp_dir", "repo_dir", "task_json_path")
+        )
     source = _protocol_zip(
         Path(ctx.temp_dir) / "inputs" / "S-GNB-V1.2.39.13-202604200921.zip"
     )
@@ -70,7 +104,18 @@ async def test_mandatory_gate_precedes_build_and_publishes_downloadable_artifact
     task_path = Path(ctx.task_json_path)
     task = json.loads(task_path.read_text(encoding="utf-8"))
     task["packaging_requested"] = True
-    task["inputs_manifest"] = manifest
+    if relative_base:
+        # Match the HTTP upload path: task.json stores a manifest filename, not
+        # an embedded object, and the manifest stores each staged input path.
+        manifest = await service._stage_uploaded_inputs(
+            ctx,
+            [UploadFile(filename=source.name, file=io.BytesIO(source.read_bytes()))],
+            run_id="run-package",
+        )
+        task = json.loads(task_path.read_text(encoding="utf-8"))
+        task["packaging_requested"] = True
+    else:
+        task["inputs_manifest"] = manifest
     task_path.write_text(json.dumps(task, ensure_ascii=False), encoding="utf-8")
 
     context_meta = {
@@ -130,20 +175,22 @@ async def test_mandatory_gate_precedes_build_and_publishes_downloadable_artifact
     assert len(questions) == 4  # project + version + mode + the one input
     assert request["mandatory"] is True
     assert request["purpose"] == "package_build_confirmation"
-    assert questions[-1]["question_key"] == "input:protocol-stack"
+    assert questions[-1]["question_key"] == f"input:{manifest['inputs'][0]['upload_id']}"
     assert source.name in questions[-1]["question"]
 
     answers = []
     for index, question in enumerate(questions):
         if question["question_key"] == "mode":
             label = "全量包"
+        elif question["question_key"] == "version" and relative_base:
+            label = "手动输入版本"
         else:
             label = question["options"][0]["label"]
         answers.append(
             {
                 "question_index": index,
                 "selected_labels": [label],
-                "custom_text": None,
+                "custom_text": "1.0.0.3" if question["question_key"] == "version" and relative_base else None,
             }
         )
     broker = chat_run_service.get_broker_by_run_id(job.run_id)
@@ -170,6 +217,13 @@ async def test_mandatory_gate_precedes_build_and_publishes_downloadable_artifact
     assert hashlib.sha256(stored_path.read_bytes()).hexdigest() == artifact["sha256"]
     assert artifact["download_url"] == f"/raven/api/download/{package['id']}"
     assert raven_package_service.get_package(package["id"]) is not None
+    if relative_base:
+        assert Path(ctx.temp_dir) == tmp_path / "temp/code_repos" / ctx.task_id
+        assert all(
+            Path(path).is_absolute()
+            for path in (ctx.temp_dir, ctx.repo_dir, ctx.task_json_path, task["inputs_manifest"])
+        )
+        assert all(Path(item["path"]).is_absolute() for item in manifest["inputs"])
 
 
 @pytest.mark.asyncio

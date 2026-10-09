@@ -88,7 +88,7 @@ def prepare(
     ``project_repo`` 为空而抛出；纯检索入口仍在 API 层要求显式项目。
     """
     task_id = str(uuid.uuid4())
-    base_dir = Path(settings.code_repo_clone_base_dir)
+    base_dir = Path(settings.code_repo_clone_base_dir).expanduser().resolve()
     temp_dir = base_dir / task_id
     repo_dir = temp_dir / "repo"
     inputs_dir = temp_dir / "inputs"

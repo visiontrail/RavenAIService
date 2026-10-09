@@ -63,6 +63,12 @@ link such as `[下载整包](/raven/api/download/<package-id>)`.
 Projects without a Git repository are valid Configuration Manager projects.
 Git is optional project context, not a prerequisite for package configuration.
 
+Workspace paths are normalized to absolute paths before upload staging, both
+for new workspaces and restored conversations. This includes the production
+default relative `temp/code_repos` base. Builder task pointers may be absolute
+within the workspace or relative to that workspace; a path prefixed with the
+service working directory must not be appended to the workspace a second time.
+
 ## Mandatory packaging workflow
 
 An attachment-bearing turn always follows this server-enforced sequence:

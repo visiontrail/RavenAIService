@@ -2161,6 +2161,10 @@ class PackageSearchChatService:
         required_paths = ["temp_dir", "repo_dir", "task_json_path"]
         if any(not meta.get(key) for key in required_paths):
             return None
+        # Legacy contexts stored paths relative to the service working directory.
+        # Resolve once before staging so the builder never prefixes them again.
+        for key in required_paths:
+            meta[key] = str(Path(meta[key]).expanduser().resolve())
         if (
             not Path(meta["temp_dir"]).exists()
             or not Path(meta["task_json_path"]).exists()
