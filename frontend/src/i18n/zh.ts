@@ -565,6 +565,7 @@ export default {
     deleteConversation: '删除对话',
     adminConsole: '后台管理',
     bugFixes: 'Bug 修复',
+    downloadClient: '客户端下载',
     settings: '设置',
     helpShortcuts: '帮助与快捷键',
     logout: '退出登录',

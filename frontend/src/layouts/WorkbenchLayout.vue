@@ -270,6 +270,11 @@ const goToBugFixes = () => {
   router.push('/bug-fixes')
 }
 
+const goToDownload = () => {
+  showUserMenu.value = false
+  router.push({ name: 'Download' })
+}
+
 const navItems = computed(() => ([
   { id: 'logs',    label: t('navbar.logs'),    to: '/logs',          icon: 'logs', activeNames: ['Logs', 'LogDetail'] },
   { id: 'devices', label: t('navbar.devices'), to: '/devices',       icon: 'device', activeNames: ['DeviceList', 'DeviceDetail'] },
@@ -852,7 +857,16 @@ const handleUserLogout = () => {
               {{ t('workbench.bugFixes') }}
               <span class="rw-kbd-right">/bug-fixes</span>
             </button>
-            <div v-if="isLoggedIn || isAdmin" class="rw-menu-divider"/>
+            <button
+              type="button"
+              class="rw-user-menu-item"
+              @click="goToDownload"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><path d="M12 3v12m-4-4 4 4 4-4"/><path d="M5 16v4a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-4"/></svg>
+              {{ t('workbench.downloadClient') }}
+              <span class="rw-kbd-right">/download</span>
+            </button>
+            <div class="rw-menu-divider"/>
             <div class="rw-menu-section">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="rw-menu-leading"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
               <span>{{ t('language.label') }}</span>

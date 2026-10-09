@@ -566,6 +566,7 @@ export default {
     deleteConversation: 'Delete conversation',
     adminConsole: 'Admin console',
     bugFixes: 'Bug fixes',
+    downloadClient: 'Download client',
     settings: 'Settings',
     helpShortcuts: 'Help and shortcuts',
     logout: 'Sign out',
