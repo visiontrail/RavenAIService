@@ -1502,7 +1502,9 @@ def classify_inputs(
             prebuilt_score, prebuilt_evidence = _score_rules(
                 project["prebuilt_recognition"], evidence
             )
-            is_prebuilt = prebuilt_score >= 50
+            is_prebuilt = prebuilt_score >= 50 or any(
+                PurePosixPath(name).name == SI_INI_NAME for name in archive["members"]
+            )
             if is_prebuilt:
                 prebuilt_projects.add(code)
 

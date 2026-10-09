@@ -173,6 +173,19 @@ def test_registry_mapping_survives_catalog_normalization():
     assert load_catalog(catalog).digest == catalog.digest
 
 
+def test_si_ini_forces_prebuilt_validation_without_recognition_rules(tmp_path):
+    source, _ = _patch(tmp_path / "gnb-oam-lx07a.tgz", "gnb-oam-lx07a")
+    payload = load_catalog().to_dict()
+    payload["projects"][1]["prebuilt_recognition"] = []
+    catalog = load_catalog(payload)
+    draft, plan = _confirm(catalog, [_source(source)], "lingxi-07a")
+    assert draft["inputs"][0]["prebuilt"] is True
+    candidate = next(c for c in draft["inputs"][0]["candidates"] if c["project_code"] == "lingxi-07a")
+    assert candidate["prebuilt_extract"] is True
+    assert candidate["version"] == "V1.0.0.2"
+    assert plan["inputs"][0]["component_versions"]["oam"] == "V1.0.0.2"
+
+
 @pytest.mark.parametrize("mutation", [
     lambda c: c.update(allow_prebuilt_extract="true"),
     lambda c: c.update(publishable=False),
