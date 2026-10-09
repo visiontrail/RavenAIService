@@ -11,5 +11,5 @@
 ## 3. Delivery
 
 - [x] 3.1 Update runbook and run focused backend/frontend verification.
-- [ ] 3.2 Commit scoped changes and synchronize nr-test with source/image parity and service health.
+- [x] 3.2 Commit scoped changes and synchronize nr-test with source/image parity and service health.
 - [ ] 3.3 Complete three independent webpage build/confirmation/download requests using the supplied releases.
