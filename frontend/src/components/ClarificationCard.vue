@@ -41,6 +41,7 @@
         </div>
 
         <input
+          v-if="q.allow_custom !== false"
           v-model="pending.draftCustom[qi]"
           type="text"
           class="rw-input rw-clarify-custom"

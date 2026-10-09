@@ -770,6 +770,59 @@ class PackageSearchChatService:
                     return str(option.get("value") or label).strip().casefold()
         return str(answer.get("custom_text") or "").strip().casefold()
 
+    @staticmethod
+    def _raise_if_packaging_cancelled(
+        questions: List[Dict[str, Any]], answers: List[Dict[str, Any]]
+    ) -> None:
+        """A displayed cancellation option revokes the build before catalog lookup."""
+        by_key = {
+            str(answer.get("question_key") or ""): answer
+            for answer in answers
+            if isinstance(answer, dict)
+        }
+        for question in questions:
+            answer = by_key.get(str(question.get("question_key") or "")) or {}
+            labels = answer.get("selected_labels") or []
+            for option in question.get("options") or []:
+                if (
+                    isinstance(option, dict)
+                    and option.get("label") in labels
+                    and option.get("value") == "cancel"
+                ):
+                    raise MandatoryClarificationError(
+                        "cancelled", "打包确认已取消，未执行构建和发布。"
+                    )
+
+    @staticmethod
+    def _registry_packaging_definition(
+        catalog: Any, project_code: str
+    ) -> Dict[str, Any]:
+        """Bind only an exact code or the catalog's explicit registry identity."""
+        from app.services.full_package_service import PlanValidationError
+
+        code = project_code.strip().casefold()
+        definition = catalog.projects_by_code.get(code)
+        if definition is None:
+            matches = [
+                project
+                for project in catalog.get("projects") or []
+                if code in (project.get("registry_project_codes") or [])
+            ]
+            if len(matches) != 1:
+                raise PlanValidationError(
+                    f"项目 {project_code} 的有效 Skill catalog 缺少自身定义或显式注册映射"
+                )
+            definition = matches[0]
+        # The registry code is the repository/session/publication identity.
+        # Labels, component rules and all other catalog authority are retained.
+        bound = dict(definition)
+        bound["project_code"] = code
+        # Routing has been consumed: snapshots use exact registered identities.
+        # Retaining aliases here could duplicate a mapping when both the
+        # canonical code and an explicitly mapped code are registered.
+        bound["registry_project_codes"] = []
+        return bound
+
     async def _request_packaging_confirmation(
         self,
         job: AgentJob,
@@ -857,6 +910,25 @@ class PackageSearchChatService:
         catalog = await asyncio.to_thread(
             load_catalog, self._packaging_catalog_source(ctx)
         )
+        if project_hint and job.project_catalog:
+            # A pre-bound workspace can still classify other registered projects
+            # visible in its effective layer. Never expose canonical catalog
+            # names as publishable identities when the registry uses other codes.
+            self._registry_packaging_definition(catalog, project_hint)
+            bound_payload = catalog.to_dict()
+            bound_projects = []
+            for registry_project in job.project_catalog:
+                code = str(registry_project.get("project_code") or "").strip()
+                if not code:
+                    continue
+                try:
+                    bound_projects.append(
+                        self._registry_packaging_definition(catalog, code)
+                    )
+                except PlanValidationError:
+                    continue
+            bound_payload["projects"] = bound_projects
+            catalog = await asyncio.to_thread(load_catalog, bound_payload)
         # For an unbound upload, inspect each registered project's effective
         # Skill catalog in an isolated workspace and merge only that project's
         # definition.  This lets a newly-added project-level Skill participate
@@ -865,11 +937,7 @@ class PackageSearchChatService:
         # mandatory questions are shown.
         if not project_hint and job.project_catalog:
             merged_catalog = catalog.to_dict()
-            merged_projects = {
-                str(item.get("project_code") or "").casefold(): dict(item)
-                for item in merged_catalog.get("projects") or []
-                if isinstance(item, dict) and item.get("project_code")
-            }
+            merged_projects: Dict[str, Dict[str, Any]] = {}
             for registry_project in job.project_catalog:
                 project_code = str(registry_project.get("project_code") or "").strip()
                 if not project_code:
@@ -898,13 +966,9 @@ class PackageSearchChatService:
                         load_catalog,
                         candidate_source if candidate_source.is_file() else None,
                     )
-                    project_override = candidate_catalog.projects_by_code.get(
-                        project_code.casefold()
+                    project_override = self._registry_packaging_definition(
+                        candidate_catalog, project_code
                     )
-                    if project_override is None:
-                        raise PlanValidationError(
-                            f"项目 {project_code} 的有效 Skill catalog 缺少自身定义"
-                        )
                     merged_projects[project_code.casefold()] = dict(project_override)
                     materialized = list(
                         dict.fromkeys([*materialized, *candidate_skills])
@@ -1001,6 +1065,7 @@ class PackageSearchChatService:
             chat_run_service=chat_run_service,
         )
 
+        self._raise_if_packaging_cancelled(questions, answers)
         selected_project = self._selected_project_answer(questions, answers)
         if not selected_project:
             raise PlanValidationError("未能解析用户确认的项目")
@@ -1035,13 +1100,9 @@ class PackageSearchChatService:
                 load_catalog,
                 selected_source if selected_source.is_file() else None,
             )
-            selected_definition = selected_effective_catalog.projects_by_code.get(
-                selected_project.casefold()
+            selected_definition = self._registry_packaging_definition(
+                selected_effective_catalog, selected_project
             )
-            if selected_definition is None:
-                raise PlanValidationError(
-                    "用户确认的项目不在该项目的有效 Skill catalog 中"
-                )
         except PlanValidationError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -1107,6 +1168,7 @@ class PackageSearchChatService:
                 emit_trace=emit_trace,
                 chat_run_service=chat_run_service,
             )
+            self._raise_if_packaging_cancelled(questions, answers)
             confirmed_again = self._selected_project_answer(questions, answers)
             if confirmed_again.casefold() != selected_project.casefold():
                 raise PlanValidationError("二次确认的项目再次变更，请重新发起打包")

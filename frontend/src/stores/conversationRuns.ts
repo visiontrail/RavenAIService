@@ -206,6 +206,9 @@ const normalizeClarificationQuestions = (raw: unknown): ClarificationQuestion[] 
       header: String(obj.header || '').trim(),
       question,
       multiSelect: Boolean(obj.multiSelect),
+      ...(typeof obj.question_key === 'string' ? { question_key: obj.question_key } : {}),
+      ...(typeof obj.allow_custom === 'boolean' ? { allow_custom: obj.allow_custom } : {}),
+      ...(typeof obj.required === 'boolean' ? { required: obj.required } : {}),
       options,
     })
   }

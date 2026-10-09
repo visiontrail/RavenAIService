@@ -513,7 +513,7 @@ def test_direct_include_preserves_original_archive_bytes(tmp_path):
         assert embedded.read() == core.read_bytes()
 
 
-def test_build_rejects_unconfirmed_and_traversal_direct_include(tmp_path):
+def test_build_rejects_unconfirmed_and_traversal_direct_include(tmp_path, monkeypatch):
     catalog, _manifest, _draft, confirmed = _confirmed_protocol(tmp_path)
     unconfirmed = copy.deepcopy(confirmed)
     unconfirmed["status"] = "draft"
@@ -523,15 +523,26 @@ def test_build_rejects_unconfirmed_and_traversal_direct_include(tmp_path):
     unsafe = _tar_gz(tmp_path / "yh5gc_V0.2.7.9.tar.gz", {"../escape": b"bad"})
     manifest = [_input(unsafe, "unsafe")]
     draft = classify_inputs(catalog, manifest)
-    plan = confirm_plan(
-        draft,
-        _answers(draft, {"unsafe": "galaxy_core_network"}),
-        session_id="s",
-        user_id="u",
-        catalog=catalog,
-        inputs=manifest,
-    )
-    with pytest.raises(PackageBuildError, match="unsafe archive member"):
+    def confirm_unsafe():
+        return confirm_plan(
+            draft,
+            _answers(draft, {"unsafe": "galaxy_core_network"}),
+            session_id="s",
+            user_id="u",
+            catalog=catalog,
+            inputs=manifest,
+        )
+
+    with pytest.raises(ArchiveInspectionError, match="unsafe archive member"):
+        confirm_unsafe()
+    # A plan produced by an older, non-inspecting confirmation implementation
+    # must still be rejected when the current builder validates its source.
+    from app.services import full_package_service as service_module
+
+    with monkeypatch.context() as legacy_confirmation:
+        legacy_confirmation.setattr(service_module, "_input_is_prebuilt", lambda *_args: False)
+        plan = confirm_unsafe()
+    with pytest.raises(ArchiveInspectionError, match="unsafe archive member"):
         build_full_package(plan, workspace_dir=tmp_path / "unsafe-work", catalog=catalog)
     assert not (tmp_path / "escape").exists()
 

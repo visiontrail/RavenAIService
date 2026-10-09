@@ -140,7 +140,10 @@ export interface ClarificationOption {
 export interface ClarificationQuestion {
   header?: string
   question: string
+  question_key?: string
   multiSelect?: boolean
+  allow_custom?: boolean
+  required?: boolean
   options: ClarificationOption[]
 }
 

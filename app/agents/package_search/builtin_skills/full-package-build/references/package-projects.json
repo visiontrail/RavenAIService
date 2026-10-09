@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "catalog_version": "2026.08.14-lx10.1",
+  "catalog_version": "2026.10.09-lx07a-oam.1",
   "limits": {
     "max_archive_members": 10000,
     "max_extract_bytes": 2147483648
@@ -92,7 +92,8 @@
               "(?:^|/)gnb-oam-lx10$"
             ],
             "exclude_patterns": []
-          }
+          },
+          "allow_prebuilt_extract": true
         },
         {
           "component_key": "cucp",
@@ -544,6 +545,225 @@
               "reason": "文件位于 m3 目录，默认 catalog 仅识别"
             }
           ]
+        }
+      ],
+      "registry_project_codes": [
+        "oam_lx10"
+      ]
+    },
+    {
+      "project_code": "lingxi-07a",
+      "label": "灵犀 07A（LX07A）",
+      "aliases": [
+        "lingxi-07a",
+        "Lingxi 07A",
+        "LX07A",
+        "灵犀07A"
+      ],
+      "registry_project_codes": [
+        "oam_lx07a"
+      ],
+      "packet_attr": 1001,
+      "patch_packet_attr": 1002,
+      "publisher": "yinhe",
+      "package_prefix": "GalaxySpace-Lx07A",
+      "package_name_pattern": "{package_prefix}-V{numeric_version}{patch_suffix}-{confirmation_short}.tgz",
+      "package_version_pattern": "^\\d+\\.\\d+\\.\\d+\\.\\d+$",
+      "recognition": [
+        {
+          "field": "relative_path",
+          "pattern": "(?:LX0?7A|lingxi[-_ ]?0?7a|灵犀.?0?7A)",
+          "weight": 60,
+          "reason": "相对路径包含 LX07A/灵犀07A 项目标识"
+        },
+        {
+          "field": "filename",
+          "pattern": "(?:lx07a|gnb[-_]oam[-_]lx07a)",
+          "weight": 60,
+          "reason": "文件名明确标识 LX07A OAM"
+        },
+        {
+          "field": "archive_member",
+          "pattern": "(?:^|/)gnb-oam-lx07a$",
+          "weight": 80,
+          "reason": "归档内存在 LX07A OAM 载荷"
+        }
+      ],
+      "prebuilt_recognition": [
+        {
+          "field": "archive_member",
+          "pattern": "(?:^|/)si\\.ini$",
+          "weight": 80,
+          "reason": "归档包含 si.ini，必须验证单组件清单后才可提取"
+        },
+        {
+          "field": "filename",
+          "pattern": "GalaxySpace-Lx07a.*\\.(?:tgz|tar\\.gz)$",
+          "weight": 55,
+          "reason": "文件名符合 LX07A 预制包命名"
+        }
+      ],
+      "version_rules": [
+        {
+          "source": "relative_path",
+          "pattern": "(?:LX0?7A|灵犀.?0?7A)[/\\\\_-]+V?(?P<version>\\d+\\.\\d+\\.\\d+\\.\\d+)",
+          "transform": "dotted"
+        }
+      ],
+      "components": [
+        {
+          "component_key": "oam",
+          "label": "OAM",
+          "description": "LX07A OAM 服务（协议属性来自现有客户端及升级器）",
+          "file_attr": 301,
+          "output_name": "gnb-oam-lx07a",
+          "publishable": true,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "gnb[-_]oam[-_]lx07a",
+              "weight": 55,
+              "reason": "文件名包含 gnb-oam-lx07a"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)gnb-oam-lx07a$",
+              "weight": 80,
+              "reason": "归档内存在 OAM 可执行文件 gnb-oam-lx07a"
+            }
+          ],
+          "version_rules": [
+            {
+              "source": "filename",
+              "pattern": "[Vv](?P<version>\\d{4})(?!\\d)",
+              "transform": "compact_decimal"
+            }
+          ],
+          "materialization": {
+            "type": "extract_match",
+            "patterns": [
+              "(?:^|/)gnb-oam-lx07a$"
+            ],
+            "exclude_patterns": []
+          },
+          "allow_prebuilt_extract": true
+        },
+        {
+          "component_key": "cucp",
+          "label": "CUCP 协议栈",
+          "description": "S-GNB CU 控制面 Debian 包",
+          "file_attr": 302,
+          "output_name": "cucp.deb",
+          "publishable": true,
+          "classification_threshold": 50,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "S-GNB",
+              "weight": 25,
+              "reason": "源文件名为 S-GNB 协议栈集合"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)gnb_cucp-[^/]+\\.deb$",
+              "weight": 85,
+              "reason": "归档内存在 gnb_cucp Debian 载荷"
+            }
+          ],
+          "version_rules": [
+            {
+              "source": "archive_member",
+              "pattern": "gnb_cucp-(?P<version>\\d+\\.\\d+\\.\\d+\\.\\d+)-(?P<timestamp>\\d{12})",
+              "transform": "dotted_timestamp"
+            }
+          ],
+          "materialization": {
+            "type": "extract_match",
+            "patterns": [
+              "(?:^|/)gnb_cucp-[^/]+\\.deb$"
+            ],
+            "exclude_patterns": [
+              "\\.md5$"
+            ]
+          }
+        },
+        {
+          "component_key": "cuup",
+          "label": "CUUP 协议栈",
+          "description": "S-GNB CU 用户面 Debian 包",
+          "file_attr": 307,
+          "output_name": "cuup.deb",
+          "publishable": true,
+          "classification_threshold": 50,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "S-GNB",
+              "weight": 25,
+              "reason": "源文件名为 S-GNB 协议栈集合"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)gnb_cuup-[^/]+\\.deb$",
+              "weight": 85,
+              "reason": "归档内存在 gnb_cuup Debian 载荷"
+            }
+          ],
+          "version_rules": [
+            {
+              "source": "archive_member",
+              "pattern": "gnb_cuup-(?P<version>\\d+\\.\\d+\\.\\d+\\.\\d+)-(?P<timestamp>\\d{12})",
+              "transform": "dotted_timestamp"
+            }
+          ],
+          "materialization": {
+            "type": "extract_match",
+            "patterns": [
+              "(?:^|/)gnb_cuup-[^/]+\\.deb$"
+            ],
+            "exclude_patterns": [
+              "\\.md5$"
+            ]
+          }
+        },
+        {
+          "component_key": "du",
+          "label": "DU 协议栈",
+          "description": "S-GNB DU Debian 包",
+          "file_attr": 308,
+          "output_name": "du.deb",
+          "publishable": true,
+          "classification_threshold": 50,
+          "recognition": [
+            {
+              "field": "filename",
+              "pattern": "S-GNB",
+              "weight": 25,
+              "reason": "源文件名为 S-GNB 协议栈集合"
+            },
+            {
+              "field": "archive_member",
+              "pattern": "(?:^|/)gnb_du-[^/]+\\.deb$",
+              "weight": 85,
+              "reason": "归档内存在 gnb_du Debian 载荷"
+            }
+          ],
+          "version_rules": [
+            {
+              "source": "archive_member",
+              "pattern": "gnb_du-(?P<version>\\d+\\.\\d+\\.\\d+\\.\\d+)-(?P<timestamp>\\d{12})",
+              "transform": "dotted_timestamp"
+            }
+          ],
+          "materialization": {
+            "type": "extract_match",
+            "patterns": [
+              "(?:^|/)gnb_du-[^/]+\\.deb$"
+            ],
+            "exclude_patterns": [
+              "\\.md5$"
+            ]
+          }
         }
       ]
     }

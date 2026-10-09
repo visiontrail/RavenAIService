@@ -363,6 +363,16 @@ def _normalize_questions(raw: Any) -> List[Dict[str, Any]]:
                     if item.get("question_key") is not None
                     else {}
                 ),
+                **(
+                    {"allow_custom": bool(item["allow_custom"])}
+                    if "allow_custom" in item
+                    else {}
+                ),
+                **(
+                    {"required": bool(item["required"])}
+                    if "required" in item
+                    else {}
+                ),
             }
         )
     return out
@@ -434,6 +444,10 @@ def _normalize_complete_answers(
             else []
         )
         custom = str(raw.get("custom_text") or "").strip()
+        if custom and questions[index].get("allow_custom") is False:
+            raise MandatoryClarificationError(
+                "invalid_answers", "该确认问题不接受自定义答案，请选择已有选项。"
+            )
         if not selected and not custom:
             raise MandatoryClarificationError(
                 "missing_answers", "项目与每个上传文件都必须由用户逐项确认。"

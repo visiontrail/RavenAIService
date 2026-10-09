@@ -1,6 +1,6 @@
 ---
 name: full-package-build
-description: Classify uploaded software components and build a confirmed whole-package TGZ. Use whenever the user uploads component files or archives and asks to assemble, package, upgrade, release, or create an LX10/whole software package.
+description: Classify uploaded software components and build a confirmed whole-package TGZ. Use whenever the user uploads component files or archives and asks to assemble, package, upgrade, release, or create an LX07A/LX10/whole software package.
 ---
 
 # 整包打包
@@ -12,7 +12,7 @@ description: Classify uploaded software components and build a confirmed whole-p
 - 分类结论只是建议，不是授权。
 - 每次打包都必须使用服务端强制反问卡；用户关闭普通反问偏好也不例外。
 - 卡片必须确认项目、整包版本、整包类型，并逐一确认每个 `upload_id` 的组件映射或“排除此文件”。一个文件可以多选多个组件。
-- Patch/预制包、recognition-only 和未知文件也必须显示并由用户明确排除；不得静默忽略。
+- 所有文件都必须显示并明确确认。Patch/预制包只有在组件 catalog 明确开启 `allow_prebuilt_extract` 且服务端验证单组件 `si.ini` 后，才能确认提取该组件；其余预制包、recognition-only 和未知文件必须明确排除，不得静默忽略。
 - 缺答、取消、超时、catalog 改变、文件路径/大小/SHA-256 改变或确认签名失效时，禁止构建和上传。
 - 不使用 Bash、Write、Edit 或仓库写工具替代专用 builder。
 
@@ -30,8 +30,15 @@ description: Classify uploaded software components and build a confirmed whole-p
 - S-GNB ZIP 可同时提供 CUCP、CUUP、DU；构建时只安全解压一次。
 - BPO master 同时命中 313 与 315，必须让用户选择，不能自动消歧。
 - 已含 `si.ini` 的 Satellite Patch 是预制包，不能再次嵌套。
+- OAM 的单组件预制包可通过 catalog opt-in 提取：源 TAR 必须只包含根目录 `si.ini` 与精确命名的 OAM 载荷；PacketAttr、Publisher、FileAttr、FileNumInPacket、FileName、FileVer 以及存在的大小/校验字段均须匹配。使用源 FileVer；绝不将原预制包或其 si.ini 嵌入新包。
 - `sct_sf2`、`bpo_sf2`、`sct_m3` 仅识别；在 catalog 未补齐正式 FileAttr/输出格式前不能发布。
+
+## LX07A 默认规则边界
+
+- 支持 OAM 301、CUCP 302、CUUP 307、DU 308；整包 PacketAttr 1001、Patch 1002。
+- OAM 输出名固定为 `gnb-oam-lx07a`，按上述单组件清单校验规则提取；协议栈 ZIP 同时提供三个 Debian 载荷。
+- 项目注册身份只能精确匹配 `project_code` 或显式 `registry_project_codes`，不得通过显示名称或 aliases 猜测。
 
 ## 扩展 catalog
 
-新增项目或组件优先编辑 JSON，不改分类器代码。仅使用已有 vocabulary：recognition rule（filename、relative_path、extension、magic、archive_member）、version rule、`copy`、`direct_include`、`extract_match`。所有正则、属性、输出名和冲突会在反问前校验；配置无效时停止并报告 catalog 错误。
+新增项目或组件优先编辑 JSON，不改分类器代码。使用 recognition rule（filename、relative_path、extension、magic、archive_member）、version rule、`copy`、`direct_include`、`extract_match`；`allow_prebuilt_extract` 仅可用于可发布的 `extract_match` 组件。所有正则、属性、输出名和冲突会在反问前校验；配置无效时停止并报告 catalog 错误。

@@ -369,6 +369,7 @@ def validate_catalog(data: Mapping[str, Any]) -> PackageCatalog:
 
     normalised_projects: list[dict[str, Any]] = []
     seen_projects: set[str] = set()
+    seen_registry_projects: set[str] = set()
     for p_index, project_raw in enumerate(projects_raw):
         location = f"projects[{p_index}]"
         project = _require_mapping(project_raw, location)
@@ -381,6 +382,16 @@ def validate_catalog(data: Mapping[str, Any]) -> PackageCatalog:
             isinstance(item, str) and item.strip() for item in aliases_raw
         ):
             raise CatalogValidationError(f"{location}.aliases must be an array of strings")
+        registry_codes_raw = project.get("registry_project_codes", [])
+        if not isinstance(registry_codes_raw, list):
+            raise CatalogValidationError(f"{location}.registry_project_codes must be an array")
+        registry_codes = [
+            _safe_key(code, f"{location}.registry_project_codes[{index}]")
+            for index, code in enumerate(registry_codes_raw)
+        ]
+        if len(set(registry_codes)) != len(registry_codes) or seen_registry_projects.intersection(registry_codes):
+            raise CatalogValidationError("duplicate registry_project_codes mapping")
+        seen_registry_projects.update(registry_codes)
         packet_attr = _positive_int(project.get("packet_attr"), f"{location}.packet_attr")
         patch_packet_attr = project.get("patch_packet_attr")
         if patch_packet_attr is not None:
@@ -483,6 +494,16 @@ def validate_catalog(data: Mapping[str, Any]) -> PackageCatalog:
                         for i, pattern in enumerate(excludes)
                     ]
 
+            allow_prebuilt_extract = component.get("allow_prebuilt_extract", False)
+            if not isinstance(allow_prebuilt_extract, bool):
+                raise CatalogValidationError(f"{c_location}.allow_prebuilt_extract must be boolean")
+            if allow_prebuilt_extract and (
+                not publishable or not materialisation or materialisation["type"] != "extract_match"
+            ):
+                raise CatalogValidationError(
+                    f"{c_location}.allow_prebuilt_extract requires a publishable extract_match component"
+                )
+
             threshold = component.get("classification_threshold", 30)
             try:
                 threshold = float(threshold)
@@ -512,6 +533,7 @@ def validate_catalog(data: Mapping[str, Any]) -> PackageCatalog:
                         component.get("version_rules"), f"{c_location}.version_rules"
                     ),
                     "materialization": materialisation,
+                    "allow_prebuilt_extract": allow_prebuilt_extract,
                     "classification_threshold": threshold,
                     "ambiguous_group": str(component.get("ambiguous_group") or "").strip(),
                     "default_version": str(component.get("default_version") or "V0.0.0.0").strip(),
@@ -525,6 +547,7 @@ def validate_catalog(data: Mapping[str, Any]) -> PackageCatalog:
                     project.get("label", project_code), f"{location}.label"
                 ),
                 "aliases": [str(item).strip() for item in aliases_raw],
+                "registry_project_codes": registry_codes,
                 "packet_attr": packet_attr,
                 "patch_packet_attr": patch_packet_attr,
                 "publisher": _require_nonempty_string(
@@ -546,6 +569,11 @@ def validate_catalog(data: Mapping[str, Any]) -> PackageCatalog:
                 "components": normalised_components,
             }
         )
+
+    for project in normalised_projects:
+        if any(code in seen_projects and code != project["project_code"]
+               for code in project["registry_project_codes"]):
+            raise CatalogValidationError("registry_project_codes conflicts with another project_code")
 
     limits_raw = raw.get("limits") or {}
     limits = _require_mapping(limits_raw, "limits")
@@ -1288,6 +1316,139 @@ def compute_draft_plan_hash(draft: Mapping[str, Any]) -> str:
     return canonical_hash(_draft_hash_payload(draft))
 
 
+def _input_is_prebuilt(
+    item: Mapping[str, Any], project: Mapping[str, Any], limits: Mapping[str, Any]
+) -> bool:
+    archive = inspect_archive(
+        item["path"],
+        max_members=int(limits["max_archive_members"]),
+        max_uncompressed_bytes=int(limits["max_extract_bytes"]),
+        strict=True,
+    )
+    if any(PurePosixPath(name).name == SI_INI_NAME for name in archive["members"]):
+        return True
+    score, _ = _score_rules(
+        project["prebuilt_recognition"],
+        {
+            "filename": item.get("original_name", ""),
+            "relative_path": item.get("relative_path") or item["path"],
+            "archive_members": archive["members"],
+        },
+    )
+    return bool(item.get("prebuilt")) or score >= 50
+
+
+def _validated_prebuilt_component(
+    item: Mapping[str, Any],
+    project: Mapping[str, Any],
+    component: Mapping[str, Any],
+    limits: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate the opted-in single-component TAR, without extracting it.
+
+    Deliberately narrower than whole-package reuse: source metadata never becomes
+    a payload, and an arbitrary manifest cannot introduce additional components.
+    """
+    if not component.get("allow_prebuilt_extract"):
+        raise PlanValidationError("prebuilt package component extraction is not enabled")
+    source = Path(item["path"])
+    inspected = inspect_archive(
+        source,
+        max_members=int(limits["max_archive_members"]),
+        max_uncompressed_bytes=int(limits["max_extract_bytes"]),
+        strict=True,
+    )
+    if inspected["archive_type"] != "tar":
+        raise PlanValidationError("prebuilt component extraction requires a TAR package")
+    try:
+        with tarfile.open(source, "r:*") as archive:
+            members: dict[str, tarfile.TarInfo] = {}
+            for member in archive.getmembers():
+                name = _normalise_member_name(member.name)
+                if member.isdir():
+                    continue
+                if not member.isfile() or name in members:
+                    raise PlanValidationError("prebuilt package has duplicate or non-regular members")
+                members[name] = member
+            expected_name = str(component["output_name"])
+            if set(members) != {SI_INI_NAME, expected_name}:
+                raise PlanValidationError("prebuilt package must contain exactly si.ini and the component payload")
+            metadata = _read_tar_member_limited(
+                archive, members[SI_INI_NAME], limit=MAX_SI_INI_BYTES, label=SI_INI_NAME
+            ).decode("utf-8")
+            parsed: dict[str, str] = {}
+            for raw_line in metadata.splitlines():
+                line = raw_line.strip()
+                if line == "---Release Note Starts---":
+                    break
+                if not line or line.startswith("#"):
+                    continue
+                match = re.fullmatch(r"([A-Za-z][A-Za-z0-9_]*)\s*=\s*([^;\x00]+);", line)
+                if match is None:
+                    raise PlanValidationError("prebuilt si.ini contains a malformed field")
+                key, value = match.group(1).lower(), match.group(2).strip()
+                if key in parsed:
+                    raise PlanValidationError("prebuilt si.ini contains duplicate fields")
+                parsed[key] = value
+            allowed_packet_attrs = {str(project["packet_attr"])}
+            if project.get("patch_packet_attr"):
+                allowed_packet_attrs.add(str(project["patch_packet_attr"]))
+            if parsed.get("packetattr") not in allowed_packet_attrs:
+                raise PlanValidationError("prebuilt PacketAttr does not match project catalog")
+            if parsed.get("publisher") != project["publisher"]:
+                raise PlanValidationError("prebuilt Publisher does not match project catalog")
+            if parsed.get("filenuminpacket") != "1":
+                raise PlanValidationError("prebuilt FileNumInPacket must declare exactly one payload")
+            if parsed.get("filename_1") != expected_name:
+                raise PlanValidationError("prebuilt FileName_1 does not match component catalog")
+            if parsed.get("fileattr_1") != str(component["file_attr"]):
+                raise PlanValidationError("prebuilt FileAttr_1 does not match component catalog")
+            version = parsed.get("filever_1", "")
+            if not version.startswith("V") or not _SAFE_VERSION_RE.fullmatch(version[1:]):
+                raise PlanValidationError("prebuilt FileVer_1 is invalid")
+            packet_version = parsed.get("packet_ver", "")
+            if not packet_version.startswith("V") or not _SAFE_VERSION_RE.fullmatch(packet_version[1:]):
+                raise PlanValidationError("prebuilt Packet_Ver is invalid")
+            for key in parsed:
+                indexed = re.fullmatch(r"file[a-z0-9_]*_(\d+)", key)
+                if indexed and indexed.group(1) != "1":
+                    raise PlanValidationError("prebuilt file fields disagree with declared count")
+            payload = members[expected_name]
+            if payload.size <= 0:
+                raise PlanValidationError("prebuilt component payload is empty")
+            for key in ("filesize_1", "filelength_1", "filelen_1"):
+                if key in parsed and (not parsed[key].isdigit() or int(parsed[key]) != payload.size):
+                    raise PlanValidationError("prebuilt component size mismatch")
+            digests = {"md5": hashlib.md5(), "sha1": hashlib.sha1(), "sha256": hashlib.sha256()}
+            handle = archive.extractfile(payload)
+            if handle is None:
+                raise PlanValidationError("prebuilt component payload cannot be read")
+            total = 0
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                total += len(chunk)
+                if total > payload.size:
+                    raise PlanValidationError("prebuilt component size mismatch")
+                for digest in digests.values():
+                    digest.update(chunk)
+            if total != payload.size:
+                raise PlanValidationError("prebuilt component size mismatch")
+            checksum_fields = {"filemd5_1": "md5", "filesha1_1": "sha1", "filesha256_1": "sha256"}
+            for key, value in parsed.items():
+                algorithm = checksum_fields.get(key)
+                if key in {"filechecksum_1", "filehash_1"}:
+                    algorithm = {32: "md5", 40: "sha1", 64: "sha256"}.get(len(value))
+                    if algorithm is None:
+                        raise PlanValidationError("prebuilt checksum format is unsupported")
+                elif any(token in key for token in ("checksum", "hash", "md5", "sha", "crc", "digest")) and algorithm is None:
+                    raise PlanValidationError("prebuilt checksum field is unsupported")
+                if algorithm and value.lower() != digests[algorithm].hexdigest():
+                    raise PlanValidationError("prebuilt component checksum mismatch")
+            return {"version": version, "payload_name": expected_name, "size": total,
+                    "sha256": digests["sha256"].hexdigest()}
+    except (OSError, tarfile.TarError, UnicodeDecodeError, PackageBuildError) as exc:
+        raise PlanValidationError(f"invalid prebuilt component package: {exc}") from exc
+
+
 def classify_inputs(
     catalog: Any,
     inputs: Sequence[Mapping[str, Any]],
@@ -1322,6 +1483,7 @@ def classify_inputs(
         input_project_candidates: list[dict[str, Any]] = []
         all_component_candidates: list[dict[str, Any]] = []
         prebuilt_projects: set[str] = set()
+        prebuilt_errors: list[str] = []
 
         for project in loaded["projects"]:
             code = project["project_code"]
@@ -1356,7 +1518,23 @@ def classify_inputs(
                     archive_members=archive["members"],
                     rules=component["version_rules"],
                 )
-                publishable = bool(component["publishable"]) and not is_prebuilt
+                prebuilt_component = None
+                if is_prebuilt and component.get("allow_prebuilt_extract"):
+                    try:
+                        prebuilt_component = _validated_prebuilt_component(
+                            input_item, project, component, limits
+                        )
+                    except FullPackageError as exc:
+                        prebuilt_errors.append(f"{code}/{component['component_key']}: {exc}")
+                    else:
+                        version_candidates = [{
+                            "version": prebuilt_component["version"],
+                            "source": "si.ini", "matched": prebuilt_component["version"],
+                            "location": SI_INI_NAME,
+                        }]
+                publishable = bool(component["publishable"]) and (
+                    not is_prebuilt or prebuilt_component is not None
+                )
                 candidate = {
                     "project_code": code,
                     "component_key": component["component_key"],
@@ -1367,6 +1545,7 @@ def classify_inputs(
                     "publishable": publishable,
                     "recognition_only": bool(component["recognition_only"]),
                     "prebuilt": is_prebuilt,
+                    "prebuilt_extract": prebuilt_component is not None,
                     "ambiguous_group": component["ambiguous_group"],
                     "version": version_candidates[0]["version"] if version_candidates else None,
                     "version_candidates": version_candidates,
@@ -1446,7 +1625,7 @@ def classify_inputs(
                 "ambiguity": sorted(ambiguous_groups),
                 "version": versions[0]["version"] if versions else None,
                 "version_candidates": versions,
-                "classification_errors": list(archive["errors"]),
+                "classification_errors": list(archive["errors"]) + prebuilt_errors,
             }
         )
 
@@ -1897,10 +2076,9 @@ def confirm_plan(
         include, component_keys, versions = _parse_component_answer(
             answer_map[f"input:{upload_id}"]
         )
-        if include and item.get("prebuilt"):
-            raise PlanValidationError(
-                f"{item.get('original_name')} is a prebuilt package and must be excluded"
-            )
+        is_prebuilt = bool(item.get("prebuilt"))
+        if include:
+            is_prebuilt = _input_is_prebuilt(item, project, loaded["limits"])
         selected_versions: dict[str, str] = {}
         for component_key in component_keys:
             component = components_by_key.get(component_key)
@@ -1918,6 +2096,15 @@ def confirm_plan(
                     f"{globally_selected[component_key]} and {upload_id}"
                 )
             globally_selected[component_key] = upload_id
+            prebuilt_component = None
+            if is_prebuilt:
+                prebuilt_component = _validated_prebuilt_component(
+                    item, project, component, loaded["limits"]
+                )
+                if versions.get(component_key) and str(versions[component_key]).lstrip("Vv") != (
+                    prebuilt_component["version"].lstrip("Vv")
+                ):
+                    raise PlanValidationError("prebuilt component version must match FileVer_1")
             inferred = next(
                 (
                     candidate.get("version")
@@ -1929,7 +2116,8 @@ def confirm_plan(
                 None,
             )
             component_version = str(
-                versions.get(component_key)
+                (prebuilt_component or {}).get("version")
+                or versions.get(component_key)
                 or inferred
                 or item.get("version")
                 or component["default_version"]
@@ -1948,7 +2136,7 @@ def confirm_plan(
                     component_keys[0] if len(component_keys) == 1 else sorted(component_keys)
                 ),
                 "component_versions": selected_versions,
-                "prebuilt": bool(item.get("prebuilt")),
+                "prebuilt": is_prebuilt,
             }
         )
     if included_count == 0:
@@ -2049,14 +2237,23 @@ def validate_confirmed_plan(
             raise PlanValidationError(
                 f"input {input_item.get('upload_id')} has inconsistent include/mapping state"
             )
-        if selected and input_item.get("prebuilt"):
-            raise PlanValidationError("prebuilt input cannot be included")
+        is_prebuilt = bool(input_item.get("prebuilt"))
+        if selected and verify_files:
+            is_prebuilt = _input_is_prebuilt(input_item, project, loaded["limits"])
         for key in selected:
             component = components.get(str(key))
             if component is None or not component["publishable"] or component["recognition_only"]:
                 raise PlanValidationError(f"component {key!r} is not publishable")
             if key in seen:
                 raise PlanValidationError(f"component {key!r} is selected more than once")
+            if is_prebuilt:
+                if not verify_files:
+                    if not component.get("allow_prebuilt_extract"):
+                        raise PlanValidationError("prebuilt input cannot be included")
+                else:
+                    verified = _validated_prebuilt_component(input_item, project, component, loaded["limits"])
+                    if (input_item.get("component_versions") or {}).get(key) != verified["version"]:
+                        raise PlanValidationError("confirmed prebuilt version differs from FileVer_1")
             seen.add(str(key))
             included += 1
     if included == 0:
@@ -2517,6 +2714,7 @@ def build_full_package(
             if not input_item.get("include"):
                 continue
             source = Path(input_item["path"])
+            is_prebuilt = _input_is_prebuilt(input_item, project, loaded["limits"])
             selected = input_item.get("selected_components")
             if selected is None:
                 selected = input_item.get("selected_component") or []
@@ -2525,6 +2723,10 @@ def build_full_package(
                 materialization = component["materialization"]
                 kind = materialization["type"]
                 source_payload = source
+                prebuilt_component = (
+                    _validated_prebuilt_component(input_item, project, component, loaded["limits"])
+                    if is_prebuilt else None
+                )
                 if kind == "extract_match":
                     extracted = extraction_cache.get(input_item["sha256"])
                     if extracted is None:
@@ -2555,6 +2757,12 @@ def build_full_package(
                         )
                 elif kind != "copy":  # defensive: catalog validation already rejects this
                     raise PackageBuildError(f"unsupported materialization type: {kind}")
+
+                if prebuilt_component and (
+                    source_payload.stat().st_size != prebuilt_component["size"]
+                    or sha256_file(source_payload) != prebuilt_component["sha256"]
+                ):
+                    raise PackageBuildError("extracted prebuilt payload differs from validated source")
 
                 output_name = _collision_safe_name(
                     str(component["output_name"]), component_key, used_names

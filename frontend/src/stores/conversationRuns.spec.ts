@@ -935,6 +935,39 @@ describe('conversationRuns store', () => {
     expect(state.pendingClarifications[0].error).toBeTruthy()
   })
 
+  it('preserves explicit confirmation constraints and the legacy custom default', () => {
+    const store = useConversationRunsStore()
+    const state = store.ensureState('package-session')
+    store.applyEventToState(state, {
+      event: 'agent_trace',
+      type: 'clarification_request',
+      task_id: 'package-run',
+      run_id: 'package-run',
+      session_id: 'package-session',
+      seq: 1,
+      timestamp: 1,
+      request_id: 'package-confirmation',
+      questions: [
+        {
+          question_key: 'project',
+          question: 'Confirm project',
+          allow_custom: false,
+          required: true,
+          options: [{ label: 'LX07A' }, { label: 'LX10' }],
+        },
+        { question: 'Legacy question', options: [{ label: 'Option' }] },
+      ],
+    })
+
+    const questions = state.pendingClarifications[0].questions
+    expect(questions[0]).toMatchObject({
+      question_key: 'project',
+      allow_custom: false,
+      required: true,
+    })
+    expect(questions[1].allow_custom).toBeUndefined()
+  })
+
   it('requires all thirteen component-mapping answers before submitting', async () => {
     const store = useConversationRunsStore()
     const state = store.ensureState('package-session')

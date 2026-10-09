@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 
 import pytest
 
@@ -143,3 +144,75 @@ async def test_mandatory_gate_timeout_always_cancels_side_effect_path():
     assert cancelled == [True]
     assert events[-1]["outcome"] == "cancelled"
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected_labels", [[], ["lingxi-10"]])
+async def test_closed_project_question_rejects_custom_text(selected_labels):
+    questions = copy.deepcopy(QUESTIONS)
+    questions[0].update({"allow_custom": False, "required": True})
+    broker = PermissionBroker()
+    events: list[dict] = []
+    resolver = asyncio.create_task(
+        _resolve_when_open(
+            broker,
+            events,
+            [
+                {
+                    "question_index": 0,
+                    "selected_labels": selected_labels,
+                    "custom_text": "LX07A",
+                },
+                {"question_index": 1, "selected_labels": ["oam"]},
+            ],
+        )
+    )
+
+    with pytest.raises(MandatoryClarificationError) as caught:
+        await request_mandatory_clarification(
+            questions,
+            broker=broker,
+            emit=events.append,
+            seq_counter=SeqCounter(),
+            task_id="closed-project",
+            run_id="closed-project",
+            timeout_seconds=1,
+        )
+    await resolver
+
+    assert caught.value.code == "invalid_answers"
+    assert events[0]["questions"][0]["allow_custom"] is False
+    assert events[0]["questions"][0]["required"] is True
+    assert events[-1]["outcome"] == "rejected"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allow_custom", [None, True])
+async def test_legacy_and_open_questions_keep_custom_answers(allow_custom):
+    questions = copy.deepcopy(QUESTIONS)
+    if allow_custom is not None:
+        questions[0]["allow_custom"] = allow_custom
+    broker = PermissionBroker()
+    events: list[dict] = []
+    resolver = asyncio.create_task(
+        _resolve_when_open(
+            broker,
+            events,
+            [
+                {"question_index": 0, "custom_text": "custom-project"},
+                {"question_index": 1, "selected_labels": ["oam"]},
+            ],
+        )
+    )
+    answers = await request_mandatory_clarification(
+        questions,
+        broker=broker,
+        emit=events.append,
+        seq_counter=SeqCounter(),
+        task_id="legacy-project",
+        run_id="legacy-project",
+        timeout_seconds=1,
+    )
+    await resolver
+    assert answers[0]["custom_text"] == "custom-project"
+    if allow_custom is None:
+        assert "allow_custom" not in events[0]["questions"][0]

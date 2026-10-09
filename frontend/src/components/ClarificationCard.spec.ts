@@ -41,4 +41,20 @@ describe('ClarificationCard', () => {
     expect(source).toMatch(/\.rw-clarify\s*\{[\s\S]*?max-height:\s*calc\(100vh - 32px\)/)
     expect(source).toMatch(/\.rw-clarify-body\s*\{[\s\S]*?overflow-y:\s*auto/)
   })
+
+  it('hides custom input for closed questions while preserving the legacy default', async () => {
+    const pending = pendingWithQuestions(3)
+    pending.questions[0].allow_custom = false
+    pending.questions[1].allow_custom = true
+    const app = createSSRApp({
+      render: () => h(ClarificationCard, { pending }),
+    })
+    app.use(i18n)
+
+    const html = await renderToString(app)
+    expect(html.match(/class="rw-input rw-clarify-custom"/g)).toHaveLength(2)
+    expect(html.indexOf('class="rw-input rw-clarify-custom"')).toBeGreaterThan(
+      html.indexOf('Map component-2.bin'),
+    )
+  })
 })

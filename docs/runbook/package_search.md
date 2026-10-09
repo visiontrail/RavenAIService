@@ -32,6 +32,13 @@ its stable key, display name, package/file attributes, matching evidence, build
 strategy, and whether it is publishable. Recognition-only entries are useful
 for preliminary classification but cannot be silently put into a release.
 
+Catalog project identifiers can differ from database registry identifiers.
+Use an explicit `registry_project_codes` list for that binding; LX10 is bound
+to `oam_lx10` and LX07A to `oam_lx07a`. Confirmation, Skill selection, and
+publication retain the registered project code. Display labels and general
+aliases never authorize a different project's rules. Uploaded project Skills
+retain precedence and invalid overrides stop the build.
+
 ## Chat endpoint
 
 Use the interactive endpoint for packaging:
@@ -95,6 +102,16 @@ disabled in packaging mode, and the builder never publishes directly.
   destination, entry-count/size limits, and decompression bombs are rejected.
 - Duplicate original filenames remain distinct because upload IDs, not names,
   are the identity key.
+- Closed confirmation questions preserve `allow_custom=false` through the
+  trace and webpage. Project identity must come from an offered option;
+  cancellation terminates before catalog selection or publication.
+- The built-in LX07A and LX10 OAM components explicitly permit extraction from
+  a supported single-component prebuilt package. Its bounded `si.ini` must
+  identify the project's packet attribute, the exact OAM filename and FileAttr,
+  a valid component version, and an actual payload matching any declared size
+  or checksum. Raven revalidates that manifest before building, preserves the
+  component version, and writes a new full-package manifest. Other prebuilt
+  packages remain blocked unless a validated catalog explicitly supports them.
 
 ## Search-only compatibility endpoint
 
