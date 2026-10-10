@@ -5,6 +5,7 @@ import { releasesPublicApi } from '@/api/releases'
 import PlatformBrandIcon from '@/components/icons/PlatformBrandIcon.vue'
 import type { ReleaseItem } from '@/types'
 import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'
+import ClientShowcase from '@/components/download/ClientShowcase.vue'
 
 const { t, locale } = useI18n()
 
@@ -262,6 +263,7 @@ onMounted(() => fetchReleases())
           </div>
 
         </section>
+        <ClientShowcase />
       </div>
     </div>
   </div>
