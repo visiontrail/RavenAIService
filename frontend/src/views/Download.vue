@@ -261,42 +261,6 @@ onMounted(() => fetchReleases())
             </div>
           </div>
 
-          <!-- Info strip -->
-          <div v-if="hasAnyRelease && !loading" class="mt-10 grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div class="info-strip-item flex items-start gap-3 p-4 rounded-xl bg-white border border-slate-100 shadow-sm">
-              <div class="flex-shrink-0 w-8 h-8 rounded-lg bg-green-50 flex items-center justify-center">
-                <svg class="h-4 w-4 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                </svg>
-              </div>
-              <div>
-                <p class="text-sm font-semibold text-slate-800">{{ t('download.info.secure.title') }}</p>
-                <p class="text-xs text-slate-500 mt-0.5">{{ t('download.info.secure.desc') }}</p>
-              </div>
-            </div>
-            <div class="info-strip-item flex items-start gap-3 p-4 rounded-xl bg-white border border-slate-100 shadow-sm">
-              <div class="flex-shrink-0 w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
-                <svg class="h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              </div>
-              <div>
-                <p class="text-sm font-semibold text-slate-800">{{ t('download.info.updates.title') }}</p>
-                <p class="text-xs text-slate-500 mt-0.5">{{ t('download.info.updates.desc') }}</p>
-              </div>
-            </div>
-            <div class="info-strip-item flex items-start gap-3 p-4 rounded-xl bg-white border border-slate-100 shadow-sm">
-              <div class="flex-shrink-0 w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center">
-                <svg class="h-4 w-4 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z" />
-                </svg>
-              </div>
-              <div>
-                <p class="text-sm font-semibold text-slate-800">{{ t('download.info.support.title') }}</p>
-                <p class="text-xs text-slate-500 mt-0.5">{{ t('download.info.support.desc') }}</p>
-              </div>
-            </div>
-          </div>
         </section>
       </div>
     </div>
@@ -309,14 +273,14 @@ onMounted(() => fetchReleases())
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--rw-canvas, #ffffff);
+  background: #ffffff;
 }
 
 .rw-page-scroll {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  background: #f8fafc;
+  background: #ffffff;
 }
 
 .rw-btn-secondary {
@@ -345,16 +309,11 @@ onMounted(() => fetchReleases())
 
 .download-page {
   min-height: 100%;
-  background: var(--rw-canvas-soft, #f8fafc);
+  background: #ffffff;
 }
 
 .hero-section {
-  background: linear-gradient(160deg, #ffffff 0%, #f0f9ff 50%, #e0f2fe 100%);
-  border-bottom: 1px solid var(--rw-hairline, #e2e8f0);
-}
-
-html.dark .hero-section {
-  background: linear-gradient(160deg, #111115 0%, #15151d 50%, #1b1b2a 100%);
+  background: #ffffff;
 }
 
 .platform-card {
