@@ -981,6 +981,11 @@ export const useConversationRunsStore = defineStore('conversationRuns', () => {
             if (lastWithAgent?.run_agent_kind) {
               state.lastAgentKind = lastWithAgent.run_agent_kind as AgentKind
             }
+            if (resp.workspace_context) {
+              state.lastAgentKind = lastWithAgent?.run_agent_kind as AgentKind || resp.workspace_context.agent_kind
+              state.lastProjectRepoId = resp.workspace_context.project_repo_id
+              state.hasLogWorkspaceContext = resp.workspace_context.has_log_workspace
+            }
             // LogAnalysisChatService persists `[日志附件] ...` in the user
             // message after a successful run. OR with the live SSE-derived
             // state so a reload during an in-flight run cannot erase it.

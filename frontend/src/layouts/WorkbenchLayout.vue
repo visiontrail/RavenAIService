@@ -446,13 +446,13 @@ const handleSelectSession = (session: ChatSessionSummary) => {
   openRowMenuId.value = null
   showSearchBox.value = false
   sessionStore.selectSession(session.id)
-  if (!isHomeRoute.value) router.push('/workbench')
+  router.push({ path: '/workbench', query: { session_id: session.id } })
 }
 
 const startNewChat = () => {
   showSearchBox.value = false
   sessionStore.startNewChat()
-  if (!isHomeRoute.value) router.push('/workbench')
+  if (!isHomeRoute.value || route.query.session_id) router.push('/workbench')
   if (isLoggedIn.value) {
     announcementStore.checkPending().catch(() => { /* retry on next trigger */ })
   }

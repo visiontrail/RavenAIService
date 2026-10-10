@@ -13,6 +13,16 @@
 
 ## 1. 工作区布局
 
+日志详情的“Fork 到我的对话”调用 `POST /api/v1/logs/{log_id}/analysis/fork`，
+要求登录。服务端按已保存轮次复制问答，从全部原日志附件重新建立 UUID 工作目录，
+绑定当前用户的新会话及 `owner_user_id`；代码在首次追问时按正常 Agent 流程独立克隆。
+不继承原用户运行 ID、SDK 会话或可变代码目录。旧版单结果也可复制。
+
+上下文注册文件的 `forked_from_log_id` 标识来源；追问仅保存个人 ChatMessage，
+不覆盖共享日志分析，也不自动分发来源日志的 BugFix。消息 API 的 `workspace_context`
+仅在会话所有权校验后返回 Agent/项目选择，不暴露文件系统路径，供刷新恢复。
+附件准备或持久化失败会回滚并清理本次新目录。
+
 主对话支持直接上传 Markdown（`.md`、`.markdown`）、配置文本（`.ini`、`.cfg`、
 `.conf`、`.yaml`、`.yml`、`.toml`、`.properties`）以及 Excel（`.xls`、`.xlsx`、
 `.xlsm`），并保留已有日志文本和压缩包格式。文本原样放入 `logs/`；Excel 按

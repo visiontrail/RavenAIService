@@ -672,6 +672,8 @@ class LogAnalysisChatService:
         event loop free. All failures are swallowed — the answer is already
         persisted and must not be affected.
         """
+        if job.context_meta.get("forked_from_log_id"):
+            return
         if not isinstance(job.result, dict):
             return
         # Cheap pre-check on the hot path: only touch the DB / Celery broker when
@@ -740,6 +742,8 @@ class LogAnalysisChatService:
             "project_repo_id": job.context_meta.get("project_repo_id")
             or job.context_meta.get("project_id"),
         }
+        if job.context_meta.get("forked_from_log_id"):
+            request_payload["forked_from_log_id"] = job.context_meta["forked_from_log_id"]
 
         # Register the in-memory ChatRunJob first so even if DB write fails
         # the sidebar/active-run endpoint still surfaces the running task.
@@ -1420,7 +1424,7 @@ class LogAnalysisChatService:
         result: Dict[str, Any],
         question: Optional[str] = None,
     ) -> None:
-        if not db or not context_meta.get("log_id"):
+        if not db or not context_meta.get("log_id") or context_meta.get("forked_from_log_id"):
             return
         try:
             await log_service.save_ai_analysis_result(

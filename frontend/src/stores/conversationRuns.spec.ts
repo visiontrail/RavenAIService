@@ -197,6 +197,27 @@ describe('conversationRuns store', () => {
     )
   })
 
+  it('restores a Fork workspace and project without inheriting the source run', async () => {
+    const store = useConversationRunsStore()
+    vi.spyOn(userApi, 'fetchMessages').mockResolvedValue({
+      success: true,
+      message: 'ok',
+      data: [
+        { id: 'u', session_id: 'fork', role: 'user', content: '原问题', created_at: '', updated_at: '' },
+        { id: 'a', session_id: 'fork', role: 'ai', content: '原分析', created_at: '', updated_at: '' },
+      ],
+      workspace_context: { agent_kind: 'log_analysis', project_repo_id: 42, has_log_workspace: true },
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 404 })))
+    const state = await store.loadSession('fork', { isLoggedIn: true, force: true })
+    expect(state.messages.map((m) => m.content)).toEqual(['原问题', '原分析'])
+    expect(state.lastAgentKind).toBe('log_analysis')
+    expect(state.lastProjectRepoId).toBe(42)
+    expect(state.hasLogWorkspaceContext).toBe(true)
+    expect(state.activeRunId).toBeNull()
+    expect(state.isSending).toBe(false)
+  })
+
   it('loads DB history, restores active-run trace, and finishes from the resumed stream', async () => {
     const store = useConversationRunsStore()
     const traceEvents = Array.from({ length: 10 }, (_, idx) =>

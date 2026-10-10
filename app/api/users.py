@@ -634,9 +634,21 @@ async def get_chat_messages(
                 message.run_agent_kind = run.agent_kind
                 message.trace_events = trace_events
         messages.append(message)
+    # fetch_messages 已校验会话归属；仅返回当前用户 Fork 的可恢复选择，不暴露目录。
+    from app.services.log_analysis_chat_service import log_analysis_chat_service
+
+    workspace_context = None
+    loaded = log_analysis_chat_service._load_context(session_id, user=current_user)
+    if loaded is not None and loaded[1].get("forked_from_log_id"):
+        workspace_context = {
+            "agent_kind": "log_analysis",
+            "project_repo_id": loaded[1].get("project_repo_id"),
+            "has_log_workspace": True,
+        }
     return ChatMessagesResponse(
         message="ok",
         data=messages,
+        workspace_context=workspace_context,
     )
 
 

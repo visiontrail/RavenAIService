@@ -456,3 +456,4 @@ class ChatMessagesResponse(BaseResponse):
     """会话消息响应"""
 
     data: list[ChatMessageRecord] = Field(default_factory=list)
+    workspace_context: Optional[dict[str, Any]] = None

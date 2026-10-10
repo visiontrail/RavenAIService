@@ -175,7 +175,9 @@ export const userApi = {
       params: { q: query, offset, limit: 20 }, signal,
     }),
 
-  fetchMessages: (sessionId: string): Promise<ApiResponse<ChatMessageRecord[]>> =>
+  fetchMessages: (sessionId: string): Promise<ApiResponse<ChatMessageRecord[]> & {
+    workspace_context?: { agent_kind: 'log_analysis'; project_repo_id: number | null; has_log_workspace: boolean } | null
+  }> =>
     userClient.get(`/api/v1/users/chat-sessions/${sessionId}/messages`),
 
   deleteSession: (sessionId: string): Promise<ApiResponse<ChatSessionSummary[]>> =>

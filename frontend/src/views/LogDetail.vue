@@ -297,6 +297,15 @@
           <div class="card-head">
             <h2 class="card-title">{{ t('logDetail.aiAnalysisTitle') }}</h2>
             <span class="card-subtitle">{{ t('logDetail.aiAutoSaveHint') }}</span>
+            <button
+              v-if="aiAnalysisResult"
+              class="rw-btn-secondary rw-btn-xs"
+              :disabled="forkLoading || !userStore.isAuthenticated"
+              :title="userStore.isAuthenticated ? t('logDetail.forkHint') : t('logDetail.forkLoginRequired')"
+              @click="handleForkAnalysis"
+            >
+              {{ forkLoading ? t('logDetail.forkLoading') : t('logDetail.forkAnalysis') }}
+            </button>
             <span
               v-if="aiAnalysisResult"
               :class="['rw-pill', aiAnalysisResult.status === 'completed' ? 'rw-pill-success' : 'rw-pill-warning']"
@@ -489,6 +498,7 @@ import AIAnalysisResult from '../components/AIAnalysisResult.vue'
 import AgentTraceStream from '../components/AgentTraceStream.vue'
 import type { AgentTraceEvent } from '../types/agentTrace'
 import { useUserStore } from '../stores/user'
+import { useChatSessionStore } from '../stores/chatSession'
 import { renderMarkdown, processMermaidBlocks } from '../utils/markdownRenderer'
 import { jsPDF } from 'jspdf'
 import html2canvas from 'html2canvas-pro'
@@ -502,12 +512,31 @@ const route = useRoute()
 const router = useRouter()
 const logStore = useLogStore()
 const userStore = useUserStore()
+const sessionStore = useChatSessionStore()
 const { t } = useI18n()
 
 // 响应式变量
 const downloadLoading = ref(false)
 const deleteLoading = ref(false)
 const exportPdfLoading = ref(false)
+const forkLoading = ref(false)
+const handleForkAnalysis = async () => {
+  if (forkLoading.value || !userStore.isAuthenticated || !logStore.currentLog) return
+  forkLoading.value = true
+  try {
+    const response = await logApi.forkAnalysis(logStore.currentLog.id)
+    if (!response.success || !response.data) throw new Error(response.message)
+    sessionStore.upsertSessionTitle(response.data.id, response.data.title)
+    sessionStore.setSelected(response.data.id)
+    ElMessage.success(t('logDetail.forkSuccess'))
+    await router.push({ path: '/workbench', query: { session_id: response.data.id } })
+  } catch (error: any) {
+    const detail = error?.response?.data?.detail
+    ElMessage.error(typeof detail === 'string' ? detail : t('logDetail.forkFailed'))
+  } finally {
+    forkLoading.value = false
+  }
+}
 const activeVersionCollapse = ref(['version-details'])
 const issueDescriptionEditing = ref(false)
 const issueDescriptionSaving = ref(false)

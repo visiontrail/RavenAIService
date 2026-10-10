@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import { deviceLinkApi } from '@/api/deviceLink'
 import { userApi, userToken } from '@/api/user'
 import type { DeviceInfo } from '@/types'
@@ -106,6 +107,7 @@ type PendingImage = {
 }
 
 const userStore = useUserStore()
+const route = useRoute()
 const appStore = useAppStore()
 const sessionStore = useChatSessionStore()
 const runsStore = useConversationRunsStore()
@@ -255,6 +257,10 @@ onMounted(() => {
   document.addEventListener('click', handleClickOutside)
   document.addEventListener('keydown', handleKey)
   fetchDevices()
+  const requestedSession = route.query.session_id
+  if (typeof requestedSession === 'string' && isLoggedIn.value) {
+    sessionStore.setSelected(requestedSession)
+  }
   // Load the currently-selected session's messages on mount.
   if (sessionStore.selectedSessionId) {
     loadMessages(sessionStore.selectedSessionId)
@@ -886,6 +892,8 @@ const isProjectRepoRequiredMissing = computed(() =>
 )
 
 watch(visibleProjectRepoOptions, (options) => {
+  // 历史/Fork 恢复时，项目列表仍在请求中；空列表不能清除已保存的项目。
+  if (!projectRepoOptionsLoaded.value || projectRepoOptionsLoading.value) return
   if (selectedProjectRepoId.value === null) return
   if (!options.some((repo) => repo.id === selectedProjectRepoId.value)) {
     selectedProjectRepoId.value = null

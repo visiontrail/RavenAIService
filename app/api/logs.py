@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 
 from app.models.database import get_db
-from app.api.users import get_request_locale, get_optional_user
+from app.api.users import get_request_locale, get_optional_user, get_current_user
 from app.i18n.messages import t
 
 from app.models.log import (
@@ -42,6 +42,19 @@ from app.exceptions import ValidationError, FileUploadError, FileSizeExceededErr
 logger = logging.getLogger(__name__)
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
+
+
+@router.post("/{log_id}/analysis/fork", status_code=201, summary="Fork 日志分析到个人对话")
+async def fork_analysis_conversation(
+    log_id: str,
+    current_user=Depends(get_current_user),
+    locale: str = Depends(get_request_locale),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.log_analysis_fork_service import fork_log_analysis
+
+    session = await fork_log_analysis(db, log_id, current_user, locale)
+    return {"success": True, "message": "ok", "data": session}
 
 
 # 注意：日志的项目归属完全依赖显式 project_id / project_code（前端或调用方按项目选择）。

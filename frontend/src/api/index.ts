@@ -79,6 +79,13 @@ api.interceptors.response.use(
 
 // 日志相关API
 export const logApi = {
+  forkAnalysis: (id: string): Promise<ApiResponse<import('../types').ChatSessionSummary>> => {
+    const token = readUserToken()
+    return api.post(`/api/v1/logs/${encodeURIComponent(id)}/analysis/fork`, undefined, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+  },
+
   // 获取日志列表
   getLogList: (params: {
     page?: number

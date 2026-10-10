@@ -1707,6 +1707,8 @@ class LogService(BaseCRUDService[LogRecord]):
                 .where(
                     ChatAgentRun.agent_kind == "log_analysis",
                     ChatAgentRun.request_json.ilike(f"%{record.id}%"),
+                    # Fork 的 run 只描述个人追问，不能回填为原共享分析的触发人。
+                    ~ChatAgentRun.request_json.ilike('%"forked_from_log_id"%'),
                 )
                 .order_by(ChatAgentRun.started_at.desc())
                 .limit(20)
