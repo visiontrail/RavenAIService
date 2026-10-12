@@ -127,6 +127,8 @@
   color: var(--md-foreground);
   font-size: 1rem;
   line-height: 1.75;
+  /* 长日志、路径和行内代码在正文内换行，避免撑宽整个对话滚动区。 */
+  overflow-wrap: anywhere;
 }
 
 html.dark .markdown-content {
@@ -222,6 +224,7 @@ html.dark .markdown-content {
 /* 代码块容器 */
 .markdown-content pre {
   @apply my-4 overflow-x-auto rounded-lg shadow-sm;
+  overflow-wrap: normal;
 }
 
 .markdown-content pre code {
@@ -317,6 +320,8 @@ html.dark .markdown-content {
 .markdown-content .table-wrapper {
   @apply overflow-x-auto rounded-lg border;
   border-color: var(--md-border);
+  /* 宽表格保留自身滚动，不继承正文的强制换行。 */
+  overflow-wrap: normal;
 }
 
 /* 表格右上角「复制 Markdown」按钮：默认隐藏，hover 显现 */
