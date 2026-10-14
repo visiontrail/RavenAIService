@@ -88,6 +88,7 @@ export const logApi = {
 
   // 获取日志列表
   getLogList: (params: {
+    compact?: boolean
     page?: number
     per_page?: number
     project_id?: number
@@ -98,7 +99,7 @@ export const logApi = {
     sort_by?: 'created_at' | 'file_size' | 'updated_at' | 'filename'
     sort_order?: 'asc' | 'desc'
   } = {}): Promise<ApiResponse<LogListData>> => {
-    return api.get('/api/v1/logs', { params })
+    return api.get('/api/v1/logs', { params, timeout: 30_000 })
   },
 
   // 获取日志详情

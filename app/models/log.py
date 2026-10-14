@@ -252,6 +252,8 @@ class LogFileInfo(BaseModel):
     error_message: Optional[str] = Field(None, description="错误信息")
     issue_description: Optional[str] = Field(None, description="问题描述")
     download_count: int = Field(0, description="下载次数")
+    has_ai_analysis: bool = Field(False, description="是否已有AI分析结果（列表摘要）")
+    has_manual_analysis: bool = Field(False, description="是否已有人工分析（列表摘要）")
     ai_analysis_result: Optional[Dict[str, Any]] = Field(
         None,
         description="最近一次AI分析结果（完整数据结构）"
@@ -381,6 +383,7 @@ class SortOrder(str, Enum):
 
 class LogListRequest(BaseModel):
     """日志列表查询请求模型"""
+    compact: bool = Field(False, description="仅返回列表摘要，不含分析正文和历史")
     page: int = Field(1, ge=1, description="页码")
     per_page: int = Field(20, ge=1, le=100, description="每页大小")
     project_id: Optional[int] = Field(None, description="项目过滤；0 或 None 表示未分类日志")

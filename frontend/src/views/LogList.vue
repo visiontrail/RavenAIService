@@ -2,7 +2,7 @@
   <div class="rw-page">
     <WorkbenchTopbar :title="t('logList.title')" :meta="t('logList.records', { count: logStore.pagination.total })">
       <template #actions>
-        <button class="rw-btn-secondary" @click="refreshData" :disabled="logStore.loading">
+        <button class="rw-btn-secondary" @click="refreshData" :disabled="logStore.loading || logStore.refreshing" :aria-busy="logStore.loading || logStore.refreshing">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-6.36-2.64L3 16" />
             <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 6.36 2.64L21 8" />
@@ -422,11 +422,12 @@ const { t } = useI18n()
 const logStore = useLogStore()
 const appStore = useAppStore()
 
-const searchQuery = ref('')
-const statusFilter = ref('')
-const projectFilter = ref<number | ''>('')
+const searchQuery = ref(logStore.filters.search)
+const statusFilter = ref(logStore.filters.status)
+const projectFilter = ref<number | ''>(logStore.filters.project_id)
 const projectOptions = ref<ProjectRepoOption[]>([])
-const dateRange = ref<string[] | null>(null)
+const dateRange = ref<string[] | null>(logStore.filters.start_time && logStore.filters.end_time
+  ? [logStore.filters.start_time, logStore.filters.end_time] : null)
 const selectedLogs = ref<LogRecord[]>([])
 const mobileFilterDrawerVisible = ref(false)
 
@@ -549,7 +550,7 @@ const onTableSortChange = (sort: { prop: string; order: 'ascending' | 'descendin
 }
 
 const refreshData = () => {
-  logStore.fetchLogs()
+  logStore.fetchLogs({}, { force: true })
 }
 
 const handleSelectionChange = (selection: LogRecord[]) => {
@@ -557,7 +558,7 @@ const handleSelectionChange = (selection: LogRecord[]) => {
 }
 
 const handleSizeChange = (size: number) => {
-  logStore.setPagination({ per_page: size })
+  logStore.setPagination({ page: 1, per_page: size })
   logStore.fetchLogs()
 }
 
@@ -698,9 +699,11 @@ let timer: number | null = null
 const startAutoRefresh = () => {
   stopAutoRefresh()
   timer = window.setInterval(() => {
-    const hasProcessing = logStore.logs.some((l: any) => l.status === 'processing')
-    if (hasProcessing) {
-      logStore.fetchLogs()
+    const hasProcessing = logStore.logs.some(l =>
+      ['pending', 'processing'].includes(l.status)
+      || ['queued', 'running', 'processing'].includes(l.ai_analysis_status || ''))
+    if (document.visibilityState === 'visible' && hasProcessing) {
+      refreshData()
     }
   }, 30000)
 }
@@ -722,16 +725,21 @@ const fetchProjectOptions = async () => {
   }
 }
 
+const refreshOnFocus = () => {
+  if (document.visibilityState === 'visible') refreshData()
+}
+
 onMounted(() => {
+  window.addEventListener('focus', refreshOnFocus)
+  document.addEventListener('visibilitychange', refreshOnFocus)
   fetchProjectOptions()
-  logStore.fetchLogs().then(() => {
-    startAutoRefresh()
-  }).catch((error) => {
-    console.error('initial data load failed:', error)
-  })
+  startAutoRefresh()
+  void logStore.fetchLogs({}, { force: true })
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('focus', refreshOnFocus)
+  document.removeEventListener('visibilitychange', refreshOnFocus)
   stopAutoRefresh()
 })
 
@@ -761,7 +769,7 @@ const getAttachmentTitle = (row: LogRecord) => {
 const isAIAnalysisCompleted = (log: LogRecord) => {
   const status = log.ai_analysis_status?.toLowerCase()
   if (status === 'completed' || status === 'succeeded') return true
-  if (log.ai_analysis_result && status !== 'failed') return true
+  if ((log.has_ai_analysis ?? Boolean(log.ai_analysis_result)) && status !== 'failed') return true
   return false
 }
 
@@ -772,7 +780,7 @@ const getStatusDisplayText = (log: LogRecord) => {
 }
 
 const hasManualAnalysis = (log: LogRecord) => {
-  return Boolean(log.manual_analysis && log.manual_analysis.trim())
+  return log.has_manual_analysis ?? Boolean(log.manual_analysis && log.manual_analysis.trim())
 }
 
 const pillKindForStatus = (status?: string) => {

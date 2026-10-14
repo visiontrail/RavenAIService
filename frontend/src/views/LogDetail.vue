@@ -39,7 +39,7 @@
     </header>
 
     <div class="rw-page-scroll">
-      <div v-if="logStore.loading" class="rw-card">
+      <div v-if="logStore.detailLoading" class="rw-card">
         <el-skeleton :rows="8" animated />
       </div>
 
@@ -1119,6 +1119,7 @@ const handleSaveIssueDescription = async () => {
   try {
     const response = await logApi.updateIssueDescription(logStore.currentLog.id, payload)
     if (response.success) {
+      logStore.invalidateList()
       const updatedDescription = response.data?.issue_description || ''
       logStore.currentLog.issue_description = updatedDescription
       if (response.data?.updated_at) {
@@ -1162,6 +1163,7 @@ const handleSaveManualAnalysis = async () => {
     const content = manualAnalysisForm.value.content.trim()
     const response = await logApi.saveManualAnalysis(logStore.currentLog.id, content)
     if (response.success) {
+      logStore.invalidateList()
       logStore.currentLog.manual_analysis = content
       logStore.currentLog.manual_analysis_updated_at =
         response.data?.manual_analysis_updated_at || new Date().toISOString()
@@ -1840,6 +1842,7 @@ const handleAIAnalysisSubmit = async () => {
 
     if (response.success) {
       const taskId = response.data?.task_id || response.data?.taskId || null
+      logStore.invalidateList()
       const status = response.data?.status || 'queued'
       aiAnalysisTaskId.value = taskId
       aiAnalysisStatus.value = status

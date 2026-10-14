@@ -15,7 +15,8 @@ from typing import List, Optional, Dict, Any, Tuple
 from pathlib import Path
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, case, func
+from sqlalchemy.orm import load_only
 
 from app.config import settings
 from app.models.log import (
@@ -418,8 +419,9 @@ class LogService(BaseCRUDService[LogRecord]):
         project_map: Dict[int, ProjectRepo],
         *,
         enrich_analysis_trigger: bool = False,
+        primary: Optional[LogRecord] = None,
     ) -> LogFileInfo:
-        primary = self._group_primary_record(records)
+        primary = primary if primary is not None else self._group_primary_record(records)
         _, metadata = self._record_metadata(primary)
         info = await self._db_to_pydantic(
             primary,
@@ -462,6 +464,69 @@ class LogService(BaseCRUDService[LogRecord]):
             )
         return info
 
+    async def _list_group_headers(self, db: AsyncSession) -> List[LogRecord]:
+        """SQLite 只读取分组/筛选所需字段，避免把所有分析正文载入 Python。
+
+        临时 LogRecord 不加入 session；分页后才加载真实记录。其他数据库
+        保留原有路径，避免对损坏的旧 JSON 做不兼容的强制类型转换。
+        """
+        if db.get_bind().dialect.name != "sqlite":
+            result = await db.execute(
+                select(LogRecord).where(LogRecord.is_deleted == False)
+            )
+            return list(result.scalars().all())
+
+        metadata = case(
+            (func.json_valid(LogRecord.metadata_json) == 1, LogRecord.metadata_json),
+            else_="{}",
+        )
+        result = await db.execute(
+            select(
+                LogRecord.id, LogRecord.filename, LogRecord.original_filename,
+                LogRecord.file_size, LogRecord.analysis_group_id,
+                LogRecord.project_id, LogRecord.status, LogRecord.log_level,
+                LogRecord.created_at, LogRecord.updated_at,
+                LogRecord.issue_description,
+                func.json_extract(metadata, "$.source").label("source"),
+                func.json_extract(metadata, "$.extra_fields.chat_session_id").label("session_id"),
+                func.json_type(metadata, "$.extra_fields.ai_analysis_result").label("analysis_type"),
+            ).where(LogRecord.is_deleted == False)
+        )
+        headers = []
+        for row in result.mappings():
+            values = dict(row)
+            source = values.pop("source")
+            session_id = values.pop("session_id")
+            has_analysis = values.pop("analysis_type") == "object"
+            extra = {"chat_session_id": session_id}
+            if has_analysis:
+                extra["ai_analysis_result"] = {}
+            headers.append(LogRecord(
+                **values,
+                metadata_json=json.dumps({"source": source, "extra_fields": extra}),
+            ))
+        return headers
+
+    @staticmethod
+    def _compact_list_info(info: LogFileInfo) -> LogFileInfo:
+        """列表仅保留展示需要的摘要，正文继续由详情接口提供。"""
+        info.ai_analysis_result = None
+        info.ai_analysis_conversation = None
+        info.manual_analysis = None
+        info.issue_description = None
+        info.error_message = None
+        info.ai_analysis_query = None
+        info.ai_analysis_error = None
+        if info.metadata:
+            info.metadata = LogMetadata(
+                source=info.metadata.source,
+                environment=info.metadata.environment,
+                service_name=info.metadata.service_name,
+                version=info.metadata.version,
+                tags=info.metadata.tags,
+            )
+        return info
+
     async def get_log_list(
         self, 
         db: AsyncSession, 
@@ -480,10 +545,7 @@ class LogService(BaseCRUDService[LogRecord]):
         try:
             # Grouping has to happen before pagination: one AI analysis can own
             # several LogRecord rows but represents exactly one list item.
-            result = await db.execute(
-                select(LogRecord).where(LogRecord.is_deleted == False)
-            )
-            all_records = list(result.scalars().all())
+            all_records = await self._list_group_headers(db)
 
             groups: Dict[Tuple[Any, ...], List[LogRecord]] = {}
             for record in all_records:
@@ -492,9 +554,13 @@ class LogService(BaseCRUDService[LogRecord]):
                 ).append(record)
 
             filtered_groups: List[List[LogRecord]] = []
+            primaries = {
+                id(records): self._group_primary_record(records)
+                for records in groups.values()
+            }
             normalized_search = (request.search or "").strip().casefold()
             for records in groups.values():
-                primary = self._group_primary_record(records)
+                primary = primaries[id(records)]
                 created_at = min(record.created_at for record in records)
 
                 if request.project_id is not None:
@@ -524,7 +590,7 @@ class LogService(BaseCRUDService[LogRecord]):
                 filtered_groups.append(records)
 
             def _group_sort_key(records: List[LogRecord]) -> Any:
-                primary = self._group_primary_record(records)
+                primary = primaries[id(records)]
                 if request.sort_by == SortField.FILE_SIZE:
                     return sum(record.file_size for record in records)
                 if request.sort_by == SortField.UPDATED_AT:
@@ -545,21 +611,29 @@ class LogService(BaseCRUDService[LogRecord]):
             page_groups = filtered_groups[
                 offset:offset + request.per_page
             ]
-            page_records = [
-                record for records in page_groups for record in records
-            ]
+            page_ids = [record.id for records in page_groups for record in records]
+            page_records = []
+            if page_ids:
+                result = await db.execute(
+                    select(LogRecord).where(LogRecord.id.in_(page_ids))
+                )
+                page_records = list(result.scalars().all())
+            record_map = {record.id: record for record in page_records}
             project_map = await self._get_project_map(
                 db, [record.project_id for record in page_records]
             )
             log_infos = [
                 await self._group_to_pydantic(
                     db,
-                    records,
+                    [record_map[record.id] for record in records],
                     project_map,
                     enrich_analysis_trigger=True,
+                    primary=record_map[primaries[id(records)].id],
                 )
                 for records in page_groups
             ]
+            if request.compact:
+                log_infos = [self._compact_list_info(info) for info in log_infos]
 
             pages = (total + request.per_page - 1) // request.per_page if total > 0 else 0
             pagination = PaginationInfo(
@@ -1673,6 +1747,8 @@ class LogService(BaseCRUDService[LogRecord]):
             error_message=record.error_message,
             download_count=record.download_count,
             issue_description=record.issue_description,
+            has_ai_analysis=ai_analysis_result is not None,
+            has_manual_analysis=bool(manual_analysis_content and manual_analysis_content.strip()),
             ai_analysis_result=ai_analysis_result,
             ai_analysis_conversation=ai_analysis_conversation,
             ai_analysis_triggered_by=ai_analysis_triggered_by,
@@ -1704,6 +1780,11 @@ class LogService(BaseCRUDService[LogRecord]):
 
             result = await db.execute(
                 select(ChatAgentRun)
+                .options(load_only(
+                    ChatAgentRun.id, ChatAgentRun.request_json, ChatAgentRun.user_id,
+                    ChatAgentRun.session_id, ChatAgentRun.started_at, ChatAgentRun.finished_at,
+                    raiseload=True,
+                ))
                 .where(
                     ChatAgentRun.agent_kind == "log_analysis",
                     ChatAgentRun.request_json.ilike(f"%{record.id}%"),
@@ -1729,7 +1810,10 @@ class LogService(BaseCRUDService[LogRecord]):
             user_payload: Dict[str, Any] = {}
             if matched_run.user_id:
                 user_result = await db.execute(
-                    select(User).where(User.id == matched_run.user_id)
+                    select(User).options(load_only(
+                        User.id, User.username, User.display_name, User.email,
+                        raiseload=True,
+                    )).where(User.id == matched_run.user_id)
                 )
                 user = user_result.scalar_one_or_none()
                 if user is not None:

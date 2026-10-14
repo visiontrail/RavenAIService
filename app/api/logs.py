@@ -645,6 +645,7 @@ async def upload_t04_logs(
 
 @router.get("", response_model=LogListResponse)
 async def get_logs(
+    compact: bool = Query(False, description="精简列表，不含分析正文和对话历史"),
     page: int = Query(1, ge=1, description="页码"),
     per_page: int = Query(20, ge=1, le=100, description="每页大小"),
     project_id: Optional[int] = Query(None, description="项目过滤；0 或 none 表示未分类日志"),
@@ -685,6 +686,7 @@ async def get_logs(
     from app.models.database import get_db
     
     list_request = LogListRequest(
+        compact=compact,
         page=page,
         per_page=per_page,
         project_id=project_id,

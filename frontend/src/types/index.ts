@@ -73,6 +73,8 @@ export interface LogRecord {
   download_url?: string
   file_size_human?: string
   ai_analysis_result?: any
+  has_ai_analysis?: boolean
+  has_manual_analysis?: boolean
   ai_analysis_conversation?: any[]
   ai_analysis_triggered_by?: AnalysisTriggerInfo | null
   ai_analysis_task_id?: string

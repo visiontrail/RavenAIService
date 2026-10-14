@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -261,6 +261,106 @@ def test_list_groups_new_and_legacy_ai_attachments(
         for attachment in legacy["attachments"]
     } == {"old-a.log", "old-b.zip"}
     assert legacy["ai_analysis_triggered_by"]["user"]["username"] == "alice"
+
+
+def test_compact_list_omits_bodies_but_detail_preserves_them(grouped_client):
+    body = "large analysis body " * 100_000
+    target_id = grouped_client._ids["group_primary"]
+
+    async def seed():
+        async with grouped_client._factory() as session:
+            record = await session.get(LogRecord, target_id)
+            metadata = json.loads(record.metadata_json)
+            metadata["service_name"] = "receiver"
+            metadata["version_info"] = {"raw_content": body}
+            metadata["extra_fields"].update({
+                "ai_analysis_result": {"status": "completed", "answer": body},
+                "ai_analysis_conversation": [{"answer": body}],
+                "manual_analysis": {"content": body},
+                "unrelated_large_data": body,
+            })
+            record.metadata_json = json.dumps(metadata)
+            await session.commit()
+
+    asyncio.run(seed())
+    compact = grouped_client.get("/api/v1/logs", params={"compact": True})
+    assert compact.status_code == 200, compact.text
+    assert len(compact.content) < 15_000
+    row = next(row for row in compact.json()["data"]["logs"] if row["id"] == target_id)
+    assert row["has_ai_analysis"] is True
+    assert row["has_manual_analysis"] is True
+    assert row["ai_analysis_result"] is None
+    assert row["ai_analysis_conversation"] is None
+    assert row["manual_analysis"] is None
+    assert row["metadata"]["extra_fields"] == {}
+    assert row["metadata"]["service_name"] == "receiver"
+    assert row["ai_analysis_triggered_by"]["user"]["username"] == "alice"
+    detail = grouped_client.get(f"/api/v1/logs/{target_id}").json()["data"]
+    assert detail["ai_analysis_result"]["answer"] == body
+    assert detail["manual_analysis"] == body
+    assert detail["ai_analysis_conversation"][0]["answer"] == body
+    full = grouped_client.get("/api/v1/logs").json()["data"]
+    assert next(row for row in full["logs"] if row["id"] == target_id)["ai_analysis_result"]["answer"] == body
+
+
+@pytest.mark.parametrize("params", [
+    {"sort_by": field, "sort_order": order, "per_page": 1, "page": page}
+    for field in ("filename", "file_size", "created_at", "updated_at")
+    for order in ("asc", "desc") for page in (1, 2, 4)
+] + [{"search": "companion"}, {"status": "completed"}, {"project_id": 0}])
+def test_header_projection_matches_full_record_grouping(grouped_client, monkeypatch, params):
+    optimized = grouped_client.get("/api/v1/logs", params=params).json()["data"]
+
+    async def full_headers(db):
+        result = await db.execute(select(LogRecord).where(LogRecord.is_deleted == False))
+        return list(result.scalars().all())
+
+    monkeypatch.setattr(logs_api.log_service, "_list_group_headers", full_headers)
+    reference = grouped_client.get("/api/v1/logs", params=params).json()["data"]
+    assert optimized == reference
+
+
+@pytest.mark.parametrize("metadata", ["{broken", "null", "[]", '{"extra_fields":null}', '{"extra_fields":[]}'])
+def test_header_projection_recovers_malformed_legacy_metadata(grouped_client, metadata):
+    async def seed():
+        async with grouped_client._factory() as session:
+            record = await session.get(LogRecord, grouped_client._ids["standalone"])
+            record.metadata_json = metadata
+            await session.commit()
+
+    asyncio.run(seed())
+    response = grouped_client.get("/api/v1/logs", params={"compact": True})
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["pagination"]["total"] == 3
+
+
+def test_list_hydrates_only_page_and_never_loads_run_traces(grouped_client):
+    engine = grouped_client._factory.kw["bind"].sync_engine
+    statements = []
+
+    def record_sql(_conn, _cursor, statement, parameters, _context, _many):
+        statements.append((statement, parameters))
+
+    event.listen(engine, "before_cursor_execute", record_sql)
+    try:
+        response = grouped_client.get("/api/v1/logs", params={
+            "compact": True, "per_page": 1, "search": "capture",
+        })
+    finally:
+        event.remove(engine, "before_cursor_execute", record_sql)
+    assert response.status_code == 200, response.text
+    header_sql = statements[0][0].split("FROM")[0]
+    assert "json_extract" in header_sql
+    assert "log_records.file_path" not in header_sql
+    hydration = [(sql, params) for sql, params in statements if "log_records.file_path" in sql]
+    assert len(hydration) == 1
+    assert "WHERE log_records.id IN" in hydration[0][0]
+    assert set(hydration[0][1]) == {
+        grouped_client._ids["group_first"], grouped_client._ids["group_primary"],
+    }
+    run_queries = [sql for sql, _ in statements if "FROM chat_agent_runs" in sql]
+    assert run_queries
+    assert all("trace_events_json" not in sql and "result_json" not in sql for sql in run_queries)
 
 
 def test_standalone_analysis_captures_authenticated_trigger(
