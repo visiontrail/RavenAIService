@@ -54,7 +54,7 @@
                     <span class="text-blue-600">{{ t('upload.dragClickHint') }}</span>
                   </p>
                   <p class="text-sm text-gray-500 mt-2">
-                    {{ t('upload.formatHint', { max: maxFileSize }) }}
+                    {{ t('upload.formatHint') }}
                   </p>
                 </div>
               </div>
@@ -108,7 +108,7 @@
                 <el-icon class="text-green-500 mt-0.5" size="14">
                   <Check />
                 </el-icon>
-                <span>{{ t('upload.tip3', { max: maxFileSize }) }}</span>
+                <span>{{ t('upload.tip3') }}</span>
               </li>
               <li class="flex items-start space-x-2">
                 <el-icon class="text-green-500 mt-0.5" size="14">
@@ -276,10 +276,6 @@ const supportedLogFileSuffixes = [
 ]
 const acceptedLogFileTypes = supportedLogFileSuffixes.join(',')
 
-const maxFileSize = computed(() => {
-  return parseInt(import.meta.env.VITE_MAX_FILE_SIZE || '1024')
-})
-
 const recentUploads = computed(() => {
   return logStore.logs.slice(0, 5)
 })
@@ -296,13 +292,6 @@ const handleFileRemove = (_file: UploadFile, files: UploadFiles) => {
 
 // 上传前验证
 const beforeUpload = (file: File) => {
-  // 检查文件大小
-  const isLtMaxSize = file.size / 1024 / 1024 < maxFileSize.value
-  if (!isLtMaxSize) {
-    ElMessage.error(t('upload.fileTooLarge', { max: maxFileSize.value }))
-    return false
-  }
-
   const fileName = file.name.toLowerCase()
 
   // 检查是否为支持的格式

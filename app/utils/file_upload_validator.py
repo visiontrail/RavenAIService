@@ -1,5 +1,5 @@
 """日志归档文件上传验证器
-支持所有 SUPPORTED_ARCHIVE_EXTS 格式的 magic number 校验、1GB 大小限制等。
+支持所有 SUPPORTED_ARCHIVE_EXTS 格式的 magic number 校验，大小上限跟随 MAX_FILE_SIZE。
 """
 
 import re
@@ -7,6 +7,8 @@ import hashlib
 from typing import List, Tuple, Optional
 from pathlib import Path
 from fastapi import UploadFile
+
+from app.config import settings
 
 from app.exceptions import (
     UnsupportedFileTypeError,
@@ -17,9 +19,6 @@ from app.i18n import DEFAULT
 from app.i18n.messages import t
 from app.tools.archive_tool import SUPPORTED_ARCHIVE_EXTS, check_archive_magic
 
-
-# 1GB 文件大小限制
-T04_MAX_FILE_SIZE = 1024 * 1024 * 1024
 
 # 安全文件名基础字符集。\w 默认支持 Unicode，允许中文等本地化名称；
 # 仅显式允许半角空格，不接受换行或制表符。
@@ -36,7 +35,7 @@ class T04FileUploadValidator:
     """日志归档文件上传验证器，支持所有 SUPPORTED_ARCHIVE_EXTS 格式。"""
 
     def __init__(self):
-        self.max_file_size = T04_MAX_FILE_SIZE
+        self.max_file_size = settings.max_file_size
     
     async def validate_upload_files(
         self, files: List[UploadFile], locale: str = DEFAULT
@@ -138,7 +137,7 @@ class T04FileUploadValidator:
             )
 
     async def _validate_file_size(self, file: UploadFile, locale: str = DEFAULT):
-        """验证文件大小（1GB限制）"""
+        """验证文件大小，上限为 MAX_FILE_SIZE。"""
         # 重置文件指针
         await file.seek(0)
 
@@ -149,6 +148,7 @@ class T04FileUploadValidator:
         # 重置文件指针
         await file.seek(0)
 
+        self.max_file_size = settings.max_file_size
         if file_size > self.max_file_size:
             raise FileSizeExceededError(
                 file_size,

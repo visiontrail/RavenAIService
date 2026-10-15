@@ -7,7 +7,8 @@ import io
 import pytest
 from fastapi import UploadFile
 
-from app.exceptions import ValidationError
+from app.config import settings
+from app.exceptions import FileSizeExceededError, ValidationError
 from app.utils.file_upload_validator import t04_file_validator
 
 
@@ -22,6 +23,19 @@ async def test_no_files_message_localized() -> None:
     assert ok_zh is False and ok_en is False
     assert msg_zh == "没有选择文件"
     assert msg_en == "No file selected"
+
+
+@pytest.mark.asyncio
+async def test_upload_size_follows_configured_limit(monkeypatch) -> None:
+    upload = _upload("log.zip", b"12345")
+    monkeypatch.setattr(settings, "max_file_size", 5)
+    await t04_file_validator._validate_file_size(upload, "en")
+    assert upload.file.tell() == 0
+
+    monkeypatch.setattr(settings, "max_file_size", 4)
+    with pytest.raises(FileSizeExceededError):
+        await t04_file_validator._validate_file_size(upload, "en")
+    assert upload.file.tell() == 0
 
 
 @pytest.mark.asyncio

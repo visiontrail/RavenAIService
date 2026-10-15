@@ -670,7 +670,7 @@ describe('conversationRuns store', () => {
 
   it.each([
     [413, 'zh', '超过服务器允许的大小'],
-    [413, 'en', 'exceeds the server size limit'],
+    [413, 'en', 'exceed the server size limit'],
     [502, 'zh', 'HTTP 502'],
     [503, 'en', 'HTTP 503'],
     [504, 'zh', 'HTTP 504'],
@@ -686,6 +686,22 @@ describe('conversationRuns store', () => {
     expect(answer.content).toContain(expected)
     expect(answer.content).not.toContain('<html>')
     expect(answer.content).not.toContain('请检查网络')
+  })
+
+  it('uploads a multi-gigabyte log attachment', async () => {
+    const store = useConversationRunsStore()
+    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 200 }))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('fetch', fetchMock)
+    const huge = new File(['x'], 'gnb_ts_fpga.log')
+    Object.defineProperty(huge, 'size', { value: 2 * 1024 * 1024 * 1024 })
+
+    await store.startLogAnalysisRun('too-big', {
+      message: '分析',
+      files: [huge],
+    })
+
+    expect(fetchMock).toHaveBeenCalledOnce()
   })
 
   it('reserves the connection failure message for failed log-analysis transport', async () => {
