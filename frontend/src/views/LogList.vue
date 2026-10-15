@@ -1,19 +1,5 @@
 <template>
   <div class="rw-page">
-    <WorkbenchTopbar :title="t('logList.title')" :meta="t('logList.records', { count: logStore.pagination.total })">
-      <template #actions>
-        <button class="rw-btn-secondary" @click="refreshData" :disabled="logStore.loading || logStore.refreshing" :aria-busy="logStore.loading || logStore.refreshing">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-6.36-2.64L3 16" />
-            <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 6.36 2.64L21 8" />
-            <path d="M21 3v5h-5" />
-            <path d="M3 21v-5h5" />
-          </svg>
-          <span>{{ t('common.refresh') }}</span>
-        </button>
-      </template>
-    </WorkbenchTopbar>
-
     <div class="rw-page-scroll">
       <!-- Desktop filter card -->
       <section class="rw-card filter-card desktop-only">
@@ -117,6 +103,7 @@
       <section class="rw-card table-card desktop-only">
         <div class="table-toolbar">
           <div class="sort-controls">
+            <span class="records-count">{{ t('logList.records', { count: logStore.pagination.total }) }}</span>
             <el-select v-model="sortBy" size="small" class="sort-select" @change="handleSortChange">
               <el-option :label="t('logList.sortByCreatedAt')" value="created_at" />
               <el-option :label="t('logList.sortByFileSize')" value="file_size" />
@@ -130,6 +117,15 @@
                 <path d="M11 18h4" />
               </svg>
               <span>{{ sortOrder === 'desc' ? t('logList.sortDesc') : t('logList.sortAsc') }}</span>
+            </button>
+            <button class="rw-btn-secondary" @click="refreshData" :disabled="logStore.loading || logStore.refreshing" :aria-busy="logStore.loading || logStore.refreshing">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-6.36-2.64L3 16" />
+                <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 6.36 2.64L21 8" />
+                <path d="M21 3v5h-5" />
+                <path d="M3 21v-5h5" />
+              </svg>
+              <span>{{ t('common.refresh') }}</span>
             </button>
           </div>
         </div>
@@ -284,6 +280,18 @@
 
       <!-- Mobile list -->
       <div class="mobile-only mobile-list-wrap">
+        <div class="mobile-list-toolbar">
+          <span class="records-count">{{ t('logList.records', { count: logStore.pagination.total }) }}</span>
+          <button class="rw-btn-secondary" @click="refreshData" :disabled="logStore.loading || logStore.refreshing" :aria-busy="logStore.loading || logStore.refreshing">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-6.36-2.64L3 16" />
+              <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 6.36 2.64L21 8" />
+              <path d="M21 3v5h-5" />
+              <path d="M3 21v-5h5" />
+            </svg>
+            <span>{{ t('common.refresh') }}</span>
+          </button>
+        </div>
         <div v-loading="logStore.loading">
           <div v-if="logStore.logs.length" class="mobile-log-list">
             <article v-for="row in logStore.logs" :key="row.id" class="mobile-log-card">
@@ -415,7 +423,6 @@ import { logApi, projectRepoApi } from '../api'
 import type { ProjectRepoOption } from '../api'
 import type { LogRecord } from '../types'
 import { Search } from '@element-plus/icons-vue'
-import WorkbenchTopbar from '@/layouts/WorkbenchTopbar.vue'
 
 const { t } = useI18n()
 
@@ -977,6 +984,13 @@ const pillKindForStatus = (status?: string) => {
   align-items: center;
   gap: 8px;
 }
+.records-count {
+  flex-shrink: 0;
+  color: var(--rw-muted);
+  font-family: var(--rw-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
 .sort-select { width: 160px; }
 .sort-toggle { height: 32px; }
 
@@ -1038,6 +1052,13 @@ const pillKindForStatus = (status?: string) => {
 
 /* Mobile list */
 .mobile-list-wrap { display: none; }
+.mobile-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
 .mobile-log-list {
   display: flex;
   flex-direction: column;
